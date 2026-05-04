@@ -2,7 +2,7 @@
 Description=eFinder plate-solving telescope finder
 Documentation=https://github.com/mconsidine/eFinder_cli
 After=cedar-detect.service network.target
-Wants=cedar-detect.service
+Requires=cedar-detect.service
 
 [Service]
 Type=simple

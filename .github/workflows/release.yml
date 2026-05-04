@@ -236,7 +236,7 @@ jobs:
           ls -lh build/output/
 
       - name: Attach to release
-        if: github.event_name = 'release'
+        if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
           files: build/output/efinder.img.xz
