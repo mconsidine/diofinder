@@ -78,7 +78,6 @@ apt-get install -y --no-install-recommends \
   python3-numpy python3-scipy python3-pil \
   python3-picamera2 python3-libcamera \
   python3-flask \
-  libopenblas0 \
   build-essential pkg-config \
   curl ca-certificates git \
   protobuf-compiler \
@@ -308,46 +307,51 @@ if [ -f "$CMDLINE_TXT" ]; then
   fi
 fi
 
-# --- Pre-bake static first-boot settings into the image ---------------------
-# These are device-independent facts that don't need the MAC address or any
-# runtime state.  Doing them here (in chroot) means firstboot.sh has less to
-# do and the image boots directly into a known-good state.
+# --- NetworkManager connection profiles --------------------------------------
+#
+# Write these as .nmconnection files so they exist before first boot.
+# NM reads them at startup and matches to interfaces as they appear.
+#
+# USB gadget note: usb0 only exists when a cable is plugged into a USB
+# host. If no cable is connected at boot, NM skips the profile. We add
+# a udev rule to trigger activation the moment usb0 appears -- whether
+# at boot or when the user plugs in the cable later.
 
-# Hostname
-hostnamectl --no-ask-password set-hostname efinder 2>/dev/null || \
-  echo "efinder" > /etc/hostname
-if grep -q "^127\.0\.1\.1" /etc/hosts; then
-  sed -i "s/^127\.0\.1\.1.*/127.0.1.1\tefinder/" /etc/hosts
-else
-  echo "127.0.1.1	efinder" >> /etc/hosts
-fi
+NM_CONNECTIONS=/etc/NetworkManager/system-connections
+mkdir -p "$NM_CONNECTIONS"
 
-# Avahi: pre-set host-name so efinder.local resolves on first power-up.
-AVAHI_CONF=/etc/avahi/avahi-daemon.conf
-if [ -f "$AVAHI_CONF" ]; then
-  if grep -qE '^#?host-name=' "$AVAHI_CONF"; then
-    sed -i 's/^#\?host-name=.*/host-name=efinder/' "$AVAHI_CONF"
-  else
-    sed -i '/^\[server\]/a host-name=efinder' "$AVAHI_CONF"
-  fi
-fi
+LOG "Writing USB Ethernet gadget NM profile"
+cat > "$NM_CONNECTIONS/efinder-usb.nmconnection" << 'EOF'
+[connection]
+id=efinder-usb
+type=ethernet
+interface-name=usb0
+autoconnect=true
 
-# Reduce SD card wear: never swap under normal operation.
-if ! grep -q "^vm.swappiness" /etc/sysctl.conf 2>/dev/null; then
-  echo "vm.swappiness = 0" >> /etc/sysctl.conf
-fi
+[ethernet]
 
-# Tmpfs for /var/tmp to avoid wearing the SD card with throwaway writes.
-if ! grep -q "^tmpfs /var/tmp" /etc/fstab 2>/dev/null; then
-  echo "tmpfs /var/tmp tmpfs nodev,nosuid,size=10M 0 0" >> /etc/fstab
-fi
+[ipv4]
+method=shared
+address1=10.55.0.1/24
 
-# WiFi regulatory country default. US is a safe default; the user can
-# change it with raspi-config after first boot.  Without any country code
-# many WiFi drivers refuse to bring up an AP.
-if command -v raspi-config >/dev/null 2>&1; then
-  raspi-config nonint do_wifi_country US 2>/dev/null || true
-fi
+[ipv6]
+method=ignore
+EOF
+chmod 600 "$NM_CONNECTIONS/efinder-usb.nmconnection"
+
+# udev rule: bring up the efinder-usb NM profile the moment usb0
+# appears. This fires whether the cable is plugged in before or after
+# boot, solving the race between g_ether creating usb0 and NM having
+# a chance to activate the profile.
+LOG "Writing udev rule for usb0 auto-activation"
+cat > /etc/udev/rules.d/72-efinder-usb.rules << 'EOF'
+# eFinder: activate USB Ethernet gadget profile when usb0 appears.
+# g_ether creates usb0 when a USB cable is connected to a host.
+# Without this rule NM only activates autoconnect profiles that exist
+# at daemon startup -- missing any interface that appears later.
+ACTION=="add", SUBSYSTEM=="net", KERNEL=="usb0", \
+    RUN+="/usr/bin/nmcli con up efinder-usb"
+EOF
 
 # --- Enable services ---------------------------------------------------------
 
