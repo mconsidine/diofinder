@@ -7,10 +7,14 @@ After=network.target
 Type=simple
 User=efinder
 Group=efinder
+
+# Create /run/cedar-detect owned by efinder. The socket lives here.
 RuntimeDirectory=cedar-detect
 RuntimeDirectoryMode=0755
+
 ExecStart=/usr/local/bin/cedar-detect-server \
   --listen unix:///run/cedar-detect/cedar-detect.sock
+
 Restart=on-failure
 RestartSec=2
 
@@ -21,16 +25,18 @@ RestartSec=2
 CPUAffinity=3
 Nice=-5
 
-# Hardening
+# Hardening -- kept intentionally loose for a cross-compiled Rust binary
+# on first deployment. Tighten after confirming stable operation.
 NoNewPrivileges=true
-ProtectSystem=strict
+# NOT using ProtectSystem=strict -- cross-compiled binary may need paths
+# we haven't enumerated. Use 'full' (protects /usr /boot read-only) which
+# is less aggressive than 'strict' (everything read-only).
+ProtectSystem=full
 ProtectHome=true
-ReadWritePaths=/run/cedar-detect
-# IMPORTANT: do NOT set PrivateTmp=true. We rely on /dev/shm being shared
-# with the eFinder process so cedar-detect can read frames directly via
-# the shmem_name protobuf field rather than transferring 730 KB per call
-# over gRPC. PrivateTmp would not isolate /dev/shm specifically (that's a
-# separate tmpfs), but we leave it off to be unambiguous about intent.
+# /dev/shm access: cedar-detect uses POSIX shared memory (shm_open) to
+# read image frames directly from the eFinder process, bypassing a
+# 730 KB gRPC serialization per frame. Do NOT remove this.
+ReadWritePaths=/run/cedar-detect /dev/shm
 
 [Install]
 WantedBy=multi-user.target

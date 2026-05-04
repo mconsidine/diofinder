@@ -149,6 +149,54 @@ if [ "$DRY_RUN" = "1" ]; then
   exit 0
 fi
 
+# --- 4a. Edit boot partition files directly (outside chroot) -----------------
+#
+# We do these edits here, on the host, rather than relying solely on
+# install.sh inside the chroot because:
+#   - The host can write FAT32 files natively without qemu overhead.
+#   - It's easier to verify and debug by inspecting the mounted files.
+#   - belt-and-suspenders: install.sh does the same edits idempotently.
+
+CONFIG_TXT="$ROOT/boot/firmware/config.txt"
+CMDLINE_TXT="$ROOT/boot/firmware/cmdline.txt"
+
+LOG "Patching $CONFIG_TXT for USB gadget + camera"
+if [ -f "$CONFIG_TXT" ]; then
+  for setting in \
+    "camera_auto_detect=1" \
+    "enable_uart=1" \
+    "dtoverlay=dwc2"; do
+    if ! grep -qF "$setting" "$CONFIG_TXT"; then
+      echo "$setting" >> "$CONFIG_TXT"
+      LOG "  Added: $setting"
+    else
+      LOG "  Already present: $setting"
+    fi
+  done
+else
+  WARN "config.txt not found at $CONFIG_TXT; USB gadget mode not configured"
+fi
+
+LOG "Patching $CMDLINE_TXT for USB gadget modules"
+if [ -f "$CMDLINE_TXT" ]; then
+  if ! grep -q "modules-load=dwc2,g_ether" "$CMDLINE_TXT"; then
+    # cmdline.txt must remain a single line with no trailing newline.
+    # Splice 'modules-load=dwc2,g_ether' after 'rootwait'.
+    cp "$CMDLINE_TXT" "$CMDLINE_TXT.orig"
+    if grep -q "rootwait" "$CMDLINE_TXT"; then
+      sed -i 's/rootwait/rootwait modules-load=dwc2,g_ether/' "$CMDLINE_TXT"
+    else
+      sed -i '1s/^/modules-load=dwc2,g_ether /' "$CMDLINE_TXT"
+    fi
+    LOG "  modules-load=dwc2,g_ether added to cmdline.txt"
+    LOG "  cmdline.txt is now: $(cat "$CMDLINE_TXT")"
+  else
+    LOG "  modules-load=dwc2,g_ether already present in cmdline.txt"
+  fi
+else
+  WARN "cmdline.txt not found at $CMDLINE_TXT; USB gadget module load not configured"
+fi
+
 # qemu-user-static for cross-arch chroot
 cp /usr/bin/qemu-aarch64-static "$ROOT/usr/bin/"
 

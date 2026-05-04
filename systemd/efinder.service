@@ -33,8 +33,22 @@ NoNewPrivileges=true
 ProtectSystem=full
 ReadWritePaths=/var/lib/efinder /etc/efinder /run/efinder
 
-# Wait for the cedar-detect socket to exist before starting our children
-ExecStartPre=/usr/bin/timeout 30 sh -c 'until [ -S /run/cedar-detect/cedar-detect.sock ]; do sleep 0.2; done'
+# Wait for cedar-detect to create its socket before we spawn workers.
+# Check both: service must be active AND socket must exist.
+# Fail fast (2s) if the service is not active at all -- no point waiting
+# 30s for a socket that will never appear because cedar-detect crashed.
+ExecStartPre=/bin/bash -c '\
+  for i in $(seq 1 150); do \
+    if ! systemctl is-active --quiet cedar-detect.service; then \
+      echo "cedar-detect.service is not active; aborting wait"; \
+      systemctl status cedar-detect.service --no-pager -n 20; \
+      exit 1; \
+    fi; \
+    [ -S /run/cedar-detect/cedar-detect.sock ] && exit 0; \
+    sleep 0.2; \
+  done; \
+  echo "Timed out waiting for cedar-detect socket"; \
+  exit 1'
 
 [Install]
 WantedBy=multi-user.target
