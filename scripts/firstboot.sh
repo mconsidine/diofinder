@@ -4,15 +4,15 @@
 #
 # At the end of first boot the eFinder will be:
 #   * Hostname:           efinder.local
-#   * USB gadget IP:      10.55.0.1/24 (DHCP server for tethered host)
+#   * USB serial console: /dev/ttyACM0 on host (screen /dev/ttyACM0 115200)
 #   * Wi-Fi AP IP:        10.42.0.1/24 (DHCP server for clients)
 #   * Wi-Fi AP SSID:      efinder-XXXX (last 4 of MAC)
 #   * Wi-Fi AP password:  12345678 (hardcoded; private-network device)
 #   * Wi-Fi station:      not configured (user runs station.sh later)
 #
 # After first boot, the user can either:
-#   1. Tether USB cable to Pi data port -> ssh efinder@10.55.0.1
-#      (or ssh efinder@efinder.local once mDNS resolves)
+#   1. Tether USB cable to Pi data port -> screen /dev/ttyACM0 115200
+#      (macOS: screen /dev/tty.usbmodem* 115200)
 #   2. Connect phone/laptop to the AP SSID -> ssh efinder@10.42.0.1
 #      (or ssh efinder@efinder.local once mDNS resolves)
 #
@@ -76,28 +76,6 @@ else
   WARN "avahi-daemon not installed; mDNS efinder.local won't work"
 fi
 
-# --- USB Ethernet gadget profile ---------------------------------------------
-# Kernel modules dwc2 + g_ether are loaded via cmdline.txt edits made at
-# image build. When the cable is plugged in, the kernel creates usb0.
-# This profile tells NetworkManager to give it a static IP and run a DHCP
-# server (so the host gets 10.55.0.x). 'ifname usb0' makes the profile
-# apply regardless of the random MAC g_ether picks each boot.
-
-if ! nmcli -t -f NAME con show | grep -qx "efinder-usb"; then
-  LOG "Creating usb0 NetworkManager profile (10.55.0.1/24)"
-  nmcli con add \
-    type ethernet \
-    ifname usb0 \
-    con-name efinder-usb \
-    autoconnect yes \
-    ipv4.method shared \
-    ipv4.addresses 10.55.0.1/24 \
-    ipv6.method ignore \
-    || WARN "Could not create usb0 profile"
-else
-  LOG "usb0 profile already exists"
-fi
-
 # --- Wi-Fi access point profile ----------------------------------------------
 
 MAC=$(ip link show wlan0 2>/dev/null | awk '/ether/ {gsub(":",""); print $2; exit}')
@@ -136,18 +114,13 @@ else
   LOG "AP profile already exists"
 fi
 
-# --- Bring connections up now -------------------------------------------------
+# --- Bring AP up now ----------------------------------------------------------
+# Attempt activation unconditionally; if wlan0 is busy or unavailable,
+# the autoconnect=yes on the profile guarantees it comes up at next boot.
 
-if ip link show usb0 >/dev/null 2>&1; then
-  nmcli con up efinder-usb >/dev/null 2>&1 \
-    || WARN "Could not activate efinder-usb (may auto-connect later)"
-fi
-
-if nmcli -t -f DEVICE,STATE dev | grep -q "^wlan0:disconnected"; then
-  LOG "Activating Wi-Fi AP"
-  nmcli con up efinder-ap >/dev/null 2>&1 \
-    || WARN "Could not bring up AP (it'll auto-connect at next boot)"
-fi
+LOG "Activating Wi-Fi AP"
+nmcli con up efinder-ap >/dev/null 2>&1 \
+  || WARN "Could not bring up AP on first boot (will auto-connect at next boot)"
 
 mkdir -p /var/lib/efinder/captures
 chown -R efinder:efinder /var/lib/efinder

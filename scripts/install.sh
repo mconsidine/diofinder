@@ -276,82 +276,42 @@ if [ -f "$CONFIG_TXT" ]; then
   if ! grep -q "^enable_uart=1" "$CONFIG_TXT"; then
     echo "enable_uart=1" >> "$CONFIG_TXT"
   fi
-  # USB Ethernet gadget mode -- lets the Pi appear as a network device
-  # when plugged into the host's USB port via the Pi's USB data port
-  # (the middle micro-USB on the Zero 2W, NOT the leftmost PWR port).
-  # Once active, the host sees a new Ethernet interface; Avahi broadcasts
-  # over it, so `ssh efinder.local` works without Wi-Fi or HDMI.
+  # USB serial gadget mode -- the Pi appears as /dev/ttyACM0 (Linux/Mac)
+  # or a COM port (Windows) when plugged into the host via the Pi's USB
+  # data port (the middle micro-USB on the Zero 2W, NOT the leftmost PWR
+  # port). A getty on ttyGS0 (enabled below) provides a login prompt.
+  # Use: screen /dev/ttyACM0 115200
   if ! grep -q "^dtoverlay=dwc2" "$CONFIG_TXT"; then
     LOG "Enabling USB gadget mode (dwc2) in $CONFIG_TXT"
     echo "" >> "$CONFIG_TXT"
-    echo "# USB Ethernet gadget mode -- see /boot/firmware/cmdline.txt" >> "$CONFIG_TXT"
+    echo "# USB serial gadget mode -- see /boot/firmware/cmdline.txt" >> "$CONFIG_TXT"
     echo "dtoverlay=dwc2" >> "$CONFIG_TXT"
   fi
 fi
 
 # cmdline.txt is one long single line; we splice into it rather than
 # append. The kernel parses each space-separated token as a parameter.
+# console=ttyGS0,115200 routes kernel boot messages to the USB serial
+# port so the full boot sequence is visible in screen.
 if [ -f "$CMDLINE_TXT" ]; then
   if ! grep -q "modules-load=.*\bdwc2\b" "$CMDLINE_TXT"; then
-    LOG "Adding dwc2,g_ether modules-load to $CMDLINE_TXT"
-    # Backup once
+    LOG "Adding dwc2,g_cdc_acm modules-load to $CMDLINE_TXT"
     [ -f "$CMDLINE_TXT.efinder-orig" ] || cp "$CMDLINE_TXT" "$CMDLINE_TXT.efinder-orig"
-    # Insert after rootwait (a common anchor in stock cmdline.txt) so
-    # the parameter ordering stays sensible. If rootwait isn't present,
-    # just prepend.
     if grep -q "rootwait" "$CMDLINE_TXT"; then
-      sed -i 's/rootwait/rootwait modules-load=dwc2,g_ether/' "$CMDLINE_TXT"
+      sed -i 's/rootwait/rootwait modules-load=dwc2,g_cdc_acm console=ttyGS0,115200/' "$CMDLINE_TXT"
     else
-      sed -i '1s|^|modules-load=dwc2,g_ether |' "$CMDLINE_TXT"
+      sed -i '1s|^|modules-load=dwc2,g_cdc_acm console=ttyGS0,115200 |' "$CMDLINE_TXT"
     fi
   fi
 fi
 
-# --- NetworkManager connection profiles --------------------------------------
-#
-# Write these as .nmconnection files so they exist before first boot.
-# NM reads them at startup and matches to interfaces as they appear.
-#
-# USB gadget note: usb0 only exists when a cable is plugged into a USB
-# host. If no cable is connected at boot, NM skips the profile. We add
-# a udev rule to trigger activation the moment usb0 appears -- whether
-# at boot or when the user plugs in the cable later.
+# --- USB serial console (g_cdc_acm gadget) -----------------------------------
+# g_cdc_acm creates /dev/ttyGS0 on the Pi. Enable a getty on it so the
+# user gets a login prompt when they connect with screen /dev/ttyACM0 115200.
 
-NM_CONNECTIONS=/etc/NetworkManager/system-connections
-mkdir -p "$NM_CONNECTIONS"
-
-LOG "Writing USB Ethernet gadget NM profile"
-cat > "$NM_CONNECTIONS/efinder-usb.nmconnection" << 'EOF'
-[connection]
-id=efinder-usb
-type=ethernet
-interface-name=usb0
-autoconnect=true
-
-[ethernet]
-
-[ipv4]
-method=shared
-address1=10.55.0.1/24
-
-[ipv6]
-method=ignore
-EOF
-chmod 600 "$NM_CONNECTIONS/efinder-usb.nmconnection"
-
-# udev rule: bring up the efinder-usb NM profile the moment usb0
-# appears. This fires whether the cable is plugged in before or after
-# boot, solving the race between g_ether creating usb0 and NM having
-# a chance to activate the profile.
-LOG "Writing udev rule for usb0 auto-activation"
-cat > /etc/udev/rules.d/72-efinder-usb.rules << 'EOF'
-# eFinder: activate USB Ethernet gadget profile when usb0 appears.
-# g_ether creates usb0 when a USB cable is connected to a host.
-# Without this rule NM only activates autoconnect profiles that exist
-# at daemon startup -- missing any interface that appears later.
-ACTION=="add", SUBSYSTEM=="net", KERNEL=="usb0", \
-    RUN+="/usr/bin/nmcli con up efinder-usb"
-EOF
+LOG "Enabling USB serial console (serial-getty@ttyGS0)"
+systemctl enable serial-getty@ttyGS0.service 2>/dev/null || \
+  WARN "Could not enable serial-getty@ttyGS0"
 
 # --- Enable services ---------------------------------------------------------
 
