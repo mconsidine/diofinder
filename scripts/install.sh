@@ -281,11 +281,13 @@ if [ -f "$CONFIG_TXT" ]; then
   # data port (the middle micro-USB on the Zero 2W, NOT the leftmost PWR
   # port). A getty on ttyGS0 (enabled below) provides a login prompt.
   # Use: screen /dev/ttyACM0 115200
-  if ! grep -q "^dtoverlay=dwc2" "$CONFIG_TXT"; then
+  # Whole-line match (-x) is intentional: the base Pi OS Trixie image
+  # ships 'dtoverlay=dwc2,dr_mode=host' in [cm5] for CM5 host mode.
+  # A substring or prefix match would falsely skip adding the [all]
+  # peripheral-mode entry that the Pi Zero / Zero 2W actually needs.
+  if ! grep -qxF "dtoverlay=dwc2" "$CONFIG_TXT"; then
     LOG "Enabling USB gadget mode (dwc2) in $CONFIG_TXT"
-    echo "" >> "$CONFIG_TXT"
-    echo "# USB serial gadget mode -- see /boot/firmware/cmdline.txt" >> "$CONFIG_TXT"
-    echo "dtoverlay=dwc2" >> "$CONFIG_TXT"
+    printf "\n[all]\n# USB serial gadget mode -- see /boot/firmware/cmdline.txt\ndtoverlay=dwc2\n" >> "$CONFIG_TXT"
   fi
 fi
 
