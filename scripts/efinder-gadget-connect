@@ -1,0 +1,32 @@
+#!/bin/bash
+# Force USB gadget re-enumeration after g_cdc_acm is registered.
+#
+# The PC starts trying to enumerate the USB device the moment the
+# hardware powers on (dtoverlay=dwc2,dr_mode=peripheral). The g_cdc_acm
+# function driver isn't registered until systemd-modules-load runs, which
+# is tens of seconds later. The PC times out ("device descriptor read/64,
+# error -110") and gives up.
+#
+# This script runs after systemd-modules-load.service and pulses
+# soft_connect: the gadget briefly disconnects then reconnects, giving
+# the PC a fresh enumeration event with g_cdc_acm now registered and
+# ready to answer descriptor requests.
+#
+# Also handles the "cable plugged in after boot" case: soft_connect=0
+# then =1 is harmless when no host is connected; when the user plugs
+# in later, g_cdc_acm is already loaded and enumeration succeeds
+# immediately.
+
+# Wait up to 10s for the UDC sysfs entry to appear.
+for i in $(seq 1 20); do
+    ls /sys/class/udc/ 2>/dev/null | grep -q . && break
+    sleep 0.5
+done
+
+for sc in /sys/class/udc/*/soft_connect; do
+    [ -f "$sc" ] || continue
+    echo 0 > "$sc"
+    sleep 1
+    echo 1 > "$sc"
+    logger -t efinder-gadget "USB gadget reconnected via $sc"
+done

@@ -236,18 +236,20 @@ sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/python" \
 # --- systemd units ------------------------------------------------------------
 
 LOG "Installing systemd units"
-install -m 644 "$EFINDER_DIR/systemd/cedar-detect.service"      /etc/systemd/system/
-install -m 644 "$EFINDER_DIR/systemd/efinder.service"           /etc/systemd/system/
-install -m 644 "$EFINDER_DIR/systemd/efinder-firstboot.service" /etc/systemd/system/
-install -m 644 "$EFINDER_DIR/systemd/efinder-webui.service"     /etc/systemd/system/
+install -m 644 "$EFINDER_DIR/systemd/cedar-detect.service"        /etc/systemd/system/
+install -m 644 "$EFINDER_DIR/systemd/efinder.service"             /etc/systemd/system/
+install -m 644 "$EFINDER_DIR/systemd/efinder-firstboot.service"   /etc/systemd/system/
+install -m 644 "$EFINDER_DIR/systemd/efinder-webui.service"       /etc/systemd/system/
+install -m 644 "$EFINDER_DIR/systemd/efinder-usb-gadget.service"  /etc/systemd/system/
 
 # Sudoers rule scoped to just efinder-update (used by the web UI)
 install -m 440 "$EFINDER_DIR/etc/sudoers.d/efinder-update" /etc/sudoers.d/efinder-update
 
-install -m 755 "$EFINDER_DIR/scripts/efinder-update" /usr/local/bin/
-install -m 755 "$EFINDER_DIR/scripts/efinder-ctl"    /usr/local/bin/
-install -m 755 "$EFINDER_DIR/scripts/ap.sh"          /usr/local/bin/ap.sh
-install -m 755 "$EFINDER_DIR/scripts/station.sh"     /usr/local/bin/station.sh
+install -m 755 "$EFINDER_DIR/scripts/efinder-update"          /usr/local/bin/
+install -m 755 "$EFINDER_DIR/scripts/efinder-ctl"             /usr/local/bin/
+install -m 755 "$EFINDER_DIR/scripts/ap.sh"                   /usr/local/bin/ap.sh
+install -m 755 "$EFINDER_DIR/scripts/station.sh"              /usr/local/bin/station.sh
+install -m 755 "$EFINDER_DIR/scripts/efinder-gadget-connect"  /usr/local/bin/efinder-gadget-connect
 # firstboot.sh runs in place from /opt/efinder/scripts/ per the systemd
 # unit (no copy needed); just ensure it's executable.
 chmod 755 "$EFINDER_DIR/scripts/firstboot.sh"
@@ -352,7 +354,8 @@ systemctl enable serial-getty@ttyGS0.service 2>/dev/null || \
 LOG "Enabling services"
 systemctl daemon-reload
 systemctl enable cedar-detect.service efinder.service \
-                 efinder-firstboot.service efinder-webui.service
+                 efinder-firstboot.service efinder-webui.service \
+                 efinder-usb-gadget.service
 
 if [ "$IN_CHROOT" != "1" ]; then
   LOG "Starting services"

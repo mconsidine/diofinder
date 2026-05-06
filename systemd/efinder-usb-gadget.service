@@ -1,0 +1,16 @@
+[Unit]
+Description=eFinder USB serial gadget reconnect
+# Must run after module loading so g_cdc_acm is bound to the DWC2
+# hardware before we pulse soft_connect. Without this ordering, the
+# reconnect happens before the gadget function driver is registered
+# and the PC still gets no response.
+After=systemd-modules-load.service
+Wants=systemd-modules-load.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/efinder-gadget-connect
+
+[Install]
+WantedBy=multi-user.target
