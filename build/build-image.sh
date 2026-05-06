@@ -164,8 +164,7 @@ LOG "Patching $CONFIG_TXT for USB gadget + camera"
 if [ -f "$CONFIG_TXT" ]; then
   for setting in \
     "camera_auto_detect=1" \
-    "enable_uart=1" \
-    "dtoverlay=dwc2"; do
+    "enable_uart=1"; do
     if ! grep -qF "$setting" "$CONFIG_TXT"; then
       echo "$setting" >> "$CONFIG_TXT"
       LOG "  Added: $setting"
@@ -173,6 +172,17 @@ if [ -f "$CONFIG_TXT" ]; then
       LOG "  Already present: $setting"
     fi
   done
+  # dtoverlay=dwc2 requires whole-line matching (-x). The base Pi OS Trixie
+  # image ships 'dtoverlay=dwc2,dr_mode=host' in the [cm5] section for CM5
+  # host mode. A substring match would falsely treat that as "already
+  # configured" and skip adding the [all] peripheral-mode entry that the
+  # Pi Zero / Zero 2W actually needs. Using -x ensures an exact line match.
+  if ! grep -qxF "dtoverlay=dwc2" "$CONFIG_TXT"; then
+    printf "\n[all]\n# USB serial gadget mode (peripheral) for Pi Zero / Zero 2W\ndtoverlay=dwc2\n" >> "$CONFIG_TXT"
+    LOG "  Added: dtoverlay=dwc2 under [all]"
+  else
+    LOG "  Already present: dtoverlay=dwc2"
+  fi
 else
   WARN "config.txt not found at $CONFIG_TXT; USB gadget mode not configured"
 fi
