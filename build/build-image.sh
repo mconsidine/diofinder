@@ -177,11 +177,14 @@ if [ -f "$CONFIG_TXT" ]; then
   # host mode. A substring match would falsely treat that as "already
   # configured" and skip adding the [all] peripheral-mode entry that the
   # Pi Zero / Zero 2W actually needs. Using -x ensures an exact line match.
-  if ! grep -qxF "dtoverlay=dwc2" "$CONFIG_TXT"; then
-    printf "\n[all]\n# USB serial gadget mode (peripheral) for Pi Zero / Zero 2W\ndtoverlay=dwc2\n" >> "$CONFIG_TXT"
-    LOG "  Added: dtoverlay=dwc2 under [all]"
+  # dr_mode=peripheral is explicit and required. Without it the dwc2 driver
+  # on newer kernels defaults to OTG mode and waits to detect host vs device
+  # rather than committing to peripheral (gadget) mode.
+  if ! grep -qxF "dtoverlay=dwc2,dr_mode=peripheral" "$CONFIG_TXT"; then
+    printf "\n[all]\n# USB serial gadget -- peripheral mode for Pi Zero / Zero 2W\ndtoverlay=dwc2,dr_mode=peripheral\n" >> "$CONFIG_TXT"
+    LOG "  Added: dtoverlay=dwc2,dr_mode=peripheral under [all]"
   else
-    LOG "  Already present: dtoverlay=dwc2"
+    LOG "  Already present: dtoverlay=dwc2,dr_mode=peripheral"
   fi
 else
   WARN "config.txt not found at $CONFIG_TXT; USB gadget mode not configured"

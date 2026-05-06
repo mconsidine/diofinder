@@ -285,11 +285,27 @@ if [ -f "$CONFIG_TXT" ]; then
   # ships 'dtoverlay=dwc2,dr_mode=host' in [cm5] for CM5 host mode.
   # A substring or prefix match would falsely skip adding the [all]
   # peripheral-mode entry that the Pi Zero / Zero 2W actually needs.
-  if ! grep -qxF "dtoverlay=dwc2" "$CONFIG_TXT"; then
-    LOG "Enabling USB gadget mode (dwc2) in $CONFIG_TXT"
-    printf "\n[all]\n# USB serial gadget mode -- see /boot/firmware/cmdline.txt\ndtoverlay=dwc2\n" >> "$CONFIG_TXT"
+  # dr_mode=peripheral is explicit and required. Without it, the dwc2
+  # driver on newer kernels defaults to OTG mode and waits to detect
+  # host vs device rather than committing to peripheral (gadget) mode.
+  if ! grep -qxF "dtoverlay=dwc2,dr_mode=peripheral" "$CONFIG_TXT"; then
+    LOG "Enabling USB gadget mode (dwc2,dr_mode=peripheral) in $CONFIG_TXT"
+    printf "\n[all]\n# USB serial gadget -- peripheral mode for Pi Zero / Zero 2W\ndtoverlay=dwc2,dr_mode=peripheral\n" >> "$CONFIG_TXT"
   fi
 fi
+
+# Belt-and-suspenders: also write a modules-load.d file. The cmdline.txt
+# modules-load= parameter is processed by systemd-modules-load, but a
+# dedicated conf file is more reliable across Pi OS variants.
+LOG "Writing /etc/modules-load.d/efinder-gadget.conf"
+mkdir -p /etc/modules-load.d
+cat > /etc/modules-load.d/efinder-gadget.conf << 'EOF'
+# eFinder USB serial gadget
+# dwc2: DWC2 USB OTG controller driver
+# g_cdc_acm: USB CDC ACM serial gadget (/dev/ttyACM0 on the host PC)
+dwc2
+g_cdc_acm
+EOF
 
 # cmdline.txt is one long single line; we splice into it rather than
 # append. The kernel parses each space-separated token as a parameter.
