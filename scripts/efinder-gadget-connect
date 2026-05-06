@@ -1,32 +1,102 @@
 #!/bin/bash
-# Force USB gadget re-enumeration after g_cdc_acm is registered.
+# Configure and connect the USB serial ACM gadget using configfs (libcomposite).
 #
-# The PC starts trying to enumerate the USB device the moment the
-# hardware powers on (dtoverlay=dwc2,dr_mode=peripheral). The g_cdc_acm
-# function driver isn't registered until systemd-modules-load runs, which
-# is tens of seconds later. The PC times out ("device descriptor read/64,
-# error -110") and gives up.
+# Pi OS Trixie kernel ships libcomposite + usb_f_acm + u_serial instead of
+# the old monolithic g_cdc_acm module. We assemble the same USB CDC ACM
+# device through /sys/kernel/config/usb_gadget/.
 #
-# This script runs after systemd-modules-load.service and pulses
-# soft_connect: the gadget briefly disconnects then reconnects, giving
-# the PC a fresh enumeration event with g_cdc_acm now registered and
-# ready to answer descriptor requests.
+# On the host side the Pi appears as /dev/ttyACM0 (Linux/Mac) or a COM port
+# (Windows). Use: screen /dev/ttyACM0 115200
 #
-# Also handles the "cable plugged in after boot" case: soft_connect=0
-# then =1 is harmless when no host is connected; when the user plugs
-# in later, g_cdc_acm is already loaded and enumeration succeeds
-# immediately.
+# Timing: the PC begins USB enumeration the moment the hardware powers on.
+# We load the modules and configure the gadget here, then pulse soft_connect
+# so the PC sees a fresh enumeration request with the gadget already bound.
+# This avoids the "device descriptor read/64, error -110" timeout.
 
-# Wait up to 10s for the UDC sysfs entry to appear.
-for i in $(seq 1 20); do
-    ls /sys/class/udc/ 2>/dev/null | grep -q . && break
+set -euo pipefail
+
+GADGET_PATH="/sys/kernel/config/usb_gadget/efinder"
+
+# --- Load required modules ---------------------------------------------------
+
+modprobe libcomposite
+modprobe u_serial
+modprobe usb_f_acm
+
+# --- Wait for the UDC to appear ----------------------------------------------
+
+UDC=""
+for i in $(seq 1 40); do
+    UDC=$(ls /sys/class/udc/ 2>/dev/null | head -n1)
+    [ -n "$UDC" ] && break
     sleep 0.5
 done
 
-for sc in /sys/class/udc/*/soft_connect; do
-    [ -f "$sc" ] || continue
-    echo 0 > "$sc"
+if [ -z "$UDC" ]; then
+    logger -t efinder-gadget "ERROR: No UDC found in /sys/class/udc/ — gadget not configured"
+    exit 1
+fi
+logger -t efinder-gadget "Using UDC: $UDC"
+
+# --- Configure gadget via configfs -------------------------------------------
+
+# Mount configfs if not already mounted
+if ! mountpoint -q /sys/kernel/config 2>/dev/null; then
+    mount -t configfs none /sys/kernel/config
+fi
+
+# Tear down any existing gadget so this script is idempotent
+if [ -d "$GADGET_PATH" ]; then
+    # Unbind before reconfiguring
+    echo "" > "$GADGET_PATH/UDC" 2>/dev/null || true
+    rm -f "$GADGET_PATH/configs/c.1/acm.usb0" 2>/dev/null || true
+    rmdir "$GADGET_PATH/configs/c.1/strings/0x409" 2>/dev/null || true
+    rmdir "$GADGET_PATH/configs/c.1" 2>/dev/null || true
+    rmdir "$GADGET_PATH/functions/acm.usb0" 2>/dev/null || true
+    rmdir "$GADGET_PATH/strings/0x409" 2>/dev/null || true
+    rmdir "$GADGET_PATH" 2>/dev/null || true
+fi
+
+mkdir -p "$GADGET_PATH"
+cd "$GADGET_PATH"
+
+# USB identifiers — use a known CDC ACM VID/PID so Linux auto-loads cdc_acm
+echo 0x1d6b > idVendor   # Linux Foundation
+echo 0x0104 > idProduct  # Multifunction Composite Gadget
+echo 0x0100 > bcdDevice
+echo 0x0200 > bcdUSB
+
+# Device class: use CDC (0x02) for ACM so the host binds cdc_acm automatically
+echo 0x02 > bDeviceClass
+echo 0x00 > bDeviceSubClass
+echo 0x00 > bDeviceProtocol
+
+mkdir -p strings/0x409
+echo "fedcba9876543210" > strings/0x409/serialnumber
+echo "eFinder"          > strings/0x409/manufacturer
+echo "eFinder Serial"   > strings/0x409/product
+
+mkdir -p configs/c.1/strings/0x409
+echo "CDC ACM"          > configs/c.1/strings/0x409/configuration
+echo 250                > configs/c.1/MaxPower
+
+mkdir -p functions/acm.usb0
+ln -sf "$(pwd)/functions/acm.usb0" configs/c.1/acm.usb0
+
+# Bind to the UDC — this makes the device visible to the host
+echo "$UDC" > UDC
+logger -t efinder-gadget "Gadget configured and bound to $UDC"
+
+# --- Pulse soft_connect to force re-enumeration ------------------------------
+#
+# The PC may have already timed out waiting for the gadget. A soft_connect
+# pulse triggers a fresh D+ pull-up so the host sees a new attachment event.
+
+SC="/sys/class/udc/${UDC}/soft_connect"
+if [ -f "$SC" ]; then
+    sleep 0.5
+    echo 0 > "$SC"
     sleep 1
-    echo 1 > "$sc"
-    logger -t efinder-gadget "USB gadget reconnected via $sc"
-done
+    echo 1 > "$SC"
+    logger -t efinder-gadget "soft_connect pulsed on $UDC"
+fi

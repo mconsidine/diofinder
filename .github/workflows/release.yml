@@ -215,9 +215,9 @@ jobs:
           echo "--- config.txt (last 20 lines) ---"
           tail -20 /tmp/boot-check/config.txt
           echo ""
-          sudo grep -q "modules-load=dwc2,g_cdc_acm" /tmp/boot-check/cmdline.txt \
-            && echo "✓ USB gadget modules in cmdline.txt" \
-            || { echo "✗ MISSING: modules-load=dwc2,g_cdc_acm not in cmdline.txt"; exit 1; }
+          sudo grep -q "console=ttyGS0" /tmp/boot-check/cmdline.txt \
+            && echo "✓ USB serial console in cmdline.txt" \
+            || { echo "✗ MISSING: console=ttyGS0 not in cmdline.txt"; exit 1; }
           sudo grep -qx "dtoverlay=dwc2,dr_mode=peripheral" /tmp/boot-check/config.txt \
             && echo "✓ dtoverlay=dwc2,dr_mode=peripheral in config.txt" \
             || { echo "✗ MISSING: dtoverlay=dwc2,dr_mode=peripheral not in config.txt"; exit 1; }

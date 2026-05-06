@@ -190,25 +190,26 @@ else
   WARN "config.txt not found at $CONFIG_TXT; USB gadget mode not configured"
 fi
 
-LOG "Patching $CMDLINE_TXT for USB gadget modules"
+LOG "Patching $CMDLINE_TXT for USB serial console"
 if [ -f "$CMDLINE_TXT" ]; then
-  if ! grep -q "modules-load=dwc2,g_cdc_acm" "$CMDLINE_TXT"; then
+  if ! grep -q "console=ttyGS0" "$CMDLINE_TXT"; then
     # cmdline.txt must remain a single line with no trailing newline.
-    # Splice after 'rootwait'; also add console=ttyGS0,115200 so kernel
-    # boot messages appear on the USB serial port (screen /dev/ttyACM0 115200).
+    # Add console=ttyGS0,115200 so kernel boot messages appear on the USB
+    # serial port (screen /dev/ttyACM0 115200 on the host).
+    # dwc2 is loaded via modules-load.d / initramfs; no cmdline.txt entry needed.
     cp "$CMDLINE_TXT" "$CMDLINE_TXT.orig"
     if grep -q "rootwait" "$CMDLINE_TXT"; then
-      sed -i 's/rootwait/rootwait modules-load=dwc2,g_cdc_acm console=ttyGS0,115200/' "$CMDLINE_TXT"
+      sed -i 's/rootwait/rootwait console=ttyGS0,115200/' "$CMDLINE_TXT"
     else
-      sed -i '1s/^/modules-load=dwc2,g_cdc_acm console=ttyGS0,115200 /' "$CMDLINE_TXT"
+      sed -i '1s/^/console=ttyGS0,115200 /' "$CMDLINE_TXT"
     fi
-    LOG "  modules-load=dwc2,g_cdc_acm console=ttyGS0,115200 added to cmdline.txt"
+    LOG "  console=ttyGS0,115200 added to cmdline.txt"
     LOG "  cmdline.txt is now: $(cat "$CMDLINE_TXT")"
   else
-    LOG "  modules-load=dwc2,g_cdc_acm already present in cmdline.txt"
+    LOG "  console=ttyGS0,115200 already present in cmdline.txt"
   fi
 else
-  WARN "cmdline.txt not found at $CMDLINE_TXT; USB gadget module load not configured"
+  WARN "cmdline.txt not found at $CMDLINE_TXT; USB serial console not configured"
 fi
 
 # qemu-user-static for cross-arch chroot
