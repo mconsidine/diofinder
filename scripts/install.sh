@@ -297,53 +297,53 @@ if [ -f "$CONFIG_TXT" ]; then
   fi
 fi
 
-# Belt-and-suspenders: also write a modules-load.d file. The cmdline.txt
-# modules-load= parameter is processed by systemd-modules-load, but a
-# dedicated conf file is more reliable across Pi OS variants.
+# Belt-and-suspenders: also write a modules-load.d file so systemd
+# pre-loads dwc2 early. libcomposite/u_serial/usb_f_acm are loaded by
+# efinder-gadget-connect at runtime (modprobe) so they are listed here
+# only as documentation; including them in modules-load.d is fine too.
 LOG "Writing /etc/modules-load.d/efinder-gadget.conf"
 mkdir -p /etc/modules-load.d
 cat > /etc/modules-load.d/efinder-gadget.conf << 'EOF'
-# eFinder USB serial gadget
-# dwc2: DWC2 USB OTG controller driver
-# g_cdc_acm: USB CDC ACM serial gadget (/dev/ttyACM0 on the host PC)
+# eFinder USB serial gadget (configfs / libcomposite approach)
+# dwc2: DWC2 USB OTG controller driver (peripheral mode via dtoverlay)
+# The ACM gadget function is assembled at runtime by efinder-gadget-connect
+# using libcomposite + u_serial + usb_f_acm (Pi OS Trixie kernel).
 dwc2
-g_cdc_acm
+libcomposite
+u_serial
+usb_f_acm
 EOF
 
-# Add gadget modules to the initramfs so they are loaded before userspace
-# starts. This is critical: the PC begins USB enumeration the moment the
-# hardware is powered on. systemd-modules-load runs tens of seconds later,
-# causing the enumeration to time out (dmesg: "device descriptor read/64,
-# error -110"). Loading via initramfs ensures g_cdc_acm is bound to the
-# dwc2 hardware before the PC's first descriptor request.
-LOG "Adding USB gadget modules to initramfs"
+# Add dwc2 to the initramfs so the controller is available early.
+# The function modules (libcomposite, etc.) are loaded by efinder-gadget-connect
+# after systemd starts, so they do not need to be in the initramfs.
+LOG "Adding dwc2 module to initramfs"
 mkdir -p /etc/initramfs-tools
-for mod in dwc2 g_cdc_acm; do
+for mod in dwc2; do
   grep -qxF "$mod" /etc/initramfs-tools/modules 2>/dev/null \
     || echo "$mod" >> /etc/initramfs-tools/modules
 done
 update-initramfs -u -k all \
-  || WARN "update-initramfs failed; USB serial may time out on first enumeration"
+  || WARN "update-initramfs failed; USB gadget setup may be delayed on first boot"
 
-# cmdline.txt is one long single line; we splice into it rather than
-# append. The kernel parses each space-separated token as a parameter.
-# console=ttyGS0,115200 routes kernel boot messages to the USB serial
-# port so the full boot sequence is visible in screen.
+# cmdline.txt: add console=ttyGS0,115200 so kernel boot messages appear on
+# the USB serial port (screen /dev/ttyACM0 115200). dwc2 is loaded via
+# modules-load.d / initramfs; no need to list it in cmdline.txt.
 if [ -f "$CMDLINE_TXT" ]; then
-  if ! grep -q "modules-load=.*\bdwc2\b" "$CMDLINE_TXT"; then
-    LOG "Adding dwc2,g_cdc_acm modules-load to $CMDLINE_TXT"
+  if ! grep -q "console=ttyGS0" "$CMDLINE_TXT"; then
+    LOG "Adding console=ttyGS0,115200 to $CMDLINE_TXT"
     [ -f "$CMDLINE_TXT.efinder-orig" ] || cp "$CMDLINE_TXT" "$CMDLINE_TXT.efinder-orig"
     if grep -q "rootwait" "$CMDLINE_TXT"; then
-      sed -i 's/rootwait/rootwait modules-load=dwc2,g_cdc_acm console=ttyGS0,115200/' "$CMDLINE_TXT"
+      sed -i 's/rootwait/rootwait console=ttyGS0,115200/' "$CMDLINE_TXT"
     else
-      sed -i '1s|^|modules-load=dwc2,g_cdc_acm console=ttyGS0,115200 |' "$CMDLINE_TXT"
+      sed -i '1s|^|console=ttyGS0,115200 |' "$CMDLINE_TXT"
     fi
   fi
 fi
 
-# --- USB serial console (g_cdc_acm gadget) -----------------------------------
-# g_cdc_acm creates /dev/ttyGS0 on the Pi. Enable a getty on it so the
-# user gets a login prompt when they connect with screen /dev/ttyACM0 115200.
+# --- USB serial console ------------------------------------------------------
+# The configfs ACM gadget creates /dev/ttyGS0 on the Pi. Enable a getty on
+# it so the user gets a login prompt via: screen /dev/ttyACM0 115200
 
 LOG "Enabling USB serial console (serial-getty@ttyGS0)"
 systemctl enable serial-getty@ttyGS0.service 2>/dev/null || \
