@@ -68,6 +68,25 @@ if ! id -u "$EFINDER_USER" >/dev/null 2>&1; then
   usermod -aG video,gpio,i2c,dialout,sudo,netdev "$EFINDER_USER" || true
 fi
 
+# --- Hostname -----------------------------------------------------------------
+
+LOG "Setting hostname to efinder"
+echo "efinder" > /etc/hostname
+# Ensure 127.0.1.1 maps to the new hostname (avahi/mDNS needs this)
+if grep -q "^127\.0\.1\.1" /etc/hosts; then
+  sed -i 's/^127\.0\.1\.1.*/127.0.1.1\tefinder/' /etc/hosts
+else
+  echo "127.0.1.1\tefinder" >> /etc/hosts
+fi
+
+# --- WiFi regulatory domain ---------------------------------------------------
+# Without a country code, Pi OS Trixie soft-blocks WiFi via rfkill.
+# Write the regulatory domain now so it is set on every boot.
+
+LOG "Setting WiFi regulatory domain to US"
+mkdir -p /etc/default
+echo "REGDOMAIN=US" > /etc/default/crda
+
 # --- System packages ----------------------------------------------------------
 
 LOG "Updating apt and installing system packages"
@@ -84,7 +103,9 @@ apt-get install -y --no-install-recommends \
   avahi-daemon \
   openssh-server \
   network-manager \
-  initramfs-tools
+  initramfs-tools \
+  iw \
+  wireless-regdb
 
 # SSH on by default. Pi OS Lite has had this off-by-default in some
 # recent images; ensure it's enabled so the user can ssh in immediately.
