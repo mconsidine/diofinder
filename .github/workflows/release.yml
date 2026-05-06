@@ -218,9 +218,9 @@ jobs:
           sudo grep -q "modules-load=dwc2,g_cdc_acm" /tmp/boot-check/cmdline.txt \
             && echo "✓ USB gadget modules in cmdline.txt" \
             || { echo "✗ MISSING: modules-load=dwc2,g_cdc_acm not in cmdline.txt"; exit 1; }
-          sudo grep -qx "dtoverlay=dwc2" /tmp/boot-check/config.txt \
-            && echo "✓ dtoverlay=dwc2 (peripheral mode) in config.txt" \
-            || { echo "✗ MISSING: standalone dtoverlay=dwc2 not in config.txt (dtoverlay=dwc2,dr_mode=host in [cm5] does not count)"; exit 1; }
+          sudo grep -qx "dtoverlay=dwc2,dr_mode=peripheral" /tmp/boot-check/config.txt \
+            && echo "✓ dtoverlay=dwc2,dr_mode=peripheral in config.txt" \
+            || { echo "✗ MISSING: dtoverlay=dwc2,dr_mode=peripheral not in config.txt"; exit 1; }
           sudo umount /tmp/boot-check
           sudo losetup -d "$LOOP"
 
