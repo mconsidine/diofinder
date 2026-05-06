@@ -76,6 +76,16 @@ else
   WARN "avahi-daemon not installed; mDNS efinder.local won't work"
 fi
 
+# --- WiFi regulatory domain + rfkill -----------------------------------------
+# Pi OS Trixie soft-blocks WiFi until a country code is applied.
+# /etc/default/crda (written by install.sh) handles subsequent boots;
+# this runtime call covers the very first boot before crda has been read.
+
+LOG "Setting WiFi regulatory domain and unblocking rfkill"
+iw reg set US 2>/dev/null || WARN "iw reg set US failed (non-fatal)"
+rfkill unblock wifi 2>/dev/null || WARN "rfkill unblock wifi failed (non-fatal)"
+sleep 1   # give cfg80211 a moment to apply the domain before nmcli runs
+
 # --- Wi-Fi access point profile ----------------------------------------------
 
 MAC=$(ip link show wlan0 2>/dev/null | awk '/ether/ {gsub(":",""); print $2; exit}')
