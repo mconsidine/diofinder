@@ -57,7 +57,7 @@ fi
 # --- Camera detection ---------------------------------------------------------
 
 if command -v libcamera-hello >/dev/null 2>&1; then
-  if libcamera-hello --list-cameras 2>&1 | grep -q "Available cameras"; then
+  if libcamera-hello --list-cameras 2>/dev/null | grep -q "Available cameras"; then
     LOG "Camera detected (libcamera reports at least one)"
   else
     WARN "No camera detected by libcamera. Check ribbon cable orientation."
