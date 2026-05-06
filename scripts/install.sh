@@ -83,7 +83,8 @@ apt-get install -y --no-install-recommends \
   protobuf-compiler \
   avahi-daemon \
   openssh-server \
-  network-manager
+  network-manager \
+  initramfs-tools
 
 # SSH on by default. Pi OS Lite has had this off-by-default in some
 # recent images; ensure it's enabled so the user can ssh in immediately.
@@ -306,6 +307,21 @@ cat > /etc/modules-load.d/efinder-gadget.conf << 'EOF'
 dwc2
 g_cdc_acm
 EOF
+
+# Add gadget modules to the initramfs so they are loaded before userspace
+# starts. This is critical: the PC begins USB enumeration the moment the
+# hardware is powered on. systemd-modules-load runs tens of seconds later,
+# causing the enumeration to time out (dmesg: "device descriptor read/64,
+# error -110"). Loading via initramfs ensures g_cdc_acm is bound to the
+# dwc2 hardware before the PC's first descriptor request.
+LOG "Adding USB gadget modules to initramfs"
+mkdir -p /etc/initramfs-tools
+for mod in dwc2 g_cdc_acm; do
+  grep -qxF "$mod" /etc/initramfs-tools/modules 2>/dev/null \
+    || echo "$mod" >> /etc/initramfs-tools/modules
+done
+update-initramfs -u -k all \
+  || WARN "update-initramfs failed; USB serial may time out on first enumeration"
 
 # cmdline.txt is one long single line; we splice into it rather than
 # append. The kernel parses each space-separated token as a parameter.
