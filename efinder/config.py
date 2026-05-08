@@ -73,7 +73,7 @@ class Config:
     distortion: float = 0.0
 
     # -------- Cedar-detect knobs --------
-    cedar_detect_socket: str = "unix:///run/cedar-detect/cedar-detect.sock"
+    cedar_detect_socket: str = "localhost:50051"
     detect_sigma: float = 8.0
     detect_hot_pixels: bool = True
     # If True, cedar-detect bins the image down 2x before star search.
