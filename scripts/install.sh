@@ -111,6 +111,18 @@ apt-get install -y --no-install-recommends \
 # recent images; ensure it's enabled so the user can ssh in immediately.
 systemctl enable ssh.service 2>/dev/null || systemctl enable ssh.socket || true
 
+# NetworkManager: manage all interfaces (default Debian config has
+# managed=false which prevents NM from controlling wlan0).
+LOG "Configuring NetworkManager"
+mkdir -p /etc/NetworkManager
+cat > /etc/NetworkManager/NetworkManager.conf << 'EOF'
+[main]
+plugins=ifupdown,keyfile
+
+[ifupdown]
+managed=true
+EOF
+
 # --- Application code ---------------------------------------------------------
 
 if [ "$IN_CHROOT" = "1" ]; then
