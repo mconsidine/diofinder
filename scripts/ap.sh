@@ -80,7 +80,7 @@ nmcli con up "$PROFILE"
 
 # Report what we ended up with.
 SSID=$(nmcli -t -s -f 802-11-wireless.ssid con show "$PROFILE" | cut -d: -f2)
-PSK=$(nmcli -t -s -f wifi-sec.psk con show "$PROFILE" | cut -d: -f2)
+PSK=$(nmcli -t -s -f 802-11-wireless-security.psk con show "$PROFILE" | cut -d: -f2)
 IP=$(ip -4 addr show wlan0 2>/dev/null | awk '/inet / {print $2; exit}')
 
 cat <<EOF
