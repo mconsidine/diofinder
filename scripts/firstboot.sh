@@ -56,15 +56,23 @@ fi
 
 # --- Camera detection ---------------------------------------------------------
 
-if command -v libcamera-hello >/dev/null 2>&1; then
-  if libcamera-hello --list-cameras 2>/dev/null | grep -q "Available cameras"; then
-    LOG "Camera detected (libcamera reports at least one)"
+# rpicam-hello replaced libcamera-hello in Pi OS Bookworm/Trixie
+RPICAM_CMD=""
+if command -v rpicam-hello >/dev/null 2>&1; then
+  RPICAM_CMD="rpicam-hello"
+elif command -v libcamera-hello >/dev/null 2>&1; then
+  RPICAM_CMD="libcamera-hello"
+fi
+
+if [ -n "$RPICAM_CMD" ]; then
+  if $RPICAM_CMD --list-cameras 2>/dev/null | grep -q "Available cameras"; then
+    LOG "Camera detected ($RPICAM_CMD reports at least one)"
   else
-    WARN "No camera detected by libcamera. Check ribbon cable orientation."
+    WARN "No camera detected. Check CSI ribbon cable orientation and seating."
     WARN "First-boot continues; camera can be added later."
   fi
 else
-  WARN "libcamera-hello not installed; cannot verify camera"
+  WARN "Neither rpicam-hello nor libcamera-hello found; cannot verify camera"
 fi
 
 # --- Avahi: ensure it is running (config was pre-baked at image build) --------

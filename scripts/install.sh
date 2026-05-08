@@ -96,6 +96,7 @@ apt-get install -y --no-install-recommends \
   python3 python3-venv python3-pip python3-dev \
   python3-numpy python3-scipy python3-pil \
   python3-picamera2 python3-libcamera \
+  rpicam-apps \
   python3-flask \
   build-essential pkg-config \
   curl ca-certificates git \
