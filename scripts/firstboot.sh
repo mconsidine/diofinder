@@ -84,6 +84,7 @@ fi
 LOG "Setting WiFi regulatory domain and unblocking rfkill"
 iw reg set US 2>/dev/null || WARN "iw reg set US failed (non-fatal)"
 rfkill unblock wifi 2>/dev/null || WARN "rfkill unblock wifi failed (non-fatal)"
+nmcli radio wifi on 2>/dev/null || WARN "nmcli radio wifi on failed (non-fatal)"
 sleep 1   # give cfg80211 a moment to apply the domain before nmcli runs
 
 # --- Wi-Fi access point profile ----------------------------------------------
