@@ -13,11 +13,10 @@ ExecStart=/usr/local/bin/cedar-detect-server --port 50051
 Restart=on-failure
 RestartSec=2
 
-# Pin to the same core as the solver. Cedar-detect work and tetra3 solving
-# are sequential per frame (Python solver blocks on the gRPC call), so
-# co-locating them on one core is fine and leaves the other cores free
-# for camera and comms.
-CPUAffinity=3
+# Pin cedar-detect to CPU 2. The solver (caller) runs on CPU 3. Keeping them
+# on separate cores eliminates context-switch contention during the gRPC call
+# that happens on every frame -- previously both ends competed for CPU 3.
+CPUAffinity=2
 Nice=-5
 
 # Hardening -- kept intentionally loose for a cross-compiled Rust binary

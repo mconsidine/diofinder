@@ -257,7 +257,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                         error_message=f"cedar-detect failed: {e}",
                         completed_at=time.monotonic(),
                     ))
-                fail_streak += 1; time.sleep(0.5); continue
+                fail_streak += 1; time.sleep(0.05); continue
             slots.release_read_slot()
 
             n = len(resp.star_candidates)

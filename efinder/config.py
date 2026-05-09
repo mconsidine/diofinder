@@ -106,8 +106,10 @@ class Config:
     lx200_client_timeout_s: float = 30.0
 
     # -------- CPU affinity --------
-    # Pi Zero 2W has 4 cores; we leave 0 to the kernel.
-    cpu_camera: int = 2
+    # Pi Zero 2W: 4 cores; 0 = kernel, 1 = comms, 2 = cedar-detect,
+    # 3 = solver. Camera shares 3 with solver; it blocks on hardware
+    # DMA during exposure so the overlap is minimal.
+    cpu_camera: int = 3
     cpu_solver: int = 3
     cpu_comms: int = 1
 
