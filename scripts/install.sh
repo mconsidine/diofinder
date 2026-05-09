@@ -313,18 +313,13 @@ if [ -f "$CONFIG_TXT" ]; then
   if ! grep -q "^enable_uart=1" "$CONFIG_TXT"; then
     echo "enable_uart=1" >> "$CONFIG_TXT"
   fi
-  # USB serial gadget mode -- the Pi appears as /dev/ttyACM0 (Linux/Mac)
-  # or a COM port (Windows) when plugged into the host via the Pi's USB
-  # data port (the middle micro-USB on the Zero 2W, NOT the leftmost PWR
-  # port). A getty on ttyGS0 (enabled below) provides a login prompt.
-  # Use: screen /dev/ttyACM0 115200
-  # Whole-line match (-x) is intentional: the base Pi OS Trixie image
-  # ships 'dtoverlay=dwc2,dr_mode=host' in [cm5] for CM5 host mode.
-  # A substring or prefix match would falsely skip adding the [all]
-  # peripheral-mode entry that the Pi Zero / Zero 2W actually needs.
-  # dr_mode=peripheral is explicit and required. Without it, the dwc2
-  # driver on newer kernels defaults to OTG mode and waits to detect
-  # host vs device rather than committing to peripheral (gadget) mode.
+  # Pi OS Trixie's camera_auto_detect is unreliable for IMX477 (Arducam
+  # 12MP / HQ Camera). Add the explicit overlay so the sensor is always
+  # found regardless of firmware auto-detection behaviour.
+  if ! grep -qxF "dtoverlay=imx477" "$CONFIG_TXT"; then
+    LOG "Adding explicit IMX477 camera overlay to $CONFIG_TXT"
+    echo "dtoverlay=imx477" >> "$CONFIG_TXT"
+  fi
   if ! grep -qxF "dtoverlay=dwc2,dr_mode=peripheral" "$CONFIG_TXT"; then
     LOG "Enabling USB gadget mode (dwc2,dr_mode=peripheral) in $CONFIG_TXT"
     printf "\n[all]\n# USB serial gadget -- peripheral mode for Pi Zero / Zero 2W\ndtoverlay=dwc2,dr_mode=peripheral\n" >> "$CONFIG_TXT"

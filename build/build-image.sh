@@ -164,7 +164,8 @@ LOG "Patching $CONFIG_TXT for USB gadget + camera"
 if [ -f "$CONFIG_TXT" ]; then
   for setting in \
     "camera_auto_detect=1" \
-    "enable_uart=1"; do
+    "enable_uart=1" \
+    "dtoverlay=imx477"; do
     if ! grep -qF "$setting" "$CONFIG_TXT"; then
       echo "$setting" >> "$CONFIG_TXT"
       LOG "  Added: $setting"
