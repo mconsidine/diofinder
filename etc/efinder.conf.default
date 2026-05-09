@@ -69,7 +69,10 @@ lx200_port: 4060
 lx200_client_timeout_s: 10.0
 
 # ---- CPU affinity (Pi Zero 2W: 4 cores) ----
-cpu_camera: 2
+# 0=kernel  1=comms  2=cedar-detect  3=solver+camera
+# Camera blocks on hardware DMA during exposure, so sharing core 3
+# with the solver has negligible overlap.
+cpu_camera: 3
 cpu_solver: 3
 cpu_comms: 1
 
