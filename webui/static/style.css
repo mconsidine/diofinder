@@ -1,39 +1,37 @@
-/* eFinder web UI -- minimal dark theme.
-   Designed for legibility on a phone in the field at night. Red text
-   to preserve dark adaptation isn't a default, but feel free to add a
-   "night vision" toggle later. */
+/* eFinder web UI -- night vision red theme.
+   Red text preserves dark adaptation in the field. */
 
 * { box-sizing: border-box; }
 
 html, body {
   margin: 0;
   padding: 0;
-  background: #11151c;
-  color: #d8dde6;
+  background: #0d0000;
+  color: #cc3300;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 16px;
   line-height: 1.4;
 }
 
 header {
-  background: #0a0d12;
+  background: #080000;
   padding: 0.6rem 1rem;
-  border-bottom: 1px solid #2a2f3a;
+  border-bottom: 1px solid #3a0a00;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 1rem;
 }
 header h1 { margin: 0; font-size: 1.2rem; }
-header h1 a { color: #d8dde6; text-decoration: none; }
+header h1 a { color: #cc3300; text-decoration: none; }
 header nav { display: flex; gap: 1rem; flex-wrap: wrap; }
 header nav a {
-  color: #88a4d4;
+  color: #ff5500;
   text-decoration: none;
   padding: 0.25rem 0.5rem;
   border-radius: 4px;
 }
-header nav a:hover { background: #1a1f2a; }
+header nav a:hover { background: #1a0500; }
 
 main {
   max-width: 900px;
@@ -41,12 +39,12 @@ main {
   padding: 0 1rem;
 }
 
-h2 { margin-top: 0; font-weight: 500; color: #c9d2e0; }
-h3 { color: #c9d2e0; font-weight: 500; }
+h2 { margin-top: 0; font-weight: 500; color: #cc3300; }
+h3 { color: #cc3300; font-weight: 500; }
 
 .card {
-  background: #1a1f2a;
-  border: 1px solid #252a36;
+  background: #110000;
+  border: 1px solid #2a0800;
   border-radius: 6px;
   padding: 1rem;
   margin-bottom: 1rem;
@@ -73,12 +71,12 @@ h3 { color: #c9d2e0; font-weight: 500; }
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #6c7689;
+  color: #882200;
 }
 .big-coords > div > span:last-child {
   font-size: 1.6rem;
   font-family: "SF Mono", Menlo, Consolas, monospace;
-  color: #88a4d4;
+  color: #ff5500;
 }
 
 dl.stats {
@@ -88,16 +86,16 @@ dl.stats {
   row-gap: 0.25rem;
   margin: 0.5rem 0;
 }
-dl.stats dt { color: #6c7689; }
+dl.stats dt { color: #882200; }
 dl.stats dd { margin: 0; font-family: "SF Mono", Menlo, Consolas, monospace; }
 
-.muted { color: #6c7689; }
-.hint { font-size: 0.85rem; color: #6c7689; margin-top: 0.5rem; }
+.muted { color: #882200; }
+.hint { font-size: 0.85rem; color: #882200; margin-top: 0.5rem; }
 .instruction {
   font-size: 1.1rem;
-  background: #252a36;
+  background: #1a0500;
   padding: 0.75rem 1rem;
-  border-left: 3px solid #88a4d4;
+  border-left: 3px solid #cc3300;
   border-radius: 4px;
 }
 
@@ -115,9 +113,9 @@ input[type="number"], input[type="text"] {
   width: 100%;
   max-width: 320px;
   padding: 0.5rem;
-  background: #11151c;
-  color: #d8dde6;
-  border: 1px solid #2a2f3a;
+  background: #0d0000;
+  color: #cc3300;
+  border: 1px solid #3a0a00;
   border-radius: 4px;
   font-family: "SF Mono", Menlo, Consolas, monospace;
 }
@@ -125,38 +123,38 @@ input[type="number"], input[type="text"] {
 .btn {
   display: inline-block;
   padding: 0.5rem 1rem;
-  background: #2a2f3a;
-  color: #d8dde6;
-  border: 1px solid #353b48;
+  background: #1a0500;
+  color: #cc3300;
+  border: 1px solid #3a0a00;
   border-radius: 4px;
   cursor: pointer;
   font-size: 0.95rem;
 }
-.btn:hover { background: #353b48; }
-.btn-primary { background: #2a4178; border-color: #345090; color: #e8edf6; }
-.btn-primary:hover { background: #345090; }
-.btn-warning { background: #5a3a1c; border-color: #704a26; }
-.btn-warning:hover { background: #704a26; }
+.btn:hover { background: #2a0800; }
+.btn-primary { background: #3a0a00; border-color: #cc3300; color: #ff5500; }
+.btn-primary:hover { background: #4a1000; }
+.btn-warning { background: #2a0800; border-color: #882200; }
+.btn-warning:hover { background: #3a0a00; }
 
 .alert {
   padding: 0.75rem 1rem;
   border-radius: 4px;
   margin: 0.5rem 0;
 }
-.alert-error { background: #3a1c1c; border: 1px solid #5a2a2a; color: #e8baba; }
-.alert-warning { background: #3a3018; border: 1px solid #5a4a26; color: #e8d8ba; }
-.alert-inline { color: #e8d8ba; font-size: 0.85rem; margin-left: 0.5rem; }
+.alert-error { background: #1a0000; border: 1px solid #882200; color: #ff5500; }
+.alert-warning { background: #1a0800; border: 1px solid #882200; color: #cc3300; }
+.alert-inline { color: #cc3300; font-size: 0.85rem; margin-left: 0.5rem; }
 
 .actions { margin: 1rem 0; display: flex; gap: 0.5rem; flex-wrap: wrap; }
 
 pre.logs, pre.config {
-  background: #0a0d12;
-  border: 1px solid #252a36;
+  background: #080000;
+  border: 1px solid #2a0800;
   border-radius: 4px;
   padding: 1rem;
   overflow-x: auto;
   font-size: 0.85rem;
-  color: #b8c2d2;
+  color: #cc3300;
   max-height: 70vh;
   overflow-y: auto;
 }

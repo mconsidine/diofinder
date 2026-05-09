@@ -230,15 +230,22 @@ def calibration_reset():
 
 @app.route("/exposure/set", methods=["POST"])
 def exposure_set():
+    persist = request.form.get("persist") == "on"
     try:
         s = float(request.form.get("exposure_s", ""))
+        r = _safe_call("exposure_set", {"exposure_s": s, "persist": persist})
+        if not r.ok:
+            return r.error, 400
     except ValueError:
         return "exposure must be numeric", 400
-    persist = request.form.get("persist") == "on"
-    r = _safe_call("exposure_set",
-                   {"exposure_s": s, "persist": persist})
-    if not r.ok:
-        return r.error, 400
+    if request.form.get("gain"):
+        try:
+            g = float(request.form.get("gain"))
+            r = _safe_call("gain_set", {"gain": g, "persist": persist})
+            if not r.ok:
+                return r.error, 400
+        except ValueError:
+            return "gain must be numeric", 400
     return redirect(url_for("dashboard"))
 
 
@@ -252,10 +259,11 @@ def logs():
     n = max(10, min(n, 500))
     try:
         out = subprocess.check_output(
-            ["journalctl", "-u", "efinder.service",
+            ["journalctl", "--system",
+             "-u", "efinder.service",
              "-u", "cedar-detect.service",
              "-n", str(n), "--no-pager", "-o", "short-precise"],
-            text=True, timeout=5.0,
+            text=True, stderr=subprocess.STDOUT, timeout=5.0,
         )
     except subprocess.CalledProcessError as e:
         out = f"journalctl failed: {e}"

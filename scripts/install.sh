@@ -65,7 +65,7 @@ if ! id -u "$EFINDER_USER" >/dev/null 2>&1; then
   #   video/gpio/i2c/dialout  hardware access (camera, GPIO, etc.)
   #   sudo                    so ap.sh / station.sh / efinder-update work
   #   netdev                  so nmcli works without sudo for some ops
-  usermod -aG video,gpio,i2c,dialout,sudo,netdev "$EFINDER_USER" || true
+  usermod -aG video,gpio,i2c,dialout,sudo,netdev,systemd-journal "$EFINDER_USER" || true
 fi
 
 # --- Hostname -----------------------------------------------------------------
