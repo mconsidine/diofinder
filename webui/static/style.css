@@ -159,6 +159,13 @@ pre.logs, pre.config {
   overflow-y: auto;
 }
 
+.focus-score-sm {
+  font-size: 2rem;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  color: #ff5500;
+  margin: 0.25rem 0;
+}
+
 .slider-row {
   display: flex;
   align-items: center;

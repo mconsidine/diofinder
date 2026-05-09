@@ -30,6 +30,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 
 from flask import (
     Flask, render_template, redirect, url_for, request, jsonify, abort,
@@ -134,6 +135,9 @@ def dashboard():
     sol = (_format_solution(status.result["solution"])
            if status.ok and status.result else None)
 
+    with _focus_lock:
+        committed_focus = _focus_state["committed_score"]
+
     return render_template(
         "dashboard.html",
         status_ok=status.ok,
@@ -144,6 +148,7 @@ def dashboard():
         calibration=(cal.result if cal.ok else None),
         cal_error=cal.error if not cal.ok else None,
         exposure=(exposure.result if exposure.ok else None),
+        committed_focus=committed_focus,
     )
 
 
@@ -394,6 +399,133 @@ def frame_jpg():
         buf.read(), 200,
         {"Content-Type": "image/jpeg", "Cache-Control": "no-store, no-cache"},
     )
+
+
+# ---------------------------------------------------------------------
+# Focus
+# ---------------------------------------------------------------------
+
+_focus_lock = threading.Lock()
+_focus_state = {
+    "score":           None,   # latest computed score
+    "session_max":     None,   # highest score seen this session
+    "committed_score": None,   # score saved by "Set Focus"
+    "cx": None, "cy": None,    # patch centre in full frame
+}
+
+
+def _read_focus_data():
+    """Read current frame from SHM, find brightest pixel, return patch + score."""
+    import numpy as np
+    from multiprocessing import shared_memory
+    from scipy.ndimage import laplace as nd_laplace
+    from PIL import Image
+
+    try:
+        from efinder.config import load_config
+        ecfg = load_config()
+        width, height = ecfg.frame_width, ecfg.frame_height
+    except Exception:
+        width, height = 960, 760
+
+    from efinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
+    frame = None
+    for i in range(NUM_BUFFERS):
+        try:
+            shm = shared_memory.SharedMemory(name=f"{SHM_PREFIX}_{i}")
+            frame = np.ndarray((height, width), dtype=np.uint8,
+                               buffer=shm.buf).copy()
+            shm.close()
+            break
+        except Exception:
+            continue
+
+    if frame is None:
+        return None
+
+    # Find brightest pixel as patch centre, avoiding edges
+    HALF = 30
+    search = frame[HALF:height - HALF, HALF:width - HALF]
+    idx = np.unravel_index(search.argmax(), search.shape)
+    cy = int(idx[0]) + HALF
+    cx = int(idx[1]) + HALF
+
+    patch = frame[cy - HALF:cy + HALF, cx - HALF:cx + HALF].astype(np.float32)
+
+    # Laplacian variance — higher = sharper
+    score = float(nd_laplace(patch).var())
+
+    # Scale patch up 4x with nearest-neighbour for visibility, then JPEG-encode
+    patch_img = Image.fromarray(patch.clip(0, 255).astype(np.uint8), mode="L")
+    patch_img = patch_img.resize(
+        (patch_img.width * 4, patch_img.height * 4),
+        resample=Image.NEAREST,
+    )
+    buf = io.BytesIO()
+    patch_img.save(buf, format="JPEG", quality=85)
+    patch_bytes = buf.getvalue()
+
+    return {"score": score, "cx": cx, "cy": cy, "patch_bytes": patch_bytes}
+
+
+@app.route("/focus")
+def focus_page():
+    with _focus_lock:
+        committed = _focus_state["committed_score"]
+    return render_template("focus.html", committed_score=committed)
+
+
+@app.route("/api/focus")
+def api_focus():
+    data = _read_focus_data()
+    if data is None:
+        return jsonify({"error": "camera not running"}), 503
+    score = data["score"]
+    with _focus_lock:
+        _focus_state["score"] = score
+        _focus_state["cx"] = data["cx"]
+        _focus_state["cy"] = data["cy"]
+        _focus_state["patch_bytes"] = data["patch_bytes"]
+        prev_max = _focus_state["session_max"]
+        if prev_max is None or score > prev_max:
+            _focus_state["session_max"] = score
+        session_max = _focus_state["session_max"]
+    pct = int(round(score / session_max * 100)) if session_max else 0
+    return jsonify({
+        "score":       round(score, 1),
+        "session_max": round(session_max, 1) if session_max else 0,
+        "pct":         pct,
+    })
+
+
+@app.route("/focus/patch.jpg")
+def focus_patch_jpg():
+    with _focus_lock:
+        patch_bytes = _focus_state.get("patch_bytes")
+    if patch_bytes is None:
+        # Trigger a fresh read
+        data = _read_focus_data()
+        if data is None:
+            return "camera not running", 503
+        patch_bytes = data["patch_bytes"]
+        with _focus_lock:
+            _focus_state["patch_bytes"] = patch_bytes
+    return (patch_bytes, 200,
+            {"Content-Type": "image/jpeg", "Cache-Control": "no-store, no-cache"})
+
+
+@app.route("/focus/commit", methods=["POST"])
+def focus_commit():
+    with _focus_lock:
+        _focus_state["committed_score"] = _focus_state.get("score")
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/focus/reset", methods=["POST"])
+def focus_reset():
+    with _focus_lock:
+        _focus_state["session_max"] = None
+    return ("", 204)
 
 
 # ---------------------------------------------------------------------

@@ -90,6 +90,16 @@
   </div>
 
   <div class="card">
+    <h2>Focus</h2>
+    {% if committed_focus is not none %}
+      <div class="focus-score-sm">{{ "%.1f"|format(committed_focus) }}</div>
+      <p class="hint">Score at last focus set. <a href="{{ url_for('focus_page') }}">Refocus →</a></p>
+    {% else %}
+      <p class="muted">Not set. <a href="{{ url_for('focus_page') }}" style="color:#ff5500;">Focus →</a></p>
+    {% endif %}
+  </div>
+
+  <div class="card">
     <h2>Exposure</h2>
     {% if exposure %}
       <form method="post" action="{{ url_for('exposure_set') }}">
