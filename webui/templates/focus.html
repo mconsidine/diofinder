@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+{% block title %}eFinder Focus{% endblock %}
+{% block content %}
+
+<section class="grid">
+
+  <div class="card card-wide">
+    <h2>Focus</h2>
+    <p class="hint">
+      Point at a bright star. Adjust focus until the score peaks and the bar
+      turns green, then press <strong>Set Focus</strong>.
+    </p>
+
+    <div class="focus-layout">
+
+      <div class="patch-wrap">
+        <img id="patch-img" src="/focus/patch.jpg" alt="Star patch"
+             width="240" height="240"
+             style="image-rendering:pixelated; background:#080000;">
+        <p class="hint" id="patch-coords"></p>
+      </div>
+
+      <div class="focus-metrics">
+        <div class="focus-score-label">Focus score</div>
+        <div class="focus-score" id="focus-score">—</div>
+
+        <div class="focus-bar-wrap">
+          <div class="focus-bar" id="focus-bar" style="width:0%"></div>
+        </div>
+        <div class="focus-bar-legend">
+          <span class="hint" id="focus-pct">—% of session best</span>
+          <span class="hint" id="focus-max"></span>
+        </div>
+
+        <div class="actions" style="margin-top:1.5rem;">
+          <form method="post" action="{{ url_for('focus_commit') }}">
+            <button type="submit" class="btn btn-primary">Set Focus</button>
+          </form>
+          <button class="btn" id="reset-btn" type="button">Reset max</button>
+        </div>
+
+        {% if committed_score is not none %}
+        <p class="hint" style="margin-top:1rem;">
+          Last committed: <strong>{{ "%.1f"|format(committed_score) }}</strong>
+        </p>
+        {% endif %}
+      </div>
+
+    </div>
+  </div>
+
+</section>
+
+<style>
+.focus-layout {
+  display: flex;
+  gap: 2rem;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  margin-top: 0.5rem;
+}
+.patch-wrap { flex: 0 0 auto; }
+.focus-metrics { flex: 1 1 220px; }
+.focus-score-label { font-size: 0.85rem; color: #882200; text-transform: uppercase; letter-spacing: 0.05em; }
+.focus-score {
+  font-size: 3rem;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  color: #cc3300;
+  line-height: 1.1;
+  margin: 0.25rem 0 0.75rem;
+}
+.focus-bar-wrap {
+  width: 100%;
+  height: 18px;
+  background: #1a0500;
+  border: 1px solid #3a0a00;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.focus-bar {
+  height: 100%;
+  background: #882200;
+  border-radius: 4px;
+  transition: width 0.3s, background 0.3s;
+}
+.focus-bar.good { background: #228822; }
+.focus-bar-legend {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.25rem;
+}
+</style>
+
+<script>
+let active = true;
+
+document.addEventListener('visibilitychange', () => {
+  active = !document.hidden;
+});
+
+document.getElementById('reset-btn').addEventListener('click', async () => {
+  await fetch('/focus/reset', {method:'POST'});
+});
+
+async function refreshFocus() {
+  if (!active) return;
+  try {
+    const r = await fetch('/api/focus');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d.error) return;
+
+    document.getElementById('focus-score').textContent = d.score.toFixed(1);
+    document.getElementById('focus-pct').textContent = d.pct + '% of session best';
+    document.getElementById('focus-max').textContent = 'Max: ' + d.session_max.toFixed(1);
+
+    const bar = document.getElementById('focus-bar');
+    bar.style.width = d.pct + '%';
+    bar.classList.toggle('good', d.pct >= 85);
+
+    // Refresh patch image with cache-bust
+    const img = document.getElementById('patch-img');
+    const next = new Image();
+    next.onload = () => { img.src = next.src; };
+    next.src = '/focus/patch.jpg?' + Date.now();
+
+  } catch(e) { /* ignore */ }
+}
+
+setInterval(refreshFocus, 500);
+refreshFocus();
+</script>
+
+{% endblock %}

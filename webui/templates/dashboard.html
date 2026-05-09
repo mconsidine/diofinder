@@ -29,7 +29,7 @@
         <dl class="stats">
           <dt>Stars detected</dt><dd id="stars">{{ solution.stars if solution else 0 }}</dd>
           <dt>Peak</dt><dd id="peak">{{ solution.peak if solution else 0 }}</dd>
-          <dt>Status</dt><dd id="status">{{ solution.status if solution else 0 }}</dd>
+          <dt>Status</dt><dd id="status">{{ solution.status if solution else 0 }}{% if solution %} ({{ {0:"waiting",3:"timeout",5:"too few stars"}.get(solution.status, "unknown") }}){% endif %}</dd>
         </dl>
       </div>
     {% endif %}
@@ -90,17 +90,40 @@
   </div>
 
   <div class="card">
+    <h2>Focus</h2>
+    {% if committed_focus is not none %}
+      <div class="focus-score-sm">{{ "%.1f"|format(committed_focus) }}</div>
+      <p class="hint">Score at last focus set. <a href="{{ url_for('focus_page') }}">Refocus →</a></p>
+    {% else %}
+      <p class="muted">Not set. <a href="{{ url_for('focus_page') }}" style="color:#ff5500;">Focus →</a></p>
+    {% endif %}
+  </div>
+
+  <div class="card">
     <h2>Exposure</h2>
     {% if exposure %}
       <form method="post" action="{{ url_for('exposure_set') }}">
         <label>
           Exposure (seconds)
-          <input type="number" step="0.01" min="0.001" max="10"
-                 name="exposure_s" value="{{ exposure.exposure_s }}">
+          <div class="slider-row">
+            <input type="range" id="exp_slider" min="-3" max="1" step="0.001"
+                   value="{{ (exposure.exposure_s | float) | log10 }}"
+                   oninput="expSliderChange(this.value)">
+            <input type="number" step="any" min="0.001" max="10"
+                   name="exposure_s" id="exp_num"
+                   value="{{ exposure.exposure_s }}">
+          </div>
         </label>
         <label>
-          Gain (read-only here)
-          <input type="number" value="{{ exposure.gain }}" disabled>
+          Gain (1–64)
+          <div class="slider-row">
+            <input type="range" id="gain_slider" min="1" max="64" step="1"
+                   value="{{ exposure.gain }}"
+                   oninput="gainSliderChange(this.value)">
+            <input type="number" step="1" min="1" max="64"
+                   name="gain" id="gain_num"
+                   value="{{ exposure.gain }}">
+          </div>
         </label>
         <label class="checkbox">
           <input type="checkbox" name="persist"> Save to config
@@ -138,7 +161,11 @@ async function refresh() {
         document.getElementById('stars').textContent = sol.stars || 0;
         document.getElementById('peak').textContent = sol.peak || 0;
         const status = document.getElementById('status');
-        if (status) status.textContent = sol.status || 0;
+        if (status) {
+          const labels = {0:"waiting",3:"timeout",5:"too few stars"};
+          const s = sol.status || 0;
+          status.textContent = s + ' (' + (labels[s] || 'unknown') + ')';
+        }
       }
     }
   } catch (e) {
@@ -178,6 +205,24 @@ function refreshFrame() {
   next.src = '/frame.jpg?' + ts;
 }
 setInterval(refreshFrame, 2000);
+
+function expSliderChange(v) {
+  const s = Math.pow(10, parseFloat(v));
+  document.getElementById('exp_num').value = s.toFixed(4).replace(/\.?0+$/, '');
+}
+function expNumChange(v) {
+  const s = parseFloat(v);
+  if (s > 0) document.getElementById('exp_slider').value = Math.log10(s);
+}
+function gainSliderChange(v) {
+  document.getElementById('gain_num').value = Math.round(v);
+}
+function gainNumChange(v) {
+  document.getElementById('gain_slider').value = Math.round(parseFloat(v));
+}
+// Sync number inputs back to sliders on manual entry
+document.getElementById('exp_num').addEventListener('input', e => expNumChange(e.target.value));
+document.getElementById('gain_num').addEventListener('input', e => gainNumChange(e.target.value));
 </script>
 
 {% endif %}
