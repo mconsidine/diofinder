@@ -492,8 +492,40 @@ class _MaintContext:
         self.camera_cmd_reply_q = camera_cmd_reply_q
 
 
+def _handle_maint_client(client, ctx):
+    """Handle one maintenance socket connection in its own thread."""
+    client.settimeout(15.0)
+    try:
+        buf = b""
+        while True:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+            while b"\n" in buf:
+                line, _, buf = buf.partition(b"\n")
+                if not line.strip():
+                    continue
+                try:
+                    req = MaintRequest.decode(line)
+                except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                    client.sendall(MaintResponse(
+                        ok=False,
+                        error=f"bad request: {e}").encode())
+                    continue
+                resp = _handle_maint_command(req, ctx)
+                client.sendall(resp.encode())
+    except socket.timeout:
+        pass
+    except Exception as e:
+        log.warning("Maint client error: %s", e)
+    finally:
+        try: client.close()
+        except Exception: pass
+
+
 def _serve_maint_socket(ctx, socket_path=None):
-    """Bind the Unix socket and serve clients in a loop."""
+    """Bind the Unix socket and serve clients, one thread per connection."""
     if socket_path is None:
         socket_path = SOCKET_PATH
     # Ensure the socket directory exists. /run/efinder is created by
@@ -528,34 +560,9 @@ def _serve_maint_socket(ctx, socket_path=None):
         except Exception as e:
             log.error("Maint accept failed: %s; retrying in 1s", e)
             time.sleep(1); continue
-        client.settimeout(15.0)
-        try:
-            buf = b""
-            while True:
-                chunk = client.recv(4096)
-                if not chunk:
-                    break
-                buf += chunk
-                while b"\n" in buf:
-                    line, _, buf = buf.partition(b"\n")
-                    if not line.strip():
-                        continue
-                    try:
-                        req = MaintRequest.decode(line)
-                    except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                        client.sendall(MaintResponse(
-                            ok=False,
-                            error=f"bad request: {e}").encode())
-                        continue
-                    resp = _handle_maint_command(req, ctx)
-                    client.sendall(resp.encode())
-        except socket.timeout:
-            pass
-        except Exception as e:
-            log.warning("Maint client error: %s", e)
-        finally:
-            try: client.close()
-            except Exception: pass
+        t = threading.Thread(
+            target=_handle_maint_client, args=(client, ctx), daemon=True)
+        t.start()
 
 
 def _serve_lx200(latest_solution, shared_cfg, cfg,
