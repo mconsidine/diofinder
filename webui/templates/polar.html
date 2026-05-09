@@ -57,38 +57,52 @@
 </div>
 
 <script>
-// Auto-refresh the polar status block every 800 ms while a session is active.
+// Latitude polling: runs every 800 ms until a non-zero value is received
+// from SkySafari (via :St), then stops. Polar-session state changes still
+// trigger a full page reload.
+let _latReceived = {{ 'true' if polar.latitude_deg is not none and polar.latitude_deg != 0.0 else 'false' }};
+let _latTimer = null;
+
 async function refresh() {
   try {
     const r = await fetch('/api/polar/status');
     if (!r.ok) return;
     const data = await r.json();
     if (!data.ok) return;
-    // We can't render Jinja from JS; just reload if state changes.
+
+    // Update polar-session dynamic numbers.
     const ps = data.result.state;
     const cur = document.body.dataset.polarState || '{{ polar.state }}';
     document.body.dataset.polarState = ps;
-    // Always update the dynamic numbers
     const points = document.getElementById('points-captured');
     if (points) points.textContent = data.result.points_captured;
     const action = document.getElementById('needed-action');
     if (action) action.textContent = data.result.needed_action;
     const elapsed = document.getElementById('elapsed');
     if (elapsed) elapsed.textContent = data.result.elapsed_s.toFixed(0) + ' s';
-    // Update latitude if SkySafari has provided it
-    const lat = data.result.latitude_deg;
-    if (lat !== undefined && lat !== null && lat !== 0.0) {
-      const latVal = document.getElementById('lat-val');
-      if (latVal) {
-        latVal.className = '';
-        latVal.textContent = lat.toFixed(4) + '°';
-      }
-      const latInput = document.getElementById('lat-input');
-      if (latInput && !latInput.matches(':focus')) {
-        latInput.value = lat.toFixed(4);
+
+    // Update latitude once; stop polling for it after the first hit.
+    if (!_latReceived) {
+      const lat = data.result.latitude_deg;
+      if (lat !== undefined && lat !== null && lat !== 0.0) {
+        const latVal = document.getElementById('lat-val');
+        if (latVal) {
+          latVal.className = '';
+          latVal.textContent = lat.toFixed(4) + '°';
+        }
+        const latInput = document.getElementById('lat-input');
+        if (latInput && !latInput.matches(':focus')) {
+          latInput.value = lat.toFixed(4);
+        }
+        _latReceived = true;
+        // If polar session is also idle, no further polling needed.
+        if (ps === cur && (ps === 'idle' || ps === 'done' || ps === 'error')) {
+          clearInterval(_latTimer);
+        }
       }
     }
-    // If state changed, do a hard reload to re-render the Jinja partial
+
+    // State change → full reload to re-render Jinja partial.
     if (ps !== cur) {
       location.reload();
     }
@@ -96,7 +110,7 @@ async function refresh() {
     console.error(e);
   }
 }
-setInterval(refresh, 800);
+_latTimer = setInterval(refresh, 800);
 </script>
 
 {% endif %}
