@@ -9,6 +9,55 @@
 {% else %}
 
 <section class="grid">
+  <div class="card card-wide">
+    <h2>Live View</h2>
+    <p class="hint">
+      Red circle marks the boresight. Centre the target star inside it,
+      then tap <strong>Align</strong> in SkySafari to sync.
+      The star synced on does not need to be the brightest in the field &mdash;
+      alignment is coordinate-based.
+    </p>
+    <div class="live-view">
+      <img id="live-frame" src="/frame.jpg" alt="Camera frame"
+           style="max-width:100%; height:auto; display:block; background:#111;">
+    </div>
+    <p class="hint" id="live-ts"></p>
+  </div>
+
+  <div class="card">
+    <h2>Exposure</h2>
+    {% if exposure %}
+      <form method="post" action="{{ url_for('exposure_set') }}">
+        <label>
+          Exposure (seconds)
+          <div class="slider-row">
+            <input type="range" id="exp_slider" min="-3" max="1" step="0.001"
+                   value="{{ (exposure.exposure_s | float) | log10 }}"
+                   oninput="expSliderChange(this.value)">
+            <input type="number" step="any" min="0.001" max="10"
+                   name="exposure_s" id="exp_num"
+                   value="{{ exposure.exposure_s }}">
+          </div>
+        </label>
+        <label>
+          Gain (1–64)
+          <div class="slider-row">
+            <input type="range" id="gain_slider" min="1" max="64" step="1"
+                   value="{{ exposure.gain }}"
+                   oninput="gainSliderChange(this.value)">
+            <input type="number" step="1" min="1" max="64"
+                   name="gain" id="gain_num"
+                   value="{{ exposure.gain }}">
+          </div>
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" name="persist"> Save to config
+        </label>
+        <button type="submit" class="btn">Apply</button>
+      </form>
+    {% endif %}
+  </div>
+
   <div class="card" id="solution-card">
     <h2>Pointing</h2>
     {% if solution and solution.solved %}
@@ -32,6 +81,16 @@
           <dt>Status</dt><dd id="status">{{ solution.status if solution else 0 }}{% if solution %} ({{ {0:"waiting",3:"timeout",5:"too few stars"}.get(solution.status, "unknown") }}){% endif %}</dd>
         </dl>
       </div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Focus</h2>
+    {% if committed_focus is not none %}
+      <div class="focus-score-sm">{{ "%.1f"|format(committed_focus) }}</div>
+      <p class="hint">Score at last focus set. <a href="{{ url_for('focus_page') }}">Refocus →</a></p>
+    {% else %}
+      <p class="muted">Not set. <a href="{{ url_for('focus_page') }}" style="color:#ff5500;">Focus →</a></p>
     {% endif %}
   </div>
 
@@ -72,65 +131,6 @@
       <button type="submit" class="btn">Reset to center</button>
     </form>
     <p class="hint">Use SkySafari "Align" on a known star for normal alignment.</p>
-  </div>
-
-  <div class="card card-wide">
-    <h2>Live View</h2>
-    <p class="hint">
-      Red circle marks the boresight. Centre the target star inside it,
-      then tap <strong>Align</strong> in SkySafari to sync.
-      The star synced on does not need to be the brightest in the field &mdash;
-      alignment is coordinate-based.
-    </p>
-    <div class="live-view">
-      <img id="live-frame" src="/frame.jpg" alt="Camera frame"
-           style="max-width:100%; height:auto; display:block; background:#111;">
-    </div>
-    <p class="hint" id="live-ts"></p>
-  </div>
-
-  <div class="card">
-    <h2>Focus</h2>
-    {% if committed_focus is not none %}
-      <div class="focus-score-sm">{{ "%.1f"|format(committed_focus) }}</div>
-      <p class="hint">Score at last focus set. <a href="{{ url_for('focus_page') }}">Refocus →</a></p>
-    {% else %}
-      <p class="muted">Not set. <a href="{{ url_for('focus_page') }}" style="color:#ff5500;">Focus →</a></p>
-    {% endif %}
-  </div>
-
-  <div class="card">
-    <h2>Exposure</h2>
-    {% if exposure %}
-      <form method="post" action="{{ url_for('exposure_set') }}">
-        <label>
-          Exposure (seconds)
-          <div class="slider-row">
-            <input type="range" id="exp_slider" min="-3" max="1" step="0.001"
-                   value="{{ (exposure.exposure_s | float) | log10 }}"
-                   oninput="expSliderChange(this.value)">
-            <input type="number" step="any" min="0.001" max="10"
-                   name="exposure_s" id="exp_num"
-                   value="{{ exposure.exposure_s }}">
-          </div>
-        </label>
-        <label>
-          Gain (1–64)
-          <div class="slider-row">
-            <input type="range" id="gain_slider" min="1" max="64" step="1"
-                   value="{{ exposure.gain }}"
-                   oninput="gainSliderChange(this.value)">
-            <input type="number" step="1" min="1" max="64"
-                   name="gain" id="gain_num"
-                   value="{{ exposure.gain }}">
-          </div>
-        </label>
-        <label class="checkbox">
-          <input type="checkbox" name="persist"> Save to config
-        </label>
-        <button type="submit" class="btn">Apply</button>
-      </form>
-    {% endif %}
   </div>
 </section>
 

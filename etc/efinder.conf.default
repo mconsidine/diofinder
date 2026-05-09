@@ -45,7 +45,7 @@ latitude_deg: 0.0
 longitude_deg: 0.0
 
 # ---- Cedar-detect ----
-cedar_detect_socket: unix:///run/cedar-detect/cedar-detect.sock
+cedar_detect_socket: localhost:50051
 detect_sigma: 8.0
 detect_hot_pixels: true
 detect_use_binned: false

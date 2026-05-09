@@ -2,7 +2,8 @@
 # Switch the eFinder's Wi-Fi from access-point mode to station (client) mode.
 #
 # Usage:
-#   sudo station.sh "SSID" "Password"
+#   sudo station.sh                     # scan for networks and choose interactively
+#   sudo station.sh "SSID" "Password"  # non-interactive (scripted)
 #
 # After this script:
 #   * The Pi joins the named Wi-Fi network as a client.
@@ -23,26 +24,58 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-if [ $# -lt 2 ]; then
+# ---- Interactive SSID discovery when no arguments are supplied ---------------
+if [ $# -eq 0 ]; then
+  echo "Scanning for Wi-Fi networks..."
+  # Make sure the radio is on so nmcli can scan.
+  nmcli radio wifi on 2>/dev/null || true
+  sleep 2
+
+  # Collect unique SSIDs (non-empty, exclude our own AP).
+  mapfile -t SSIDS < <(
+    nmcli -t -f SSID,SIGNAL dev wifi list 2>/dev/null \
+      | grep -v '^efinder-' \
+      | grep -v '^:' \
+      | grep -v '^$' \
+      | sort -t: -k2 -rn \
+      | awk -F: '!seen[$1]++ && $1!=""  {print $1}' \
+  )
+
+  if [ ${#SSIDS[@]} -eq 0 ]; then
+    echo "No networks found. Make sure Wi-Fi is unblocked and try again." >&2
+    exit 1
+  fi
+
+  echo ""
+  echo "Available networks:"
+  for i in "${!SSIDS[@]}"; do
+    printf "  %2d) %s\n" $((i+1)) "${SSIDS[$i]}"
+  done
+  echo ""
+  read -rp "Select network [1-${#SSIDS[@]}]: " SEL
+  if ! [[ "$SEL" =~ ^[0-9]+$ ]] || [ "$SEL" -lt 1 ] || [ "$SEL" -gt ${#SSIDS[@]} ]; then
+    echo "Invalid selection." >&2
+    exit 1
+  fi
+  NEW_SSID="${SSIDS[$((SEL-1))]}"
+
+  read -rsp "Password for '$NEW_SSID' (Enter for open network): " NEW_PASS
+  echo ""
+
+elif [ $# -eq 2 ]; then
+  NEW_SSID="$1"
+  NEW_PASS="$2"
+else
   cat <<EOF >&2
-Usage: sudo station.sh "SSID" "Password"
-
-  SSID:     name of the Wi-Fi network to join
-  Password: WPA2 password (or "" for an open network)
-
-After joining, the Pi gets a DHCP-assigned IP. Find it with:
-  ip -4 addr show wlan0
-or:
-  nmcli -p dev show wlan0
+Usage:
+  sudo station.sh                     # scan and choose interactively
+  sudo station.sh "SSID" "Password"  # non-interactive
 
 To switch back to AP mode:
   sudo /usr/local/bin/ap.sh
 EOF
   exit 1
 fi
-
-NEW_SSID="$1"
-NEW_PASS="$2"
 PROFILE="efinder-station"
 
 # WPA2 requires 8+ chars; empty is allowed (open network).
