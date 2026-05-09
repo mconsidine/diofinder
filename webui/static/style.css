@@ -159,6 +159,22 @@ pre.logs, pre.config {
   overflow-y: auto;
 }
 
+.slider-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+.slider-row input[type="range"] {
+  flex: 1;
+  accent-color: #cc3300;
+  max-width: 180px;
+}
+.slider-row input[type="number"] {
+  width: 90px;
+  max-width: 90px;
+}
+
 .card-wide {
   grid-column: 1 / -1;  /* span all grid columns */
 }

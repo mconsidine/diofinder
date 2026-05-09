@@ -45,9 +45,13 @@ except ImportError:
 
 log = logging.getLogger("efinder.webui")
 
+import math
+
 app = Flask(__name__,
             template_folder="templates",
             static_folder="static")
+
+app.jinja_env.filters['log10'] = lambda x: math.log10(float(x)) if float(x) > 0 else -3
 
 
 # ---------------------------------------------------------------------
