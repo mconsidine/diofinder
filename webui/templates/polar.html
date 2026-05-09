@@ -23,20 +23,22 @@
 
 <div class="card">
   <h3>Latitude</h3>
-  {% if polar.latitude_deg %}
-    <p>Currently set to <strong>{{ "%.4f"|format(polar.latitude_deg) }}&deg;</strong>.</p>
-  {% else %}
-    <p class="muted">
-      Latitude not set. Connect SkySafari (which sends GPS coordinates
-      automatically), or enter manually below.
-    </p>
-  {% endif %}
+  <p id="lat-status">
+    {% if polar.latitude_deg is not none and polar.latitude_deg != 0.0 %}
+      Currently set to <strong id="lat-val">{{ "%.4f"|format(polar.latitude_deg) }}&deg;</strong>
+      (from SkySafari or manual entry).
+    {% else %}
+      <span id="lat-val" class="muted">Not set — connect SkySafari or enter below.</span>
+    {% endif %}
+  </p>
   <form method="post" action="{{ url_for('polar_set_latitude') }}">
     <label>
       Latitude (degrees, negative for southern hemisphere)
       <input type="number" step="0.0001" min="-90" max="90"
-             name="latitude_deg" required
-             {% if polar.latitude_deg %}value="{{ polar.latitude_deg }}"{% endif %}>
+             name="latitude_deg" id="lat-input" required
+             {% if polar.latitude_deg is not none and polar.latitude_deg != 0.0 %}
+             value="{{ polar.latitude_deg }}"
+             {% endif %}>
     </label>
     <button type="submit" class="btn">Save</button>
   </form>
@@ -73,6 +75,19 @@ async function refresh() {
     if (action) action.textContent = data.result.needed_action;
     const elapsed = document.getElementById('elapsed');
     if (elapsed) elapsed.textContent = data.result.elapsed_s.toFixed(0) + ' s';
+    // Update latitude if SkySafari has provided it
+    const lat = data.result.latitude_deg;
+    if (lat !== undefined && lat !== null && lat !== 0.0) {
+      const latVal = document.getElementById('lat-val');
+      if (latVal) {
+        latVal.className = '';
+        latVal.textContent = lat.toFixed(4) + '°';
+      }
+      const latInput = document.getElementById('lat-input');
+      if (latInput && !latInput.matches(':focus')) {
+        latInput.value = lat.toFixed(4);
+      }
+    }
     // If state changed, do a hard reload to re-render the Jinja partial
     if (ps !== cur) {
       location.reload();
