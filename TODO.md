@@ -2,193 +2,207 @@
 
 Living document. Update as features land or get deferred.
 
-## Major features (deferred)
+## Major features
 
 ### Polar alignment helper
 ✅ DONE. Three-point algorithm: user rotates mount in RA only, eFinder
 captures three plate-solved positions (with dwell detection), fits a
-plane through the points on the celestial sphere, the plane's normal
-is the apparent RA axis. Decomposes the offset from the true pole
-into azimuth and altitude errors using the observer's latitude.
+great circle through the points on the celestial sphere, derives the
+apparent RA axis, and decomposes the offset from the true pole into
+azimuth and altitude errors using the observer's latitude.
 
-The code is in `efinder/polar.py` (math) and `efinder/polar_run.py`
-(state machine, lives in solver process). Maintenance commands:
-- `efinder-ctl polar start`           begin a session
-- `efinder-ctl polar status`          where are we, what's the user need to do
-- `efinder-ctl polar cancel`          abort
-- `efinder-ctl polar set-latitude N`  manually set latitude
+Code: `efinder/polar.py` (math) and `efinder/polar_run.py` (state machine,
+lives in solver_proc). Maintenance commands: `efinder-ctl polar start|status|
+cancel|set-latitude`.
 
-Latitude flows in automatically from SkySafari's LX200 `:St` command;
-manual `set-latitude` is the fallback. If a user starts polar alignment
-before SkySafari connects, the capture proceeds normally and the
-result is computed-but-undecomposed; once latitude arrives (via
-SkySafari or manually), the prior result is retroactively decomposed
-into az/alt without requiring a recapture.
+SkySafari sends latitude via `:St#` on connect (requires "Set Time &
+Location" enabled in SkySafari settings). Value is cached in config so
+it survives reconnects and powers the Polar page latitude field.
 
-Could improve later if needed:
-- Capture more than 3 points for noise reduction (already supported
-  via `PolarParams.target_points`; just expose it as a config knob).
-- Detect when the user is moving in declination as well as RA (which
-  invalidates the assumption) and warn before computing.
-- Live update of the predicted residual error during adjustment so
-  the user can iteratively tune toward zero without re-running.
+If alignment completes before latitude is available, the result is stored
+pending decomposition; once latitude arrives (via `:St` or
+`set-latitude`), az/alt errors are computed retroactively without
+recapture.
 
-### Camera characterization
-What "characterization" should mean for an eFinder is narrower than
-ZWO's general camera testing:
-
-1. **Black level** (camera offset): integrate dark frames briefly,
-   take the median, store as `dark_level`. Cedar-detect supports an
-   `estimate_background_region` that effectively does this per-frame,
-   but a calibrated baseline lets us start solving on the first frame.
-2. **Dead/hot pixel map**: take a long exposure with the lens capped,
-   threshold to find permanently-hot pixels, store as a small array.
-   Cedar-detect already detects hot pixels per-frame; this would just
-   make the per-frame work faster.
-3. **FOV calibration**: ✅ DONE. `calibration.py` accumulates 30
-   successful solves, commits the median to the config when stddev
-   is below 0.05°, then uses tight (0.1°) tolerance for subsequent
-   solves. Watches for drift via rolling median; recalibrates if
-   the lens is changed or refocused.
-4. **Distortion**: ✅ DONE alongside FOV calibration -- same
-   accumulator, same commit policy with looser threshold.
-5. **Plate scale (arcsec/pixel)**: ✅ DERIVED from calibrated FOV
-   and frame_width on commit. Stored as cfg.arcsec_per_pixel.
-
-Still TODO: dark frame and hot pixel calibration. Both require a
-"point the scope at a wall and trigger calibration" operation. The
-maintenance socket is now in place to host these commands -- the
-work is in camera_proc:
-- Dark frame: open shutter long, capture N frames, take median per
-  pixel, store as a numpy array. Subtract from each subsequent frame
-  before publishing.
-- Hot pixel map: capture a long exposure, threshold, store the list
-  of (y,x) coords. Cedar-detect already does this per-frame; baking
-  it in just makes the per-frame work faster and lets us mask in
-  the camera before the solver sees it.
+Possible future improvements:
+- Expose `PolarParams.target_points` as a config knob for > 3 capture
+  points (noise reduction).
+- Detect accidental dec movement between capture points and warn.
+- Live residual prediction during iterative adjustment.
 
 ### Web UI
-✅ DONE (v1). Flask app at `webui/app.py`, runs on port 80 via
-`efinder-webui.service`. Talks to the maintenance socket exactly like
-`efinder-ctl` does -- holds no state of its own. Pages:
-- `/`        dashboard with auto-refreshing pointing, calibration,
-             boresight, exposure
-- `/polar`   polar alignment workflow (multi-step, live updates)
-- `/config`  read-only view of /etc/efinder/efinder.conf
-- `/logs`    last N lines of journalctl
-- `/update`  trigger efinder-update (via sudoers rule scoped to
-             just that one script)
-- `/healthz` simple ping endpoint (200 if daemon reachable)
+✅ DONE. Flask app at `webui/app.py`, runs on port 80 via
+`efinder-webui.service`. Uses maintenance socket for all data — no
+state of its own. Pages:
+
+- `/`        dashboard: live RA/Dec, exposure/gain controls, pointing,
+             focus score, calibration, boresight
+- `/polar`   step-by-step polar alignment workflow with live status
+- `/config`  read-only view of `/etc/efinder/efinder.conf`
+- `/logs`    live journalctl tail for efinder + cedar-detect
+- `/update`  trigger efinder-update in one click
+- `/healthz` 200 OK ping endpoint
+
+Web UI uses `threaded=True` on Flask's dev server so slow solver
+operations don't block concurrent requests.
+
+TTL cache on high-frequency maint ops (`calibration_status` 5 s,
+`polar_status` 1 s) prevents queue pile-up on 2-second auto-refresh
+with multiple browser tabs.
 
 Future improvements:
-- Editable config (probably never; ssh + restart is fine)
-- Charts of solve history (useful but defer)
-- Image preview from a recently-saved frame (requires save_failed_frames
-  hookup)
-- Authentication (only matters if someone exposes the eFinder to a
-  hostile network; not the default deployment)
-- Replace Flask's dev server with gunicorn for a tiny perf bump
-  (probably never; web UI traffic is one user at a time)
+- Editable config (defer; SSH + restart is fine)
+- Solve history charts
+- Image preview from saved frames (blocked on frame-save implementation)
+- Replace Flask dev server with gunicorn (probably never; single-user)
 
-### Captive-portal Wi-Fi fallback
-If the configured Wi-Fi credentials don't connect after N attempts,
-bring up the `efinder-hotspot` connection and serve a captive portal
-that lets the user re-enter credentials. `comitup` does this well
-out of the box; `RaspAP` is heavier but has more features.
+### Maintenance socket (Unix socket IPC)
+✅ DONE. Listens at `/run/efinder/maint.sock`. One daemon thread per
+connection so slow solver operations don't block concurrent callers.
 
-Defer until v0.8. For now, wrong Wi-Fi credentials = re-flash.
+Protocol: newline-delimited JSON. Client library: `efinder/maint.py`.
+Dispatch table: `efinder/comms_proc.py::_handle_maint_command`.
+
+Supported commands: ping, version, status, boresight (show/center/set),
+calibration (status/reset), exposure (get/set/persist), gain (set/persist),
+polar (start/status/cancel/set-latitude), raw JSON passthrough.
+
+### LX200 protocol
+✅ DONE. Implemented commands: `:GR#`, `:GD#`, `:CM#` (sync/boresight),
+`:St#` (set latitude), `:Sg#` (set longitude), `:Gt#` (get latitude),
+`:Gg#` (get longitude), `:SL#`, `:SC#`, `:MS#`, `:Q#`, `:P#`,
+`:GVP#`, `:GVN#`.
+
+`:Gt#` and `:Gg#` return stored lat/lon in LX200 DMS format so
+SkySafari receives a proper response and does not time out or retry.
+This is required for SkySafari to reliably send `:St#` on connect.
+
+### Camera frame rate
+✅ FIXED. `FrameDurationLimits` max was set to `exposure_s + 200ms`,
+artificially capping the camera at 2.5 fps even at short exposures.
+Now set to `1_000_000_000` µs (1000 s sentinel), letting the ISP
+hardware determine the actual achievable rate.
+
+### Maint socket broken pipes
+✅ FIXED. Was single-threaded; slow solver operations (1.5 s) during
+web UI auto-refresh caused connection pile-up and broken pipes. Fixed
+with one daemon thread per connection + TTL cache for frequent reads
++ dark frame fast-path to eliminate wasted 1.5 s cycles on dark frames.
+
+### Dark frame fast-path
+✅ DONE. After camera publishes a frame, solver checks
+`bufs[idx].max() < 20` before invoking cedar-detect or cedar-solve.
+If true, the frame is published as an empty solution and the slot is
+released in ~0.1 ms. Eliminates the full detect+solve cycle (~1.5 s)
+when the lens is capped or the sky is completely dark.
+
+### CPU affinity
+✅ DONE.
+- CPU 0: kernel/IRQs/system services
+- CPU 1: comms_proc (LX200 + maint socket)
+- CPU 2: cedar-detect-server (CPUAffinity=2 in systemd unit)
+- CPU 3: solver_proc + camera_proc (camera blocks on ISP hardware
+  between frames, so sharing CPU 3 with the solver is fine)
+
+### Zram swap
+✅ DONE. `install.sh` configures `zram-tools` with `PERCENT=50`
+(~256 MB) and `ALGO=lz4`. Provides near-RAM-speed compressed swap
+critical for the solver's large data structures on the Zero 2W's 512 MB.
+
+### Station.sh interactive mode
+✅ DONE. `station.sh` called with no arguments scans available SSIDs
+with `nmcli dev wifi list`, sorts by signal strength, presents a
+numbered menu, and prompts for selection and password.
+
+### FOV self-calibration
+✅ DONE. `calibration.py` accumulates 30 successful solves, commits the
+median FOV and distortion to config when stddev < 0.05°, then uses a
+tight 0.1° tolerance window for subsequent solves.
+
+### Boresight calibration
+✅ DONE. `:CM#` sync command records the pixel offset between the
+plate-solved star position and the reported boresight. Offset is
+persisted to `/etc/efinder/efinder.conf`.
+
+### Release image filename stamping
+✅ DONE. Release images named `efinder-YYYYMMDD-vX.Y.Z.img.xz` (tagged
+builds) or `efinder-YYYYMMDD.img.xz` (manual workflow dispatch). The
+build date is embedded at build time.
+
+---
 
 ## Tactical TODOs
 
+### Dark frame and hot pixel calibration
+Infrastructure is in place (maintenance socket ready for new commands).
+Still TODO in `camera_proc.py`:
+- **Dark frame**: open shutter long, capture N frames, take median per
+  pixel, store as a numpy array. Subtract from each subsequent frame
+  before publishing to FrameSlots.
+- **Hot pixel map**: capture a long exposure, threshold, store (y,x)
+  list. Cedar-detect already detects hot pixels per-frame; baking it in
+  makes per-frame work faster and masks in the camera before the solver.
+
+New maintenance commands needed: `efinder-ctl darkframe capture`,
+`efinder-ctl hotpixels capture`.
+
 ### Auto-exposure
-The solver already knows the detected-star count. Adaptive exposure
+Solver already knows detected star count per frame. Adaptive exposure
 algorithm:
-- If `n < auto_exposure_target_stars * 0.5`: increase exposure by 1.5x
-  (clamped to `auto_exposure_max_s`).
-- If `n > auto_exposure_target_stars * 1.5`: decrease by 0.7x
-  (clamped to `auto_exposure_min_s`).
-- Hysteresis: don't change exposure on every frame; require N
-  consecutive frames in the over/under band.
-- Clamp number of changes per minute to avoid oscillation.
+- `n < target * 0.5`: increase exposure 1.5× (clamped to max_s)
+- `n > target * 1.5`: decrease 0.7× (clamped to min_s)
+- Hysteresis: N consecutive frames in over/under band before changing
+- Rate-limit: max 1 change per 10 s to avoid oscillation
 
-Need a queue from solver to camera_proc (camera doesn't currently
-listen to anything). Keep simple: `exposure_q` with single Float
-messages, camera_proc drains and updates picamera2 controls.
-
-### Log/stat exposure to comms or web UI
-Right now solve stats only land in journald. The web UI status page
-should pull from `latest_solution` directly, but it would be useful
-to have a small ring buffer of "last 60 solves" with timing history
-for the UI to graph. Probably a new Manager list.
-
-### Boresight reset / show / edit via Unix socket
-✅ DONE. `efinder-ctl` is the command-line client; the maintenance
-socket lives at `/run/efinder/maint.sock`. Currently supports:
-- `efinder-ctl status` / `version` / `ping`
-- `efinder-ctl boresight show|center|set Y X`
-- `efinder-ctl calibration status|reset`
-- `efinder-ctl exposure get|set [--persist]`
-- `efinder-ctl gain set [--persist]`
-- `efinder-ctl raw '{"cmd":"...","args":{}}'`
-
-The protocol (newline-delimited JSON) is straightforward to extend
-when more commands are needed -- see `efinder/maint.py` for the wire
-format and `efinder/comms_proc.py::_handle_maint_command` for the
-dispatch table.
-
-Future commands likely worth adding when their backing features land:
-- `efinder-ctl darkframe capture` (needs camera dark-frame logic)
-- `efinder-ctl hotpixels capture` (needs camera hot-pixel logic)
-- `efinder-ctl polar status` (needs polar alignment helper)
-- `efinder-ctl config show|reload` (needs config-reload broadcast)
+Needs a queue from solver to camera_proc. Camera currently receives
+commands only from comms_proc; extend `CameraCmd` with
+`CAMERA_OP_SET_EXPOSURE` from solver (already exists in worker_cmds.py
+— solver just needs to be wired to send it).
 
 ### Frame save for diagnostics
-`save_failed_frames: true` should cause the solver, on `status=NO_MATCH`
-or `TOO_FEW`, to write the most recent frame (with overlays of detected
-centroids) to `/var/lib/efinder/captures/YYYYMMDD-HHMMSS.png`. Cap
-disk usage at, say, 100 MB; rotate oldest first.
+`save_failed_frames: true` is wired in config but the write logic in
+`solver_proc.py` is not implemented. When done:
+- On `status=NO_MATCH` or `TOO_FEW`, write frame with centroid overlays
+  to `/var/lib/efinder/captures/YYYYMMDD-HHMMSS.png`.
+- Cap disk usage at 100 MB; rotate oldest first.
+
+### Watchdog for solver hang
+systemd restarts the service on crash but not on hang. Add a heartbeat
+monitor: if `latest_solution.epoch_monotonic` hasn't updated for 60 s,
+the launcher kills the solver to force a systemd restart.
+
+### Auto-solve history ring buffer
+Expose the last 60 solve results (timing, star count, status) as a
+Manager list so the web UI can graph solve history. Currently metrics
+are journald-only.
 
 ### LX200 sync reply string
-Currently we hardcode an M31 string for `:CM#` reply because SkySafari
-accepts any short string. Some LX200 dialects expect specific formats.
-Check whether SkySafari actually displays the reply string; if so,
-craft something useful like "aligned to (RA, Dec)".
+Currently hardcoded to `M31 EX GAL MOC 99#` (SkySafari accepts any
+short string). Some LX200 dialects expect specific formats. Could craft
+something like the solved RA/Dec for display in SkySafari.
 
-### TLS / authentication for LX200 server
-None currently. Anyone on the same Wi-Fi can talk to the eFinder.
-Probably acceptable for a hobby setup but worth flagging.
+### Captive portal for wrong Wi-Fi credentials
+If `station.sh` is given bad credentials, the only recovery is USB
+tether. Plan: detect failed join after N seconds, fall back to AP mode
+automatically. `comitup` is the cleanest existing solution.
+Target: v0.8.
 
-### Manager dict performance
-`latest_solution` and `shared_cfg` are `multiprocessing.Manager` dicts.
-Every read goes through a socket to the manager process. For LX200
-polling (a few Hz) this is fine; for the web UI status endpoint it
-might add up. If it does, switch to `multiprocessing.shared_memory`
-holding a fixed-layout struct with a seqlock. Don't preempt.
-
-### Solve timeout and sigma defaults
-The `solve_timeout_ms=1500` and `detect_sigma=8.0` defaults are guesses.
-Once we have a few users on real sky, tune from observed metrics.
-This is the kind of thing where the web UI status page becomes useful:
-expose median solve time, miss rate, average centroid count, then
-let users tune from data rather than vibes.
-
-### Solve-from-image fallback
-If cedar-detect crashes or the gRPC server is unavailable, we currently
-just fail. We could fall back to tetra3's built-in
-`get_centroids_from_image`. Slower but robust. Worth doing once we
-have the basics solid.
+---
 
 ## Known issues to watch
 
-- Manager dict is created in main process but accessed by spawned
-  children. Pickling/unpickling on first access; should still work
-  but could be a startup hiccup. Verify.
-- SHM cleanup on crash: if the launcher dies between `create=True`
-  and the `unlink` in `finally`, stale SHM blocks remain in /dev/shm.
-  Re-running clears them via the unlink-before-create dance; but a
-  systemd `ExecStartPre=/usr/bin/find /dev/shm -name 'efinder_frame_*'
-  -delete` would be more robust.
-- No watchdog beyond systemd's. If the solver hangs (not crashes),
-  systemd won't restart us. Consider a heartbeat: if
-  `latest_solution.epoch_monotonic` doesn't update for 60s, the
-  launcher kills the solver to force a restart.
+- **Manager dict overhead**: `latest_solution` and `shared_cfg` go
+  through a socket to the manager process on every read. At LX200 poll
+  frequency (a few Hz) this is fine. If the web UI adds more frequent
+  endpoints, consider migrating to a `shared_memory` struct with a
+  seqlock.
+
+- **SHM cleanup on crash**: if the launcher dies between `create=True`
+  and the `finally` unlink, stale SHM blocks remain in `/dev/shm`.
+  Re-running clears them via the unlink-before-create dance. A
+  `ExecStartPre` cleanup in `efinder.service` would be more robust.
+
+- **grpcio build from source in chroot**: if no aarch64 wheel exists for
+  the Python version on Trixie, pip builds grpcio from source. The
+  chroot has `build-essential` so it works but adds 10–20 minutes to
+  the image build.

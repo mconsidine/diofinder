@@ -237,8 +237,11 @@ jobs:
           # Rename to include build date and version tag so each release
           # artifact is unambiguously identifiable on disk.
           BUILD_DATE=$(date -u +%Y%m%d)
-          TAG=${{ steps.ver.outputs.tag }}
-          IMGNAME="efinder-${BUILD_DATE}-${TAG}.img.xz"
+          if [ "${{ github.event_name }}" = "release" ]; then
+            IMGNAME="efinder-${BUILD_DATE}-${{ steps.ver.outputs.tag }}.img.xz"
+          else
+            IMGNAME="efinder-${BUILD_DATE}.img.xz"
+          fi
           mv build/output/efinder.img.xz "build/output/${IMGNAME}"
           echo "imgname=${IMGNAME}" >> $GITHUB_OUTPUT
           ls -lh build/output/
