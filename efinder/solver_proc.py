@@ -245,6 +245,17 @@ def solver_main(slots, latest_solution, shared_cfg,
             )
             local_peak = int(bufs[idx].max())
 
+            # Dark-frame fast-path: if the brightest pixel is below the noise
+            # floor, there are no stars and running cedar-detect + cedar-solve
+            # is pointless. numpy.max() on a 960x760 uint8 array costs ~0.1ms
+            # and is already computed above, so this check is essentially free.
+            # Threshold of 20 ADU is well below any real star signal but safely
+            # above sensor read noise (~2-4 ADU) and dark current artefacts.
+            if local_peak < 20:
+                slots.release_read_slot()
+                latest_solution.update(_empty_solution(peak=local_peak))
+                continue
+
             try:
                 resp = stub.ExtractCentroids(req, timeout=2.0)
             except Exception as e:
