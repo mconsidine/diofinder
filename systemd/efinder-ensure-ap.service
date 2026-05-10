@@ -1,0 +1,27 @@
+[Unit]
+Description=Ensure eFinder Wi-Fi AP is active if wlan0 has no other connection
+# Run after NM has had a chance to activate connections at boot.
+After=NetworkManager.service efinder-firstboot.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+# Wait for NM to settle, then activate the AP profile if wlan0 is idle.
+# This handles the case where NM's autoconnect was suppressed (e.g. after
+# a failed activation attempt on a previous boot, or after station.sh was
+# run and the AP profile was left in a failed state).
+ExecStart=/bin/bash -c '\
+  sleep 8; \
+  ACTIVE=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null \
+           | awk -F: '"'"'$2=="wlan0"{print $1}'"'"'); \
+  if [ -z "$ACTIVE" ]; then \
+    logger -t efinder-ensure-ap "wlan0 idle; activating efinder-ap"; \
+    nmcli con up efinder-ap >/dev/null 2>&1 || \
+      logger -t efinder-ensure-ap "WARNING: could not activate efinder-ap"; \
+  else \
+    logger -t efinder-ensure-ap "wlan0 already active: $ACTIVE"; \
+  fi'
+
+[Install]
+WantedBy=multi-user.target

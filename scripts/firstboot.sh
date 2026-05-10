@@ -133,6 +133,15 @@ else
   LOG "AP profile already exists"
 fi
 
+# Ensure NM will always retry the AP connection; by default NM gives up
+# after a few failed autoconnect attempts (e.g. when the radio was not
+# ready on first try) and will not retry until manually prompted.
+# autoconnect-retries=0 means retry indefinitely.
+nmcli con modify efinder-ap \
+  connection.autoconnect yes \
+  connection.autoconnect-retries 0 \
+  2>/dev/null || WARN "Could not set AP autoconnect-retries (non-fatal)"
+
 # --- Bring AP up now ----------------------------------------------------------
 # Attempt activation unconditionally; if wlan0 is busy or unavailable,
 # the autoconnect=yes on the profile guarantees it comes up at next boot.

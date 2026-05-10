@@ -301,6 +301,7 @@ install -m 644 "$EFINDER_DIR/systemd/efinder.service"             /etc/systemd/s
 install -m 644 "$EFINDER_DIR/systemd/efinder-firstboot.service"   /etc/systemd/system/
 install -m 644 "$EFINDER_DIR/systemd/efinder-webui.service"       /etc/systemd/system/
 install -m 644 "$EFINDER_DIR/systemd/efinder-usb-gadget.service"  /etc/systemd/system/
+install -m 644 "$EFINDER_DIR/systemd/efinder-ensure-ap.service"   /etc/systemd/system/
 
 # Sudoers rule scoped to just efinder-update (used by the web UI)
 install -m 440 "$EFINDER_DIR/etc/sudoers.d/efinder-update" /etc/sudoers.d/efinder-update
@@ -410,7 +411,7 @@ LOG "Enabling services"
 systemctl daemon-reload
 systemctl enable cedar-detect.service efinder.service \
                  efinder-firstboot.service efinder-webui.service \
-                 efinder-usb-gadget.service
+                 efinder-usb-gadget.service efinder-ensure-ap.service
 
 if [ "$IN_CHROOT" != "1" ]; then
   LOG "Starting services"
