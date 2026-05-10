@@ -1,38 +1,26 @@
 #!/bin/bash
-# eFinder first-boot setup. Runs once via efinder-firstboot.service.
-# Idempotent in spirit but guarded by /var/lib/efinder/firstboot.done.
+# eFinder boot-time setup.  Runs on EVERY boot via efinder-firstboot.service.
 #
-# At the end of first boot the eFinder will be:
-#   * Hostname:           efinder.local
-#   * USB serial console: /dev/ttyACM0 on host (screen /dev/ttyACM0 115200)
-#   * Wi-Fi AP IP:        10.42.0.1/24 (DHCP server for clients)
-#   * Wi-Fi AP SSID:      efinder-XXXX (last 4 of MAC)
-#   * Wi-Fi AP password:  12345678 (hardcoded; private-network device)
-#   * Wi-Fi station:      not configured (user runs station.sh later)
+# All operations are idempotent — safe to repeat without side effects.
+# Removing the one-time 'firstboot.done' guard means:
+#   * If the AP NM profile is ever deleted or corrupted, the next boot
+#     recreates it automatically.
+#   * There is no fragile marker file that can silently prevent recovery.
 #
-# After first boot, the user can either:
-#   1. Tether USB cable to Pi data port -> screen /dev/ttyACM0 115200
-#      (macOS: screen /dev/tty.usbmodem* 115200)
-#   2. Connect phone/laptop to the AP SSID -> ssh efinder@10.42.0.1
-#      (or ssh efinder@efinder.local once mDNS resolves)
+# The last-run timestamp is still written to /var/lib/efinder/firstboot.done
+# for diagnostics (journalctl, support), but it is NOT read as a gate.
 #
-# Then run /usr/local/bin/station.sh "MyWiFi" "MyPassword" to switch
-# the Wi-Fi from AP mode to joining a real network.
+# Wi-Fi AP activation is NOT done here; efinder-ensure-ap.service handles
+# that after NM has had time to try any station connections first.
 
 set -euo pipefail
 
-LOG()  { echo "[firstboot] $*"; }
-WARN() { echo "[firstboot] WARNING: $*" >&2; }
-FAIL() { echo "[firstboot] ERROR: $*" >&2; exit 1; }
+LOG()  { echo "[efinder-setup] $*"; }
+WARN() { echo "[efinder-setup] WARNING: $*" >&2; }
 
 DONE_MARKER=/var/lib/efinder/firstboot.done
-if [ -f "$DONE_MARKER" ]; then
-  LOG "First-boot already completed at $(cat "$DONE_MARKER"); exiting."
-  LOG "To force re-run: sudo rm $DONE_MARKER && sudo systemctl start efinder-firstboot"
-  exit 0
-fi
 
-LOG "Starting first-boot configuration"
+LOG "Running boot-time setup"
 mkdir -p /var/lib/efinder /etc/efinder
 
 # --- Hardware sanity check ----------------------------------------------------
@@ -40,7 +28,7 @@ mkdir -p /var/lib/efinder /etc/efinder
 MODEL_FILE=/proc/device-tree/model
 if [ -r "$MODEL_FILE" ]; then
   MODEL=$(tr -d '\0' < "$MODEL_FILE")
-  LOG "Detected hardware: $MODEL"
+  LOG "Hardware: $MODEL"
   case "$MODEL" in
     *"Zero 2"*) : ;;
     *"Pi 3"*|*"Pi 4"*|*"Pi 5"*)
@@ -50,13 +38,10 @@ if [ -r "$MODEL_FILE" ]; then
       WARN "Unknown hardware ($MODEL); proceeding anyway"
       ;;
   esac
-else
-  WARN "Could not read $MODEL_FILE"
 fi
 
 # --- Camera detection ---------------------------------------------------------
 
-# rpicam-hello replaced libcamera-hello in Pi OS Bookworm/Trixie
 RPICAM_CMD=""
 if command -v rpicam-hello >/dev/null 2>&1; then
   RPICAM_CMD="rpicam-hello"
@@ -66,36 +51,31 @@ fi
 
 if [ -n "$RPICAM_CMD" ]; then
   if $RPICAM_CMD --list-cameras 2>/dev/null | grep -q "Available cameras"; then
-    LOG "Camera detected ($RPICAM_CMD reports at least one)"
+    LOG "Camera detected"
   else
-    WARN "No camera detected. Check CSI ribbon cable orientation and seating."
-    WARN "First-boot continues; camera can be added later."
+    WARN "No camera detected — check CSI ribbon cable"
   fi
-else
-  WARN "Neither rpicam-hello nor libcamera-hello found; cannot verify camera"
 fi
 
-# --- Avahi: ensure it is running (config was pre-baked at image build) --------
+# --- Avahi --------------------------------------------------------------------
+
 if systemctl list-unit-files avahi-daemon.service >/dev/null 2>&1; then
   systemctl enable --now avahi-daemon.service 2>/dev/null || \
     WARN "Could not enable avahi-daemon"
-  systemctl restart avahi-daemon.service 2>/dev/null || true
-else
-  WARN "avahi-daemon not installed; mDNS efinder.local won't work"
 fi
 
 # --- WiFi regulatory domain + rfkill -----------------------------------------
 # Pi OS Trixie soft-blocks WiFi until a country code is applied.
-# /etc/default/crda (written by install.sh) handles subsequent boots;
-# this runtime call covers the very first boot before crda has been read.
 
-LOG "Setting WiFi regulatory domain and unblocking rfkill"
+LOG "Unblocking WiFi radio"
 iw reg set US 2>/dev/null || WARN "iw reg set US failed (non-fatal)"
 rfkill unblock wifi 2>/dev/null || WARN "rfkill unblock wifi failed (non-fatal)"
 nmcli radio wifi on 2>/dev/null || WARN "nmcli radio wifi on failed (non-fatal)"
-sleep 1   # give cfg80211 a moment to apply the domain before nmcli runs
+sleep 1
 
-# --- Wi-Fi access point profile ----------------------------------------------
+# --- Wi-Fi access point profile -----------------------------------------------
+# Create the AP profile if it doesn't exist. If it does, leave it alone
+# (the user may have customised the SSID or password via ap.sh).
 
 MAC=$(ip link show wlan0 2>/dev/null | awk '/ether/ {gsub(":",""); print $2; exit}')
 if [ -n "${MAC:-}" ]; then
@@ -107,7 +87,7 @@ fi
 AP_PASS="12345678"
 
 if ! nmcli -t -f NAME con show | grep -qx "efinder-ap"; then
-  LOG "Creating Wi-Fi AP profile: SSID=$AP_SSID password=$AP_PASS"
+  LOG "Creating Wi-Fi AP profile: SSID=$AP_SSID"
   nmcli con add \
     type wifi \
     ifname wlan0 \
@@ -123,37 +103,24 @@ if ! nmcli -t -f NAME con show | grep -qx "efinder-ap"; then
     wifi-sec.psk "$AP_PASS" \
     || WARN "Could not create AP profile"
 
-  LOG "============================================="
-  LOG "  AP SSID:     $AP_SSID"
-  LOG "  AP password: $AP_PASS"
-  LOG "  AP IP:       10.42.0.1"
-  LOG "  Hostname:    efinder.local"
-  LOG "============================================="
+  LOG "  SSID=$AP_SSID  password=$AP_PASS  IP=10.42.0.1"
 else
-  LOG "AP profile already exists"
+  LOG "AP profile already exists — leaving it unchanged"
 fi
 
-# Ensure NM will always retry the AP connection; by default NM gives up
-# after a few failed autoconnect attempts (e.g. when the radio was not
-# ready on first try) and will not retry until manually prompted.
-# autoconnect-retries=0 means retry indefinitely.
+# Ensure NM will always retry the AP connection. autoconnect-retries=0
+# means retry indefinitely; without this NM stops trying after a few
+# failures and will not retry until manually prompted, even across reboots.
 nmcli con modify efinder-ap \
-  connection.autoconnect yes \
   connection.autoconnect-retries 0 \
   2>/dev/null || WARN "Could not set AP autoconnect-retries (non-fatal)"
 
-# --- Bring AP up now ----------------------------------------------------------
-# Attempt activation unconditionally; if wlan0 is busy or unavailable,
-# the autoconnect=yes on the profile guarantees it comes up at next boot.
-
-LOG "Activating Wi-Fi AP"
-nmcli con up efinder-ap >/dev/null 2>&1 \
-  || WARN "Could not bring up AP on first boot (will auto-connect at next boot)"
+# --- Filesystem setup ---------------------------------------------------------
 
 mkdir -p /var/lib/efinder/captures
-chown -R efinder:efinder /var/lib/efinder
+chown -R efinder:efinder /var/lib/efinder 2>/dev/null || true
 
-# --- Mark done ----------------------------------------------------------------
+# --- Record last-run time (diagnostic only — NOT read as a gate) --------------
 
 date -u +"%Y-%m-%dT%H:%M:%SZ" > "$DONE_MARKER"
-LOG "First-boot configuration complete"
+LOG "Boot setup complete"
