@@ -25,8 +25,8 @@ set -euo pipefail
 EFINDER_USER="efinder"
 EFINDER_HOME="/home/${EFINDER_USER}"
 EFINDER_DIR="/opt/efinder"
-REPO_URL="https://github.com/mconsidine/eFinder_cli.git"
-CEDAR_DETECT_REPO="mconsidine/eFinder_cli"
+REPO_URL="https://github.com/mconsidine/eFinder_cli_new.git"
+CEDAR_DETECT_REPO="mconsidine/eFinder_cli_new"
 CEDAR_DETECT_BIN="cedar-detect-server"
 TARGET_VERSION="${EFINDER_VERSION:-latest}"
 IN_CHROOT="${EFINDER_CHROOT:-0}"
@@ -74,9 +74,9 @@ LOG "Setting hostname to efinder"
 echo "efinder" > /etc/hostname
 # Ensure 127.0.1.1 maps to the new hostname (avahi/mDNS needs this)
 if grep -q "^127\.0\.1\.1" /etc/hosts; then
-  sed -i 's/^127\.0\.1\.1.*/127.0.1.1\tefinder/' /etc/hosts
+  sed -i $'s/^127\\.0\\.1\\.1.*/127.0.1.1\tefinder/' /etc/hosts
 else
-  echo "127.0.1.1\tefinder" >> /etc/hosts
+  printf "127.0.1.1\tefinder\n" >> /etc/hosts
 fi
 
 # --- WiFi regulatory domain ---------------------------------------------------

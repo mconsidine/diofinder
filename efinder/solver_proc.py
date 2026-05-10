@@ -77,16 +77,30 @@ def _filled_solution(*, ra, dec, roll, fov, stars, matches,
     }
 
 
-def _drain_align_queue(q):
-    """Take only the most recent alignment request, discard older ones.
-    Returns the latest AlignRequest or None.
+def _drain_align_queue(q, response_q):
+    """Take only the most recent alignment request; NACK superseded ones.
+
+    If SkySafari sends two rapid syncs, the comms process is waiting on
+    each. Silently dropping the older ones would leave comms blocked on
+    align_response_q until its timeout. Posting a failure result unblocks
+    it immediately.
     """
     latest = None
+    superseded = []
     try:
         while True:
-            latest = q.get_nowait()
+            item = q.get_nowait()
+            if latest is not None:
+                superseded.append(latest)
+            latest = item
     except Exception:
         pass
+    for old_req in superseded:
+        response_q.put(AlignResult(
+            success=False,
+            error_message="superseded by a newer sync request",
+            completed_at=time.monotonic(),
+        ))
     return latest
 
 
@@ -230,7 +244,7 @@ def solver_main(slots, latest_solution, shared_cfg,
 
             # Check for a pending alignment request; if there are several
             # queued, take only the latest.
-            align_req = _drain_align_queue(align_request_q)
+            align_req = _drain_align_queue(align_request_q, align_response_q)
 
             shm_name = f"{SHM_PREFIX}_{idx}"
             req = pb.CentroidsRequest(
