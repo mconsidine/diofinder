@@ -225,13 +225,17 @@ def _handle_lx200_command(cmd, latest_solution, align_state, cfg, shared_cfg,
             if ctx is not None:
                 cfg.latitude_deg = lat
                 cfg_mod.save_keys({"latitude_deg": lat})
-                # Propagate to the live solver-side aligner. Best-effort;
-                # if this times out, the persisted value will take effect
-                # on the next service restart.
-                _call_solver(SOLVER_OP_POLAR_SET_LATITUDE,
-                             {"latitude_deg": lat},
-                             ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
-                             timeout_s=2.0)
+                # Propagate to the live solver-side PolarSession. Done in a
+                # daemon thread so the LX200 handler returns immediately to
+                # SkySafari without waiting for _solver_call_lock (which may
+                # be held by a concurrent maint call). Longer timeout gives
+                # the solver time to finish its current solve/gRPC call first.
+                def _push_lat(l=lat):
+                    _call_solver(SOLVER_OP_POLAR_SET_LATITUDE,
+                                 {"latitude_deg": l},
+                                 ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
+                                 timeout_s=10.0)
+                threading.Thread(target=_push_lat, daemon=True).start()
                 log.info("Latitude from LX200 :St -> %.4f", lat)
             return b"1"
         except Exception as e:
@@ -391,7 +395,14 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 return MaintResponse(ok=False, error="solver did not respond in time")
             if not reply.ok:
                 return MaintResponse(ok=False, error=reply.error)
-            return MaintResponse(ok=True, result=reply.result)
+            result = reply.result or {}
+            # If the solver's PolarSession doesn't have latitude yet (async
+            # :St push still in-flight, or first boot before SkySafari has
+            # connected), fall back to the value in cfg, which is updated
+            # synchronously in the :St handler and persisted to disk.
+            if not result.get("latitude_deg") and ctx.cfg.latitude_deg:
+                result = {**result, "latitude_deg": ctx.cfg.latitude_deg}
+            return MaintResponse(ok=True, result=result)
 
         if cmd == "polar_cancel":
             reply = _call_solver(SOLVER_OP_POLAR_CANCEL, {},
