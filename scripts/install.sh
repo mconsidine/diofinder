@@ -106,8 +106,7 @@ apt-get install -y --no-install-recommends \
   network-manager \
   initramfs-tools \
   iw \
-  wireless-regdb \
-  zram-tools
+  wireless-regdb
 
 # --- zram compressed swap -----------------------------------------------------
 # Pi Zero 2W has 512 MB RAM. The tetra3 solve database and supporting Python
@@ -115,8 +114,14 @@ apt-get install -y --no-install-recommends \
 # the OOM killer can evict tetra3 db pages and cause 5-10 s solve stalls.
 # zram provides ~256 MB of LZ4-compressed swap at near-RAM speed with no
 # SD-card wear.
-LOG "Configuring zram swap"
-cat > /etc/default/zramswap << 'EOF'
+#
+# zram-tools is kept as a separate, non-fatal install so that an unavailable
+# package (repo variant, temporary mirror issue) does not abort install.sh
+# before the critical services are enabled further below.
+LOG "Installing zram-tools (optional)"
+if apt-get install -y zram-tools 2>/dev/null; then
+  LOG "Configuring zram swap"
+  cat > /etc/default/zramswap << 'EOF'
 # zram compressed swap -- managed by zramswap service (from zram-tools)
 # SIZE: percentage of physical RAM to use for the compressed store.
 # At 2:1 compression (typical for star-solve data) this gives ~256 MB
@@ -124,7 +129,10 @@ cat > /etc/default/zramswap << 'EOF'
 PERCENT=50
 ALGO=lz4
 EOF
-systemctl enable zramswap.service 2>/dev/null || true
+  systemctl enable zramswap.service 2>/dev/null || true
+else
+  WARN "zram-tools not available; compressed swap not configured (non-fatal)"
+fi
 
 # SSH on by default. Pi OS Lite has had this off-by-default in some
 # recent images; ensure it's enabled so the user can ssh in immediately.
