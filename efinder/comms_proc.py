@@ -215,10 +215,10 @@ def _handle_lx200_command(cmd, latest_solution, align_state, cfg, shared_cfg,
                           align_request_q, align_response_q, ctx=None):
     if cmd == ":GR":
         sol = dict(latest_solution)
-        return _format_ra(sol["ra_deg"] / 15.0).encode("ascii")
+        return _format_ra(sol.get("ra_deg", 0.0) / 15.0).encode("ascii")
     if cmd == ":GD":
         sol = dict(latest_solution)
-        return _format_dec(sol["dec_deg"]).encode("ascii")
+        return _format_dec(sol.get("dec_deg", 0.0)).encode("ascii")
 
     # Mount status. SkySafari sends this immediately on connect; if it gets
     # no response (missing '#') it blocks waiting forever.
@@ -252,21 +252,20 @@ def _handle_lx200_command(cmd, latest_solution, align_state, cfg, shared_cfg,
         try:
             from efinder.align import _parse_dec_dms  # same DMS format
             lat = _parse_dec_dms(cmd[3:])
-            if ctx is not None:
-                cfg.latitude_deg = lat
-                cfg_mod.save_keys({"latitude_deg": lat})
-                # Propagate to the live solver-side PolarSession. Done in a
-                # daemon thread so the LX200 handler returns immediately to
-                # SkySafari without waiting for _solver_call_lock (which may
-                # be held by a concurrent maint call). Longer timeout gives
-                # the solver time to finish its current solve/gRPC call first.
-                def _push_lat(l=lat):
-                    _call_solver(SOLVER_OP_POLAR_SET_LATITUDE,
-                                 {"latitude_deg": l},
-                                 ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
-                                 timeout_s=10.0)
-                threading.Thread(target=_push_lat, daemon=True).start()
-                log.info("Latitude from LX200 :St -> %.4f", lat)
+            cfg.latitude_deg = lat
+            cfg_mod.save_keys({"latitude_deg": lat})
+            # Propagate to the live solver-side PolarSession in a daemon thread
+            # so the LX200 handler returns immediately to SkySafari without
+            # waiting on _solver_call_lock (which may be held by a concurrent
+            # maint call). Longer timeout gives the solver time to finish its
+            # current solve/gRPC call first.
+            def _push_lat(l=lat):
+                _call_solver(SOLVER_OP_POLAR_SET_LATITUDE,
+                             {"latitude_deg": l},
+                             ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
+                             timeout_s=10.0)
+            threading.Thread(target=_push_lat, daemon=True).start()
+            log.info("Latitude from LX200 :St -> %.4f", lat)
             return b"1"
         except Exception as e:
             log.warning("Could not parse :St latitude %r: %s", cmd[3:], e)

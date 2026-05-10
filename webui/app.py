@@ -27,6 +27,7 @@ webui/static/.
 import io
 import json
 import logging
+import math
 import os
 import subprocess
 import sys
@@ -45,8 +46,6 @@ except ImportError:
     from efinder.maint import call as maint_call, MaintResponse
 
 log = logging.getLogger("efinder.webui")
-
-import math
 
 app = Flask(__name__,
             template_folder="templates",
@@ -272,7 +271,8 @@ def logs():
              "-u", "efinder.service",
              "-u", "cedar-detect.service",
              "-n", str(n), "--no-pager", "-o", "short-precise"],
-            text=True, stderr=subprocess.STDOUT, timeout=5.0,
+            text=True, errors="replace",
+            stderr=subprocess.STDOUT, timeout=5.0,
         )
     except subprocess.CalledProcessError as e:
         out = f"journalctl failed: {e}"
