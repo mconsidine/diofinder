@@ -12,7 +12,7 @@
 set -euo pipefail
 
 EFINDER_DIR=/opt/efinder
-REPO=mconsidine/eFinder_cli
+REPO=mconsidine/eFinder_cli_new
 BINARY=cedar-detect-server
 TARGET_VERSION="${1:-latest}"
 
