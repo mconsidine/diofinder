@@ -67,7 +67,7 @@ def _handle_camera_cmd(cmd, cam, current_state):
                 "ExposureTime": int(new_s * 1_000_000),
                 "FrameDurationLimits": (
                     int(new_s * 1_000_000),
-                    int(new_s * 1_000_000) + 200_000,
+                    1_000_000_000,
                 ),
             })
             current_state["exposure_s"] = new_s
@@ -118,9 +118,14 @@ def camera_main(slots, camera_cmd_q, camera_cmd_reply_q, cfg):
             "AnalogueGain": float(cfg.gain),
             "AeEnable": False,
             "AwbEnable": False,
+            # Min = exposure time (hard physics floor).
+            # Max = large sentinel; let the hardware/ISP determine the
+            # actual achievable rate. The old value of exposure+200ms
+            # capped the camera at 2.5fps with the default 0.2s exposure,
+            # even though the solver would benefit from frames sooner.
             "FrameDurationLimits": (
                 int(cfg.exposure_s * 1_000_000),
-                int(cfg.exposure_s * 1_000_000) + 200_000,
+                1_000_000_000,
             ),
         },
     )
