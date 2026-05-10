@@ -255,6 +255,27 @@ def _handle_lx200_command(cmd, latest_solution, align_state, cfg, shared_cfg,
         except Exception as e:
             log.warning("Could not parse :Sg longitude %r: %s", cmd[3:], e)
             return b"0"
+
+    # :Gt / :Gg -- SkySafari sends these immediately on connect to read the
+    # mount's stored site location. Returning a real value satisfies its
+    # initialisation handshake and may determine whether it sends :St/:Sg
+    # back with its GPS coordinates.
+    if cmd == ":Gt":
+        lat = cfg.latitude_deg or 0.0
+        sign = "+" if lat >= 0 else "-"
+        a = abs(lat)
+        d = int(a)
+        m = int(round((a - d) * 60.0))
+        return f"{sign}{d:02d}*{m:02d}#".encode("ascii")
+
+    if cmd == ":Gg":
+        lon = cfg.longitude_deg or 0.0
+        sign = "+" if lon >= 0 else "-"
+        a = abs(lon)
+        d = int(a)
+        m = int(round((a - d) * 60.0))
+        return f"{sign}{d:03d}*{m:02d}#".encode("ascii")
+
     if cmd.startswith(":SG") or cmd.startswith(":SL"):
         return b"1"
     if cmd.startswith(":SC"):
