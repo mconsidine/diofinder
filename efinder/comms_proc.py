@@ -48,6 +48,36 @@ _request_id_seq = itertools.count(1)
 _solver_call_lock = threading.Lock()
 _camera_call_lock = threading.Lock()
 
+# TTL cache for solver IPC results that change slowly. Prevents concurrent
+# web-UI polls (calibration_status, polar_status) from each blocking on
+# _solver_call_lock while the solver is mid-solve (up to 1520ms per cycle).
+# Cache entries: op -> (timestamp, SolverCmdReply)
+_solver_cache: dict = {}
+_solver_cache_lock = threading.Lock()
+
+
+def _cached_call_solver(op, solver_cmd_q, solver_cmd_reply_q, ttl_s: float):
+    """Call the solver with a TTL cache. Cache hits return immediately."""
+    now = time.monotonic()
+    with _solver_cache_lock:
+        entry = _solver_cache.get(op)
+        if entry and now - entry[0] < ttl_s:
+            return entry[1]
+    reply = _call_solver(op, {}, solver_cmd_q, solver_cmd_reply_q)
+    if reply is not None and reply.ok:
+        with _solver_cache_lock:
+            _solver_cache[op] = (time.monotonic(), reply)
+    return reply
+
+
+def _invalidate_solver_cache(op=None):
+    """Invalidate one or all cached solver results (call after mutations)."""
+    with _solver_cache_lock:
+        if op is None:
+            _solver_cache.clear()
+        else:
+            _solver_cache.pop(op, None)
+
 
 def _pin_to_cpu(cpu: int) -> None:
     try:
@@ -382,8 +412,11 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
 
         # ---- Calibration ----
         if cmd == "calibration_status":
-            reply = _call_solver(SOLVER_OP_CALIBRATION_STATUS, {},
-                                 ctx.solver_cmd_q, ctx.solver_cmd_reply_q)
+            # Calibration changes ~once per 30 solves; cache for 5s so
+            # concurrent dashboard polls don't pile up on _solver_call_lock.
+            reply = _cached_call_solver(
+                SOLVER_OP_CALIBRATION_STATUS,
+                ctx.solver_cmd_q, ctx.solver_cmd_reply_q, ttl_s=5.0)
             if reply is None:
                 return MaintResponse(ok=False, error="solver did not respond in time")
             if not reply.ok:
@@ -391,6 +424,7 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             return MaintResponse(ok=True, result=reply.result)
 
         if cmd == "calibration_reset":
+            _invalidate_solver_cache(SOLVER_OP_CALIBRATION_STATUS)
             reply = _call_solver(SOLVER_OP_CALIBRATION_RESET, {},
                                  ctx.solver_cmd_q, ctx.solver_cmd_reply_q)
             if reply is None:
@@ -401,6 +435,7 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
 
         # ---- Polar alignment ----
         if cmd == "polar_start":
+            _invalidate_solver_cache(SOLVER_OP_POLAR_STATUS)
             reply = _call_solver(SOLVER_OP_POLAR_START, {},
                                  ctx.solver_cmd_q, ctx.solver_cmd_reply_q)
             if reply is None:
@@ -410,8 +445,12 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             return MaintResponse(ok=True, result=reply.result)
 
         if cmd == "polar_status":
-            reply = _call_solver(SOLVER_OP_POLAR_STATUS, {},
-                                 ctx.solver_cmd_q, ctx.solver_cmd_reply_q)
+            # Cache for 1s -- short enough for responsive polar alignment
+            # feedback, long enough to absorb the 800ms JS poll rate without
+            # every poll blocking on _solver_call_lock.
+            reply = _cached_call_solver(
+                SOLVER_OP_POLAR_STATUS,
+                ctx.solver_cmd_q, ctx.solver_cmd_reply_q, ttl_s=1.0)
             if reply is None:
                 return MaintResponse(ok=False, error="solver did not respond in time")
             if not reply.ok:
@@ -426,6 +465,7 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             return MaintResponse(ok=True, result=result)
 
         if cmd == "polar_cancel":
+            _invalidate_solver_cache(SOLVER_OP_POLAR_STATUS)
             reply = _call_solver(SOLVER_OP_POLAR_CANCEL, {},
                                  ctx.solver_cmd_q, ctx.solver_cmd_reply_q)
             if reply is None:
@@ -441,6 +481,7 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 return MaintResponse(ok=False,
                                      error=f"polar_set_latitude requires numeric latitude_deg: {e}")
             persist = bool(args.get("persist", True))  # default True for latitude
+            _invalidate_solver_cache(SOLVER_OP_POLAR_STATUS)
             reply = _call_solver(SOLVER_OP_POLAR_SET_LATITUDE,
                                  {"latitude_deg": lat},
                                  ctx.solver_cmd_q, ctx.solver_cmd_reply_q)

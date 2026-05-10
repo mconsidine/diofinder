@@ -59,7 +59,7 @@ app.jinja_env.filters['log10'] = lambda x: math.log10(float(x)) if float(x) > 0 
 # Helpers
 # ---------------------------------------------------------------------
 
-def _safe_call(cmd, args=None, timeout=5.0):
+def _safe_call(cmd, args=None, timeout=15.0):
     """Wrap maint_call with an error-friendly fallback. The dashboard
     must keep rendering even if the daemon is down or restarting.
     """
