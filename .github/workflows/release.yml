@@ -225,6 +225,7 @@ jobs:
           sudo losetup -d "$LOOP"
 
       - name: Compress image
+        id: compress
         run: |
           ls -lh build/output/
           # build-image.sh ran under sudo and produced a root-owned image.
@@ -233,13 +234,20 @@ jobs:
           # in this step). Hand ownership back to runner first.
           sudo chown -R "$(id -u):$(id -g)" build/output/
           xz -T0 -9 build/output/efinder.img
+          # Rename to include build date and version tag so each release
+          # artifact is unambiguously identifiable on disk.
+          BUILD_DATE=$(date -u +%Y%m%d)
+          TAG=${{ steps.ver.outputs.tag }}
+          IMGNAME="efinder-${BUILD_DATE}-${TAG}.img.xz"
+          mv build/output/efinder.img.xz "build/output/${IMGNAME}"
+          echo "imgname=${IMGNAME}" >> $GITHUB_OUTPUT
           ls -lh build/output/
 
       - name: Attach to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v2
         with:
-          files: build/output/efinder.img.xz
+          files: build/output/${{ steps.compress.outputs.imgname }}
           fail_on_unmatched_files: true
 
       - name: Upload as workflow artifact (manual builds)
@@ -247,6 +255,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: efinder-image-${{ steps.ver.outputs.tag }}
-          path: build/output/efinder.img.xz
+          path: build/output/${{ steps.compress.outputs.imgname }}
           retention-days: 14
           if-no-files-found: error
