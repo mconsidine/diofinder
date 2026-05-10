@@ -74,6 +74,13 @@ if [ -n "$ACTIVE_WIFI" ] && [ "$ACTIVE_WIFI" != "$PROFILE" ]; then
   nmcli con down "$ACTIVE_WIFI" >/dev/null || true
 fi
 
+# Re-enable AP autoconnect and clear any suppression from previous failures
+# or from station.sh (which sets autoconnect=no on the AP profile).
+nmcli con modify "$PROFILE" \
+  connection.autoconnect yes \
+  connection.autoconnect-retries 0 \
+  2>/dev/null || true
+
 # Bring up the AP.
 echo "Activating AP profile: $PROFILE"
 nmcli con up "$PROFILE"
