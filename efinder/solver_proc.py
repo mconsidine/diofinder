@@ -172,7 +172,7 @@ def _handle_solver_cmd(cmd, calibrator, polar):
             error=f"{type(e).__name__}: {e}")
 
 
-def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg):
+def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg):
     """
     Called after every successful plate-solve.
 
@@ -180,7 +180,16 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg):
     2. If a previous solve reference exists, appends the (IMU-delta,
        sky-delta) pair to the calibration ring buffer and re-fits the
        2×3 transform matrix C that maps IMU rotation vectors to
-       (Δra_rad·cos(dec), Δdec_rad).
+       (Δcam_right, Δcam_up) — the delta expressed in the *camera frame*
+       rather than the sky frame.
+
+       Expressing pairs in the camera frame (by rotating the sky delta by
+       -roll before fitting) removes orientation-dependent variation from
+       the training data.  C then represents the fixed IMU→camera mounting
+       transform, which is valid across the whole sky rather than just near
+       the calibration region.  comms_proc rotates back by +roll_ref when
+       predicting, recovering the correct sky delta.
+
     3. Writes the new solve as the IMU reference for the next call.
 
     All paths are no-ops when the IMU is absent (imu_available=False).
@@ -193,21 +202,23 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg):
     if q_now is None or time.monotonic() - imu_t > 2.0:
         return  # stale or missing IMU data
 
-    q_prev   = shared_cfg.get("imu_ref_q")
-    ra_prev  = shared_cfg.get("imu_ref_ra_deg")
-    dec_prev = shared_cfg.get("imu_ref_dec_deg")
+    q_prev    = shared_cfg.get("imu_ref_q")
+    ra_prev   = shared_cfg.get("imu_ref_ra_deg")
+    dec_prev  = shared_cfg.get("imu_ref_dec_deg")
+    roll_prev = shared_cfg.get("imu_ref_roll_deg", 0.0)
 
     # Write new reference before the expensive calibration work so that
     # comms_proc always has the freshest possible anchor point.
-    shared_cfg["imu_ref_q"]      = q_now
-    shared_cfg["imu_ref_ra_deg"] = new_ra_deg
+    shared_cfg["imu_ref_q"]       = q_now
+    shared_cfg["imu_ref_ra_deg"]  = new_ra_deg
     shared_cfg["imu_ref_dec_deg"] = new_dec_deg
-    shared_cfg["imu_ref_t"]      = time.monotonic()
+    shared_cfg["imu_ref_roll_deg"] = new_roll_deg
+    shared_cfg["imu_ref_t"]       = time.monotonic()
 
     if q_prev is None or ra_prev is None or dec_prev is None:
         return  # first solve — no delta to compute yet
 
-    # ---- Compute the (IMU rotation vector, sky delta) calibration pair ----
+    # ---- Compute the calibration pair (IMU rot-vec, camera-frame sky-delta) ----
 
     r_imu = quat_delta_rotvec(q_now, q_prev)
     imu_dist = math.sqrt(r_imu[0]**2 + r_imu[1]**2 + r_imu[2]**2)
@@ -220,27 +231,30 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg):
     dra = new_ra_deg - ra_prev
     if dra >  180: dra -= 360
     if dra < -180: dra += 360
-    dra_rad  = math.radians(dra) * cos_dec  # cos(dec)-scaled, for equal weighting
+    dra_rad  = math.radians(dra) * cos_dec
     ddec_rad = math.radians(new_dec_deg - dec_prev)
 
     sky_dist = math.sqrt(dra_rad**2 + ddec_rad**2)
-    # Skip pairs where the scope barely moved (noise-dominated) or slewed
-    # so far that it's clearly a large intentional slew (less useful for
-    # the fine-grained dead-reckoning calibration).
     if sky_dist < math.radians(0.1) or sky_dist > math.radians(15.0):
         return
+
+    # Rotate the sky delta (east, north) into the camera frame using the
+    # roll angle at the *previous* solve.  Convention: roll is the CCW
+    # rotation of celestial north from image "up", so rotating the sky
+    # vector by -roll brings it into the camera's "north=up" frame.
+    roll_rad = math.radians(roll_prev)
+    cos_r, sin_r = math.cos(roll_rad), math.sin(roll_rad)
+    cam_r =  dra_rad * cos_r + ddec_rad * sin_r
+    cam_u = -dra_rad * sin_r + ddec_rad * cos_r
 
     # ---- Update calibration ring buffer and refit -------------------------
 
     pairs = list(shared_cfg.get("imu_calib_pairs", []))
-    pairs.append((r_imu[0], r_imu[1], r_imu[2], dra_rad, ddec_rad))
+    pairs.append((r_imu[0], r_imu[1], r_imu[2], cam_r, cam_u))
     if len(pairs) > 20:
         pairs = pairs[-20:]
 
     if len(pairs) >= 3:
-        # Fit C (3×2) via least squares: R @ C ≈ S
-        # where R is N×3 (IMU rotation vectors) and S is N×2 (sky deltas).
-        # C.T is the 2×3 matrix that maps a 3-vector r to [dra, ddec].
         R = np.array([[p[0], p[1], p[2]] for p in pairs])   # N×3
         S = np.array([[p[3], p[4]]       for p in pairs])   # N×2
         C, _, _, _ = np.linalg.lstsq(R, S, rcond=None)      # C: 3×2
@@ -250,7 +264,6 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg):
         ss_tot = float(np.sum((S - S.mean(axis=0))**2))
         r2 = max(0.0, 1.0 - ss_res / ss_tot) if ss_tot > 1e-15 else 0.0
 
-        # Store as flattened 2×3 row-major list for comms_proc
         shared_cfg["imu_calib_C"]       = C.T.flatten().tolist()
         shared_cfg["imu_calib_quality"] = r2
 
@@ -484,7 +497,7 @@ def solver_main(slots, latest_solution, shared_cfg,
             ))
 
             # ---- IMU dead-reckoning reference update ----
-            _imu_update_reference(shared_cfg, ra_out, dec_out)
+            _imu_update_reference(shared_cfg, ra_out, dec_out, soln.get("Roll", 0.0))
 
             # ---- Alignment response, if requested ----
             if align_req is not None:

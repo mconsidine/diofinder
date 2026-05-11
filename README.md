@@ -18,14 +18,15 @@ boresight registration and a built-in three-point polar alignment assistant.
 7. [Web UI](#web-ui)
 8. [Polar alignment](#polar-alignment)
 9. [Focus assessment](#focus-assessment)
-10. [Wi-Fi modes](#wi-fi-modes)
-11. [Configuration reference](#configuration-reference)
-12. [Maintenance CLI (`efinder-ctl`)](#maintenance-cli-efinder-ctl)
-13. [Updating in the field](#updating-in-the-field)
-14. [Performance characteristics](#performance-characteristics)
-15. [Architecture](#architecture)
-16. [Building and development](#building-and-development)
-17. [Known limitations and deferred work](#known-limitations-and-deferred-work)
+10. [IMU dead-reckoning (optional)](#imu-dead-reckoning-optional)
+11. [Wi-Fi modes](#wi-fi-modes)
+12. [Configuration reference](#configuration-reference)
+13. [Maintenance CLI (`efinder-ctl`)](#maintenance-cli-efinder-ctl)
+14. [Updating in the field](#updating-in-the-field)
+15. [Performance characteristics](#performance-characteristics)
+16. [Architecture](#architecture)
+17. [Building and development](#building-and-development)
+18. [Known limitations and deferred work](#known-limitations-and-deferred-work)
 
 ---
 
@@ -40,7 +41,8 @@ SkySafari in real time via the LX200 protocol.
 **Core capabilities:**
 
 - **Continuous plate-solving** at ~1–2 s per frame (960×760, Cortex-A53
-  optimized). Each solve reports RA, Dec, and image orientation.
+  optimized). Each solve reports RA, Dec, field-of-view, and image orientation
+  (position angle / roll).
 - **Boresight calibration** via SkySafari's Sync command: center a star,
   tap Sync, and the eFinder stores the pixel offset between the star's
   centroid and the frame center. The offset is persisted across reboots.
@@ -53,13 +55,18 @@ SkySafari in real time via the LX200 protocol.
   results, derives the true RA axis, and reports azimuth and altitude
   corrections to align it with the celestial pole. Requires observer latitude,
   which SkySafari supplies automatically.
-- **Live web UI** on port 80: dashboard, polar alignment workflow, configuration
-  viewer, live log tail, and one-click in-place updater.
+- **IMU dead-reckoning** (optional, requires BNO055): a BNO055 IMU on I²C
+  self-calibrates passively from consecutive plate-solve pairs and smooths
+  SkySafari position updates between solves to < 1 ms latency. Hot-pluggable
+  — no reboot needed.
+- **Live web UI** on port 80: dashboard, camera settings, polar alignment
+  workflow, Wi-Fi switching, configuration viewer, live log tail, and one-click
+  in-place updater.
 - **Maintenance CLI** (`efinder-ctl`) for full control over boresight,
   calibration, exposure, gain, and polar alignment without opening a browser.
 - **Dual network presence**: USB Ethernet gadget (plug-and-play, no drivers on
   Mac/Linux) and self-hosted Wi-Fi AP simultaneously. Optionally joins your home
-  Wi-Fi instead.
+  Wi-Fi instead; browser-based switching with automatic AP fallback.
 - **Dark frame fast-path**: frames below 20 ADU peak (lens cap on, completely
   dark sky) are detected in ~0.1 ms and skipped entirely — the solver never
   wastes time on empty frames.
@@ -77,6 +84,7 @@ SkySafari in real time via the LX200 protocol.
 | Micro-USB power supply | 5V 2A; the Zero's middle port is data+power |
 | Micro-USB to USB-A cable | For USB tether to laptop/tablet |
 | Mounting hardware | Dovetail or finder shoe to attach to the tube |
+| BNO055 IMU *(optional)* | I²C inertial sensor for dead-reckoning between plate-solves. Connect to GPIO 2 (SDA) and GPIO 3 (SCL). Hot-pluggable — detected automatically, no reboot. |
 
 The IMX477 was chosen for its large 7.9 mm diagonal sensor (wide field),
 12 MP resolution (more stars per frame), and excellent low-light performance.
@@ -243,25 +251,56 @@ holds no state of its own.
 
 ### Dashboard (`/`)
 
-The dashboard auto-refreshes every 2 seconds and shows:
+The dashboard auto-refreshes every 1.5 seconds and shows:
 
-- **Live view**: current RA/Dec, plate-solve status, detected star count,
-  solve time, and image orientation (position angle).
-- **Exposure / Gain**: current settings with a live slider to change exposure
-  and a gain input. Changes take effect immediately; use the **Persist** button
-  to write them to config.
-- **Pointing**: boresight pixel coordinates, calibration state (accumulating /
-  calibrated / uncalibrated), and calibrated FOV and plate scale once
-  available.
-- **Focus**: Laplacian variance score for the brightest detected star,
-  updated on every solve. Higher is sharper.
-- **Calibration**: FOV calibration state and history.
-- **Boresight**: pixel coordinates of the registered boresight offset.
+- **Pointing**: current RA/Dec, star count, match count, solve time, peak pixel
+  value, FOV, and image roll (position angle of celestial north relative to
+  image up). Auto-refreshed from `/api/status`.
+- **Focus**: Laplacian variance score at the last focus commit, with a link to
+  the Focus page for active focusing.
+- **Calibration**: FOV calibration state, committed FOV, rolling window
+  fill level, median, and standard deviation. Includes a **Recalibrate** button.
+- **Boresight**: current boresight pixel coordinates. **Reset to center** button
+  resets to the frame center without a new sync.
+- **IMU**: if a BNO055 is detected, shows calibration progress (pairs
+  collected / 3 needed), R² fit quality, and state (calibrating / active).
+  Activates automatically once 3 pairs are collected and R² ≥ 0.85.
+
+### Camera (`/camera`)
+
+Live camera view with configurable settings:
+
+- **Live frame**: JPEG from the current SHM buffer with a boresight crosshair
+  overlaid. Refreshes every 2 seconds.
+- **Exposure / Gain**: sliders for exposure time (0.001–10 s) and analogue
+  gain (1–64). Changes take effect on the next frame; use **Persist** to write
+  to config.
+- **Solver parameters**: sliders for `detect_sigma` (star extraction threshold,
+  3–20) and `solve_timeout_ms` (per-frame solver budget, 500–5000 ms). Changes
+  take effect immediately; use **Persist** to write to config.
 
 ### Polar alignment (`/polar`)
 
 Step-by-step workflow for three-point polar alignment. See the
 [Polar alignment](#polar-alignment) section for the full procedure.
+
+### Wi-Fi (`/wifi`)
+
+Browser-based Wi-Fi management:
+
+- **Status card**: shows current mode (AP / station), SSID, and IP address.
+  Includes a **Switch to AP Mode** button when in station mode.
+- **Connect form**: enter an SSID (with autocomplete from a live network scan)
+  and password, then click **Connect**. A connecting page counts down 90 s,
+  polls `/api/wifi/status` every 3 s, and reports success, fast fail (AP
+  fallback fired), or timeout. On timeout the JS automatically POSTs to
+  `/wifi/ap` to restore the AP — a second independent fallback layer alongside
+  the one built into `station.sh` itself.
+- **Rescan button**: triggers a fresh NM Wi-Fi scan and repopulates the SSID
+  list without a page reload.
+
+If the Pi cannot reach the station network and you are not connected via USB
+Ethernet, connect via USB at `10.55.0.1` and run `sudo ap.sh` to restore AP mode.
 
 ### Configuration (`/config`)
 
@@ -389,6 +428,84 @@ while the dark frame fast-path is active (lens cap on).
 
 ---
 
+## IMU dead-reckoning (optional)
+
+If a BNO055 inertial measurement unit (IMU) is wired to the Pi's I²C bus
+(GPIO 2 = SDA, GPIO 3 = SCL), the eFinder uses it to smooth SkySafari
+position updates between plate-solves.
+
+### How it works
+
+Without the IMU, SkySafari polls `:GR#`/`:GD#` every ~0.5–1 s and gets the
+last plate-solved position, which jumps discretely each time a new solve
+completes. With the IMU active, the same polls return a continuously updated
+dead-reckoning estimate: the last known position plus the rotation the IMU has
+measured since that solve. The result is smooth, < 1 ms response even while
+the solver is busy.
+
+### Self-calibration
+
+No manual calibration ritual is required. The IMU transform is learned
+passively from consecutive plate-solve pairs:
+
+1. After each successful solve, the solver computes the angular displacement
+   both in sky coordinates (from the two RA/Dec solutions) and in camera
+   coordinates (by rotating the sky delta by the image roll angle, so the
+   result is independent of where the scope is pointing).
+2. The sky displacement and the simultaneous IMU rotation vector are stored
+   as a training pair in a 20-entry ring buffer.
+3. Once 3 pairs are available, a 2×3 least-squares matrix (C) is fitted that
+   maps IMU rotation vectors to (right, up) displacements in the camera frame.
+4. The IMU becomes "active" when at least 3 pairs are collected and the fit
+   R² ≥ 0.85. Status is shown on the dashboard IMU card.
+
+The ring buffer is rolling, so C continues to refine as more pairs arrive and
+old pairs age out. Because training pairs are expressed in the camera frame
+(using the image roll), C captures the fixed mechanical mounting relationship
+between the IMU and the camera — valid across the whole sky, not just near
+the calibration region.
+
+### Roll (position angle)
+
+Each plate-solve also reports **roll** — the rotation of celestial north
+relative to the image's "up" direction (toward y=0), counter-clockwise
+positive. Roll is shown on the dashboard Pointing card.
+
+Roll serves two purposes:
+
+1. **IMU calibration normalization** (described above): rotating the sky delta
+   by −roll before fitting removes the sky-position dependence from C, making
+   the calibration globally valid.
+2. **Dead-reckoning prediction**: when predicting, the camera-frame delta
+   from C is rotated back by +roll at the reference solve to recover the
+   correct sky-frame RA/Dec offset.
+
+### Hardware setup
+
+Wire the BNO055 to the Pi Zero 2W's I²C-1 bus:
+
+| BNO055 pin | Pi Zero 2W pin |
+|---|---|
+| VIN | 3.3 V (pin 1) |
+| GND | GND (pin 6) |
+| SDA | GPIO 2 (pin 3) |
+| SCL | GPIO 3 (pin 5) |
+
+The I²C bus is enabled by default on Pi OS. The eFinder uses `smbus2`
+(installed by `install.sh`), not the Adafruit CircuitPython library. The
+`efinder` user must be in the `i2c` group:
+
+```bash
+sudo usermod -aG i2c efinder
+```
+
+The chip is detected automatically within 3 s of being powered on (hot-plug).
+No configuration or reboot is needed. If the chip is removed, the eFinder
+reverts to direct plate-solve reporting with no interruption to normal
+operation.
+
+---
+
 ## Wi-Fi modes
 
 The eFinder starts in **access point mode** (AP mode) out of the box. It also
@@ -402,21 +519,23 @@ to this network.
 
 ### Switching to station mode
 
-To join your home (or observatory) Wi-Fi network, run the `station.sh` script.
+**Via the web UI (recommended):**
 
-**Interactive mode** (recommended in the field — scans for available SSIDs):
+Open `http://efinder.local/wifi`, enter the target SSID and password in the
+Connect form, and click **Connect**. The connecting page counts down 90 s while
+polling for success. Two independent fallback layers restore AP mode
+automatically if the connection fails — no manual intervention needed.
 
-```bash
-sudo /usr/local/bin/station.sh
-```
-
-This scans available networks, lists them sorted by signal strength with a
-numbered menu, prompts you to select one, then prompts for the password.
-
-**Non-interactive mode** (scripting or known credentials):
+**Via SSH / command line:**
 
 ```bash
 sudo /usr/local/bin/station.sh "MySSID" "MyPassword"
+```
+
+Or run interactively (scans for available SSIDs):
+
+```bash
+sudo /usr/local/bin/station.sh
 ```
 
 After connecting in station mode, the Pi's IP address on the home network is
@@ -425,17 +544,22 @@ USB Ethernet gadget remains on `10.55.0.1` regardless of Wi-Fi mode.
 
 ### Switching back to AP mode
 
+**Via the web UI:** Open `/wifi` and click **Switch to AP Mode**.
+
+**Via command line:**
+
 ```bash
 sudo /usr/local/bin/ap.sh
 ```
 
 ### Recovering from bad Wi-Fi credentials
 
-If the Pi cannot join the target network (wrong password, out of range), it
-will have no Wi-Fi connectivity. Recovery options:
+If the Pi cannot join the target network (wrong password, out of range), both
+`station.sh` and the web UI's JS watchdog independently attempt to restore AP
+mode. If Wi-Fi is fully lost:
 
-1. Connect via USB Ethernet (`10.55.0.1`) and run `sudo /usr/local/bin/ap.sh`
-   to restore AP mode.
+1. Connect via USB Ethernet (`10.55.0.1`) and open `http://10.55.0.1/wifi`, or
+   run `sudo /usr/local/bin/ap.sh` via SSH.
 2. SSH in via `efinder.local` over USB, run `sudo nmcli con delete "wrong-ssid"`,
    then retry.
 3. As a last resort, re-flash the SD card.
@@ -599,6 +723,7 @@ sudo /usr/local/bin/efinder-update v0.7.1       # specific version
 | cedar-detect centroid extraction (gRPC, SHM zero-copy) | 30–80 ms |
 | cedar-solve plate matching | 200–800 ms (depends on star count and FOV calibration state) |
 | LX200 report latency after solve | < 1 ms |
+| IMU dead-reckoning prediction (when active) | < 0.1 ms |
 | **Total end-to-end (typical)** | **~1–2 s with 0.2 s exposure** |
 
 ### Camera frame rate
@@ -624,6 +749,10 @@ solver invocation.
 | `cedar-detect-server` | ~15 MB |
 | **Total** | **~325 MB** |
 
+**IMU overhead:** The `imu_thread` daemon reads 8 bytes over I²C at 20 Hz,
+consuming < 0.4% of total system CPU and < 1 MB additional RSS. When the IMU
+is absent the thread polls once every 3 s — effectively zero overhead.
+
 With zram swap providing ~256 MB of additional (compressed) swap, the system
 operates comfortably within the Zero 2W's 512 MB physical RAM.
 
@@ -647,9 +776,10 @@ the FOV:
 ### Process topology
 
 ```
-┌──────────────────── efinder_main (CPU 0, then yields) ──────────────────────┐
-│  Launches workers, manages shared state, handles SIGTERM/SIGCHLD             │
-└──────────┬──────────────┬─────────────────┬──────────────────────────────────┘
+┌─────────── efinder_main (CPU 0, then yields) ────────────────────────────────┐
+│  Launches workers, manages shared state, handles SIGTERM/SIGCHLD              │
+│  imu_thread (daemon, CPU any) — probes I²C every 3 s, reads at 20 Hz         │
+└──────────┬──────────────┬─────────────────┬───────────────────────────────────┘
            │              │                 │
     ┌──────▼──────┐ ┌─────▼──────┐  ┌──────▼──────┐
     │ comms_proc  │ │camera_proc │  │ solver_proc  │
@@ -666,6 +796,14 @@ the FOV:
     │ maint.sock  │                 │  Rust gRPC   │
     └─────────────┘                 └──────────────┘
 ```
+
+The `imu_thread` runs as a Python daemon thread inside the `efinder_main`
+process. It polls I²C addresses 0x28 and 0x29 every 3 s looking for a BNO055
+chip. When found it initialises the chip in IMUPLUS mode (accelerometer +
+gyroscope only; no magnetometer, immune to telescope motors and metal) and reads
+quaternions at 20 Hz. IMU data is written to `shared_cfg` so both `solver_proc`
+and `comms_proc` can read it without IPC overhead. If the chip is removed, the
+thread falls back to the 3 s polling loop.
 
 ### Frame pipeline
 
@@ -702,9 +840,26 @@ comms_proc: RA/Dec available for next :GR# / :GD# poll
 |---|---|---|---|
 | `FrameSlots` | `shared_memory` (3 × 730 KB) | `solver_proc`, `cedar-detect` | `camera_proc` |
 | `latest_solution` | `Manager().dict()` | `comms_proc`, web UI | `solver_proc` |
-| `shared_cfg` | `Manager().dict()` | `comms_proc`, web UI | `comms_proc` (on maint cmd) |
+| `shared_cfg` | `Manager().dict()` | `comms_proc`, `solver_proc`, web UI | `comms_proc` (maint cmd), `solver_proc` (boresight/IMU ref), `imu_thread` (IMU data) |
 | `camera_cmd_q` | `multiprocessing.Queue` | `camera_proc` | `comms_proc` |
 | `solver_cmd_q` | `multiprocessing.Queue` | `solver_proc` | `comms_proc` |
+
+**IMU-related keys in `shared_cfg`:**
+
+| Key | Written by | Description |
+|---|---|---|
+| `imu_available` | `imu_thread` | `True` when BNO055 is detected and responding |
+| `imu_q` | `imu_thread` | Current quaternion as `(w, x, y, z)` tuple |
+| `imu_t` | `imu_thread` | `time.monotonic()` of last quaternion read |
+| `imu_ref_q` | `solver_proc` | Quaternion at the last plate-solve |
+| `imu_ref_ra_deg` | `solver_proc` | RA at the last plate-solve |
+| `imu_ref_dec_deg` | `solver_proc` | Dec at the last plate-solve |
+| `imu_ref_roll_deg` | `solver_proc` | Roll (position angle) at the last plate-solve |
+| `imu_ref_t` | `solver_proc` | Monotonic time of the last plate-solve |
+| `imu_calib_pairs` | `solver_proc` | Ring buffer of (IMU rot-vec, camera-frame sky-delta) training pairs (≤ 20) |
+| `imu_calib_C` | `solver_proc` | Fitted 2×3 IMU→camera transform matrix (row-major list of 6 floats) |
+| `imu_calib_quality` | `solver_proc` | R² of the current calibration fit |
+| `imu_calib_n` | `solver_proc` | Number of calibration pairs collected so far |
 
 ### Maintenance socket IPC
 
@@ -724,7 +879,8 @@ when the web UI auto-refreshes every 2 seconds from multiple browser tabs.
 | `efinder.service` | Main eFinder application (camera + solver + comms). Restart policy: `always`. |
 | `cedar-detect.service` | Rust gRPC centroid server. Started before `efinder.service` via `Wants=`/`After=`. |
 | `efinder-webui.service` | Flask web UI on port 80. Independent of `efinder.service`; survives a solver restart. |
-| `efinder-firstboot.service` | One-shot network setup (runs once, marks itself complete with a stamp file). |
+| `efinder-firstboot.service` | Network setup — runs on every boot (all operations are idempotent). Configures the USB gadget interface and ensures the AP profile exists. |
+| `efinder-ensure-ap.service` | 60-second polling watchdog that restores the AP profile if NetworkManager has suppressed it (e.g. after a failed station-mode attempt). |
 
 ---
 

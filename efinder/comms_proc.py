@@ -252,9 +252,21 @@ def _imu_predict(shared_cfg):
     r = quat_delta_rotvec(q_now, q_ref)
 
     # Apply 2×3 calibration matrix (row-major: [c00 c01 c02 c10 c11 c12])
+    # C maps IMU rot-vec -> (cam_right, cam_up) in the camera frame
     c = C_flat
-    dra_rad  = c[0]*r[0] + c[1]*r[1] + c[2]*r[2]
-    ddec_rad = c[3]*r[0] + c[4]*r[1] + c[5]*r[2]
+    dr = c[0]*r[0] + c[1]*r[1] + c[2]*r[2]   # camera-right component
+    du = c[3]*r[0] + c[4]*r[1] + c[5]*r[2]   # camera-up component
+
+    # Rotate camera-frame delta back to sky frame using roll at the reference solve.
+    # Training stored cam_r =  dra*cos(roll) + ddec*sin(roll)
+    #                  cam_u = -dra*sin(roll) + ddec*cos(roll)
+    # Inverse: dra  =  dr*cos(roll) - du*sin(roll)
+    #          ddec =  dr*sin(roll) + du*cos(roll)
+    roll_ref = shared_cfg.get("imu_ref_roll_deg", 0.0)
+    roll_rad = math.radians(roll_ref)
+    cos_r, sin_r = math.cos(roll_rad), math.sin(roll_rad)
+    dra_rad  =  dr * cos_r - du * sin_r
+    ddec_rad =  dr * sin_r + du * cos_r
 
     # Safety cap — don't extrapolate more than 5 ° from the reference
     if abs(dra_rad) > math.radians(5.0) or abs(ddec_rad) > math.radians(5.0):

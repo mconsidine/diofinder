@@ -28,6 +28,7 @@
         <dt>Solve time</dt><dd id="solve_ms">{{ "%.0f"|format(solution.solve_ms) }} ms</dd>
         <dt>Peak</dt><dd id="peak">{{ solution.peak }}</dd>
         <dt>FOV</dt><dd id="fov">{{ "%.3f"|format(solution.fov_deg) }}&deg;</dd>
+        <dt>Roll</dt><dd id="roll">{{ "%.1f"|format(solution.roll_deg) }}&deg;</dd>
       </dl>
     {% else %}
       <div class="not-solved" id="not-solved">
@@ -137,6 +138,8 @@ async function refresh() {
       if (peak) peak.textContent = sol.peak;
       const fov = document.getElementById('fov');
       if (fov) fov.textContent = sol.fov_deg.toFixed(3) + '\u00b0';
+      const roll = document.getElementById('roll');
+      if (roll) roll.textContent = (sol.roll_deg || 0).toFixed(1) + '\u00b0';
     } else {
       const ns = document.getElementById('not-solved');
       if (ns) {

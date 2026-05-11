@@ -96,6 +96,7 @@ def _format_solution(sol):
         "ra_deg": sol["ra_deg"],
         "dec_deg": sol["dec_deg"],
         "fov_deg": sol.get("fov_deg", 0.0),
+        "roll_deg": sol.get("roll_deg", 0.0),
         "stars": sol["stars"],
         "matches": sol.get("matches", 0),
         "peak": sol["peak"],
