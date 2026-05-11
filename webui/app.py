@@ -30,6 +30,7 @@ import json
 import logging
 import math
 import os
+import re as _re
 import subprocess
 import sys
 import threading
@@ -285,6 +286,141 @@ def solver_params_set():
     if not r.ok:
         return r.error, 400
     return redirect(url_for("camera_page"))
+
+
+# ---------------------------------------------------------------------
+# Wi-Fi management
+# ---------------------------------------------------------------------
+
+def _get_wifi_status():
+    """Return a dict describing the current wlan0 connection state."""
+    result = {"mode": "disconnected", "ssid": None, "connection": None, "ip": None}
+    try:
+        active = subprocess.check_output(
+            ["nmcli", "-t", "-f", "NAME,DEVICE", "con", "show", "--active"],
+            text=True, errors="replace", timeout=5,
+        )
+        for line in active.splitlines():
+            parts = line.split(":")
+            if len(parts) >= 2 and parts[1] == "wlan0":
+                wlan_con = parts[0]
+                result["connection"] = wlan_con
+                result["mode"] = "ap" if wlan_con == "efinder-ap" else "station"
+                try:
+                    ssid_out = subprocess.check_output(
+                        ["nmcli", "-t", "-s", "-f", "802-11-wireless.ssid",
+                         "con", "show", wlan_con],
+                        text=True, errors="replace", timeout=3,
+                    )
+                    m = _re.search(r"802-11-wireless\.ssid:(.*)", ssid_out)
+                    result["ssid"] = m.group(1).strip() if m else wlan_con
+                except Exception:
+                    result["ssid"] = wlan_con
+                break
+    except Exception:
+        pass
+    try:
+        ip_out = subprocess.check_output(
+            ["ip", "-4", "addr", "show", "wlan0"],
+            text=True, errors="replace", timeout=3,
+        )
+        m = _re.search(r"inet (\S+)", ip_out)
+        if m:
+            result["ip"] = m.group(1)
+    except Exception:
+        pass
+    return result
+
+
+def _scan_networks():
+    """Return list of visible SSIDs sorted by signal strength (NM cache, no rescan)."""
+    try:
+        out = subprocess.check_output(
+            ["nmcli", "--rescan", "no", "-t", "-f", "SSID,SIGNAL",
+             "dev", "wifi", "list"],
+            text=True, errors="replace", timeout=5,
+        )
+        seen = set()
+        networks = []
+        for line in out.splitlines():
+            parts = line.split(":")
+            ssid = parts[0].strip() if parts else ""
+            try:
+                signal = int(parts[1].strip()) if len(parts) > 1 else 0
+            except ValueError:
+                signal = 0
+            if ssid and ssid not in seen and not ssid.startswith("efinder-"):
+                seen.add(ssid)
+                networks.append({"ssid": ssid, "signal": signal})
+        networks.sort(key=lambda n: n["signal"], reverse=True)
+        return networks
+    except Exception:
+        return []
+
+
+_wifi_lock = threading.Lock()
+_wifi_connect_proc = None
+
+
+@app.route("/wifi")
+def wifi_page():
+    status = _get_wifi_status()
+    networks = _scan_networks()
+    return render_template("wifi.html", status=status, networks=networks)
+
+
+@app.route("/wifi/ap", methods=["POST"])
+def wifi_ap():
+    try:
+        subprocess.run(
+            ["sudo", "/usr/local/bin/ap.sh"],
+            timeout=30, capture_output=True,
+        )
+    except Exception:
+        pass
+    return redirect(url_for("wifi_page"))
+
+
+@app.route("/wifi/station", methods=["POST"])
+def wifi_station():
+    global _wifi_connect_proc
+    ssid = request.form.get("ssid", "").strip()
+    password = request.form.get("password", "").strip()
+    if not ssid:
+        return "SSID required", 400
+    cmd = ["sudo", "/usr/local/bin/station.sh", ssid, password]
+    with _wifi_lock:
+        if _wifi_connect_proc and _wifi_connect_proc.poll() is None:
+            _wifi_connect_proc.terminate()
+        _wifi_connect_proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    return redirect(url_for("wifi_connecting", ssid=ssid))
+
+
+@app.route("/wifi/connecting")
+def wifi_connecting():
+    ssid = request.args.get("ssid", "")
+    return render_template("wifi_connecting.html", ssid=ssid)
+
+
+@app.route("/api/wifi/status")
+def api_wifi_status():
+    return jsonify(_get_wifi_status())
+
+
+@app.route("/api/wifi/scan")
+def api_wifi_scan():
+    try:
+        subprocess.run(
+            ["nmcli", "dev", "wifi", "rescan"],
+            timeout=10, capture_output=True,
+        )
+    except Exception:
+        pass
+    return jsonify({"networks": _scan_networks()})
 
 
 # ---------------------------------------------------------------------

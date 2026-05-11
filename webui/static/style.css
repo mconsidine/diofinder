@@ -109,7 +109,7 @@ label.checkbox {
   align-items: center;
   gap: 0.4rem;
 }
-input[type="number"], input[type="text"] {
+input[type="number"], input[type="text"], input[type="password"], select {
   width: 100%;
   max-width: 320px;
   padding: 0.5rem;
@@ -118,6 +118,16 @@ input[type="number"], input[type="text"] {
   border: 1px solid #3a0a00;
   border-radius: 4px;
   font-family: "SF Mono", Menlo, Consolas, monospace;
+}
+select option { background: #0d0000; }
+details summary { font-size: 0.85rem; color: #882200; }
+details summary:hover { color: #cc3300; }
+code {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  background: #1a0000;
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
 }
 
 .btn {
