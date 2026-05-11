@@ -78,6 +78,8 @@ def main():
     shared_cfg = manager.dict({
         "boresight_y": cfg.boresight_y,
         "boresight_x": cfg.boresight_x,
+        # IMU dead-reckoning state (populated by imu_proc thread + solver_proc)
+        "imu_available": False,
     })
     align_request_q = mp.Queue(maxsize=4)
     align_response_q = mp.Queue(maxsize=4)
@@ -92,6 +94,13 @@ def main():
     from efinder.camera_proc import camera_main
     from efinder.solver_proc import solver_main
     from efinder.comms_proc import comms_main
+    from efinder.imu_proc import start_imu_thread
+
+    # IMU runs as a daemon thread in the main process.  It probes for a
+    # BNO055 on I2C every 3 s and publishes to shared_cfg when found.
+    # If smbus2 is not installed or the chip is absent, it exits silently
+    # and imu_available stays False — no impact on the rest of the system.
+    start_imu_thread(shared_cfg)
 
     procs = [
         mp.Process(target=comms_main, name="efinder-comms",

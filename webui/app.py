@@ -148,6 +148,7 @@ def dashboard():
         calibration=(cal.result if cal.ok else None),
         cal_error=cal.error if not cal.ok else None,
         committed_focus=committed_focus,
+        imu=(status.result.get("imu") if status.ok else None),
     )
 
 
@@ -157,8 +158,8 @@ def api_status():
     status = _safe_call("status")
     cal = _safe_call("calibration_status")
     return jsonify({
-        "status": {"ok": status.ok, "result": status.result, "error": status.error},
-        "calibration": {"ok": cal.ok, "result": cal.result, "error": cal.error},
+        "status":      {"ok": status.ok, "result": status.result, "error": status.error},
+        "calibration": {"ok": cal.ok,    "result": cal.result,    "error": cal.error},
     })
 
 

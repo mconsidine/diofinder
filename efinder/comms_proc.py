@@ -21,6 +21,7 @@ doesn't delay maintenance commands and vice versa.
 import itertools
 import json
 import logging
+import math
 import os
 import socket
 import threading
@@ -29,6 +30,7 @@ from queue import Empty
 
 from efinder import config as cfg_mod
 from efinder.align import AlignRequest, AlignResult, CommsAlignState
+from efinder.imu_math import quat_delta_rotvec
 from efinder.maint import MaintRequest, MaintResponse, SOCKET_PATH
 from efinder.worker_cmds import (
     SolverCmd, CameraCmd,
@@ -211,12 +213,74 @@ def _do_alignment(align_state, cfg, shared_cfg,
 # LX200 command handler
 # ----------------------------------------------------------------------
 
+def _imu_predict(shared_cfg):
+    """
+    Return an IMU-smoothed (ra_deg, dec_deg) estimate, or None.
+
+    Uses the dead-reckoning calibration built up passively from
+    consecutive plate-solves.  Falls through to None whenever:
+      * the IMU is absent or its data is stale (> 2 s old)
+      * fewer than 3 calibration pairs have been collected
+      * the calibration R² is below 0.85 (poor fit)
+      * the reference solve is older than 120 s
+      * the predicted delta exceeds 5 ° (safety cap)
+    """
+    if not shared_cfg.get("imu_available", False):
+        return None
+    if shared_cfg.get("imu_calib_n", 0) < 3:
+        return None
+    if shared_cfg.get("imu_calib_quality", 0.0) < 0.85:
+        return None
+
+    q_now  = shared_cfg.get("imu_q")
+    imu_t  = shared_cfg.get("imu_t", 0.0)
+    if q_now is None or time.monotonic() - imu_t > 2.0:
+        return None
+
+    q_ref   = shared_cfg.get("imu_ref_q")
+    ra_ref  = shared_cfg.get("imu_ref_ra_deg")
+    dec_ref = shared_cfg.get("imu_ref_dec_deg")
+    ref_t   = shared_cfg.get("imu_ref_t", 0.0)
+    if q_ref is None or ra_ref is None or time.monotonic() - ref_t > 120.0:
+        return None
+
+    C_flat = shared_cfg.get("imu_calib_C")
+    if C_flat is None or len(C_flat) != 6:
+        return None
+
+    # IMU rotation vector from reference to now
+    r = quat_delta_rotvec(q_now, q_ref)
+
+    # Apply 2×3 calibration matrix (row-major: [c00 c01 c02 c10 c11 c12])
+    c = C_flat
+    dra_rad  = c[0]*r[0] + c[1]*r[1] + c[2]*r[2]
+    ddec_rad = c[3]*r[0] + c[4]*r[1] + c[5]*r[2]
+
+    # Safety cap — don't extrapolate more than 5 ° from the reference
+    if abs(dra_rad) > math.radians(5.0) or abs(ddec_rad) > math.radians(5.0):
+        return None
+
+    cos_dec = math.cos(math.radians(dec_ref))
+    if abs(cos_dec) < 0.01:
+        return None  # within ~0.6 ° of a pole; math degrades
+
+    ra_pred  = (ra_ref + math.degrees(dra_rad) / cos_dec) % 360.0
+    dec_pred = max(-90.0, min(90.0, dec_ref + math.degrees(ddec_rad)))
+    return ra_pred, dec_pred
+
+
 def _handle_lx200_command(cmd, latest_solution, align_state, cfg, shared_cfg,
                           align_request_q, align_response_q, ctx=None):
     if cmd == ":GR":
+        pred = _imu_predict(shared_cfg)
+        if pred is not None:
+            return _format_ra(pred[0] / 15.0).encode("ascii")
         sol = dict(latest_solution)
         return _format_ra(sol.get("ra_deg", 0.0) / 15.0).encode("ascii")
     if cmd == ":GD":
+        pred = _imu_predict(shared_cfg)
+        if pred is not None:
+            return _format_dec(pred[1]).encode("ascii")
         sol = dict(latest_solution)
         return _format_dec(sol.get("dec_deg", 0.0)).encode("ascii")
 
@@ -366,6 +430,10 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
 
         if cmd == "status":
             sol = dict(ctx.latest_solution)
+            imu_n       = ctx.shared_cfg.get("imu_calib_n", 0)
+            imu_quality = ctx.shared_cfg.get("imu_calib_quality", 0.0)
+            imu_avail   = ctx.shared_cfg.get("imu_available", False)
+            imu_active  = imu_avail and imu_n >= 3 and imu_quality >= 0.85
             return MaintResponse(ok=True, result={
                 "solution": sol,
                 "boresight": {
@@ -374,6 +442,12 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 },
                 "fov_deg": ctx.shared_cfg.get("fov_deg", ctx.cfg.fov_deg),
                 "config_summary": ctx.cfg.summary(),
+                "imu": {
+                    "available": imu_avail,
+                    "calib_n":   imu_n,
+                    "quality":   round(imu_quality, 3),
+                    "active":    imu_active,
+                },
             })
 
         # ---- Boresight ----
