@@ -13,3 +13,4 @@
 grpcio
 grpcio-tools
 protobuf
+smbus2

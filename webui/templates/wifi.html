@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}eFinder Wi-Fi{% endblock %}
+{% block content %}
+
+<section class="grid">
+
+  <div class="card">
+    <h2>Current Status</h2>
+    <dl class="stats">
+      <dt>Mode</dt>
+      <dd>
+        {% if status.mode == "ap" %}Access Point (AP)
+        {% elif status.mode == "station" %}Station (client)
+        {% else %}Disconnected
+        {% endif %}
+      </dd>
+      {% if status.ssid %}
+        <dt>Network</dt><dd>{{ status.ssid }}</dd>
+      {% endif %}
+      {% if status.ip %}
+        <dt>IP</dt><dd>{{ status.ip }}</dd>
+      {% endif %}
+    </dl>
+
+    {% if status.mode != "ap" %}
+      <form method="post" action="{{ url_for('wifi_ap') }}">
+        <button type="submit" class="btn btn-primary">Switch to AP Mode</button>
+      </form>
+      <p class="hint">Restores the eFinder's own Wi-Fi hotspot.</p>
+    {% else %}
+      <p class="hint">
+        Devices connect to the eFinder hotspot directly.
+        Switch to station mode to join your home/observatory network.
+      </p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Connect to Network</h2>
+    <div class="alert alert-warning" style="margin-bottom:0.75rem;">
+      If the connection fails, AP mode is automatically restored after 90&nbsp;s.
+      You can also recover via USB at <strong>10.55.0.1</strong>.
+    </div>
+    <form method="post" action="{{ url_for('wifi_station') }}" id="station-form">
+      <label>
+        Network (SSID)
+        <input list="network-list" type="text" name="ssid"
+               placeholder="Network name" required autocomplete="off">
+        <datalist id="network-list">
+          {% for n in networks %}
+            <option value="{{ n.ssid }}">{{ n.ssid }} — {{ n.signal }}%</option>
+          {% endfor %}
+        </datalist>
+      </label>
+      <label>
+        Password
+        <input type="password" name="password"
+               placeholder="Leave blank for open network" autocomplete="off">
+      </label>
+      <div class="actions">
+        <button type="submit" class="btn btn-primary">Connect</button>
+        <button type="button" class="btn" id="rescan-btn" onclick="rescan()">Rescan</button>
+      </div>
+    </form>
+
+    {% if networks %}
+      <details style="margin-top:0.75rem;">
+        <summary class="hint" style="cursor:pointer;">
+          {{ networks|length }} network{{ 's' if networks|length != 1 }} visible
+        </summary>
+        <ul id="network-list-display" style="margin:0.5rem 0; padding-left:1.2rem; font-size:0.9rem;">
+          {% for n in networks %}
+            <li style="cursor:pointer;" onclick="pickNetwork('{{ n.ssid | e }}')">
+              {{ n.ssid }} <span class="muted">({{ n.signal }}%)</span>
+            </li>
+          {% endfor %}
+        </ul>
+      </details>
+    {% else %}
+      <p class="hint" id="no-networks">
+        No networks visible — try Rescan, or enter the SSID manually.
+        {% if status.mode == "ap" %}
+          (Scanning is limited in AP mode.)
+        {% endif %}
+      </p>
+    {% endif %}
+  </div>
+
+</section>
+
+<script>
+function pickNetwork(ssid) {
+  document.querySelector('input[name="ssid"]').value = ssid;
+  document.querySelector('input[name="password"]').focus();
+}
+
+async function rescan() {
+  const btn = document.getElementById('rescan-btn');
+  btn.textContent = 'Scanning…';
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/wifi/scan');
+    const data = await r.json();
+    const dl = document.getElementById('network-list');
+    const ul = document.getElementById('network-list-display');
+    if (dl) {
+      dl.innerHTML = data.networks.map(
+        n => `<option value="${n.ssid}">${n.ssid} — ${n.signal}%</option>`
+      ).join('');
+    }
+    if (ul) {
+      ul.innerHTML = data.networks.length
+        ? data.networks.map(
+            n => `<li style="cursor:pointer;" onclick="pickNetwork('${n.ssid.replace(/'/g,"\\'")}')">
+                    ${n.ssid} <span class="muted">(${n.signal}%)</span>
+                  </li>`
+          ).join('')
+        : '<li class="muted">No networks found.</li>';
+    }
+  } catch(e) {
+    console.error('Rescan failed:', e);
+  } finally {
+    btn.textContent = 'Rescan';
+    btn.disabled = false;
+  }
+}
+</script>
+
+{% endblock %}

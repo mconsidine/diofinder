@@ -21,6 +21,7 @@ doesn't delay maintenance commands and vice versa.
 import itertools
 import json
 import logging
+import math
 import os
 import socket
 import threading
@@ -29,6 +30,7 @@ from queue import Empty
 
 from efinder import config as cfg_mod
 from efinder.align import AlignRequest, AlignResult, CommsAlignState
+from efinder.imu_math import quat_delta_rotvec
 from efinder.maint import MaintRequest, MaintResponse, SOCKET_PATH
 from efinder.worker_cmds import (
     SolverCmd, CameraCmd,
@@ -211,12 +213,86 @@ def _do_alignment(align_state, cfg, shared_cfg,
 # LX200 command handler
 # ----------------------------------------------------------------------
 
+def _imu_predict(shared_cfg):
+    """
+    Return an IMU-smoothed (ra_deg, dec_deg) estimate, or None.
+
+    Uses the dead-reckoning calibration built up passively from
+    consecutive plate-solves.  Falls through to None whenever:
+      * the IMU is absent or its data is stale (> 2 s old)
+      * fewer than 3 calibration pairs have been collected
+      * the calibration R² is below 0.85 (poor fit)
+      * the reference solve is older than 120 s
+      * the predicted delta exceeds 5 ° (safety cap)
+    """
+    if not shared_cfg.get("imu_available", False):
+        return None
+    if shared_cfg.get("imu_calib_n", 0) < 3:
+        return None
+    if shared_cfg.get("imu_calib_quality", 0.0) < 0.85:
+        return None
+
+    q_now  = shared_cfg.get("imu_q")
+    imu_t  = shared_cfg.get("imu_t", 0.0)
+    if q_now is None or time.monotonic() - imu_t > 2.0:
+        return None
+
+    q_ref   = shared_cfg.get("imu_ref_q")
+    ra_ref  = shared_cfg.get("imu_ref_ra_deg")
+    dec_ref = shared_cfg.get("imu_ref_dec_deg")
+    ref_t   = shared_cfg.get("imu_ref_t", 0.0)
+    if q_ref is None or ra_ref is None or time.monotonic() - ref_t > 120.0:
+        return None
+
+    C_flat = shared_cfg.get("imu_calib_C")
+    if C_flat is None or len(C_flat) != 6:
+        return None
+
+    # IMU rotation vector from reference to now
+    r = quat_delta_rotvec(q_now, q_ref)
+
+    # Apply 2×3 calibration matrix (row-major: [c00 c01 c02 c10 c11 c12])
+    # C maps IMU rot-vec -> (cam_right, cam_up) in the camera frame
+    c = C_flat
+    dr = c[0]*r[0] + c[1]*r[1] + c[2]*r[2]   # camera-right component
+    du = c[3]*r[0] + c[4]*r[1] + c[5]*r[2]   # camera-up component
+
+    # Rotate camera-frame delta back to sky frame using roll at the reference solve.
+    # Training stored cam_r =  dra*cos(roll) + ddec*sin(roll)
+    #                  cam_u = -dra*sin(roll) + ddec*cos(roll)
+    # Inverse: dra  =  dr*cos(roll) - du*sin(roll)
+    #          ddec =  dr*sin(roll) + du*cos(roll)
+    roll_ref = shared_cfg.get("imu_ref_roll_deg", 0.0)
+    roll_rad = math.radians(roll_ref)
+    cos_r, sin_r = math.cos(roll_rad), math.sin(roll_rad)
+    dra_rad  =  dr * cos_r - du * sin_r
+    ddec_rad =  dr * sin_r + du * cos_r
+
+    # Safety cap — don't extrapolate more than 5 ° from the reference
+    if abs(dra_rad) > math.radians(5.0) or abs(ddec_rad) > math.radians(5.0):
+        return None
+
+    cos_dec = math.cos(math.radians(dec_ref))
+    if abs(cos_dec) < 0.01:
+        return None  # within ~0.6 ° of a pole; math degrades
+
+    ra_pred  = (ra_ref + math.degrees(dra_rad) / cos_dec) % 360.0
+    dec_pred = max(-90.0, min(90.0, dec_ref + math.degrees(ddec_rad)))
+    return ra_pred, dec_pred
+
+
 def _handle_lx200_command(cmd, latest_solution, align_state, cfg, shared_cfg,
                           align_request_q, align_response_q, ctx=None):
     if cmd == ":GR":
+        pred = _imu_predict(shared_cfg)
+        if pred is not None:
+            return _format_ra(pred[0] / 15.0).encode("ascii")
         sol = dict(latest_solution)
         return _format_ra(sol.get("ra_deg", 0.0) / 15.0).encode("ascii")
     if cmd == ":GD":
+        pred = _imu_predict(shared_cfg)
+        if pred is not None:
+            return _format_dec(pred[1]).encode("ascii")
         sol = dict(latest_solution)
         return _format_dec(sol.get("dec_deg", 0.0)).encode("ascii")
 
@@ -366,6 +442,10 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
 
         if cmd == "status":
             sol = dict(ctx.latest_solution)
+            imu_n       = ctx.shared_cfg.get("imu_calib_n", 0)
+            imu_quality = ctx.shared_cfg.get("imu_calib_quality", 0.0)
+            imu_avail   = ctx.shared_cfg.get("imu_available", False)
+            imu_active  = imu_avail and imu_n >= 3 and imu_quality >= 0.85
             return MaintResponse(ok=True, result={
                 "solution": sol,
                 "boresight": {
@@ -374,6 +454,12 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 },
                 "fov_deg": ctx.shared_cfg.get("fov_deg", ctx.cfg.fov_deg),
                 "config_summary": ctx.cfg.summary(),
+                "imu": {
+                    "available": imu_avail,
+                    "calib_n":   imu_n,
+                    "quality":   round(imu_quality, 3),
+                    "active":    imu_active,
+                },
             })
 
         # ---- Boresight ----
@@ -542,6 +628,41 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             return MaintResponse(ok=True, result={
                 **reply.result, "persisted": persist,
             })
+
+        if cmd == "solver_params_get":
+            return MaintResponse(ok=True, result={
+                "detect_sigma":    ctx.shared_cfg.get("detect_sigma",    ctx.cfg.detect_sigma),
+                "solve_timeout_ms": ctx.shared_cfg.get("solve_timeout_ms", ctx.cfg.solve_timeout_ms),
+            })
+
+        if cmd == "solver_params_set":
+            persist = bool(args.get("persist", False))
+            updates = {}
+            if "detect_sigma" in args:
+                try:
+                    sigma = float(args["detect_sigma"])
+                except (ValueError, TypeError) as e:
+                    return MaintResponse(ok=False,
+                                        error=f"detect_sigma must be numeric: {e}")
+                if not (1.0 <= sigma <= 50.0):
+                    return MaintResponse(ok=False,
+                                        error="detect_sigma out of range [1, 50]")
+                ctx.shared_cfg["detect_sigma"] = sigma
+                updates["detect_sigma"] = sigma
+            if "solve_timeout_ms" in args:
+                try:
+                    ms = int(args["solve_timeout_ms"])
+                except (ValueError, TypeError) as e:
+                    return MaintResponse(ok=False,
+                                        error=f"solve_timeout_ms must be integer: {e}")
+                if not (200 <= ms <= 10000):
+                    return MaintResponse(ok=False,
+                                        error="solve_timeout_ms out of range [200, 10000]")
+                ctx.shared_cfg["solve_timeout_ms"] = ms
+                updates["solve_timeout_ms"] = ms
+            if persist and updates:
+                cfg_mod.save_keys(updates)
+            return MaintResponse(ok=True, result={**updates, "persisted": persist})
 
         return MaintResponse(ok=False, error=f"unknown command: {cmd!r}")
 

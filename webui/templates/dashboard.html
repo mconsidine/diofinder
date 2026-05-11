@@ -9,53 +9,10 @@
 {% else %}
 
 <section class="grid">
-  <div class="card card-wide">
-    <h2>Live View</h2>
-    <p class="hint">
-      Red circle marks the boresight. Centre the target star inside it,
-      then tap <strong>Align</strong> in SkySafari to sync.
-      The star synced on does not need to be the brightest in the field &mdash;
-      alignment is coordinate-based.
-    </p>
-    <div class="live-view">
-      <img id="live-frame" src="/frame.jpg" alt="Camera frame"
-           style="max-width:100%; height:auto; display:block; background:#111;">
-    </div>
-    <p class="hint" id="live-ts"></p>
-  </div>
-
   <div class="card">
-    <h2>Exposure</h2>
-    {% if exposure %}
-      <form method="post" action="{{ url_for('exposure_set') }}">
-        <label>
-          Exposure (seconds)
-          <div class="slider-row">
-            <input type="range" id="exp_slider" min="-3" max="1" step="0.001"
-                   value="{{ (exposure.exposure_s | float) | log10 }}"
-                   oninput="expSliderChange(this.value)">
-            <input type="number" step="any" min="0.001" max="10"
-                   name="exposure_s" id="exp_num"
-                   value="{{ exposure.exposure_s }}">
-          </div>
-        </label>
-        <label>
-          Gain (1–64)
-          <div class="slider-row">
-            <input type="range" id="gain_slider" min="1" max="64" step="1"
-                   value="{{ exposure.gain }}"
-                   oninput="gainSliderChange(this.value)">
-            <input type="number" step="1" min="1" max="64"
-                   name="gain" id="gain_num"
-                   value="{{ exposure.gain }}">
-          </div>
-        </label>
-        <label class="checkbox">
-          <input type="checkbox" name="persist"> Save to config
-        </label>
-        <button type="submit" class="btn">Apply</button>
-      </form>
-    {% endif %}
+    <h2>Camera</h2>
+    <p class="hint">Live view, exposure, gain, and solver parameters.</p>
+    <a href="{{ url_for('camera_page') }}" class="btn" style="display:inline-block;margin-top:4px;">Open Camera →</a>
   </div>
 
   <div class="card" id="solution-card">
@@ -71,6 +28,7 @@
         <dt>Solve time</dt><dd id="solve_ms">{{ "%.0f"|format(solution.solve_ms) }} ms</dd>
         <dt>Peak</dt><dd id="peak">{{ solution.peak }}</dd>
         <dt>FOV</dt><dd id="fov">{{ "%.3f"|format(solution.fov_deg) }}&deg;</dd>
+        <dt>Roll</dt><dd id="roll">{{ "%.1f"|format(solution.roll_deg) }}&deg;</dd>
       </dl>
     {% else %}
       <div class="not-solved" id="not-solved">
@@ -132,6 +90,31 @@
     </form>
     <p class="hint">Use SkySafari "Align" on a known star for normal alignment.</p>
   </div>
+
+  <div class="card" id="imu-card">
+    <h2>IMU</h2>
+    {% if imu and imu.available %}
+      {% if imu.active %}
+        <p style="color:#ff5500; font-weight:500;">Active — smoothing SkySafari updates</p>
+      {% else %}
+        <p class="hint">Detected — calibrating&hellip;</p>
+      {% endif %}
+      <dl class="stats">
+        <dt>Solves</dt>
+        <dd id="imu-n">{{ imu.calib_n }} / 3</dd>
+        <dt>R&sup2;</dt>
+        <dd id="imu-quality">{{ "%.2f"|format(imu.quality) }}</dd>
+        <dt>State</dt>
+        <dd id="imu-state">{{ "active" if imu.active else "calibrating" }}</dd>
+      </dl>
+    {% else %}
+      <p class="muted" id="imu-state">Not detected</p>
+      <p class="hint">
+        Wire a BNO055 to I&sup2;C (GPIO&nbsp;2/3) for smoothed pointing
+        between plate-solves.  Activates automatically when detected.
+      </p>
+    {% endif %}
+  </div>
 </section>
 
 <script>
@@ -155,6 +138,8 @@ async function refresh() {
       if (peak) peak.textContent = sol.peak;
       const fov = document.getElementById('fov');
       if (fov) fov.textContent = sol.fov_deg.toFixed(3) + '\u00b0';
+      const roll = document.getElementById('roll');
+      if (roll) roll.textContent = (sol.roll_deg || 0).toFixed(1) + '\u00b0';
     } else {
       const ns = document.getElementById('not-solved');
       if (ns) {
@@ -167,6 +152,18 @@ async function refresh() {
           status.textContent = s + ' (' + (labels[s] || 'unknown') + ')';
         }
       }
+    }
+    // IMU status
+    const imu = data.status.result.imu;
+    if (imu) {
+      const nEl = document.getElementById('imu-n');
+      const qEl = document.getElementById('imu-quality');
+      const sEl = document.getElementById('imu-state');
+      if (nEl) nEl.textContent = imu.calib_n + ' / 3';
+      if (qEl) qEl.textContent = imu.quality.toFixed(2);
+      if (sEl) sEl.textContent = !imu.available ? 'Not detected'
+                                : imu.active     ? 'active'
+                                :                  'calibrating';
     }
   } catch (e) {
     console.error(e);
@@ -191,38 +188,6 @@ function formatDMS(d) {
 }
 setInterval(refresh, 1500);
 
-function refreshFrame() {
-  const img = document.getElementById('live-frame');
-  if (!img) return;
-  const ts = Date.now();
-  const next = new Image();
-  next.onload = function() {
-    img.src = next.src;
-    const el = document.getElementById('live-ts');
-    if (el) el.textContent = 'Updated ' + new Date().toLocaleTimeString();
-  };
-  // Cache-bust with timestamp; on error just keep the old frame.
-  next.src = '/frame.jpg?' + ts;
-}
-setInterval(refreshFrame, 2000);
-
-function expSliderChange(v) {
-  const s = Math.pow(10, parseFloat(v));
-  document.getElementById('exp_num').value = s.toFixed(4).replace(/\.?0+$/, '');
-}
-function expNumChange(v) {
-  const s = parseFloat(v);
-  if (s > 0) document.getElementById('exp_slider').value = Math.log10(s);
-}
-function gainSliderChange(v) {
-  document.getElementById('gain_num').value = Math.round(v);
-}
-function gainNumChange(v) {
-  document.getElementById('gain_slider').value = Math.round(parseFloat(v));
-}
-// Sync number inputs back to sliders on manual entry
-document.getElementById('exp_num').addEventListener('input', e => expNumChange(e.target.value));
-document.getElementById('gain_num').addEventListener('input', e => gainNumChange(e.target.value));
 </script>
 
 {% endif %}

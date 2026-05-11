@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% block title %}eFinder — Connecting{% endblock %}
+{% block content %}
+
+<div class="card" style="max-width:520px; margin:0 auto;">
+  <h2>Connecting to &ldquo;{{ ssid }}&rdquo;</h2>
+
+  <p id="status-msg" class="hint" style="font-size:1rem; color:#cc3300;">
+    Attempting connection&hellip;
+  </p>
+
+  <div style="margin:1rem 0;">
+    <div style="background:#1a0000; border-radius:4px; overflow:hidden; height:10px;">
+      <div id="countdown-bar"
+           style="height:100%; background:#cc3300; width:100%; transition:width 1s linear;">
+      </div>
+    </div>
+    <div class="hint" style="margin-top:0.4rem;">
+      Restoring AP automatically in <span id="countdown">90</span>&thinsp;s if connection fails
+    </div>
+  </div>
+
+  <div id="result" style="display:none; margin-top:1rem;"></div>
+
+  <hr style="border-color:#2a0800; margin:1rem 0;">
+  <p class="hint">
+    <strong>If this page becomes unreachable:</strong>
+    connect via USB at <strong>10.55.0.1</strong> and run
+    <code>sudo ap.sh</code> to restore Wi-Fi.
+  </p>
+</div>
+
+<script>
+const TARGET_SSID = {{ ssid | tojson }};
+const TIMEOUT_S = 90;
+let elapsed = 0;
+let done = false;
+
+function setMsg(msg) {
+  document.getElementById('status-msg').textContent = msg;
+}
+
+function showResult(html) {
+  const el = document.getElementById('result');
+  el.innerHTML = html;
+  el.style.display = 'block';
+}
+
+function setBarColor(color) {
+  document.getElementById('countdown-bar').style.background = color;
+}
+
+async function checkStatus() {
+  try {
+    const r = await fetch('/api/wifi/status');
+    if (!r.ok) return;
+    const d = await r.json();
+
+    if (d.mode === 'station' && d.ip) {
+      done = true;
+      setBarColor('#335500');
+      document.getElementById('countdown-bar').style.width = '100%';
+      setMsg('Connected to “' + (d.ssid || TARGET_SSID) + '” — IP: ' + d.ip);
+      showResult(
+        '<p class="hint">eFinder is now reachable on your network via <strong>efinder.local</strong>.</p>' +
+        '<div class="actions">' +
+        '<a href="/wifi" class="btn btn-primary">Wi-Fi settings</a>' +
+        '<a href="/" class="btn">Dashboard</a>' +
+        '</div>'
+      );
+      return;
+    }
+
+    // station.sh failed fast and already restored the AP (mode flipped back)
+    if (d.mode === 'ap' && elapsed > 8) {
+      done = true;
+      setBarColor('#550000');
+      document.getElementById('countdown-bar').style.width = '0%';
+      setMsg('Connection failed — AP mode restored.');
+      showResult(
+        '<p class="hint">Could not connect to “' + TARGET_SSID +
+        '”. Check the SSID and password.</p>' +
+        '<div class="actions"><a href="/wifi" class="btn">Try again</a></div>'
+      );
+    }
+  } catch (e) {
+    // Network momentarily unreachable during Wi-Fi handoff — expected, keep waiting.
+  }
+}
+
+async function restoreAP() {
+  setMsg('Timed out — restoring AP mode…');
+  try {
+    await fetch('/wifi/ap', { method: 'POST' });
+  } catch (e) {
+    // If the AP came up during the fetch, this may fail — that's fine.
+  }
+  setBarColor('#550000');
+  document.getElementById('countdown-bar').style.width = '0%';
+  setMsg('AP mode restored. Reconnect to the eFinder Wi-Fi network.');
+  showResult(
+    '<div class="actions"><a href="/wifi" class="btn">Wi-Fi settings</a>' +
+    '<a href="/" class="btn">Dashboard</a></div>'
+  );
+}
+
+// Tick every second; poll status every 3 s.
+const timer = setInterval(async () => {
+  if (done) { clearInterval(timer); return; }
+  elapsed++;
+  const remaining = TIMEOUT_S - elapsed;
+  document.getElementById('countdown').textContent = Math.max(0, remaining);
+  document.getElementById('countdown-bar').style.width =
+    (Math.max(0, remaining) / TIMEOUT_S * 100) + '%';
+
+  if (elapsed % 3 === 0) await checkStatus();
+
+  if (remaining <= 0 && !done) {
+    clearInterval(timer);
+    done = true;
+    await restoreAP();
+  }
+}, 1000);
+
+// Immediate first check after a short settle delay.
+setTimeout(checkStatus, 4000);
+</script>
+
+{% endblock %}
