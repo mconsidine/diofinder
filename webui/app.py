@@ -15,6 +15,7 @@ restarted Flask or the eFinder itself.
 
 Pages:
   /              dashboard (auto-refreshing status, key actions)
+  /camera        live view, exposure/gain, solver parameters
   /polar         polar alignment workflow (multi-step)
   /config        view current configuration
   /logs          last N lines of journalctl
@@ -129,7 +130,6 @@ def _dms(deg):
 def dashboard():
     status = _safe_call("status")
     cal = _safe_call("calibration_status")
-    exposure = _safe_call("exposure_get")
 
     sol = (_format_solution(status.result["solution"])
            if status.ok and status.result else None)
@@ -146,7 +146,6 @@ def dashboard():
         fov_deg=(status.result.get("fov_deg") if status.ok else None),
         calibration=(cal.result if cal.ok else None),
         cal_error=cal.error if not cal.ok else None,
-        exposure=(exposure.result if exposure.ok else None),
         committed_focus=committed_focus,
     )
 
@@ -236,6 +235,17 @@ def calibration_reset():
 # Exposure
 # ---------------------------------------------------------------------
 
+@app.route("/camera")
+def camera_page():
+    exposure = _safe_call("exposure_get")
+    solver_params = _safe_call("solver_params_get")
+    return render_template(
+        "camera.html",
+        exposure=(exposure.result if exposure.ok else None),
+        solver_params=(solver_params.result if solver_params.ok else None),
+    )
+
+
 @app.route("/exposure/set", methods=["POST"])
 def exposure_set():
     persist = request.form.get("persist") == "on"
@@ -254,7 +264,27 @@ def exposure_set():
                 return r.error, 400
         except ValueError:
             return "gain must be numeric", 400
-    return redirect(url_for("dashboard"))
+    return redirect(url_for("camera_page"))
+
+
+@app.route("/solver/params/set", methods=["POST"])
+def solver_params_set():
+    persist = request.form.get("persist") == "on"
+    args = {"persist": persist}
+    if request.form.get("detect_sigma"):
+        try:
+            args["detect_sigma"] = float(request.form["detect_sigma"])
+        except ValueError:
+            return "detect_sigma must be numeric", 400
+    if request.form.get("solve_timeout_ms"):
+        try:
+            args["solve_timeout_ms"] = int(request.form["solve_timeout_ms"])
+        except ValueError:
+            return "solve_timeout_ms must be integer", 400
+    r = _safe_call("solver_params_set", args)
+    if not r.ok:
+        return r.error, 400
+    return redirect(url_for("camera_page"))
 
 
 # ---------------------------------------------------------------------

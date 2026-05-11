@@ -543,6 +543,41 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 **reply.result, "persisted": persist,
             })
 
+        if cmd == "solver_params_get":
+            return MaintResponse(ok=True, result={
+                "detect_sigma":    ctx.shared_cfg.get("detect_sigma",    ctx.cfg.detect_sigma),
+                "solve_timeout_ms": ctx.shared_cfg.get("solve_timeout_ms", ctx.cfg.solve_timeout_ms),
+            })
+
+        if cmd == "solver_params_set":
+            persist = bool(args.get("persist", False))
+            updates = {}
+            if "detect_sigma" in args:
+                try:
+                    sigma = float(args["detect_sigma"])
+                except (ValueError, TypeError) as e:
+                    return MaintResponse(ok=False,
+                                        error=f"detect_sigma must be numeric: {e}")
+                if not (1.0 <= sigma <= 50.0):
+                    return MaintResponse(ok=False,
+                                        error="detect_sigma out of range [1, 50]")
+                ctx.shared_cfg["detect_sigma"] = sigma
+                updates["detect_sigma"] = sigma
+            if "solve_timeout_ms" in args:
+                try:
+                    ms = int(args["solve_timeout_ms"])
+                except (ValueError, TypeError) as e:
+                    return MaintResponse(ok=False,
+                                        error=f"solve_timeout_ms must be integer: {e}")
+                if not (200 <= ms <= 10000):
+                    return MaintResponse(ok=False,
+                                        error="solve_timeout_ms out of range [200, 10000]")
+                ctx.shared_cfg["solve_timeout_ms"] = ms
+                updates["solve_timeout_ms"] = ms
+            if persist and updates:
+                cfg_mod.save_keys(updates)
+            return MaintResponse(ok=True, result={**updates, "persisted": persist})
+
         return MaintResponse(ok=False, error=f"unknown command: {cmd!r}")
 
     except Exception as e:

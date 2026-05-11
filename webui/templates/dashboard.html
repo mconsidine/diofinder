@@ -9,53 +9,10 @@
 {% else %}
 
 <section class="grid">
-  <div class="card card-wide">
-    <h2>Live View</h2>
-    <p class="hint">
-      Red circle marks the boresight. Centre the target star inside it,
-      then tap <strong>Align</strong> in SkySafari to sync.
-      The star synced on does not need to be the brightest in the field &mdash;
-      alignment is coordinate-based.
-    </p>
-    <div class="live-view">
-      <img id="live-frame" src="/frame.jpg" alt="Camera frame"
-           style="max-width:100%; height:auto; display:block; background:#111;">
-    </div>
-    <p class="hint" id="live-ts"></p>
-  </div>
-
   <div class="card">
-    <h2>Exposure</h2>
-    {% if exposure %}
-      <form method="post" action="{{ url_for('exposure_set') }}">
-        <label>
-          Exposure (seconds)
-          <div class="slider-row">
-            <input type="range" id="exp_slider" min="-3" max="1" step="0.001"
-                   value="{{ (exposure.exposure_s | float) | log10 }}"
-                   oninput="expSliderChange(this.value)">
-            <input type="number" step="any" min="0.001" max="10"
-                   name="exposure_s" id="exp_num"
-                   value="{{ exposure.exposure_s }}">
-          </div>
-        </label>
-        <label>
-          Gain (1–64)
-          <div class="slider-row">
-            <input type="range" id="gain_slider" min="1" max="64" step="1"
-                   value="{{ exposure.gain }}"
-                   oninput="gainSliderChange(this.value)">
-            <input type="number" step="1" min="1" max="64"
-                   name="gain" id="gain_num"
-                   value="{{ exposure.gain }}">
-          </div>
-        </label>
-        <label class="checkbox">
-          <input type="checkbox" name="persist"> Save to config
-        </label>
-        <button type="submit" class="btn">Apply</button>
-      </form>
-    {% endif %}
+    <h2>Camera</h2>
+    <p class="hint">Live view, exposure, gain, and solver parameters.</p>
+    <a href="{{ url_for('camera_page') }}" class="btn" style="display:inline-block;margin-top:4px;">Open Camera →</a>
   </div>
 
   <div class="card" id="solution-card">
@@ -191,38 +148,6 @@ function formatDMS(d) {
 }
 setInterval(refresh, 1500);
 
-function refreshFrame() {
-  const img = document.getElementById('live-frame');
-  if (!img) return;
-  const ts = Date.now();
-  const next = new Image();
-  next.onload = function() {
-    img.src = next.src;
-    const el = document.getElementById('live-ts');
-    if (el) el.textContent = 'Updated ' + new Date().toLocaleTimeString();
-  };
-  // Cache-bust with timestamp; on error just keep the old frame.
-  next.src = '/frame.jpg?' + ts;
-}
-setInterval(refreshFrame, 2000);
-
-function expSliderChange(v) {
-  const s = Math.pow(10, parseFloat(v));
-  document.getElementById('exp_num').value = s.toFixed(4).replace(/\.?0+$/, '');
-}
-function expNumChange(v) {
-  const s = parseFloat(v);
-  if (s > 0) document.getElementById('exp_slider').value = Math.log10(s);
-}
-function gainSliderChange(v) {
-  document.getElementById('gain_num').value = Math.round(v);
-}
-function gainNumChange(v) {
-  document.getElementById('gain_slider').value = Math.round(parseFloat(v));
-}
-// Sync number inputs back to sliders on manual entry
-document.getElementById('exp_num').addEventListener('input', e => expNumChange(e.target.value));
-document.getElementById('gain_num').addEventListener('input', e => gainNumChange(e.target.value));
 </script>
 
 {% endif %}
