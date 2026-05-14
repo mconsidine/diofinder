@@ -112,8 +112,22 @@ fi
 # means retry indefinitely; without this NM stops trying after a few
 # failures and will not retry until manually prompted, even across reboots.
 nmcli con modify efinder-ap \
+  connection.autoconnect yes \
   connection.autoconnect-retries 0 \
   2>/dev/null || WARN "Could not set AP autoconnect-retries (non-fatal)"
+
+# Explicitly activate the AP now. NM was already running when the profile
+# was created so it may have missed the startup autoconnect sweep. Calling
+# `nmcli con up` here avoids a 30-90 s delay waiting for NM's retry timer
+# or efinder-ensure-ap's polling loop. This is a no-op if it is already up.
+if ! nmcli -t -f NAME,DEVICE con show --active 2>/dev/null \
+     | awk -F: '$2=="wlan0"{exit 0} END{exit 1}'; then
+  LOG "Activating AP profile on wlan0"
+  nmcli con up efinder-ap 2>/dev/null \
+    || WARN "Could not bring up AP immediately (efinder-ensure-ap will retry)"
+else
+  LOG "wlan0 already has an active connection — leaving it"
+fi
 
 # --- Filesystem setup ---------------------------------------------------------
 

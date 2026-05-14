@@ -1,0 +1,10 @@
+#!/bin/bash
+# Set system clock from SkySafari's time sync.
+# Called by comms_proc with the UTC time string "YYYY-MM-DD HH:MM:SS".
+# Briefly disables systemd-timesyncd so timedatectl won't refuse the change,
+# then re-enables it (it will quickly confirm the new time via NTP when online,
+# or leave it as-is when offline / in AP mode).
+set -e
+/usr/bin/timedatectl set-ntp false 2>/dev/null || true
+/usr/bin/timedatectl set-time "$1"
+/usr/bin/timedatectl set-ntp true  2>/dev/null || true
