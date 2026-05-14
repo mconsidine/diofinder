@@ -26,14 +26,14 @@ modprobe usb_f_acm
 # --- Wait for the UDC to appear ----------------------------------------------
 
 UDC=""
-for i in $(seq 1 40); do
+for i in $(seq 1 60); do
     UDC=$(ls /sys/class/udc/ 2>/dev/null | head -n1)
     [ -n "$UDC" ] && break
-    sleep 0.5
+    sleep 1
 done
 
 if [ -z "$UDC" ]; then
-    logger -t efinder-gadget "ERROR: No UDC found in /sys/class/udc/ — gadget not configured"
+    logger -t efinder-gadget "ERROR: No UDC found in /sys/class/udc/ after 60s — gadget not configured"
     exit 1
 fi
 logger -t efinder-gadget "Using UDC: $UDC"
