@@ -42,10 +42,11 @@
                    value="{{ exposure.gain }}">
           </div>
         </label>
+        <p id="exp-status" class="hint" style="min-height:1.2em;">&nbsp;</p>
         <label class="checkbox">
           <input type="checkbox" name="persist"> Save to config
         </label>
-        <button type="submit" class="btn">Apply</button>
+        <button type="submit" class="btn">Apply &amp; save</button>
       </form>
     {% else %}
       <p class="muted">Daemon not reachable.</p>
@@ -85,10 +86,11 @@
                    value="{{ solver_params.solve_timeout_ms }}">
           </div>
         </label>
+        <p id="solver-status" class="hint" style="min-height:1.2em;">&nbsp;</p>
         <label class="checkbox">
           <input type="checkbox" name="persist"> Save to config
         </label>
-        <button type="submit" class="btn">Apply</button>
+        <button type="submit" class="btn">Apply &amp; save</button>
       </form>
     {% else %}
       <p class="muted">Daemon not reachable.</p>
@@ -97,54 +99,101 @@
 </section>
 
 <script>
+// --- Live frame refresh -------------------------------------------------------
 function refreshFrame() {
   const img = document.getElementById('live-frame');
   if (!img) return;
-  const ts = Date.now();
   const next = new Image();
   next.onload = function() {
     img.src = next.src;
     const el = document.getElementById('live-ts');
     if (el) el.textContent = 'Updated ' + new Date().toLocaleTimeString();
   };
-  next.src = '/frame.jpg?' + ts;
+  next.src = '/frame.jpg?' + Date.now();
 }
 setInterval(refreshFrame, 2000);
 
+// --- Auto-apply helpers -------------------------------------------------------
+function debounce(fn, ms) {
+  let t;
+  return function(...args) { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+
+function setStatus(id, msg, ok) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = ok ? '#44cc44' : '#ff5500';
+  if (ok) setTimeout(() => { if (el.textContent === msg) el.textContent = ' '; }, 2000);
+}
+
+async function applyParams(params, statusId) {
+  setStatus(statusId, 'Applying…', true);
+  try {
+    const r = await fetch('/api/camera/set', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(params),
+    });
+    const data = await r.json();
+    if (data.ok) setStatus(statusId, 'Applied', true);
+    else setStatus(statusId, 'Error: ' + (data.errors || []).join(', '), false);
+  } catch(e) {
+    setStatus(statusId, 'Error: ' + e.message, false);
+  }
+}
+
+const applyExp  = debounce(s  => applyParams({exposure_s: s},                'exp-status'),    400);
+const applyGain = debounce(g  => applyParams({gain: g},                       'exp-status'),    400);
+const applySigma   = debounce(v => applyParams({detect_sigma: v},              'solver-status'), 400);
+const applyTimeout = debounce(v => applyParams({solve_timeout_ms: v},          'solver-status'), 400);
+
+// --- Slider <-> number sync + auto-apply -------------------------------------
 function expSliderChange(v) {
   const s = Math.pow(10, parseFloat(v));
   document.getElementById('exp_num').value = s.toFixed(4).replace(/\.?0+$/, '');
+  applyExp(s);
 }
 function expNumChange(v) {
   const s = parseFloat(v);
-  if (s > 0) document.getElementById('exp_slider').value = Math.log10(s);
+  if (s > 0) { document.getElementById('exp_slider').value = Math.log10(s); applyExp(s); }
 }
 function gainSliderChange(v) {
-  document.getElementById('gain_num').value = Math.round(v);
+  const g = Math.round(v);
+  document.getElementById('gain_num').value = g;
+  applyGain(g);
 }
 function gainNumChange(v) {
-  document.getElementById('gain_slider').value = Math.round(parseFloat(v));
+  const g = Math.round(parseFloat(v));
+  document.getElementById('gain_slider').value = g;
+  applyGain(g);
 }
 function sigmaSliderChange(v) {
-  document.getElementById('sigma_num').value = parseFloat(v).toFixed(1);
+  const s = parseFloat(v);
+  document.getElementById('sigma_num').value = s.toFixed(1);
+  applySigma(s);
 }
 function sigmaNumChange(v) {
   document.getElementById('sigma_slider').value = v;
+  applySigma(parseFloat(v));
 }
 function timeoutSliderChange(v) {
-  document.getElementById('timeout_num').value = parseInt(v);
+  const ms = parseInt(v);
+  document.getElementById('timeout_num').value = ms;
+  applyTimeout(ms);
 }
 function timeoutNumChange(v) {
   document.getElementById('timeout_slider').value = v;
+  applyTimeout(parseInt(v));
 }
 
 const expNum = document.getElementById('exp_num');
 const gainNum = document.getElementById('gain_num');
 const sigmaNum = document.getElementById('sigma_num');
 const timeoutNum = document.getElementById('timeout_num');
-if (expNum) expNum.addEventListener('input', e => expNumChange(e.target.value));
-if (gainNum) gainNum.addEventListener('input', e => gainNumChange(e.target.value));
-if (sigmaNum) sigmaNum.addEventListener('input', e => sigmaNumChange(e.target.value));
+if (expNum)     expNum.addEventListener('input',     e => expNumChange(e.target.value));
+if (gainNum)    gainNum.addEventListener('input',    e => gainNumChange(e.target.value));
+if (sigmaNum)   sigmaNum.addEventListener('input',   e => sigmaNumChange(e.target.value));
 if (timeoutNum) timeoutNum.addEventListener('input', e => timeoutNumChange(e.target.value));
 </script>
 

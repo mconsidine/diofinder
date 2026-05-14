@@ -305,12 +305,15 @@ install -m 644 "$EFINDER_DIR/systemd/efinder-ensure-ap.service"   /etc/systemd/s
 
 # Sudoers rule scoped to just efinder-update (used by the web UI)
 install -m 440 "$EFINDER_DIR/etc/sudoers.d/efinder-update" /etc/sudoers.d/efinder-update
+# Sudoers rule for system clock sync from SkySafari time commands
+install -m 440 "$EFINDER_DIR/etc/sudoers.d/efinder-clock"  /etc/sudoers.d/efinder-clock
 
 install -m 755 "$EFINDER_DIR/scripts/efinder-update"          /usr/local/bin/
 install -m 755 "$EFINDER_DIR/scripts/efinder-ctl"             /usr/local/bin/
 install -m 755 "$EFINDER_DIR/scripts/ap.sh"                   /usr/local/bin/ap.sh
 install -m 755 "$EFINDER_DIR/scripts/station.sh"              /usr/local/bin/station.sh
 install -m 755 "$EFINDER_DIR/scripts/efinder-gadget-connect"  /usr/local/bin/efinder-gadget-connect
+install -m 755 "$EFINDER_DIR/scripts/efinder-set-time"        /usr/local/bin/efinder-set-time
 # firstboot.sh runs in place from /opt/efinder/scripts/ per the systemd
 # unit (no copy needed); just ensure it's executable.
 chmod 755 "$EFINDER_DIR/scripts/firstboot.sh"

@@ -18,12 +18,14 @@ maintenance socket runs in its own thread so a slow LX200 client
 doesn't delay maintenance commands and vice versa.
 """
 
+import datetime
 import itertools
 import json
 import logging
 import math
 import os
 import socket
+import subprocess
 import threading
 import time
 from queue import Empty
@@ -281,7 +283,44 @@ def _imu_predict(shared_cfg):
     return ra_pred, dec_pred
 
 
-def _handle_lx200_command(cmd, latest_solution, align_state, cfg, shared_cfg,
+def _sync_clock(sl, sg, sc):
+    """Convert SkySafari's :SL/:SG/:SC local-time payload to UTC and sync the
+    system clock.  Runs in a daemon thread so the LX200 handler returns
+    immediately.
+
+    :SL HH:MM:SS  — local time
+    :SG s[D]D     — UTC offset in hours WEST (positive = west; e.g. +05 = UTC-5)
+    :SC MM/DD/YY  — local date
+    """
+    try:
+        local_dt = datetime.datetime.strptime(f"{sc} {sl}", "%m/%d/%y %H:%M:%S")
+        # LX200 :SG sign convention: positive means hours *west* of Greenwich.
+        # UTC = local + west_offset.
+        sg_hours = float(sg)
+        utc_dt = local_dt + datetime.timedelta(hours=sg_hours)
+        time_str = utc_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+        now_utc = datetime.datetime.utcnow()
+        diff_s = abs((utc_dt - now_utc).total_seconds())
+        if diff_s < 10:
+            log.debug("Clock already accurate (drift %.0fs); skipping sync", diff_s)
+            return
+
+        log.info("Clock drift %.0fs — syncing from SkySafari: %s UTC", diff_s, time_str)
+        result = subprocess.run(
+            ["sudo", "/usr/local/bin/efinder-set-time", time_str],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0:
+            log.info("Clock synced to %s UTC", time_str)
+        else:
+            log.warning("Clock sync failed (rc=%d): %s",
+                        result.returncode, result.stderr.strip())
+    except Exception as e:
+        log.warning("Clock sync error: %s", e)
+
+
+def _handle_lx200_command(cmd, latest_solution, align_state, time_state, cfg, shared_cfg,
                           align_request_q, align_response_q, ctx=None):
     if cmd == ":GR":
         pred = _imu_predict(shared_cfg)
@@ -381,9 +420,30 @@ def _handle_lx200_command(cmd, latest_solution, align_state, cfg, shared_cfg,
         m = int(round((a - d) * 60.0))
         return f"{sign}{d:03d}*{m:02d}#".encode("ascii")
 
-    if cmd.startswith(":SG") or cmd.startswith(":SL"):
+    if cmd.startswith(":SG"):
+        # UTC offset in hours west: "+05" = UTC-5, "-05" = UTC+5
+        try:
+            time_state["sg"] = float(cmd[3:])
+        except ValueError:
+            pass
+        return b"1"
+    if cmd.startswith(":SL"):
+        # Local time HH:MM:SS
+        time_state["sl"] = cmd[3:].strip()
         return b"1"
     if cmd.startswith(":SC"):
+        # Local date MM/DD/YY — last of the three; trigger clock sync if we
+        # have all three pieces.
+        sc_val = cmd[3:].strip()
+        sl_val = time_state.get("sl")
+        sg_val = time_state.get("sg")
+        if sl_val and sg_val is not None:
+            threading.Thread(
+                target=_sync_clock, args=(sl_val, sg_val, sc_val),
+                daemon=True, name="efinder-timesync",
+            ).start()
+        else:
+            log.debug(":SC received but :SL/:SG not yet buffered — skipping clock sync")
         return b"1Updating Planetary Data#                              #"
 
     # Slew / motion commands -- we don't move anything, just acknowledge.
@@ -788,6 +848,7 @@ def _serve_lx200(latest_solution, shared_cfg, cfg,
         client.settimeout(cfg.lx200_client_timeout_s)
         log.info("LX200 client from %s", addr)
         align_state = CommsAlignState()
+        time_state = {}   # accumulates :SL/:SG for clock sync on :SC
         try:
             buf = b""
             while True:
@@ -801,7 +862,7 @@ def _serve_lx200(latest_solution, shared_cfg, cfg,
                     if not cmd.startswith(":"):
                         continue
                     reply = _handle_lx200_command(
-                        cmd, latest_solution, align_state, cfg,
+                        cmd, latest_solution, align_state, time_state, cfg,
                         shared_cfg, align_request_q, align_response_q, ctx)
                     if reply:
                         client.sendall(reply)
