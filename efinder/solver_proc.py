@@ -328,6 +328,11 @@ def solver_main(slots, latest_solution, shared_cfg,
 
     fail_streak = 0
     solve_count = 0
+    # Force cedar-detect to reopen each SHM slot on first use so it gets a
+    # fresh file descriptor after efinder recreates the SHM blocks on startup.
+    # Without this, cedar-detect reuses a stale fd from a previous session and
+    # reads old/garbage data instead of the current frame.
+    _cedar_shm_opened: set = set()
 
     try:
         while True:
@@ -348,10 +353,13 @@ def solver_main(slots, latest_solution, shared_cfg,
             align_req = _drain_align_queue(align_request_q, align_response_q)
 
             shm_name = f"{SHM_PREFIX}_{idx}"
+            reopen_shm = shm_name not in _cedar_shm_opened
+            if reopen_shm:
+                _cedar_shm_opened.add(shm_name)
             req = pb.CentroidsRequest(
                 input_image=pb.Image(
                     width=cfg.frame_width, height=cfg.frame_height,
-                    shmem_name=shm_name, reopen_shmem=False,
+                    shmem_name=shm_name, reopen_shmem=reopen_shm,
                 ),
                 sigma=shared_cfg.get("detect_sigma", cfg.detect_sigma),
                 detect_hot_pixels=cfg.detect_hot_pixels,
