@@ -96,12 +96,103 @@ def _handle_camera_cmd(cmd, cam, current_state):
             error=f"{type(e).__name__}: {e}")
 
 
-def camera_main(slots, camera_cmd_q, camera_cmd_reply_q, cfg):
+def _load_test_image(path, frame_height, frame_width):
+    """Load a PNG as a grayscale uint8 array sized (frame_height, frame_width)."""
+    try:
+        from PIL import Image
+    except ImportError:
+        raise RuntimeError(
+            "Pillow is required for test-image mode: pip install Pillow")
+    img = Image.open(path).convert("L")
+    if img.size != (frame_width, frame_height):
+        log.info("Test image %dx%d -> resizing to %dx%d",
+                 img.width, img.height, frame_width, frame_height)
+        img = img.resize((frame_width, frame_height), Image.LANCZOS)
+    return np.array(img, dtype=np.uint8)
+
+
+def _run_test_camera(test_frame, slots, camera_cmd_q, camera_cmd_reply_q, cfg):
+    """Publish a static test frame repeatedly at ~5 fps, mimicking the real loop."""
+    from efinder.worker_cmds import (
+        CameraCmdReply,
+        CAMERA_OP_GET_EXPOSURE, CAMERA_OP_SET_EXPOSURE, CAMERA_OP_SET_GAIN,
+    )
+
+    shms = [shared_memory.SharedMemory(name=f"{SHM_PREFIX}_{i}")
+            for i in range(NUM_BUFFERS)]
+    bufs = [np.ndarray((cfg.frame_height, cfg.frame_width), dtype=np.uint8,
+                        buffer=s.buf) for s in shms]
+
+    current_state = {"exposure_s": cfg.exposure_s, "gain": cfg.gain}
+    frame_count = 0
+    last_log = time.monotonic()
+
+    try:
+        while True:
+            for cmd in _drain_cmd_queue(camera_cmd_q):
+                # Honour GET; log but accept SET (no real hardware to update).
+                try:
+                    if cmd.op == CAMERA_OP_GET_EXPOSURE:
+                        reply = CameraCmdReply(
+                            request_id=cmd.request_id, ok=True,
+                            result={"exposure_s": current_state["exposure_s"],
+                                    "gain": current_state["gain"]})
+                    elif cmd.op == CAMERA_OP_SET_EXPOSURE:
+                        current_state["exposure_s"] = float(
+                            cmd.args["exposure_s"])
+                        reply = CameraCmdReply(
+                            request_id=cmd.request_id, ok=True,
+                            result={"exposure_s": current_state["exposure_s"]})
+                    elif cmd.op == CAMERA_OP_SET_GAIN:
+                        current_state["gain"] = float(cmd.args["gain"])
+                        reply = CameraCmdReply(
+                            request_id=cmd.request_id, ok=True,
+                            result={"gain": current_state["gain"]})
+                    else:
+                        reply = CameraCmdReply(
+                            request_id=cmd.request_id, ok=False,
+                            error=f"unknown camera op: {cmd.op!r}")
+                except Exception as e:
+                    reply = CameraCmdReply(
+                        request_id=cmd.request_id, ok=False,
+                        error=f"{type(e).__name__}: {e}")
+                try:
+                    camera_cmd_reply_q.put_nowait(reply)
+                except Exception as e:
+                    log.warning("Could not enqueue camera reply: %s", e)
+
+            idx = slots.acquire_write_slot()
+            np.copyto(bufs[idx], test_frame)
+            slots.publish(idx)
+
+            frame_count += 1
+            now = time.monotonic()
+            if now - last_log > 30.0:
+                fps = frame_count / (now - last_log)
+                log.info("test-image: published %d frames (%.1f fps)",
+                         frame_count, fps)
+                frame_count = 0; last_log = now
+
+            time.sleep(0.2)
+    finally:
+        for s in shms:
+            s.close()
+
+
+def camera_main(slots, camera_cmd_q, camera_cmd_reply_q, cfg,
+                test_image_path=None):
     logging.basicConfig(
         level=os.environ.get("EFINDER_LOGLEVEL", "INFO"),
         format="camera %(levelname)s %(message)s",
     )
     _pin_to_cpu(cfg.cpu_camera)
+
+    if test_image_path is not None:
+        log.info("TEST MODE: using static image %s", test_image_path)
+        test_frame = _load_test_image(
+            test_image_path, cfg.frame_height, cfg.frame_width)
+        _run_test_camera(test_frame, slots, camera_cmd_q, camera_cmd_reply_q, cfg)
+        return
 
     try:
         from picamera2 import Picamera2
