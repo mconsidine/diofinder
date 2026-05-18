@@ -77,7 +77,12 @@ cpu_solver: 3
 cpu_comms: 1
 
 # ---- Diagnostics ----
+# Set save_solved_frames or save_failed_frames to true to write PNG captures
+# to failed_frames_dir. Files are named capture_YYYYMMDD_HHMMSS_<label>.png
+# and can be replayed with: efinder --test-image <path>
+save_solved_frames: false
 save_failed_frames: false
+failed_frames_dir: /var/lib/efinder/captures
 log_solve_stats_every_n: 50
 
 # ---- Shutdown ----

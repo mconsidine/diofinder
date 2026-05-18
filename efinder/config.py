@@ -115,6 +115,7 @@ class Config:
 
     # -------- Diagnostics --------
     save_failed_frames: bool = False
+    save_solved_frames: bool = False
     failed_frames_dir: str = "/var/lib/efinder/captures"
     log_solve_stats_every_n: int = 50
 

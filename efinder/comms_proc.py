@@ -846,7 +846,7 @@ def _serve_lx200(latest_solution, shared_cfg, cfg,
         except AttributeError:
             pass  # TCP_KEEPIDLE etc. are Linux-only; SO_KEEPALIVE still helps
         client.settimeout(cfg.lx200_client_timeout_s)
-        log.info("LX200 client from %s", addr)
+        log.debug("LX200 client from %s", addr)
         align_state = CommsAlignState()
         time_state = {}   # accumulates :SL/:SG for clock sync on :SC
         try:

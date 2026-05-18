@@ -45,6 +45,21 @@ CANCELLED = 4
 TOO_FEW = 5
 
 
+def _save_frame(frame, cfg, label: str) -> None:
+    """Save a frame snapshot to cfg.failed_frames_dir as a PNG."""
+    import datetime
+    try:
+        from PIL import Image
+        import os
+        os.makedirs(cfg.failed_frames_dir, exist_ok=True)
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        path = os.path.join(cfg.failed_frames_dir, f"capture_{ts}_{label}.png")
+        Image.fromarray(frame, mode="L").save(path)
+        log.info("Saved frame: %s", path)
+    except Exception as e:
+        log.warning("Could not save frame: %s", e)
+
+
 def _pin_to_cpu(cpu: int) -> None:
     try:
         os.sched_setaffinity(0, {cpu})
@@ -368,6 +383,14 @@ def solver_main(slots, latest_solution, shared_cfg,
             )
             local_peak = int(bufs[idx].max())
 
+            # Snapshot for optional frame saving (copy taken while we own the
+            # slot; None when saving is disabled so there is no per-frame cost).
+            frame_snapshot = (
+                np.copy(bufs[idx])
+                if (cfg.save_failed_frames or cfg.save_solved_frames)
+                else None
+            )
+
             # Dark-frame fast-path: if the brightest pixel is below the noise
             # floor, there are no stars and running cedar-detect + cedar-solve
             # is pointless. numpy.max() on a 960x760 uint8 array costs ~0.1ms
@@ -479,6 +502,8 @@ def solver_main(slots, latest_solution, shared_cfg,
                         status, n, peak, noise, elapsed_ms,
                         calibrator.get_fov_estimate(),
                         calibrator.get_fov_max_error())
+                if cfg.save_failed_frames and frame_snapshot is not None:
+                    _save_frame(frame_snapshot, cfg, f"failed_s{status}")
                 continue
 
             # ---- Normal scope-pointing report ----
@@ -540,6 +565,9 @@ def solver_main(slots, latest_solution, shared_cfg,
                             boresight_x=float(x),
                             completed_at=time.monotonic(),
                         ))
+
+            if cfg.save_solved_frames and frame_snapshot is not None:
+                _save_frame(frame_snapshot, cfg, "solved")
 
             if fail_streak:
                 log.info("Solved after %d failed frames; n=%d matches=%d t=%.0fms",
