@@ -599,7 +599,22 @@ def frame_jpg():
     if frame is None:
         return "camera not running", 503, {"Content-Type": "text/plain"}
 
-    img = Image.fromarray(frame, mode="L").convert("RGB")
+    # Auto-stretch: clip to the 1st–99th percentile range and rescale to
+    # 0–255.  This ensures stars are always visible regardless of exposure
+    # or sky conditions, matching the behaviour users expect from a live
+    # astronomy view.  A small guard keeps a flat/dark frame from producing
+    # divide-by-zero or pure-noise output.
+    lo = float(np.percentile(frame, 1))
+    hi = float(np.percentile(frame, 99))
+    if hi - lo >= 4:
+        stretched = np.clip(
+            (frame.astype(np.float32) - lo) / (hi - lo) * 255.0,
+            0, 255,
+        ).astype(np.uint8)
+    else:
+        stretched = frame  # image is essentially blank; show as-is
+
+    img = Image.fromarray(stretched, mode="L").convert("RGB")
     draw = ImageDraw.Draw(img)
 
     r = 28  # circle radius in pixels (~6 % of frame width)
