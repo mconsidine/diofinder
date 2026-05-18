@@ -15,6 +15,7 @@ Inter-process state:
   * align_request_q / align_response_q: comms <-> solver alignment workflow
 """
 
+import argparse
 import logging
 import multiprocessing as mp
 import os
@@ -22,6 +23,7 @@ import signal
 import sys
 import time
 from multiprocessing import shared_memory
+from pathlib import Path
 
 from efinder.config import load_config
 from efinder.frame_slots import FrameSlots, NUM_BUFFERS, SHM_PREFIX
@@ -56,10 +58,47 @@ def _allocate_shared_frames(cfg):
     return shms
 
 
+def _resolve_test_image(args):
+    """Return an absolute Path to the test image, or None for live mode."""
+    if args.test_image:
+        p = Path(args.test_image)
+        if not p.exists():
+            log.error("--test-image path not found: %s", p)
+            sys.exit(1)
+        return p
+    if args.test:
+        search_dirs = [Path.cwd(), Path("/var/lib/efinder")]
+        for name in ("polaris.png", "test.png"):
+            for d in search_dirs:
+                p = d / name
+                if p.exists():
+                    log.info("Test mode: found %s", p)
+                    return p
+        log.error(
+            "--test specified but neither polaris.png nor test.png found in "
+            "%s", ", ".join(str(d) for d in search_dirs))
+        sys.exit(1)
+    return None
+
+
 def main():
+    parser = argparse.ArgumentParser(description="eFinder star-tracker daemon")
+    test_grp = parser.add_mutually_exclusive_group()
+    test_grp.add_argument(
+        "--test", action="store_true",
+        help="Test mode: auto-find polaris.png or test.png instead of using the camera")
+    test_grp.add_argument(
+        "--test-image", metavar="PATH",
+        help="Test mode: use the specified PNG instead of the camera")
+    args = parser.parse_args()
+
     _setup_logging()
     cfg = load_config()
     log.info("eFinder %s starting; config: %s", cfg.version, cfg.summary())
+
+    test_image_path = _resolve_test_image(args)
+    if test_image_path:
+        log.info("TEST MODE active — camera replaced by %s", test_image_path)
 
     mp.set_start_method("spawn", force=True)
 
@@ -109,7 +148,8 @@ def main():
                          solver_cmd_q, solver_cmd_reply_q,
                          camera_cmd_q, camera_cmd_reply_q, cfg)),
         mp.Process(target=camera_main, name="efinder-camera",
-                   args=(slots, camera_cmd_q, camera_cmd_reply_q, cfg)),
+                   args=(slots, camera_cmd_q, camera_cmd_reply_q, cfg,
+                         test_image_path)),
         mp.Process(target=solver_main, name="efinder-solver",
                    args=(slots, latest_solution, shared_cfg,
                          align_request_q, align_response_q,
