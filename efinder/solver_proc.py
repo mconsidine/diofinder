@@ -465,8 +465,12 @@ def solver_main(slots, latest_solution, shared_cfg,
                     ))
                 fail_streak += 1
                 if fail_streak == 1 or fail_streak % 20 == 0:
-                    log.info("No solve: status=%d n=%d peak=%d noise=%.1f t=%.0fms",
-                             status, n, peak, noise, elapsed_ms)
+                    log.info(
+                        "No solve: status=%d n=%d peak=%d noise=%.1f t=%.0fms "
+                        "fov_est=%.4f fov_err=%.4f",
+                        status, n, peak, noise, elapsed_ms,
+                        calibrator.get_fov_estimate(),
+                        calibrator.get_fov_max_error())
                 continue
 
             # ---- Normal scope-pointing report ----
