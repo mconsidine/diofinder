@@ -87,6 +87,15 @@ LOG "Setting WiFi regulatory domain to US"
 mkdir -p /etc/default
 echo "REGDOMAIN=US" > /etc/default/crda
 
+# --- Disable cloud-init -------------------------------------------------------
+# Pi OS Trixie Lite ships cloud-init. Even with blank/template config files in
+# /boot/firmware (user-data, network-config), cloud-init runs on first boot and
+# delays NetworkManager startup long enough to prevent the WiFi AP and USB
+# gadget from initialising in time. The official disable mechanism is this file.
+LOG "Disabling cloud-init"
+mkdir -p /etc/cloud
+touch /etc/cloud/cloud-init.disabled
+
 # --- System packages ----------------------------------------------------------
 
 LOG "Updating apt and installing system packages"
