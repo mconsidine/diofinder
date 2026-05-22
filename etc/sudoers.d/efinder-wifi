@@ -1,0 +1,3 @@
+# Allow the eFinder web UI to switch Wi-Fi modes without a password prompt.
+efinder ALL=(ALL) NOPASSWD: /usr/local/bin/ap.sh
+efinder ALL=(ALL) NOPASSWD: /usr/local/bin/station.sh *

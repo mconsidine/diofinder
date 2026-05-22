@@ -121,7 +121,7 @@ def _dms(deg):
     s = int(round((a - d - m / 60) * 3600))
     if s == 60: s = 0; m += 1
     if m == 60: m = 0; d += 1
-    return f"{sign}{d:02d}\u00b0{m:02d}'{s:02d}\""
+    return f"{sign}{d:02d}°{m:02d}'{s:02d}\""
 
 
 # ---------------------------------------------------------------------
@@ -390,8 +390,8 @@ def _scan_networks():
     """Return list of visible SSIDs sorted by signal strength (NM cache, no rescan)."""
     try:
         out = subprocess.check_output(
-            ["nmcli", "--rescan", "no", "-t", "-f", "SSID,SIGNAL",
-             "dev", "wifi", "list"],
+            ["nmcli", "-t", "-f", "SSID,SIGNAL",
+             "dev", "wifi", "list", "--rescan", "no"],
             text=True, errors="replace", timeout=5,
         )
         seen = set()
@@ -599,8 +599,8 @@ def frame_jpg():
     if frame is None:
         return "camera not running", 503, {"Content-Type": "text/plain"}
 
-    # Auto-stretch: clip to the 1st–99th percentile range and rescale to
-    # 0–255.  This ensures stars are always visible regardless of exposure
+    # Auto-stretch: clip to the 1st-99th percentile range and rescale to
+    # 0-255.  This ensures stars are always visible regardless of exposure
     # or sky conditions, matching the behaviour users expect from a live
     # astronomy view.  A small guard keeps a flat/dark frame from producing
     # divide-by-zero or pure-noise output.
