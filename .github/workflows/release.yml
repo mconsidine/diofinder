@@ -1,10 +1,17 @@
 name: Release
 
+# combo branch: cedar-detect-server and tetra3rs wheels are pre-built and
+# committed to vendor/ by the 'Vendor Binaries' workflow. This workflow
+# only needs to build the SD card image; install.sh picks up both binaries
+# from vendor/ without any additional compilation here.
+#
+# IMPORTANT: run the 'Vendor Binaries' workflow at least once before
+# triggering an image build, or the pre-flight check below will fail.
+
 on:
   push:
-    branches: [main]
+    branches: [combo]
     paths:
-      - 'cedar-detect/**'
       - 'efinder/**'
       - 'webui/**'
       - 'scripts/**'
@@ -22,109 +29,19 @@ on:
         default: false
 
 permissions:
-  contents: write   # needed by softprops/action-gh-release
+  contents: write
 
 jobs:
 
   # --------------------------------------------------------------------------
-  # Build cedar-detect-server cross-compiled for aarch64 / Cortex-A53.
-  # Runs on every push so we have a known-good binary in CI artifacts.
-  # On a tagged release, also attaches it to the release.
-  # --------------------------------------------------------------------------
-  cedar-detect:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - name: Checkout (with submodules)
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Verify cedar-detect submodule is present
-        run: |
-          if [ ! -f cedar-detect/Cargo.toml ]; then
-            echo "::error::cedar-detect/ is missing or empty."
-            echo "Add the submodule with:"
-            echo "  git submodule add https://github.com/smroid/cedar-detect cedar-detect"
-            echo "  git commit -m 'vendor cedar-detect'"
-            exit 1
-          fi
-          # Sanity check the bin name is what we expect
-          if ! grep -q 'name = "cedar-detect-server"' cedar-detect/Cargo.toml \
-             && ! grep -q 'cedar_detect_server' cedar-detect/src/bin/cedar_detect_server.rs 2>/dev/null \
-             && ! ls cedar-detect/src/bin/cedar*server* >/dev/null 2>&1; then
-            echo "::warning::Could not confirm cedar-detect-server bin name. Build may fail."
-          fi
-
-      - name: Install build deps
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler gcc-aarch64-linux-gnu
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-unknown-linux-gnu
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            cedar-detect/target
-          key: cargo-aarch64-cortex-a53-${{ hashFiles('cedar-detect/Cargo.lock') }}
-          restore-keys: cargo-aarch64-cortex-a53-
-
-      - name: Build cedar-detect-server
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          # Optimize for the Pi Zero 2W's specific CPU. ~5-10% speedup.
-          RUSTFLAGS: "-C target-cpu=cortex-a53"
-        working-directory: cedar-detect
-        run: |
-          cargo build --release \
-            --target aarch64-unknown-linux-gnu \
-            --bin cedar-detect-server
-
-      - name: Strip and verify binary
-        run: |
-          BIN=cedar-detect/target/aarch64-unknown-linux-gnu/release/cedar-detect-server
-          if [ ! -x "$BIN" ]; then
-            echo "::error::Binary not found at $BIN"
-            ls -la cedar-detect/target/aarch64-unknown-linux-gnu/release/ || true
-            exit 1
-          fi
-          aarch64-linux-gnu-strip "$BIN"
-          file "$BIN" | tee /tmp/binary-info
-          if ! grep -q "ARM aarch64" /tmp/binary-info; then
-            echo "::error::Binary is not aarch64. Check cross-compile config."
-            exit 1
-          fi
-          ls -lh "$BIN"
-
-      - name: Upload as workflow artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: cedar-detect-server-aarch64
-          path: cedar-detect/target/aarch64-unknown-linux-gnu/release/cedar-detect-server
-          retention-days: 30
-          if-no-files-found: error
-
-      - name: Attach to release (if tag build)
-        if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: cedar-detect/target/aarch64-unknown-linux-gnu/release/cedar-detect-server
-          fail_on_unmatched_files: true
-
-  # --------------------------------------------------------------------------
   # Build the SD card image. Only runs on tagged releases (or manual dispatch
-  # with build_image=true). Depends on cedar-detect job so the binary is
-  # available as an artifact when this job starts.
+  # with build_image=true).
+  #
+  # Both cedar-detect-server (vendor/bin/) and tetra3rs wheels (vendor/wheels/)
+  # must already be committed by the 'Vendor Binaries' workflow. The pre-flight
+  # step below fails fast with a clear message if they are missing.
   # --------------------------------------------------------------------------
   image:
-    needs: cedar-detect
     if: |
       github.event_name == 'release' ||
       (github.event_name == 'workflow_dispatch' && inputs.build_image)
@@ -134,6 +51,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Verify vendor files are present
+        run: |
+          if [ ! -f vendor/bin/cedar-detect-server ]; then
+            echo "::error::vendor/bin/cedar-detect-server is missing."
+            echo "::error::Run the 'Vendor Binaries (combo)' workflow first, then retry."
+            exit 1
+          fi
+          WHL=$(ls vendor/wheels/tetra3rs-*.whl 2>/dev/null | head -1 || true)
+          if [ -z "$WHL" ]; then
+            echo "::error::No tetra3rs wheel found in vendor/wheels/."
+            echo "::error::Run the 'Vendor Binaries (combo)' workflow first, then retry."
+            exit 1
+          fi
+          echo "Vendor files present:"
+          ls -lh vendor/bin/cedar-detect-server
+          ls -lh vendor/wheels/*.whl
+          file vendor/bin/cedar-detect-server | grep -q "ARM aarch64" \
+            || { echo "::error::vendor/bin/cedar-detect-server is not an aarch64 binary"; exit 1; }
 
       - name: Determine version tag
         id: ver
@@ -152,30 +88,8 @@ jobs:
             xz-utils kpartx parted \
             wget curl ca-certificates
 
-      # Pull the cedar-detect-server binary that the previous job built.
-      - name: Download cedar-detect-server artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: cedar-detect-server-aarch64
-          path: build/output
-
-      - name: Verify downloaded artifact
-        run: |
-          BIN=build/output/cedar-detect-server
-          [ -x "$BIN" ] || chmod +x "$BIN" 2>/dev/null || true
-          ls -lh "$BIN"
-          file "$BIN" | grep -q "ARM aarch64" || {
-            echo "::error::Downloaded artifact is not aarch64"
-            exit 1
-          }
-
       - name: Resolve cedar-solve commit
         id: cedar_solve
-        # We pin to a specific cedar-solve release tag (default v0.6.0).
-        # Bumping the version is an explicit choice: change the
-        # vars.CEDAR_SOLVE_TAG repo variable, or override here.
-        # Resolving the tag's commit SHA at build time gives
-        # reproducible images without needing to edit this file.
         env:
           CEDAR_SOLVE_TAG: ${{ vars.CEDAR_SOLVE_TAG || 'v0.6.0' }}
         run: |
@@ -193,19 +107,12 @@ jobs:
         env:
           EFINDER_VERSION: ${{ steps.ver.outputs.tag }}
           REPO: ${{ github.repository }}
-          # Tell build-image.sh to use the local binary rather than fetch
-          # from a release URL. This is the only path during CI because
-          # the release may not be fully populated yet.
-          CEDAR_DETECT_BIN_LOCAL: ${{ github.workspace }}/build/output/cedar-detect-server
-          # Pin cedar-solve to the resolved commit for reproducibility.
           EFINDER_CEDAR_SOLVE_REF: ${{ steps.cedar_solve.outputs.sha }}
         run: |
           sudo -E bash build/build-image.sh
 
       - name: Verify boot partition contents
         run: |
-          # Mount the image's boot partition and confirm the gadget-mode
-          # settings made it into the image. Belt-and-suspenders check.
           LOOP=$(sudo losetup -fP --show build/output/efinder.img)
           mkdir -p /tmp/boot-check
           sudo mount "${LOOP}p1" /tmp/boot-check
@@ -216,11 +123,11 @@ jobs:
           tail -20 /tmp/boot-check/config.txt
           echo ""
           sudo grep -q "console=ttyGS0" /tmp/boot-check/cmdline.txt \
-            && echo "✓ USB serial console in cmdline.txt" \
-            || { echo "✗ MISSING: console=ttyGS0 not in cmdline.txt"; exit 1; }
+            && echo "check: USB serial console in cmdline.txt" \
+            || { echo "MISSING: console=ttyGS0 not in cmdline.txt"; exit 1; }
           sudo grep -qx "dtoverlay=dwc2,dr_mode=peripheral" /tmp/boot-check/config.txt \
-            && echo "✓ dtoverlay=dwc2,dr_mode=peripheral in config.txt" \
-            || { echo "✗ MISSING: dtoverlay=dwc2,dr_mode=peripheral not in config.txt"; exit 1; }
+            && echo "check: dtoverlay=dwc2,dr_mode=peripheral in config.txt" \
+            || { echo "MISSING: dtoverlay=dwc2,dr_mode=peripheral not in config.txt"; exit 1; }
           sudo umount /tmp/boot-check
           sudo losetup -d "$LOOP"
 
@@ -228,14 +135,8 @@ jobs:
         id: compress
         run: |
           ls -lh build/output/
-          # build-image.sh ran under sudo and produced a root-owned image.
-          # xz preserves source metadata by default and would fail trying
-          # to chown the output to root (we're running as the runner user
-          # in this step). Hand ownership back to runner first.
           sudo chown -R "$(id -u):$(id -g)" build/output/
           xz -T0 -9 build/output/efinder.img
-          # Rename to include build date and version tag so each release
-          # artifact is unambiguously identifiable on disk.
           BUILD_DATE=$(date -u +%Y%m%d)
           if [ "${{ github.event_name }}" = "release" ]; then
             IMGNAME="efinder-${BUILD_DATE}-${{ steps.ver.outputs.tag }}.img.xz"
