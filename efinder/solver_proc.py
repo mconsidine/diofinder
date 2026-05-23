@@ -402,6 +402,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                 latest_solution.update(_empty_solution(peak=local_peak))
                 continue
 
+            t_detect = time.monotonic()
             try:
                 resp = stub.ExtractCentroids(req, timeout=2.0)
             except Exception as e:
@@ -416,6 +417,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                     ))
                 fail_streak += 1; time.sleep(0.05); continue
             slots.release_read_slot()
+            detect_ms = (time.monotonic() - t_detect) * 1000.0
 
             n = len(resp.star_candidates)
             peak = int(resp.peak_star_pixel) if resp.peak_star_pixel else local_peak
@@ -454,6 +456,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                     [[align_req.target_ra_deg, align_req.target_dec_deg]],
                     dtype=np.float32)
 
+            t_solve = time.monotonic()
             try:
                 soln = t3.solve_from_centroids(
                     centroids,
@@ -480,7 +483,9 @@ def solver_main(slots, latest_solution, shared_cfg,
                     ))
                 fail_streak += 1; continue
 
-            elapsed_ms = (time.monotonic() - t0) * 1000.0
+            t_end = time.monotonic()
+            elapsed_ms = (t_end - t0) * 1000.0
+            solve_only_ms = (t_end - t_solve) * 1000.0
             status = soln.get("status", NO_MATCH)
             solve_count += 1
 
@@ -570,12 +575,16 @@ def solver_main(slots, latest_solution, shared_cfg,
                 _save_frame(frame_snapshot, cfg, "solved")
 
             if fail_streak:
-                log.info("Solved after %d failed frames; n=%d matches=%d t=%.0fms",
-                         fail_streak, n, soln.get("Matches", 0), elapsed_ms)
+                log.info("Solved after %d failed frames; n=%d matches=%d "
+                         "t=%.0fms (detect=%.0fms solve=%.0fms)",
+                         fail_streak, n, soln.get("Matches", 0),
+                         elapsed_ms, detect_ms, solve_only_ms)
                 fail_streak = 0
             elif solve_count % cfg.log_solve_stats_every_n == 0:
-                log.info("solve #%d: n=%d matches=%d peak=%d noise=%.1f t=%.0fms",
-                         solve_count, n, soln.get("Matches", 0), peak, noise, elapsed_ms)
+                log.info("solve #%d: n=%d matches=%d peak=%d noise=%.1f "
+                         "t=%.0fms (detect=%.0fms solve=%.0fms)",
+                         solve_count, n, soln.get("Matches", 0), peak, noise,
+                         elapsed_ms, detect_ms, solve_only_ms)
     finally:
         for s in shms: s.close()
         try: channel.close()
