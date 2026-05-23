@@ -1,0 +1,172 @@
+name: Vendor Binaries (combo)
+
+# Builds cedar-detect-server and tetra3rs wheels, then commits them to
+# vendor/ in this branch so install.sh can use them without any network
+# fetch at install time.
+#
+# Triggers automatically when the cedar-detect submodule changes (new
+# cedar build).  tetra3rs takes ~3 hours (QEMU + Rust); to refresh it
+# bump vars.TETRA3RS_REF and run manually via workflow_dispatch.
+on:
+  push:
+    branches: [combo]
+    paths:
+      - 'cedar-detect/**'
+      - '.github/workflows/vendor-binaries.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+
+  # --------------------------------------------------------------------------
+  # Build cedar-detect-server (aarch64 / Cortex-A53)
+  # --------------------------------------------------------------------------
+  cedar-detect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler gcc-aarch64-linux-gnu
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            cedar-detect/target
+          key: cargo-aarch64-cortex-a53-${{ hashFiles('cedar-detect/Cargo.lock') }}
+          restore-keys: cargo-aarch64-cortex-a53-
+
+      - name: Build cedar-detect-server
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          RUSTFLAGS: "-C target-cpu=cortex-a53"
+        working-directory: cedar-detect
+        run: |
+          cargo build --release \
+            --target aarch64-unknown-linux-gnu \
+            --bin cedar-detect-server
+
+      - name: Strip and verify
+        run: |
+          BIN=cedar-detect/target/aarch64-unknown-linux-gnu/release/cedar-detect-server
+          aarch64-linux-gnu-strip "$BIN"
+          file "$BIN" | grep -q "ARM aarch64"
+          ls -lh "$BIN"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cedar-detect-server-aarch64
+          path: cedar-detect/target/aarch64-unknown-linux-gnu/release/cedar-detect-server
+          retention-days: 30
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------------
+  # Build tetra3rs wheels (aarch64, cp311/cp312/cp313)
+  # ~3 hours due to QEMU + Rust compilation.
+  # --------------------------------------------------------------------------
+  tetra3rs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout tetra3rs
+        uses: actions/checkout@v4
+        with:
+          repository: ssmichael1/tetra3rs
+          ref: ${{ vars.TETRA3RS_REF || 'main' }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Build aarch64 wheels via cibuildwheel
+        uses: pypa/cibuildwheel@v2.22.0
+        env:
+          CIBW_ARCHS_LINUX: aarch64
+          CIBW_BUILD: "cp311-manylinux_aarch64 cp312-manylinux_aarch64 cp313-manylinux_aarch64"
+          CIBW_BEFORE_ALL_LINUX: >
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs
+            | sh -s -- -y --profile minimal
+          CIBW_ENVIRONMENT: 'PATH="$HOME/.cargo/bin:$PATH" RUSTFLAGS="-C target-cpu=cortex-a53"'
+          CIBW_BEFORE_BUILD: pip install setuptools>=68 setuptools-rust>=1.10
+        with:
+          output-dir: dist
+
+      - name: Verify wheels
+        run: |
+          ls -lh dist/
+          [ $(ls dist/*.whl 2>/dev/null | wc -l) -ge 1 ] \
+            || { echo "::error::No wheels produced"; exit 1; }
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tetra3rs-wheels-aarch64
+          path: dist/*.whl
+          retention-days: 30
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------------
+  # Download both artifacts, commit them to vendor/, push back to this branch.
+  # [skip ci] in the commit message prevents re-triggering this workflow.
+  # --------------------------------------------------------------------------
+  commit-vendor:
+    needs: [cedar-detect, tetra3rs]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout combo branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download cedar-detect artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: cedar-detect-server-aarch64
+          path: vendor/bin
+
+      - name: Download tetra3rs wheels artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tetra3rs-wheels-aarch64
+          path: vendor/wheels
+
+      - name: Set execute bit on binary
+        run: chmod 755 vendor/bin/cedar-detect-server
+
+      - name: Commit and push vendor files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add vendor/
+          if git diff --staged --quiet; then
+            echo "No vendor changes to commit"
+          else
+            git commit -m "vendor: update cedar-detect-server and tetra3rs wheels [skip ci]"
+            git push origin ${{ github.ref_name }}
+          fi
+
+      - name: Attach to release (if tag build)
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            vendor/bin/cedar-detect-server
+            vendor/wheels/*.whl
+          fail_on_unmatched_files: true

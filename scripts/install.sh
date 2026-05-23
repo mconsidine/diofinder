@@ -12,7 +12,9 @@
 #
 # Chroot-mode optional env:
 #   EFINDER_CEDAR_DETECT_BIN_LOCAL  path to pre-built cedar-detect-server
+#                                   (falls back to vendor/bin/ then release download)
 #   EFINDER_TETRA3RS_WHEELS_DIR     dir of pre-built tetra3rs aarch64 wheels
+#                                   (falls back to vendor/wheels/ then PyPI)
 
 set -euo pipefail
 
@@ -63,7 +65,7 @@ fi
 LOG "Setting hostname to efinder"
 echo "efinder" > /etc/hostname
 if grep -q "^127\.0\.1\.1" /etc/hosts; then
-  sed -i $'s/^127\\.0\\.1\\.1.*/127.0.1.1\tefinder/' /etc/hosts
+  sed -i $'s/^127\.0\.1\.1.*/127.0.1.1\tefinder/' /etc/hosts
 else
   printf "127.0.1.1\tefinder\n" >> /etc/hosts
 fi
@@ -131,7 +133,6 @@ if [ "$IN_CHROOT" = "1" ]; then
     LOG "Copying staged source $SRC_STAGED -> $EFINDER_DIR"
     mkdir -p "$EFINDER_DIR"
     cp -r "$SRC_STAGED/." "$EFINDER_DIR/"
-    rm -f "$EFINDER_DIR/cedar-detect-server.aarch64"
     chown -R "$EFINDER_USER:$EFINDER_USER" "$EFINDER_DIR"
   else
     WARN "$EFINDER_DIR already exists; reusing"
@@ -191,8 +192,18 @@ print('cedar-solve runtime deps OK')
 " || FAIL "cedar-solve runtime dependency check failed"
 
 # --- Install tetra3rs --------------------------------------------------------
+# Priority: vendored wheel in repo > EFINDER_TETRA3RS_WHEELS_DIR env > PyPI.
+# Vendored wheels are committed to vendor/wheels/ by the vendor-binaries
+# CI workflow and are available immediately after git clone.
 
-if [ -n "$LOCAL_WHEELS_DIR" ]; then
+VENDOR_WHEEL=$(ls "$EFINDER_DIR/vendor/wheels/tetra3rs-"*.whl 2>/dev/null | head -1)
+if [ -n "$VENDOR_WHEEL" ]; then
+  LOG "Installing tetra3rs from vendored wheel: $(basename "$VENDOR_WHEEL")"
+  sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install "gaia-catalog<1.0" \
+    || FAIL "gaia-catalog install failed"
+  sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install "$VENDOR_WHEEL" \
+    || FAIL "tetra3rs vendored wheel install failed"
+elif [ -n "$LOCAL_WHEELS_DIR" ]; then
   LOG "Installing tetra3rs from local wheels in $LOCAL_WHEELS_DIR"
   sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install \
     "gaia-catalog<1.0" \
@@ -215,13 +226,19 @@ except ImportError as e:
 " || true
 
 # --- Install cedar-detect-server ---------------------------------------------
+# Priority: vendored binary in repo > EFINDER_CEDAR_DETECT_BIN_LOCAL env >
+#           download from GitHub release.
 
-if [ -n "$LOCAL_CD_BIN" ]; then
+VENDOR_CD="$EFINDER_DIR/vendor/bin/cedar-detect-server"
+if [ -f "$VENDOR_CD" ]; then
+  LOG "Using vendored $CEDAR_DETECT_BIN"
+  install -m 755 "$VENDOR_CD" /usr/local/bin/${CEDAR_DETECT_BIN}
+elif [ -n "$LOCAL_CD_BIN" ]; then
   [ -f "$LOCAL_CD_BIN" ] || FAIL "EFINDER_CEDAR_DETECT_BIN_LOCAL=$LOCAL_CD_BIN not found"
   LOG "Installing locally-staged $CEDAR_DETECT_BIN"
   install -m 755 "$LOCAL_CD_BIN" /usr/local/bin/${CEDAR_DETECT_BIN}
 else
-  LOG "Fetching $CEDAR_DETECT_BIN binary"
+  LOG "Fetching $CEDAR_DETECT_BIN binary from GitHub release"
   if [ "$TARGET_VERSION" = "latest" ]; then
     URL=$(curl -fsSL \
       "https://api.github.com/repos/${CEDAR_DETECT_REPO}/releases/latest" \
