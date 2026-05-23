@@ -4,9 +4,9 @@ name: Vendor Binaries (combo)
 # vendor/ in this branch so install.sh can use them without any network
 # fetch at install time.
 #
-# Triggers automatically when the cedar-detect submodule changes (new
-# cedar build).  tetra3rs takes ~3 hours (QEMU + Rust); to refresh it
-# bump vars.TETRA3RS_REF and run manually via workflow_dispatch.
+# Triggers automatically when the cedar-detect submodule changes.
+# For tetra3rs upstream updates: bump vars.TETRA3RS_REF to the desired
+# commit/tag, then trigger manually via workflow_dispatch.
 on:
   push:
     branches: [combo]
@@ -22,10 +22,15 @@ jobs:
 
   # --------------------------------------------------------------------------
   # Build cedar-detect-server (aarch64 / Cortex-A53)
+  #
+  # Optimization flags:
+  #   target-cpu=cortex-a53   A53-specific instruction scheduling
+  #   lto=thin                cross-crate inlining without full LTO cost
+  #   codegen-units=1         single CGU for maximum intra-crate optimization
   # --------------------------------------------------------------------------
   cedar-detect:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Checkout (with submodules)
         uses: actions/checkout@v4
@@ -49,13 +54,13 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             cedar-detect/target
-          key: cargo-aarch64-cortex-a53-${{ hashFiles('cedar-detect/Cargo.lock') }}
-          restore-keys: cargo-aarch64-cortex-a53-
+          key: cargo-aarch64-a53-lto-${{ hashFiles('cedar-detect/Cargo.lock') }}
+          restore-keys: cargo-aarch64-a53-lto-
 
       - name: Build cedar-detect-server
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          RUSTFLAGS: "-C target-cpu=cortex-a53"
+          RUSTFLAGS: "-C target-cpu=cortex-a53 -C lto=thin -C codegen-units=1"
         working-directory: cedar-detect
         run: |
           cargo build --release \
@@ -79,11 +84,23 @@ jobs:
 
   # --------------------------------------------------------------------------
   # Build tetra3rs wheels (aarch64, cp311/cp312/cp313)
-  # ~3 hours due to QEMU + Rust compilation.
+  #
+  # Runtime target: Pi Zero 2W (Cortex-A53, ARMv8-A, mandatory NEON/ASIMD).
+  # Optimization flags (same rationale as cedar-detect above):
+  #   target-cpu=cortex-a53   A53 pipeline scheduling
+  #   lto=thin                cross-crate inlining
+  #   codegen-units=1         maximum intra-crate optimization
+  #
+  # Build time: ~3 hours (QEMU emulation + Rust + ring crate first build).
+  # Subsequent Python versions reuse Cargo's incremental cache within the run.
+  #
+  # To pick up upstream tetra3rs changes:
+  #   1. Set repo variable TETRA3RS_REF to the desired commit/tag.
+  #   2. Trigger this workflow manually via workflow_dispatch.
   # --------------------------------------------------------------------------
   tetra3rs:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 210
     steps:
       - name: Checkout tetra3rs
         uses: actions/checkout@v4
@@ -102,7 +119,9 @@ jobs:
           CIBW_BEFORE_ALL_LINUX: >
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs
             | sh -s -- -y --profile minimal
-          CIBW_ENVIRONMENT: 'PATH="$HOME/.cargo/bin:$PATH" RUSTFLAGS="-C target-cpu=cortex-a53"'
+          CIBW_ENVIRONMENT: >-
+            PATH="$HOME/.cargo/bin:$PATH"
+            RUSTFLAGS="-C target-cpu=cortex-a53 -C lto=thin -C codegen-units=1"
           CIBW_BEFORE_BUILD: pip install setuptools>=68 setuptools-rust>=1.10
         with:
           output-dir: dist
