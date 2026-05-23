@@ -195,8 +195,12 @@ print('cedar-solve runtime deps OK')
 # Priority: vendored wheel in repo > EFINDER_TETRA3RS_WHEELS_DIR env > PyPI.
 # Vendored wheels are committed to vendor/wheels/ by the vendor-binaries
 # CI workflow and are available immediately after git clone.
+#
+# The || true after ls is essential: under set -euo pipefail, ls exits 2
+# when the glob matches nothing (only .gitkeep present), which would abort
+# the script before reaching the fallback branches.
 
-VENDOR_WHEEL=$(ls "$EFINDER_DIR/vendor/wheels/tetra3rs-"*.whl 2>/dev/null | head -1)
+VENDOR_WHEEL=$(ls "$EFINDER_DIR/vendor/wheels/tetra3rs-"*.whl 2>/dev/null | head -1 || true)
 if [ -n "$VENDOR_WHEEL" ]; then
   LOG "Installing tetra3rs from vendored wheel: $(basename "$VENDOR_WHEEL")"
   sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install "gaia-catalog<1.0" \
@@ -212,9 +216,9 @@ elif [ -n "$LOCAL_WHEELS_DIR" ]; then
     --find-links "$LOCAL_WHEELS_DIR" --no-index tetra3rs \
     || FAIL "tetra3rs wheel install failed"
 else
-  LOG "Installing tetra3rs from PyPI"
+  LOG "Installing tetra3rs from PyPI (non-fatal if unavailable)"
   sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install tetra3rs \
-    || WARN "tetra3rs install failed; tetra backend will be unavailable (non-fatal)"
+    || WARN "tetra3rs install failed; tetra backend will be unavailable"
 fi
 
 sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/python" -c "
