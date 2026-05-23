@@ -1,28 +1,12 @@
 """
-eFinder web UI.
+eFinder web UI — combo branch.
 
-Bound to port 80 on all interfaces. No authentication: the eFinder
-operates on a private network (either the user's home Wi-Fi or its
-own hotspot), and the maintenance Unix socket is the trust boundary
-that already exists. If the eFinder is exposed to the public internet,
-the user has bigger problems than the web UI lacking auth.
+Adds two new endpoints on top of the standard web UI:
+  POST /backend/set    {backend: cedar|tetra}   — switch solver backend
+  POST /testmode/set   {enabled: true|false}     — switch camera mode
 
-The web UI is a thin client of the maintenance socket. It does not
-hold any state of its own; every render is a fresh maint-socket call.
-This keeps deployment simple (Flask can crash and restart without
-losing eFinder state) and makes the same UI work whether you've
-restarted Flask or the eFinder itself.
-
-Pages:
-  /              dashboard (auto-refreshing status, key actions)
-  /camera        live view, exposure/gain, solver parameters
-  /polar         polar alignment workflow (multi-step)
-  /config        view current configuration
-  /logs          last N lines of journalctl
-  /update        trigger efinder-update
-
-The Flask templates live in webui/templates/; static assets in
-webui/static/.
+The dashboard shows toggle buttons for both controls and updates their
+state via the existing /api/status polling loop.
 """
 
 import io
@@ -39,7 +23,6 @@ from flask import (
     Flask, render_template, redirect, url_for, request, jsonify, abort,
 )
 
-# Path setup so we can import efinder.maint
 sys.path.insert(0, "/opt/efinder")
 try:
     from efinder.maint import call as maint_call, MaintResponse
@@ -53,55 +36,46 @@ app = Flask(__name__,
             template_folder="templates",
             static_folder="static")
 
-app.jinja_env.filters['log10'] = lambda x: math.log10(float(x)) if float(x) > 0 else -3
+app.jinja_env.filters['log10'] = \
+    lambda x: math.log10(float(x)) if float(x) > 0 else -3
 
-
-# ---------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------
 
 def _safe_call(cmd, args=None, timeout=15.0):
-    """Wrap maint_call with an error-friendly fallback. The dashboard
-    must keep rendering even if the daemon is down or restarting.
-    """
     try:
         return maint_call(cmd, args, timeout=timeout)
     except FileNotFoundError:
-        return MaintResponse(ok=False, error="eFinder daemon socket not found "
-                                              "(service may be stopped or restarting)")
+        return MaintResponse(ok=False, error="eFinder daemon socket not found")
     except PermissionError:
-        return MaintResponse(ok=False, error="cannot access eFinder socket "
-                                              "(check group membership)")
+        return MaintResponse(ok=False, error="cannot access eFinder socket")
     except Exception as e:
         return MaintResponse(ok=False, error=f"{type(e).__name__}: {e}")
 
 
 def _format_solution(sol):
-    """Pretty form of latest_solution for the dashboard."""
     if not sol:
         return None
     if not sol.get("solved"):
         return {
             "solved": False,
-            "stars": sol.get("stars", 0),
-            "peak": sol.get("peak", 0),
-            "noise": sol.get("noise", 0.0),
+            "stars":  sol.get("stars", 0),
+            "peak":   sol.get("peak",  0),
+            "noise":  sol.get("noise", 0.0),
             "status": sol.get("status", 0),
         }
     ra_h = sol["ra_deg"] / 15.0
     return {
-        "solved": True,
-        "ra_str": _hms(ra_h),
-        "dec_str": _dms(sol["dec_deg"]),
-        "ra_deg": sol["ra_deg"],
-        "dec_deg": sol["dec_deg"],
-        "fov_deg": sol.get("fov_deg", 0.0),
-        "roll_deg": sol.get("roll_deg", 0.0),
-        "stars": sol["stars"],
-        "matches": sol.get("matches", 0),
-        "peak": sol["peak"],
-        "noise": sol.get("noise", 0.0),
-        "solve_ms": sol["solve_ms"],
+        "solved":    True,
+        "ra_str":    _hms(ra_h),
+        "dec_str":   _dms(sol["dec_deg"]),
+        "ra_deg":    sol["ra_deg"],
+        "dec_deg":   sol["dec_deg"],
+        "fov_deg":   sol.get("fov_deg",  0.0),
+        "roll_deg":  sol.get("roll_deg", 0.0),
+        "stars":     sol["stars"],
+        "matches":   sol.get("matches", 0),
+        "peak":      sol["peak"],
+        "noise":     sol.get("noise", 0.0),
+        "solve_ms":  sol["solve_ms"],
     }
 
 
@@ -121,17 +95,13 @@ def _dms(deg):
     s = int(round((a - d - m / 60) * 3600))
     if s == 60: s = 0; m += 1
     if m == 60: m = 0; d += 1
-    return f"{sign}{d:02d}°{m:02d}'{s:02d}\""
+    return f"{sign}{d:02d}°{m:02d}'{s:02d}\""  # noqa: Q000
 
-
-# ---------------------------------------------------------------------
-# Dashboard
-# ---------------------------------------------------------------------
 
 @app.route("/")
 def dashboard():
     status = _safe_call("status")
-    cal = _safe_call("calibration_status")
+    cal    = _safe_call("calibration_status")
 
     sol = (_format_solution(status.result["solution"])
            if status.ok and status.result else None)
@@ -150,23 +120,26 @@ def dashboard():
         cal_error=cal.error if not cal.ok else None,
         committed_focus=committed_focus,
         imu=(status.result.get("imu") if status.ok else None),
+        solver_backend=(
+            status.result.get("solver_backend", "cedar")
+            if status.ok else "cedar"),
+        test_mode=(
+            status.result.get("test_mode", True)
+            if status.ok else True),
     )
 
 
 @app.route("/api/status")
 def api_status():
-    """JSON endpoint for the dashboard's auto-refresh."""
     status = _safe_call("status")
-    cal = _safe_call("calibration_status")
+    cal    = _safe_call("calibration_status")
     return jsonify({
-        "status":      {"ok": status.ok, "result": status.result, "error": status.error},
-        "calibration": {"ok": cal.ok,    "result": cal.result,    "error": cal.error},
+        "status":      {"ok": status.ok, "result": status.result,
+                        "error": status.error},
+        "calibration": {"ok": cal.ok,    "result": cal.result,
+                        "error": cal.error},
     })
 
-
-# ---------------------------------------------------------------------
-# Boresight
-# ---------------------------------------------------------------------
 
 @app.route("/boresight/center", methods=["POST"])
 def boresight_center():
@@ -176,9 +149,30 @@ def boresight_center():
     return redirect(url_for("dashboard"))
 
 
-# ---------------------------------------------------------------------
-# Polar alignment
-# ---------------------------------------------------------------------
+# ---- Combo toggles ----------------------------------------------------------
+
+@app.route("/backend/set", methods=["POST"])
+def backend_set():
+    backend = request.form.get("backend", "").strip()
+    if backend not in ("cedar", "tetra"):
+        return "backend must be 'cedar' or 'tetra'", 400
+    r = _safe_call("set_backend", {"backend": backend})
+    if not r.ok:
+        return r.error, 500
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/testmode/set", methods=["POST"])
+def testmode_set():
+    raw     = request.form.get("enabled", "false").strip().lower()
+    enabled = raw in ("true", "1", "yes")
+    r = _safe_call("set_test_mode", {"enabled": enabled})
+    if not r.ok:
+        return r.error, 500
+    return redirect(url_for("dashboard"))
+
+
+# ---- Polar alignment --------------------------------------------------------
 
 @app.route("/polar")
 def polar_page():
@@ -222,10 +216,6 @@ def polar_set_latitude():
     return redirect(url_for("polar_page"))
 
 
-# ---------------------------------------------------------------------
-# Calibration
-# ---------------------------------------------------------------------
-
 @app.route("/calibration/reset", methods=["POST"])
 def calibration_reset():
     r = _safe_call("calibration_reset")
@@ -234,13 +224,9 @@ def calibration_reset():
     return redirect(url_for("dashboard"))
 
 
-# ---------------------------------------------------------------------
-# Exposure
-# ---------------------------------------------------------------------
-
 @app.route("/camera")
 def camera_page():
-    exposure = _safe_call("exposure_get")
+    exposure      = _safe_call("exposure_get")
     solver_params = _safe_call("solver_params_get")
     return render_template(
         "camera.html",
@@ -272,11 +258,7 @@ def exposure_set():
 
 @app.route("/api/camera/set", methods=["POST"])
 def api_camera_set():
-    """JSON endpoint for the camera page's live slider auto-apply.
-    Accepts any subset of: exposure_s, gain, detect_sigma, solve_timeout_ms.
-    Never persists to config — use the form's Apply button for that.
-    """
-    data = request.get_json(silent=True) or {}
+    data   = request.get_json(silent=True) or {}
     errors = []
     applied = {}
     if "exposure_s" in data:
@@ -300,21 +282,21 @@ def api_camera_set():
         except (ValueError, TypeError) as e:
             errors.append(f"gain invalid: {e}")
     if "detect_sigma" in data or "solve_timeout_ms" in data:
-        args = {"persist": False}
+        pargs = {"persist": False}
         if "detect_sigma" in data:
             try:
-                args["detect_sigma"] = float(data["detect_sigma"])
+                pargs["detect_sigma"] = float(data["detect_sigma"])
             except (ValueError, TypeError) as e:
                 errors.append(f"detect_sigma invalid: {e}")
         if "solve_timeout_ms" in data:
             try:
-                args["solve_timeout_ms"] = int(data["solve_timeout_ms"])
+                pargs["solve_timeout_ms"] = int(data["solve_timeout_ms"])
             except (ValueError, TypeError) as e:
                 errors.append(f"solve_timeout_ms invalid: {e}")
-        if len(args) > 1:  # at least one valid param beyond persist
-            r = _safe_call("solver_params_set", args)
+        if len(pargs) > 1:
+            r = _safe_call("solver_params_set", pargs)
             if r.ok:
-                applied.update({k: v for k, v in args.items() if k != "persist"})
+                applied.update({k: v for k, v in pargs.items() if k != "persist"})
             else:
                 errors.append(f"solver_params: {r.error}")
     if errors:
@@ -325,30 +307,28 @@ def api_camera_set():
 @app.route("/solver/params/set", methods=["POST"])
 def solver_params_set():
     persist = request.form.get("persist") == "on"
-    args = {"persist": persist}
+    pargs   = {"persist": persist}
     if request.form.get("detect_sigma"):
         try:
-            args["detect_sigma"] = float(request.form["detect_sigma"])
+            pargs["detect_sigma"] = float(request.form["detect_sigma"])
         except ValueError:
             return "detect_sigma must be numeric", 400
     if request.form.get("solve_timeout_ms"):
         try:
-            args["solve_timeout_ms"] = int(request.form["solve_timeout_ms"])
+            pargs["solve_timeout_ms"] = int(request.form["solve_timeout_ms"])
         except ValueError:
             return "solve_timeout_ms must be integer", 400
-    r = _safe_call("solver_params_set", args)
+    r = _safe_call("solver_params_set", pargs)
     if not r.ok:
         return r.error, 400
     return redirect(url_for("camera_page"))
 
 
-# ---------------------------------------------------------------------
-# Wi-Fi management
-# ---------------------------------------------------------------------
+# ---- Wi-Fi ------------------------------------------------------------------
 
 def _get_wifi_status():
-    """Return a dict describing the current wlan0 connection state."""
-    result = {"mode": "disconnected", "ssid": None, "connection": None, "ip": None}
+    result = {"mode": "disconnected", "ssid": None, "connection": None,
+              "ip": None}
     try:
         active = subprocess.check_output(
             ["nmcli", "-t", "-f", "NAME,DEVICE", "con", "show", "--active"],
@@ -362,8 +342,8 @@ def _get_wifi_status():
                 result["mode"] = "ap" if wlan_con == "efinder-ap" else "station"
                 try:
                     ssid_out = subprocess.check_output(
-                        ["nmcli", "-t", "-s", "-f", "802-11-wireless.ssid",
-                         "con", "show", wlan_con],
+                        ["nmcli", "-t", "-s", "-f",
+                         "802-11-wireless.ssid", "con", "show", wlan_con],
                         text=True, errors="replace", timeout=3,
                     )
                     m = _re.search(r"802-11-wireless\.ssid:(.*)", ssid_out)
@@ -387,18 +367,17 @@ def _get_wifi_status():
 
 
 def _scan_networks():
-    """Return list of visible SSIDs sorted by signal strength (NM cache, no rescan)."""
     try:
         out = subprocess.check_output(
             ["nmcli", "-t", "-f", "SSID,SIGNAL",
              "dev", "wifi", "list", "--rescan", "no"],
             text=True, errors="replace", timeout=5,
         )
-        seen = set()
+        seen     = set()
         networks = []
         for line in out.splitlines():
-            parts = line.split(":")
-            ssid = parts[0].strip() if parts else ""
+            parts  = line.split(":")
+            ssid   = parts[0].strip() if parts else ""
             try:
                 signal = int(parts[1].strip()) if len(parts) > 1 else 0
             except ValueError:
@@ -412,13 +391,13 @@ def _scan_networks():
         return []
 
 
-_wifi_lock = threading.Lock()
+_wifi_lock         = threading.Lock()
 _wifi_connect_proc = None
 
 
 @app.route("/wifi")
 def wifi_page():
-    status = _get_wifi_status()
+    status   = _get_wifi_status()
     networks = _scan_networks()
     return render_template("wifi.html", status=status, networks=networks)
 
@@ -426,10 +405,8 @@ def wifi_page():
 @app.route("/wifi/ap", methods=["POST"])
 def wifi_ap():
     try:
-        subprocess.run(
-            ["sudo", "/usr/local/bin/ap.sh"],
-            timeout=30, capture_output=True,
-        )
+        subprocess.run(["sudo", "/usr/local/bin/ap.sh"],
+                       timeout=30, capture_output=True)
     except Exception:
         pass
     return redirect(url_for("wifi_page"))
@@ -438,7 +415,7 @@ def wifi_ap():
 @app.route("/wifi/station", methods=["POST"])
 def wifi_station():
     global _wifi_connect_proc
-    ssid = request.form.get("ssid", "").strip()
+    ssid     = request.form.get("ssid",     "").strip()
     password = request.form.get("password", "").strip()
     if not ssid:
         return "SSID required", 400
@@ -468,18 +445,14 @@ def api_wifi_status():
 @app.route("/api/wifi/scan")
 def api_wifi_scan():
     try:
-        subprocess.run(
-            ["nmcli", "dev", "wifi", "rescan"],
-            timeout=10, capture_output=True,
-        )
+        subprocess.run(["nmcli", "dev", "wifi", "rescan"],
+                       timeout=10, capture_output=True)
     except Exception:
         pass
     return jsonify({"networks": _scan_networks()})
 
 
-# ---------------------------------------------------------------------
-# Logs
-# ---------------------------------------------------------------------
+# ---- Logs -------------------------------------------------------------------
 
 @app.route("/logs")
 def logs():
@@ -503,18 +476,11 @@ def logs():
     return render_template("logs.html", logs=out, n=n)
 
 
-# ---------------------------------------------------------------------
-# Update
-# ---------------------------------------------------------------------
+# ---- Update -----------------------------------------------------------------
 
 @app.route("/update", methods=["GET", "POST"])
 def update_page():
     if request.method == "POST":
-        # Fire-and-forget; the user will see the new version after the
-        # service restarts. We don't block on this -- efinder-update
-        # restarts the service which will momentarily bring this Flask
-        # app down (since they share systemd lifecycle? No, Flask is its
-        # own service). Either way, fire and redirect.
         try:
             subprocess.Popen(
                 ["sudo", "/usr/local/bin/efinder-update"],
@@ -527,13 +493,12 @@ def update_page():
     version = _safe_call("version")
     return render_template(
         "update.html",
-        version=(version.result.get("version") if version.ok else "unknown"),
+        version=(
+            version.result.get("version") if version.ok else "unknown"),
     )
 
 
-# ---------------------------------------------------------------------
-# Config view (read-only for v1)
-# ---------------------------------------------------------------------
+# ---- Config view ------------------------------------------------------------
 
 CONFIG_PATH = os.environ.get("EFINDER_CONFIG", "/etc/efinder/efinder.conf")
 
@@ -545,25 +510,13 @@ def config_page():
             content = f.read()
     except Exception as e:
         content = f"Error reading {CONFIG_PATH}: {e}"
-    return render_template("config.html",
-                           path=CONFIG_PATH, content=content)
+    return render_template("config.html", path=CONFIG_PATH, content=content)
 
 
-# ---------------------------------------------------------------------
-# Live frame view
-# ---------------------------------------------------------------------
+# ---- Live frame view --------------------------------------------------------
 
 @app.route("/frame.jpg")
 def frame_jpg():
-    """Current camera frame as JPEG with a red boresight circle overlaid.
-
-    Reads directly from the eFinder's shared-memory triple buffer (the
-    same /dev/shm segments that camera_proc writes and solver_proc reads).
-    No round-trip through the daemon is needed for the pixel data; only
-    the boresight coordinates come from the maintenance socket.
-
-    Returns 503 if the eFinder daemon is not running (SHM not present).
-    """
     import numpy as np
     from multiprocessing import shared_memory
     from PIL import Image, ImageDraw
@@ -575,19 +528,16 @@ def frame_jpg():
     except Exception:
         width, height = 960, 760
 
-    # Boresight from the live daemon (may differ from config if recently aligned).
     bs_r = _safe_call("status")
-    bs = bs_r.result.get("boresight") if bs_r.ok and bs_r.result else None
-    cx = int(round(bs["x"])) if bs else width // 2
-    cy = int(round(bs["y"])) if bs else height // 2
+    bs   = bs_r.result.get("boresight") if bs_r.ok and bs_r.result else None
+    cx   = int(round(bs["x"])) if bs else width  // 2
+    cy   = int(round(bs["y"])) if bs else height // 2
 
-    # Read from the first accessible SHM slot.  We .copy() immediately so
-    # the buffer is detached before the camera can overwrite it.
     from efinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
     frame = None
     for i in range(NUM_BUFFERS):
         try:
-            shm = shared_memory.SharedMemory(name=f"{SHM_PREFIX}_{i}")
+            shm   = shared_memory.SharedMemory(name=f"{SHM_PREFIX}_{i}")
             frame = np.ndarray(
                 (height, width), dtype=np.uint8, buffer=shm.buf,
             ).copy()
@@ -599,11 +549,6 @@ def frame_jpg():
     if frame is None:
         return "camera not running", 503, {"Content-Type": "text/plain"}
 
-    # Auto-stretch: clip to the 1st-99th percentile range and rescale to
-    # 0-255.  This ensures stars are always visible regardless of exposure
-    # or sky conditions, matching the behaviour users expect from a live
-    # astronomy view.  A small guard keeps a flat/dark frame from producing
-    # divide-by-zero or pure-noise output.
     lo = float(np.percentile(frame, 1))
     hi = float(np.percentile(frame, 99))
     if hi - lo >= 4:
@@ -612,45 +557,41 @@ def frame_jpg():
             0, 255,
         ).astype(np.uint8)
     else:
-        stretched = frame  # image is essentially blank; show as-is
+        stretched = frame
 
-    img = Image.fromarray(stretched, mode="L").convert("RGB")
+    img  = Image.fromarray(stretched, mode="L").convert("RGB")
     draw = ImageDraw.Draw(img)
-
-    r = 28  # circle radius in pixels (~6 % of frame width)
+    r    = 28
     draw.ellipse([cx - r, cy - r, cx + r, cy + r],
                  outline=(220, 0, 0), width=2)
-    # Short tick marks extending outward from the circle
     gap = 6
-    draw.line([cx - r - gap, cy, cx - r - 1, cy], fill=(220, 0, 0), width=1)
-    draw.line([cx + r + 1, cy, cx + r + gap, cy], fill=(220, 0, 0), width=1)
-    draw.line([cx, cy - r - gap, cx, cy - r - 1], fill=(220, 0, 0), width=1)
-    draw.line([cx, cy + r + 1, cx, cy + r + gap], fill=(220, 0, 0), width=1)
+    draw.line([cx - r - gap, cy, cx - r - 1, cy],   fill=(220, 0, 0), width=1)
+    draw.line([cx + r + 1,   cy, cx + r + gap, cy],  fill=(220, 0, 0), width=1)
+    draw.line([cx, cy - r - gap, cx, cy - r - 1],   fill=(220, 0, 0), width=1)
+    draw.line([cx, cy + r + 1,   cx, cy + r + gap],  fill=(220, 0, 0), width=1)
 
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=70)
     buf.seek(0)
     return (
         buf.read(), 200,
-        {"Content-Type": "image/jpeg", "Cache-Control": "no-store, no-cache"},
+        {"Content-Type": "image/jpeg",
+         "Cache-Control": "no-store, no-cache"},
     )
 
 
-# ---------------------------------------------------------------------
-# Focus
-# ---------------------------------------------------------------------
+# ---- Focus ------------------------------------------------------------------
 
-_focus_lock = threading.Lock()
+_focus_lock  = threading.Lock()
 _focus_state = {
-    "score":           None,   # latest computed score
-    "session_max":     None,   # highest score seen this session
-    "committed_score": None,   # score saved by "Set Focus"
-    "cx": None, "cy": None,    # patch centre in full frame
+    "score":           None,
+    "session_max":     None,
+    "committed_score": None,
+    "cx": None, "cy": None,
 }
 
 
 def _read_focus_data():
-    """Read current frame from SHM, find brightest pixel, return patch + score."""
     import numpy as np
     from multiprocessing import shared_memory
     from scipy.ndimage import laplace as nd_laplace
@@ -667,7 +608,7 @@ def _read_focus_data():
     frame = None
     for i in range(NUM_BUFFERS):
         try:
-            shm = shared_memory.SharedMemory(name=f"{SHM_PREFIX}_{i}")
+            shm   = shared_memory.SharedMemory(name=f"{SHM_PREFIX}_{i}")
             frame = np.ndarray((height, width), dtype=np.uint8,
                                buffer=shm.buf).copy()
             shm.close()
@@ -678,20 +619,16 @@ def _read_focus_data():
     if frame is None:
         return None
 
-    # Find brightest pixel as patch centre, avoiding edges
-    HALF = 30
+    HALF   = 30
     search = frame[HALF:height - HALF, HALF:width - HALF]
-    idx = np.unravel_index(search.argmax(), search.shape)
-    cy = int(idx[0]) + HALF
-    cx = int(idx[1]) + HALF
+    idx    = np.unravel_index(search.argmax(), search.shape)
+    cy     = int(idx[0]) + HALF
+    cx     = int(idx[1]) + HALF
+    patch  = frame[cy - HALF:cy + HALF, cx - HALF:cx + HALF].astype(np.float32)
+    score  = float(nd_laplace(patch).var())
 
-    patch = frame[cy - HALF:cy + HALF, cx - HALF:cx + HALF].astype(np.float32)
-
-    # Laplacian variance — higher = sharper
-    score = float(nd_laplace(patch).var())
-
-    # Scale patch up 4x with nearest-neighbour for visibility, then JPEG-encode
-    patch_img = Image.fromarray(patch.clip(0, 255).astype(np.uint8), mode="L")
+    patch_img = Image.fromarray(
+        patch.clip(0, 255).astype(np.uint8), mode="L")
     patch_img = patch_img.resize(
         (patch_img.width * 4, patch_img.height * 4),
         resample=Image.NEAREST,
@@ -700,7 +637,8 @@ def _read_focus_data():
     patch_img.save(buf, format="JPEG", quality=85)
     patch_bytes = buf.getvalue()
 
-    return {"score": score, "cx": cx, "cy": cy, "patch_bytes": patch_bytes}
+    return {"score": score, "cx": cx, "cy": cy,
+            "patch_bytes": patch_bytes}
 
 
 @app.route("/focus")
@@ -718,8 +656,8 @@ def api_focus():
     score = data["score"]
     with _focus_lock:
         _focus_state["score"] = score
-        _focus_state["cx"] = data["cx"]
-        _focus_state["cy"] = data["cy"]
+        _focus_state["cx"]    = data["cx"]
+        _focus_state["cy"]    = data["cy"]
         _focus_state["patch_bytes"] = data["patch_bytes"]
         prev_max = _focus_state["session_max"]
         if prev_max is None or score > prev_max:
@@ -738,7 +676,6 @@ def focus_patch_jpg():
     with _focus_lock:
         patch_bytes = _focus_state.get("patch_bytes")
     if patch_bytes is None:
-        # Trigger a fresh read
         data = _read_focus_data()
         if data is None:
             return "camera not running", 503
@@ -746,7 +683,8 @@ def focus_patch_jpg():
         with _focus_lock:
             _focus_state["patch_bytes"] = patch_bytes
     return (patch_bytes, 200,
-            {"Content-Type": "image/jpeg", "Cache-Control": "no-store, no-cache"})
+            {"Content-Type": "image/jpeg",
+             "Cache-Control": "no-store, no-cache"})
 
 
 @app.route("/focus/commit", methods=["POST"])
@@ -763,9 +701,7 @@ def focus_reset():
     return ("", 204)
 
 
-# ---------------------------------------------------------------------
-# Health
-# ---------------------------------------------------------------------
+# ---- Health -----------------------------------------------------------------
 
 @app.route("/healthz")
 def healthz():

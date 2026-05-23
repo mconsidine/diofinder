@@ -12,7 +12,7 @@
   <div class="card">
     <h2>Camera</h2>
     <p class="hint">Live view, exposure, gain, and solver parameters.</p>
-    <a href="{{ url_for('camera_page') }}" class="btn" style="display:inline-block;margin-top:4px;">Open Camera →</a>
+    <a href="{{ url_for('camera_page') }}" class="btn" style="display:inline-block;margin-top:4px;">Open Camera &rarr;</a>
   </div>
 
   <div class="card" id="solution-card">
@@ -46,9 +46,9 @@
     <h2>Focus</h2>
     {% if committed_focus is not none %}
       <div class="focus-score-sm">{{ "%.1f"|format(committed_focus) }}</div>
-      <p class="hint">Score at last focus set. <a href="{{ url_for('focus_page') }}">Refocus →</a></p>
+      <p class="hint">Score at last focus set. <a href="{{ url_for('focus_page') }}">Refocus &rarr;</a></p>
     {% else %}
-      <p class="muted">Not set. <a href="{{ url_for('focus_page') }}" style="color:#ff5500;">Focus →</a></p>
+      <p class="muted">Not set. <a href="{{ url_for('focus_page') }}" style="color:#ff5500;">Focus &rarr;</a></p>
     {% endif %}
   </div>
 
@@ -69,7 +69,7 @@
         {% endif %}
       </dl>
       <form method="post" action="{{ url_for('calibration_reset') }}"
-            onsubmit="return confirm('Reset FOV calibration? You\\'ll lose the converged value and the next ~30 solves will recalibrate.');">
+            onsubmit="return confirm('Reset FOV calibration?');">
         <button type="submit" class="btn btn-warning">Recalibrate</button>
       </form>
     {% else %}
@@ -88,16 +88,16 @@
     <form method="post" action="{{ url_for('boresight_center') }}">
       <button type="submit" class="btn">Reset to center</button>
     </form>
-    <p class="hint">Use SkySafari "Align" on a known star for normal alignment.</p>
+    <p class="hint">Use SkySafari &ldquo;Align&rdquo; on a known star for normal alignment.</p>
   </div>
 
   <div class="card" id="imu-card">
     <h2>IMU</h2>
     {% if imu and imu.available %}
       {% if imu.active %}
-        <p style="color:#ff5500; font-weight:500;">Active — smoothing SkySafari updates</p>
+        <p style="color:#ff5500; font-weight:500;">Active &mdash; smoothing SkySafari updates</p>
       {% else %}
-        <p class="hint">Detected — calibrating&hellip;</p>
+        <p class="hint">Detected &mdash; calibrating&hellip;</p>
       {% endif %}
       <dl class="stats">
         <dt>Solves</dt>
@@ -111,10 +111,42 @@
       <p class="muted" id="imu-state">Not detected</p>
       <p class="hint">
         Wire a BNO055 to I&sup2;C (GPIO&nbsp;2/3) for smoothed pointing
-        between plate-solves.  Activates automatically when detected.
+        between plate-solves.
       </p>
     {% endif %}
   </div>
+
+  {# ---- Combo: backend / mode toggles ---- #}
+  <div class="card" id="combo-card">
+    <h2>Backend / Mode</h2>
+    <div style="margin-bottom:10px;">
+      <span class="label">Solver:</span>
+      <form method="post" action="{{ url_for('backend_set') }}" style="display:inline;margin-left:6px;">
+        <input type="hidden" name="backend" value="cedar">
+        <button type="submit" id="btn-cedar" class="btn"
+                style="{{ 'background:#ff5500;color:#fff;' if solver_backend == 'cedar' else '' }}">Cedar</button>
+      </form>
+      <form method="post" action="{{ url_for('backend_set') }}" style="display:inline;margin-left:4px;">
+        <input type="hidden" name="backend" value="tetra">
+        <button type="submit" id="btn-tetra" class="btn"
+                style="{{ 'background:#ff5500;color:#fff;' if solver_backend == 'tetra' else '' }}">Tetra3rs</button>
+      </form>
+    </div>
+    <div>
+      <span class="label">Camera:</span>
+      <form method="post" action="{{ url_for('testmode_set') }}" style="display:inline;margin-left:6px;">
+        <input type="hidden" name="enabled" value="true">
+        <button type="submit" id="btn-test" class="btn"
+                style="{{ 'background:#ff5500;color:#fff;' if test_mode else '' }}">Test</button>
+      </form>
+      <form method="post" action="{{ url_for('testmode_set') }}" style="display:inline;margin-left:4px;">
+        <input type="hidden" name="enabled" value="false">
+        <button type="submit" id="btn-live" class="btn"
+                style="{{ 'background:#ff5500;color:#fff;' if not test_mode else '' }}">Live</button>
+      </form>
+    </div>
+  </div>
+
 </section>
 
 <script>
@@ -137,9 +169,9 @@ async function refresh() {
       const peak = document.getElementById('peak');
       if (peak) peak.textContent = sol.peak;
       const fov = document.getElementById('fov');
-      if (fov) fov.textContent = sol.fov_deg.toFixed(3) + '\u00b0';
+      if (fov) fov.textContent = sol.fov_deg.toFixed(3) + '°';
       const roll = document.getElementById('roll');
-      if (roll) roll.textContent = (sol.roll_deg || 0).toFixed(1) + '\u00b0';
+      if (roll) roll.textContent = (sol.roll_deg || 0).toFixed(1) + '°';
     } else {
       const ns = document.getElementById('not-solved');
       if (ns) {
@@ -153,7 +185,7 @@ async function refresh() {
         }
       }
     }
-    // IMU status
+    // IMU
     const imu = data.status.result.imu;
     if (imu) {
       const nEl = document.getElementById('imu-n');
@@ -165,6 +197,20 @@ async function refresh() {
                                 : imu.active     ? 'active'
                                 :                  'calibrating';
     }
+    // Backend / mode toggles
+    const backend  = data.status.result.solver_backend || 'cedar';
+    const testMode = !!data.status.result.test_mode;
+    const ACTIVE = 'background:#ff5500;color:#fff;';
+    ['cedar','tetra'].forEach(b => {
+      const el = document.getElementById('btn-' + b);
+      if (el) el.style.cssText = (b === backend) ? ACTIVE : '';
+    });
+    ['test','live'].forEach(m => {
+      const el = document.getElementById('btn-' + m);
+      if (!el) return;
+      const isActive = (m === 'test') ? testMode : !testMode;
+      el.style.cssText = isActive ? ACTIVE : '';
+    });
   } catch (e) {
     console.error(e);
   }
@@ -184,10 +230,9 @@ function formatDMS(d) {
   const m = (a - D) * 60;
   const M = Math.floor(m);
   const S = Math.round((m - M) * 60);
-  return `${sign}${String(D).padStart(2,'0')}\u00b0${String(M).padStart(2,'0')}'${String(S).padStart(2,'0')}"`;
+  return `${sign}${String(D).padStart(2,'0')}°${String(M).padStart(2,'0')}'${String(S).padStart(2,'0')}"`;
 }
 setInterval(refresh, 1500);
-
 </script>
 
 {% endif %}

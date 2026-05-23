@@ -1,8 +1,11 @@
 [Unit]
-Description=eFinder plate-solving telescope finder
+Description=eFinder plate-solving telescope finder (combo: cedar+tetra3rs)
 Documentation=https://github.com/mconsidine/eFinder_cli
 After=cedar-detect.service network.target
-Requires=cedar-detect.service
+# Wants (not Requires): efinder starts even if cedar-detect is absent.
+# The cedar backend will fail per-solve until cedar-detect is running;
+# the tetra backend works without it entirely.
+Wants=cedar-detect.service
 
 [Service]
 Type=simple
@@ -13,39 +16,18 @@ Environment=PYTHONUNBUFFERED=1
 Environment=EFINDER_CONFIG=/etc/efinder/efinder.conf
 
 # Create /run/efinder owned by efinder:efinder for the maintenance
-# Unix socket. Mode 0750 on the directory; the socket itself gets
-# chmod 0660 by the comms process. Group members can connect.
+# Unix socket.
 RuntimeDirectory=efinder
 RuntimeDirectoryMode=0750
 
-# Use the venv's interpreter so picamera2/cedar-solve are on the path
 ExecStart=/opt/efinder/venv/bin/python -m efinder.efinder_main
 
 Restart=on-failure
 RestartSec=5
 
-# The main process spawns three children and pins them itself via
-# os.sched_setaffinity. We don't set CPUAffinity at the unit level
-# because that would constrain ALL children to a single mask.
-
-# Hardening (loose -- the application talks to a camera and binds a port)
 NoNewPrivileges=true
 ProtectSystem=full
 ReadWritePaths=/var/lib/efinder /etc/efinder /run/efinder
-
-# Wait for cedar-detect gRPC TCP port before spawning workers.
-ExecStartPre=/bin/bash -c '\
-  for i in $(seq 1 150); do \
-    if ! systemctl is-active --quiet cedar-detect.service; then \
-      echo "cedar-detect.service is not active; aborting wait"; \
-      systemctl status cedar-detect.service --no-pager -n 20; \
-      exit 1; \
-    fi; \
-    ss -tlnp | grep -q 127.0.0.1:50051 && exit 0; \
-    sleep 0.2; \
-  done; \
-  echo "Timed out waiting for cedar-detect port 50051"; \
-  exit 1'
 
 [Install]
 WantedBy=multi-user.target
