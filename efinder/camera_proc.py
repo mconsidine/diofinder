@@ -1,14 +1,17 @@
 """
-Camera worker process.
+Camera worker process — combo branch.
 
-Runs the picamera2 capture loop and writes each frame into a
-shared-memory buffer obtained from FrameSlots. Pinned to its dedicated
-CPU before importing picamera2 so libcamera helper threads inherit
-the affinity mask.
+Unified loop that supports runtime switching between test mode (static
+test image at ~5 fps) and live mode (picamera2). The active mode is
+read from shared_cfg["test_mode"] on every iteration.
 
-The picamera2 wiring assumes an Arducam 12 MP IMX477-class sensor
-configured for an 8-bit Y plane via YUV420 (this is the recommended
-path for monochrome capture from a color sensor on the Pi).
+Behaviour:
+  * Defaults to test mode if a test image was provided at startup.
+  * Lazily initialises picamera2 the first time live mode is requested.
+  * If picamera2 fails to initialise, reverts to test mode automatically
+    and logs an error.
+  * Camera commands (exposure/gain) are accepted in both modes; in test
+    mode they update the stored state but don’t touch hardware.
 """
 
 import logging
@@ -42,10 +45,8 @@ def _drain_cmd_queue(q):
 
 
 def _handle_camera_cmd(cmd, cam, current_state):
-    """Dispatch a CameraCmd. Returns a CameraCmdReply.
-
-    current_state is a mutable dict tracking exposure/gain so 'get'
-    commands don't need to interrogate picamera2 directly.
+    """Dispatch a CameraCmd. cam may be None (test mode); hardware ops are
+    skipped when cam is None but state is still updated.
     """
     from efinder.worker_cmds import (
         CameraCmdReply,
@@ -63,15 +64,17 @@ def _handle_camera_cmd(cmd, cam, current_state):
                 return CameraCmdReply(
                     request_id=cmd.request_id, ok=False,
                     error=f"exposure_s {new_s} out of range [0.001, 10.0]")
-            cam.set_controls({
-                "ExposureTime": int(new_s * 1_000_000),
-                "FrameDurationLimits": (
-                    int(new_s * 1_000_000),
-                    1_000_000_000,
-                ),
-            })
+            if cam is not None:
+                cam.set_controls({
+                    "ExposureTime": int(new_s * 1_000_000),
+                    "FrameDurationLimits": (
+                        int(new_s * 1_000_000),
+                        1_000_000_000,
+                    ),
+                })
             current_state["exposure_s"] = new_s
-            log.info("exposure -> %.3fs", new_s)
+            log.info("exposure -> %.3fs%s", new_s,
+                     "" if cam is not None else " (test mode, stored only)")
             return CameraCmdReply(
                 request_id=cmd.request_id, ok=True,
                 result={"exposure_s": new_s})
@@ -81,9 +84,11 @@ def _handle_camera_cmd(cmd, cam, current_state):
                 return CameraCmdReply(
                     request_id=cmd.request_id, ok=False,
                     error=f"gain {new_g} out of range [1.0, 64.0]")
-            cam.set_controls({"AnalogueGain": new_g})
+            if cam is not None:
+                cam.set_controls({"AnalogueGain": new_g})
             current_state["gain"] = new_g
-            log.info("gain -> %.1f", new_g)
+            log.info("gain -> %.1f%s", new_g,
+                     "" if cam is not None else " (test mode, stored only)")
             return CameraCmdReply(
                 request_id=cmd.request_id, ok=True,
                 result={"gain": new_g})
@@ -111,111 +116,20 @@ def _load_test_image(path, frame_height, frame_width):
     return np.array(img, dtype=np.uint8)
 
 
-def _run_test_camera(test_frame, slots, camera_cmd_q, camera_cmd_reply_q, cfg):
-    """Publish a static test frame repeatedly at ~5 fps, mimicking the real loop."""
-    from efinder.worker_cmds import (
-        CameraCmdReply,
-        CAMERA_OP_GET_EXPOSURE, CAMERA_OP_SET_EXPOSURE, CAMERA_OP_SET_GAIN,
-    )
-
-    shms = [shared_memory.SharedMemory(name=f"{SHM_PREFIX}_{i}")
-            for i in range(NUM_BUFFERS)]
-    bufs = [np.ndarray((cfg.frame_height, cfg.frame_width), dtype=np.uint8,
-                        buffer=s.buf) for s in shms]
-
-    current_state = {"exposure_s": cfg.exposure_s, "gain": cfg.gain}
-    frame_count = 0
-    last_log = time.monotonic()
-
-    try:
-        while True:
-            for cmd in _drain_cmd_queue(camera_cmd_q):
-                # Honour GET; log but accept SET (no real hardware to update).
-                try:
-                    if cmd.op == CAMERA_OP_GET_EXPOSURE:
-                        reply = CameraCmdReply(
-                            request_id=cmd.request_id, ok=True,
-                            result={"exposure_s": current_state["exposure_s"],
-                                    "gain": current_state["gain"]})
-                    elif cmd.op == CAMERA_OP_SET_EXPOSURE:
-                        current_state["exposure_s"] = float(
-                            cmd.args["exposure_s"])
-                        reply = CameraCmdReply(
-                            request_id=cmd.request_id, ok=True,
-                            result={"exposure_s": current_state["exposure_s"]})
-                    elif cmd.op == CAMERA_OP_SET_GAIN:
-                        current_state["gain"] = float(cmd.args["gain"])
-                        reply = CameraCmdReply(
-                            request_id=cmd.request_id, ok=True,
-                            result={"gain": current_state["gain"]})
-                    else:
-                        reply = CameraCmdReply(
-                            request_id=cmd.request_id, ok=False,
-                            error=f"unknown camera op: {cmd.op!r}")
-                except Exception as e:
-                    reply = CameraCmdReply(
-                        request_id=cmd.request_id, ok=False,
-                        error=f"{type(e).__name__}: {e}")
-                try:
-                    camera_cmd_reply_q.put_nowait(reply)
-                except Exception as e:
-                    log.warning("Could not enqueue camera reply: %s", e)
-
-            idx = slots.acquire_write_slot()
-            np.copyto(bufs[idx], test_frame)
-            slots.publish(idx)
-
-            frame_count += 1
-            now = time.monotonic()
-            if now - last_log > 30.0:
-                fps = frame_count / (now - last_log)
-                log.info("test-image: published %d frames (%.1f fps)",
-                         frame_count, fps)
-                frame_count = 0; last_log = now
-
-            time.sleep(0.2)
-    finally:
-        for s in shms:
-            s.close()
-
-
-def camera_main(slots, camera_cmd_q, camera_cmd_reply_q, cfg,
-                test_image_path=None):
-    logging.basicConfig(
-        level=os.environ.get("EFINDER_LOGLEVEL", "INFO"),
-        format="camera %(levelname)s %(message)s",
-    )
-    _pin_to_cpu(cfg.cpu_camera)
-
-    if test_image_path is not None:
-        log.info("TEST MODE: using static image %s", test_image_path)
-        test_frame = _load_test_image(
-            test_image_path, cfg.frame_height, cfg.frame_width)
-        _run_test_camera(test_frame, slots, camera_cmd_q, camera_cmd_reply_q, cfg)
-        return
-
-    try:
-        from picamera2 import Picamera2
-    except ImportError as e:
-        log.error("picamera2 not importable: %s", e)
-        time.sleep(10); raise
-
+def _init_camera(cfg, current_state):
+    """Initialise and start picamera2 using current_state for exposure/gain."""
+    from picamera2 import Picamera2
     cam = Picamera2()
     config = cam.create_still_configuration(
         main={"format": "YUV420",
               "size": (cfg.frame_width, cfg.frame_height)},
         controls={
-            "ExposureTime": int(cfg.exposure_s * 1_000_000),
-            "AnalogueGain": float(cfg.gain),
+            "ExposureTime": int(current_state["exposure_s"] * 1_000_000),
+            "AnalogueGain": float(current_state["gain"]),
             "AeEnable": False,
             "AwbEnable": False,
-            # Min = exposure time (hard physics floor).
-            # Max = large sentinel; let the hardware/ISP determine the
-            # actual achievable rate. The old value of exposure+200ms
-            # capped the camera at 2.5fps with the default 0.2s exposure,
-            # even though the solver would benefit from frames sooner.
             "FrameDurationLimits": (
-                int(cfg.exposure_s * 1_000_000),
+                int(current_state["exposure_s"] * 1_000_000),
                 1_000_000_000,
             ),
         },
@@ -223,23 +137,38 @@ def camera_main(slots, camera_cmd_q, camera_cmd_reply_q, cfg,
     cam.configure(config)
     cam.start()
     log.info("Camera started: %dx%d exp=%.3fs gain=%.1f",
-             cfg.frame_width, cfg.frame_height, cfg.exposure_s, cfg.gain)
+             cfg.frame_width, cfg.frame_height,
+             current_state["exposure_s"], current_state["gain"])
+    return cam
+
+
+def camera_main(slots, camera_cmd_q, camera_cmd_reply_q, cfg,
+                test_image_path=None, shared_cfg=None):
+    logging.basicConfig(
+        level=os.environ.get("EFINDER_LOGLEVEL", "INFO"),
+        format="camera %(levelname)s %(message)s",
+    )
+    _pin_to_cpu(cfg.cpu_camera)
+
+    test_frame = None
+    if test_image_path is not None:
+        log.info("Loading test image: %s", test_image_path)
+        test_frame = _load_test_image(
+            test_image_path, cfg.frame_height, cfg.frame_width)
+
+    cam = None
+    current_state = {"exposure_s": cfg.exposure_s, "gain": cfg.gain}
 
     shms = [shared_memory.SharedMemory(name=f"{SHM_PREFIX}_{i}")
             for i in range(NUM_BUFFERS)]
     bufs = [np.ndarray((cfg.frame_height, cfg.frame_width), dtype=np.uint8,
                         buffer=s.buf) for s in shms]
 
-    # Track current camera settings so commands can read them without
-    # round-tripping through picamera2's metadata.
-    current_state = {"exposure_s": cfg.exposure_s, "gain": cfg.gain}
-
     frame_count = 0
     last_log = time.monotonic()
 
     try:
         while True:
-            # Process any pending camera commands first.
             for cmd in _drain_cmd_queue(camera_cmd_q):
                 reply = _handle_camera_cmd(cmd, cam, current_state)
                 try:
@@ -247,10 +176,51 @@ def camera_main(slots, camera_cmd_q, camera_cmd_reply_q, cfg,
                 except Exception as e:
                     log.warning("Could not enqueue camera reply: %s", e)
 
+            # Determine active mode
+            if shared_cfg is not None:
+                use_test = bool(shared_cfg.get("test_mode", test_frame is not None))
+            else:
+                use_test = test_frame is not None
+
+            if use_test:
+                if test_frame is None:
+                    log.warning(
+                        "Test mode requested but no test image loaded; "
+                        "switching to live mode")
+                    if shared_cfg is not None:
+                        shared_cfg["test_mode"] = False
+                    use_test = False
+                else:
+                    idx = slots.acquire_write_slot()
+                    np.copyto(bufs[idx], test_frame)
+                    slots.publish(idx)
+                    frame_count += 1
+                    now = time.monotonic()
+                    if now - last_log > 30.0:
+                        fps = frame_count / (now - last_log)
+                        log.info("test-image: %d frames (%.1f fps)",
+                                 frame_count, fps)
+                        frame_count = 0; last_log = now
+                    time.sleep(0.2)
+                    continue
+
+            # Live mode
+            if cam is None:
+                try:
+                    cam = _init_camera(cfg, current_state)
+                except Exception as e:
+                    log.error("Camera init failed: %s; reverting to test mode", e)
+                    if shared_cfg is not None:
+                        shared_cfg["test_mode"] = True
+                    time.sleep(2.0)
+                    continue
+
             idx = slots.acquire_write_slot()
-            arr = cam.capture_array("main")
-            # YUV420 packed into (H*3/2, W); first H rows are Y (luminance).
-            np.copyto(bufs[idx], arr[:cfg.frame_height, :cfg.frame_width])
+            try:
+                arr = cam.capture_array("main")
+                np.copyto(bufs[idx], arr[:cfg.frame_height, :cfg.frame_width])
+            except Exception as e:
+                log.error("Camera capture failed: %s", e)
             slots.publish(idx)
 
             frame_count += 1
@@ -259,6 +229,10 @@ def camera_main(slots, camera_cmd_q, camera_cmd_reply_q, cfg,
                 fps = frame_count / (now - last_log)
                 log.info("captured %d frames (%.1f fps)", frame_count, fps)
                 frame_count = 0; last_log = now
+
     finally:
-        cam.stop()
-        for s in shms: s.close()
+        if cam is not None:
+            try: cam.stop()
+            except Exception: pass
+        for s in shms:
+            s.close()

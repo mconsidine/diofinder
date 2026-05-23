@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """
-eFinder main launcher.
+eFinder main launcher — combo branch.
 
 Spawns three pinned worker processes:
-  * camera_proc   -> CPU cfg.cpu_camera : picamera2 -> shared memory
-  * solver_proc   -> CPU cfg.cpu_solver : cedar-detect + cedar-solve
-  * comms_proc    -> CPU cfg.cpu_comms  : LX200 server + alignment
+  * camera_proc   -> CPU cfg.cpu_camera : picamera2 or test image -> shared memory
+  * solver_proc   -> CPU cfg.cpu_solver : cedar or tetra3rs (runtime-switchable)
+  * comms_proc    -> CPU cfg.cpu_comms  : LX200 server + alignment + maint socket
+
 CPU 0 is left to the kernel.
 
 Inter-process state:
   * Three SHM frame buffers, coordinated by FrameSlots
   * latest_solution: Manager dict published by solver, read by comms
-  * shared_cfg: Manager dict for live-mutable settings (boresight)
+  * shared_cfg: Manager dict for live-mutable settings:
+      boresight_x/y, detect_sigma, solve_timeout_ms,
+      solver_backend ("cedar" | "tetra"), test_mode (bool)
   * align_request_q / align_response_q: comms <-> solver alignment workflow
 """
 
@@ -40,9 +43,6 @@ def _setup_logging():
 
 
 def _allocate_shared_frames(cfg):
-    """Create NUM_BUFFERS shared memory blocks. Stale ones are unlinked
-    first so this process owns them.
-    """
     size = cfg.frame_height * cfg.frame_width
     shms = []
     for i in range(NUM_BUFFERS):
@@ -59,37 +59,48 @@ def _allocate_shared_frames(cfg):
 
 
 def _resolve_test_image(args):
-    """Return an absolute Path to the test image, or None for live mode."""
+    """Return an absolute Path to the test image, or None.
+
+    In combo mode we search for a test image even without --test so the
+    default test mode has something to display. Returns None if no image
+    is found (live mode will be the only option until one is placed).
+    """
     if args.test_image:
         p = Path(args.test_image)
         if not p.exists():
             log.error("--test-image path not found: %s", p)
             sys.exit(1)
         return p
+    search_dirs = [Path.cwd(), Path("/var/lib/efinder"), Path("/opt/efinder")]
+    for name in ("test.png", "polaris.png"):
+        for d in search_dirs:
+            p = d / name
+            if p.exists():
+                log.info("Test image found: %s", p)
+                return p
     if args.test:
-        search_dirs = [Path.cwd(), Path("/var/lib/efinder")]
-        for name in ("polaris.png", "test.png"):
-            for d in search_dirs:
-                p = d / name
-                if p.exists():
-                    log.info("Test mode: found %s", p)
-                    return p
         log.error(
-            "--test specified but neither polaris.png nor test.png found in "
-            "%s", ", ".join(str(d) for d in search_dirs))
+            "--test specified but no test image found in %s",
+            ", ".join(str(d) for d in search_dirs))
         sys.exit(1)
+    log.info(
+        "No test image found; test mode unavailable until test.png is placed "
+        "at /var/lib/efinder/test.png")
     return None
 
 
 def main():
-    parser = argparse.ArgumentParser(description="eFinder star-tracker daemon")
+    parser = argparse.ArgumentParser(description="eFinder star-tracker daemon (combo)")
     test_grp = parser.add_mutually_exclusive_group()
     test_grp.add_argument(
         "--test", action="store_true",
-        help="Test mode: auto-find polaris.png or test.png instead of using the camera")
+        help="Test mode: auto-find test.png / polaris.png instead of the camera")
     test_grp.add_argument(
         "--test-image", metavar="PATH",
         help="Test mode: use the specified PNG instead of the camera")
+    parser.add_argument(
+        "--backend", choices=("cedar", "tetra"), default="cedar",
+        help="Initial solver backend (default: cedar)")
     args = parser.parse_args()
 
     _setup_logging()
@@ -97,8 +108,11 @@ def main():
     log.info("eFinder %s starting; config: %s", cfg.version, cfg.summary())
 
     test_image_path = _resolve_test_image(args)
-    if test_image_path:
-        log.info("TEST MODE active — camera replaced by %s", test_image_path)
+    default_test_mode = test_image_path is not None
+    if default_test_mode:
+        log.info("Defaulting to TEST MODE — camera replaced by %s", test_image_path)
+    else:
+        log.info("No test image found; starting in LIVE MODE")
 
     mp.set_start_method("spawn", force=True)
 
@@ -106,28 +120,25 @@ def main():
     slots = FrameSlots()
 
     manager = mp.Manager()
-    # Solution published by solver, read by comms
     latest_solution = manager.dict({
         "ra_deg": 0.0, "dec_deg": 0.0, "roll_deg": 0.0, "fov_deg": 0.0,
         "stars": 0, "matches": 0, "peak": 0, "noise": 0.0,
         "solve_ms": 0.0, "solved": False, "status": 0,
         "epoch_monotonic": 0.0,
     })
-    # Live-mutable settings (boresight). Other settings stay in cfg.
     shared_cfg = manager.dict({
-        "boresight_y": cfg.boresight_y,
-        "boresight_x": cfg.boresight_x,
-        # IMU dead-reckoning state (populated by imu_proc thread + solver_proc)
-        "imu_available": False,
+        "boresight_y":    cfg.boresight_y,
+        "boresight_x":    cfg.boresight_x,
+        "imu_available":  False,
+        # Combo runtime toggles
+        "solver_backend": args.backend,
+        "test_mode":      default_test_mode,
     })
-    align_request_q = mp.Queue(maxsize=4)
+    align_request_q  = mp.Queue(maxsize=4)
     align_response_q = mp.Queue(maxsize=4)
-    # Maintenance command queues. Replies are correlated by request_id
-    # since multiple maintenance clients could in principle race; in
-    # practice there's at most one efinder-ctl invocation at a time.
-    solver_cmd_q = mp.Queue(maxsize=16)
+    solver_cmd_q       = mp.Queue(maxsize=16)
     solver_cmd_reply_q = mp.Queue(maxsize=16)
-    camera_cmd_q = mp.Queue(maxsize=16)
+    camera_cmd_q       = mp.Queue(maxsize=16)
     camera_cmd_reply_q = mp.Queue(maxsize=16)
 
     from efinder.camera_proc import camera_main
@@ -135,10 +146,6 @@ def main():
     from efinder.comms_proc import comms_main
     from efinder.imu_proc import start_imu_thread
 
-    # IMU runs as a daemon thread in the main process.  It probes for a
-    # BNO055 on I2C every 3 s and publishes to shared_cfg when found.
-    # If smbus2 is not installed or the chip is absent, it exits silently
-    # and imu_available stays False — no impact on the rest of the system.
     start_imu_thread(shared_cfg)
 
     procs = [
@@ -149,7 +156,7 @@ def main():
                          camera_cmd_q, camera_cmd_reply_q, cfg)),
         mp.Process(target=camera_main, name="efinder-camera",
                    args=(slots, camera_cmd_q, camera_cmd_reply_q, cfg,
-                         test_image_path)),
+                         test_image_path, shared_cfg)),
         mp.Process(target=solver_main, name="efinder-solver",
                    args=(slots, latest_solution, shared_cfg,
                          align_request_q, align_response_q,
