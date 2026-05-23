@@ -173,14 +173,6 @@ if [ -f "$CONFIG_TXT" ]; then
       LOG "  Already present: $setting"
     fi
   done
-  # dtoverlay=dwc2 requires whole-line matching (-x). The base Pi OS Trixie
-  # image ships 'dtoverlay=dwc2,dr_mode=host' in the [cm5] section for CM5
-  # host mode. A substring match would falsely treat that as "already
-  # configured" and skip adding the [all] peripheral-mode entry that the
-  # Pi Zero / Zero 2W actually needs. Using -x ensures an exact line match.
-  # dr_mode=peripheral is explicit and required. Without it the dwc2 driver
-  # on newer kernels defaults to OTG mode and waits to detect host vs device
-  # rather than committing to peripheral (gadget) mode.
   if ! grep -qxF "dtoverlay=dwc2,dr_mode=peripheral" "$CONFIG_TXT"; then
     printf "\n[all]\n# USB serial gadget -- peripheral mode for Pi Zero / Zero 2W\ndtoverlay=dwc2,dr_mode=peripheral\n" >> "$CONFIG_TXT"
     LOG "  Added: dtoverlay=dwc2,dr_mode=peripheral under [all]"
@@ -194,10 +186,6 @@ fi
 LOG "Patching $CMDLINE_TXT for USB serial console"
 if [ -f "$CMDLINE_TXT" ]; then
   if ! grep -q "console=ttyGS0" "$CMDLINE_TXT"; then
-    # cmdline.txt must remain a single line with no trailing newline.
-    # Add console=ttyGS0,115200 so kernel boot messages appear on the USB
-    # serial port (screen /dev/ttyACM0 115200 on the host).
-    # dwc2 is loaded via modules-load.d / initramfs; no cmdline.txt entry needed.
     cp "$CMDLINE_TXT" "$CMDLINE_TXT.orig"
     if grep -q "rootwait" "$CMDLINE_TXT"; then
       sed -i 's/rootwait/rootwait console=ttyGS0,115200/' "$CMDLINE_TXT"
@@ -237,17 +225,31 @@ chmod +x "$ROOT/usr/sbin/policy-rc.d"
 
 LOG "Copying eFinder repo into chroot at /tmp/efinder-src"
 mkdir -p "$ROOT/tmp/efinder-src"
-# Each of these is required by install.sh; fail loudly if any is missing.
 SRC_DIR="$(cd "$WORK/../.." && pwd)"
+
+# Required directories
 for d in efinder webui systemd scripts etc proto; do
   [ -d "$SRC_DIR/$d" ] || FAIL "missing source dir: $SRC_DIR/$d"
   cp -r "$SRC_DIR/$d" "$ROOT/tmp/efinder-src/"
 done
+
+# Required files
 for f in requirements.txt; do
   [ -f "$SRC_DIR/$f" ] || FAIL "missing source file: $SRC_DIR/$f"
   cp "$SRC_DIR/$f" "$ROOT/tmp/efinder-src/"
 done
-# Optional but useful:
+
+# vendor/ contains pre-built cedar-detect-server and tetra3rs wheels
+# committed by the 'Vendor Binaries' workflow. Stage it if present so
+# install.sh can use the vendored files without any network fetching.
+if [ -d "$SRC_DIR/vendor" ]; then
+  LOG "Staging vendor/ (pre-built binaries and wheels)"
+  cp -r "$SRC_DIR/vendor" "$ROOT/tmp/efinder-src/"
+else
+  WARN "vendor/ not found; install.sh will fall back to PyPI / release download"
+fi
+
+# Optional documentation
 for f in README.md TODO.md; do
   [ -f "$SRC_DIR/$f" ] && cp "$SRC_DIR/$f" "$ROOT/tmp/efinder-src/" || true
 done
