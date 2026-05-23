@@ -23,11 +23,12 @@ jobs:
   # --------------------------------------------------------------------------
   # Build cedar-detect-server (aarch64 / Cortex-A53)
   #
-  # Optimization flags:
-  #   target-cpu=cortex-a53   A53-specific instruction scheduling
-  #   lto=thin                cross-crate inlining without full LTO cost
-  #   codegen-units=1         single CGU for maximum intra-crate optimization
-  # (LTO is safe here because this is a standalone binary, not a Python wheel.)
+  # Optimization:
+  #   target-cpu=cortex-a53         A53-specific instruction scheduling
+  #   CARGO_PROFILE_RELEASE_LTO     thin LTO set at profile level, not via
+  #                                 RUSTFLAGS, so Rust embeds bitcode from
+  #                                 the start and never adds -C embed-bitcode=no
+  #   codegen-units=1               single CGU for maximum intra-crate opt
   # --------------------------------------------------------------------------
   cedar-detect:
     runs-on: ubuntu-latest
@@ -61,7 +62,8 @@ jobs:
       - name: Build cedar-detect-server
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-          RUSTFLAGS: "-C target-cpu=cortex-a53 -C lto=thin -C codegen-units=1"
+          RUSTFLAGS: "-C target-cpu=cortex-a53 -C codegen-units=1"
+          CARGO_PROFILE_RELEASE_LTO: "thin"
         working-directory: cedar-detect
         run: |
           cargo build --release \
@@ -87,14 +89,14 @@ jobs:
   # Build tetra3rs wheels (aarch64, cp311/cp312/cp313)
   #
   # Runtime target: Pi Zero 2W (Cortex-A53, ARMv8-A, mandatory NEON/ASIMD).
-  # Optimization flags:
+  # Optimization:
   #   target-cpu=cortex-a53   A53 pipeline scheduling
   #   codegen-units=1         maximum intra-crate optimization
   #
-  # Note: lto is intentionally omitted. pip's wheel build pipeline adds
+  # Note: LTO is intentionally omitted. pip's wheel build pipeline adds
   # -C embed-bitcode=no (reduces wheel size), which is mutually exclusive
-  # with -C lto. codegen-units=1 captures most of the same benefit within
-  # a single crate without the cross-crate LTO machinery.
+  # with -C lto regardless of how LTO is requested. codegen-units=1
+  # captures most of the same benefit within the crate.
   #
   # Build time: ~3 hours (QEMU emulation + Rust + ring crate first build).
   # Subsequent Python versions reuse Cargo's incremental cache within the run.
