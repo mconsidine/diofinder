@@ -192,25 +192,24 @@ print('cedar-solve runtime deps OK')
 " || FAIL "cedar-solve runtime dependency check failed"
 
 # --- Install tetra3rs --------------------------------------------------------
-# Priority: vendored wheel in repo > EFINDER_TETRA3RS_WHEELS_DIR env > PyPI.
-# Vendored wheels are committed to vendor/wheels/ by the vendor-binaries
-# CI workflow and are available immediately after git clone.
-#
-# The || true after ls is essential: under set -euo pipefail, ls exits 2
-# when the glob matches nothing (only .gitkeep present), which would abort
-# the script before reaching the fallback branches.
+# Priority: vendor/wheels/ in repo > EFINDER_TETRA3RS_WHEELS_DIR env > PyPI.
+# In all cases use --find-links + --no-index so pip selects the wheel that
+# matches the running Python version (cp311/cp312/cp313) rather than us
+# hard-coding a filename.
 
-VENDOR_WHEEL=$(ls "$EFINDER_DIR/vendor/wheels/tetra3rs-"*.whl 2>/dev/null | head -1 || true)
-if [ -n "$VENDOR_WHEEL" ]; then
-  LOG "Installing tetra3rs from vendored wheel: $(basename "$VENDOR_WHEEL")"
+VENDOR_WHEELS_DIR="$EFINDER_DIR/vendor/wheels"
+HAS_VENDOR_WHEEL=$(ls "$VENDOR_WHEELS_DIR/tetra3rs-"*.whl 2>/dev/null | head -1 || true)
+
+if [ -n "$HAS_VENDOR_WHEEL" ]; then
+  LOG "Installing tetra3rs from vendored wheels in $VENDOR_WHEELS_DIR"
   sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install "gaia-catalog<1.0" \
     || FAIL "gaia-catalog install failed"
-  sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install "$VENDOR_WHEEL" \
+  sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install \
+    --find-links "$VENDOR_WHEELS_DIR" --no-index tetra3rs \
     || FAIL "tetra3rs vendored wheel install failed"
 elif [ -n "$LOCAL_WHEELS_DIR" ]; then
   LOG "Installing tetra3rs from local wheels in $LOCAL_WHEELS_DIR"
-  sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install \
-    "gaia-catalog<1.0" \
+  sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install "gaia-catalog<1.0" \
     || FAIL "gaia-catalog install failed"
   sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install \
     --find-links "$LOCAL_WHEELS_DIR" --no-index tetra3rs \
@@ -368,8 +367,6 @@ systemctl enable serial-getty@ttyGS0.service 2>/dev/null || \
 
 LOG "Enabling services"
 systemctl daemon-reload
-# cedar-detect.service is optional (combo can run tetra-only) but we
-# enable and start it so the cedar backend is ready when selected.
 systemctl enable cedar-detect.service efinder.service \
                  efinder-firstboot.service efinder-webui.service \
                  efinder-usb-gadget.service efinder-ensure-ap.service
