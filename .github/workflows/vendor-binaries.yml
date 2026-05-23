@@ -1,5 +1,4 @@
 name: Vendor Binaries (combo)
-
 # Builds cedar-detect-server and tetra3rs wheels, then commits them to
 # vendor/ in this branch so install.sh can use them without any network
 # fetch at install time.
