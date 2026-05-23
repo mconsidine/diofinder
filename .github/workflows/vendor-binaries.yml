@@ -27,6 +27,7 @@ jobs:
   #   target-cpu=cortex-a53   A53-specific instruction scheduling
   #   lto=thin                cross-crate inlining without full LTO cost
   #   codegen-units=1         single CGU for maximum intra-crate optimization
+  # (LTO is safe here because this is a standalone binary, not a Python wheel.)
   # --------------------------------------------------------------------------
   cedar-detect:
     runs-on: ubuntu-latest
@@ -86,10 +87,14 @@ jobs:
   # Build tetra3rs wheels (aarch64, cp311/cp312/cp313)
   #
   # Runtime target: Pi Zero 2W (Cortex-A53, ARMv8-A, mandatory NEON/ASIMD).
-  # Optimization flags (same rationale as cedar-detect above):
+  # Optimization flags:
   #   target-cpu=cortex-a53   A53 pipeline scheduling
-  #   lto=thin                cross-crate inlining
   #   codegen-units=1         maximum intra-crate optimization
+  #
+  # Note: lto is intentionally omitted. pip's wheel build pipeline adds
+  # -C embed-bitcode=no (reduces wheel size), which is mutually exclusive
+  # with -C lto. codegen-units=1 captures most of the same benefit within
+  # a single crate without the cross-crate LTO machinery.
   #
   # Build time: ~3 hours (QEMU emulation + Rust + ring crate first build).
   # Subsequent Python versions reuse Cargo's incremental cache within the run.
@@ -121,7 +126,7 @@ jobs:
             | sh -s -- -y --profile minimal
           CIBW_ENVIRONMENT: >-
             PATH="$HOME/.cargo/bin:$PATH"
-            RUSTFLAGS="-C target-cpu=cortex-a53 -C lto=thin -C codegen-units=1"
+            RUSTFLAGS="-C target-cpu=cortex-a53 -C codegen-units=1"
           CIBW_BEFORE_BUILD: pip install setuptools>=68 setuptools-rust>=1.10
         with:
           output-dir: dist
