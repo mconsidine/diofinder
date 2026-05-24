@@ -59,15 +59,18 @@ def _allocate_shared_frames(cfg):
 
 
 def _resolve_test_image(args):
-    """Return an absolute Path to the test image, or None (live mode)."""
+    """Find a test image path if one exists; return Path or None.
+
+    Always searches the standard locations so camera_proc has the image
+    loaded and ready for runtime test-mode switching via the status page.
+    Only _starting_ in test mode requires --test or --test-image.
+    """
     if args.test_image:
         p = Path(args.test_image)
         if not p.exists():
             log.error("--test-image path not found: %s", p)
             sys.exit(1)
         return p
-    if not args.test:
-        return None
     search_dirs = [Path.cwd(), Path("/var/lib/efinder"), Path("/opt/efinder")]
     for name in ("test.png", "polaris.png"):
         for d in search_dirs:
@@ -75,10 +78,12 @@ def _resolve_test_image(args):
             if p.exists():
                 log.info("Test image found: %s", p)
                 return p
-    log.error(
-        "--test specified but no test image found in %s",
-        ", ".join(str(d) for d in search_dirs))
-    sys.exit(1)
+    if args.test:
+        log.error(
+            "--test specified but no test image found in %s",
+            ", ".join(str(d) for d in search_dirs))
+        sys.exit(1)
+    return None
 
 
 def main():
@@ -100,11 +105,13 @@ def main():
     log.info("eFinder %s starting; config: %s", cfg.version, cfg.summary())
 
     test_image_path = _resolve_test_image(args)
-    default_test_mode = test_image_path is not None
+    default_test_mode = args.test or (args.test_image is not None)
     if default_test_mode:
-        log.info("Defaulting to TEST MODE — camera replaced by %s", test_image_path)
+        log.info("Starting in TEST MODE — camera replaced by %s", test_image_path)
     else:
-        log.info("No test image found; starting in LIVE MODE")
+        log.info("Starting in LIVE MODE%s",
+                 f" (test image available for switching: {test_image_path})"
+                 if test_image_path else "")
 
     mp.set_start_method("spawn", force=True)
 
