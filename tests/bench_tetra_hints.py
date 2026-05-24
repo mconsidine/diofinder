@@ -58,7 +58,7 @@ extract_ms = (time.monotonic() - t0) * 1000.0
 stars = resp.star_candidates
 print(f"Cedar extract: {extract_ms:.1f}ms  n={len(stars)}")
 
-centraloids = np.array(
+centroids = np.array(
     [[c.centroid_position.x - w / 2.0,
       c.centroid_position.y - h / 2.0]
      for c in stars],
