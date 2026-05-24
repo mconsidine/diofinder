@@ -47,7 +47,6 @@ fi
 
 # Tear down any existing gadget so this script is idempotent
 if [ -d "$GADGET_PATH" ]; then
-    # Unbind before reconfiguring
     echo "" > "$GADGET_PATH/UDC" 2>/dev/null || true
     rm -f "$GADGET_PATH/configs/c.1/acm.usb0" 2>/dev/null || true
     rmdir "$GADGET_PATH/configs/c.1/strings/0x409" 2>/dev/null || true
@@ -91,12 +90,15 @@ logger -t efinder-gadget "Gadget configured and bound to $UDC"
 #
 # The PC may have already timed out waiting for the gadget. A soft_connect
 # pulse triggers a fresh D+ pull-up so the host sees a new attachment event.
+#
+# The dwc2 UDC sysfs interface requires the strings "disconnect"/"connect",
+# not "0"/"1" — writing the wrong value returns EINVAL.
 
 SC="/sys/class/udc/${UDC}/soft_connect"
 if [ -f "$SC" ]; then
     sleep 0.5
-    echo 0 > "$SC"
+    echo disconnect > "$SC" || true
     sleep 1
-    echo 1 > "$SC"
+    echo connect    > "$SC" || true
     logger -t efinder-gadget "soft_connect pulsed on $UDC"
 fi
