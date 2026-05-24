@@ -115,8 +115,7 @@ channel = grpc.insecure_channel(cfg.cedar_detect_socket)
 stub    = pb_grpc.CedarDetectStub(channel)
 
 try:
-    ready_future = channel.channel_ready_future()
-    ready_future.result(timeout=3.0)
+    grpc.channel_ready_future(channel).result(timeout=3.0)
     tag(PASS, "Channel connected")
 except Exception as e:
     tag(WARN, f"Channel not immediately ready: {e!r}  "
@@ -126,8 +125,20 @@ except Exception as e:
 sep("Stage 2: Frame source")
 
 from multiprocessing import shared_memory
+from multiprocessing import resource_tracker as _rt
 
 OWN_SHM_NAME = "efinder_diag_frame"
+
+def _borrow_shm(name: str) -> shared_memory.SharedMemory:
+    """Attach to an existing SHM segment without taking ownership.
+    Unregisters from the resource tracker so Python does not warn about
+    a 'leaked' segment that belongs to another process (the daemon)."""
+    shm = shared_memory.SharedMemory(name=name, create=False)
+    try:
+        _rt.unregister(shm._name, 'shared_memory')
+    except Exception:
+        pass
+    return shm
 own_shm  = None
 shm_slot = None
 
@@ -174,7 +185,7 @@ else:
     daemon_shm_ok = False
     for slot_name in ("efinder_frame_0", "efinder_frame_1", "efinder_frame_2"):
         try:
-            _s = shared_memory.SharedMemory(name=slot_name, create=False)
+            _s = _borrow_shm(slot_name)
             _arr = np.ndarray((h, w), dtype=np.uint8, buffer=_s.buf)
             pk  = int(_arr.max())
             mn  = float(_arr.mean())

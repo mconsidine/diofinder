@@ -147,8 +147,17 @@ if not cedar_ok and not tetra_ok:
 sep("Stage 1: Frame source → SHM")
 
 from multiprocessing import shared_memory
+from multiprocessing import resource_tracker as _rt
 
 OWN_SHM_NAME = "efinder_diag_frame"
+
+def _borrow_shm(name: str) -> shared_memory.SharedMemory:
+    shm = shared_memory.SharedMemory(name=name, create=False)
+    try:
+        _rt.unregister(shm._name, 'shared_memory')
+    except Exception:
+        pass
+    return shm
 own_shm  = None
 shm_slot = None
 
@@ -176,7 +185,7 @@ def _make_own_shm(frame):
 if args.live_shm:
     shm_slot = "efinder_frame_0"
     try:
-        _s   = shared_memory.SharedMemory(name=shm_slot, create=False)
+        _s   = _borrow_shm(shm_slot)
         _arr = np.ndarray((h, w), dtype=np.uint8, buffer=_s.buf)
         pk   = int(_arr.max())
         mn   = float(_arr.mean())
@@ -212,7 +221,7 @@ else:
     live_ok = False
     for slot in ("efinder_frame_0", "efinder_frame_1", "efinder_frame_2"):
         try:
-            _s   = shared_memory.SharedMemory(name=slot, create=False)
+            _s   = _borrow_shm(slot)
             _arr = np.ndarray((h, w), dtype=np.uint8, buffer=_s.buf)
             pk   = int(_arr.max())
             mn   = float(_arr.mean())
