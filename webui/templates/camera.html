@@ -22,24 +22,28 @@
       <form method="post" action="{{ url_for('exposure_set') }}">
         <label>
           Exposure (seconds)
-          <div class="slider-row">
+          <div class="stepper-row">
+            <button type="button" class="step-btn" onclick="stepExp(-1)">&#8722;</button>
             <input type="range" id="exp_slider" min="-3" max="1" step="0.001"
                    value="{{ (exposure.exposure_s | float) | log10 }}"
                    oninput="expSliderChange(this.value)">
             <input type="number" step="any" min="0.001" max="10"
                    name="exposure_s" id="exp_num"
                    value="{{ exposure.exposure_s }}">
+            <button type="button" class="step-btn" onclick="stepExp(1)">&#43;</button>
           </div>
         </label>
         <label>
           Gain (1–64)
-          <div class="slider-row">
+          <div class="stepper-row">
+            <button type="button" class="step-btn" onclick="stepGain(-1)">&#8722;</button>
             <input type="range" id="gain_slider" min="1" max="64" step="1"
                    value="{{ exposure.gain }}"
                    oninput="gainSliderChange(this.value)">
             <input type="number" step="1" min="1" max="64"
                    name="gain" id="gain_num"
                    value="{{ exposure.gain }}">
+            <button type="button" class="step-btn" onclick="stepGain(1)">&#43;</button>
           </div>
         </label>
         <p id="exp-status" class="hint" style="min-height:1.2em;">&nbsp;</p>
@@ -61,15 +65,17 @@
           Detection sigma
           <p class="hint" style="margin:0 0 4px">
             Star detection threshold in noise units. Lower finds fainter stars
-            but increases false positives. Default: 8.
+            but increases false positives. Default: 9.
           </p>
-          <div class="slider-row">
+          <div class="stepper-row">
+            <button type="button" class="step-btn" onclick="stepSigma(-1)">&#8722;</button>
             <input type="range" id="sigma_slider" min="3" max="20" step="0.5"
                    value="{{ solver_params.detect_sigma }}"
                    oninput="sigmaSliderChange(this.value)">
             <input type="number" step="0.5" min="3" max="20"
                    name="detect_sigma" id="sigma_num"
                    value="{{ solver_params.detect_sigma }}">
+            <button type="button" class="step-btn" onclick="stepSigma(1)">&#43;</button>
           </div>
         </label>
         <label>
@@ -85,6 +91,13 @@
                    name="solve_timeout_ms" id="timeout_num"
                    value="{{ solver_params.solve_timeout_ms }}">
           </div>
+        </label>
+        <label class="checkbox" style="margin-top:0.75rem;">
+          <input type="checkbox" id="binned_chk" name="detect_use_binned"
+                 onchange="binnedChange(this.checked)"
+                 {{ 'checked' if solver_params.detect_use_binned else '' }}>
+          Binned star candidates
+          <span class="hint" style="margin-left:0.4rem;">(faster detection)</span>
         </label>
         <p id="solver-status" class="hint" style="min-height:1.2em;">&nbsp;</p>
         <label class="checkbox">
@@ -143,10 +156,10 @@ async function applyParams(params, statusId) {
   }
 }
 
-const applyExp  = debounce(s  => applyParams({exposure_s: s},                'exp-status'),    400);
-const applyGain = debounce(g  => applyParams({gain: g},                       'exp-status'),    400);
-const applySigma   = debounce(v => applyParams({detect_sigma: v},              'solver-status'), 400);
-const applyTimeout = debounce(v => applyParams({solve_timeout_ms: v},          'solver-status'), 400);
+const applyExp     = debounce(s => applyParams({exposure_s: s},       'exp-status'),    400);
+const applyGain    = debounce(g => applyParams({gain: g},              'exp-status'),    400);
+const applySigma   = debounce(v => applyParams({detect_sigma: v},      'solver-status'), 400);
+const applyTimeout = debounce(v => applyParams({solve_timeout_ms: v},  'solver-status'), 400);
 
 // --- Slider <-> number sync + auto-apply -------------------------------------
 function expSliderChange(v) {
@@ -185,6 +198,34 @@ function timeoutSliderChange(v) {
 function timeoutNumChange(v) {
   document.getElementById('timeout_slider').value = v;
   applyTimeout(parseInt(v));
+}
+
+// --- Step buttons ------------------------------------------------------------
+function stepExp(dir) {
+  const el = document.getElementById('exp_num');
+  const s  = Math.max(0.001, Math.min(10, parseFloat(el.value || 0.2) + dir * 0.05));
+  el.value = parseFloat(s.toFixed(3));
+  document.getElementById('exp_slider').value = Math.log10(s);
+  applyExp(s);
+}
+function stepGain(dir) {
+  const el = document.getElementById('gain_num');
+  const g  = Math.max(1, Math.min(64, Math.round(parseFloat(el.value || 1)) + dir));
+  el.value = g;
+  document.getElementById('gain_slider').value = g;
+  applyGain(g);
+}
+function stepSigma(dir) {
+  const el = document.getElementById('sigma_num');
+  const s  = Math.max(3, Math.min(20, parseFloat(el.value || 9) + dir));
+  el.value = s.toFixed(1);
+  document.getElementById('sigma_slider').value = s;
+  applySigma(s);
+}
+
+// --- Binning toggle ----------------------------------------------------------
+function binnedChange(checked) {
+  applyParams({detect_use_binned: checked}, 'solver-status');
 }
 
 const expNum = document.getElementById('exp_num');

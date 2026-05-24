@@ -342,7 +342,8 @@ def solver_main(slots, latest_solution, shared_cfg,
                     ),
                     sigma=shared_cfg.get("detect_sigma", cfg.detect_sigma),
                     detect_hot_pixels=cfg.detect_hot_pixels,
-                    use_binned_for_star_candidates=cfg.detect_use_binned,
+                    use_binned_for_star_candidates=shared_cfg.get(
+                        "detect_use_binned", cfg.detect_use_binned),
                     return_binned=False,
                 )
 
@@ -556,7 +557,8 @@ def solver_main(slots, latest_solution, shared_cfg,
                     ),
                     sigma=shared_cfg.get("detect_sigma", cfg.detect_sigma),
                     detect_hot_pixels=cfg.detect_hot_pixels,
-                    use_binned_for_star_candidates=cfg.detect_use_binned,
+                    use_binned_for_star_candidates=shared_cfg.get(
+                        "detect_use_binned", cfg.detect_use_binned),
                     return_binned=False,
                 )
                 t_extract = time.monotonic()

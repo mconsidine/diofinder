@@ -192,6 +192,42 @@ pre.logs, pre.config {
   max-width: 90px;
 }
 
+.stepper-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.25rem;
+  flex-wrap: wrap;
+}
+.stepper-row input[type="range"] {
+  flex: 1;
+  accent-color: #cc3300;
+  max-width: 180px;
+}
+.stepper-row input[type="number"] {
+  width: 90px;
+  max-width: 90px;
+}
+.stepper-row .step-btn {
+  background: #1e2230;
+  color: #cc3300;
+  border: 1px solid #cc3300;
+  border-radius: 4px;
+  width: 2rem;
+  height: 2rem;
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.stepper-row .step-btn:active {
+  background: #cc3300;
+  color: #0d0f17;
+}
+
 .card-wide {
   grid-column: 1 / -1;  /* span all grid columns */
 }

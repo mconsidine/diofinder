@@ -548,6 +548,8 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "detect_sigma",    ctx.cfg.detect_sigma),
                 "solve_timeout_ms": ctx.shared_cfg.get(
                     "solve_timeout_ms", ctx.cfg.solve_timeout_ms),
+                "detect_use_binned": ctx.shared_cfg.get(
+                    "detect_use_binned", ctx.cfg.detect_use_binned),
             })
 
         if cmd == "solver_params_set":
@@ -575,6 +577,9 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                                         error="solve_timeout_ms out of range")
                 ctx.shared_cfg["solve_timeout_ms"] = ms
                 updates["solve_timeout_ms"] = ms
+            if "detect_use_binned" in args:
+                ctx.shared_cfg["detect_use_binned"] = bool(args["detect_use_binned"])
+                updates["detect_use_binned"] = bool(args["detect_use_binned"])
             if persist and updates:
                 cfg_mod.save_keys(updates)
             return MaintResponse(ok=True, result={**updates, "persisted": persist})
