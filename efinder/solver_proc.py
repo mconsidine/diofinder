@@ -261,8 +261,8 @@ def solver_main(slots, latest_solution, shared_cfg,
     try:
         import tetra3rs as _tetra3rs
         tetra3rs = _tetra3rs
-        log.info("Loading tetra3rs database %s", cfg.tetra3_db)
-        db = tetra3rs.SolverDatabase.load_from_file(cfg.tetra3_db)
+        log.info("Loading tetra3rs database %s", cfg.tetra3rs_db)
+        db = tetra3rs.SolverDatabase.load_from_file(cfg.tetra3rs_db)
         tetra_available = True
         log.info("Tetra3rs backend ready")
     except Exception as e:

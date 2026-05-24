@@ -220,6 +220,23 @@ else
     || WARN "tetra3rs install failed; tetra backend will be unavailable"
 fi
 
+# --- Patch tetra3rs dist-info name mismatch ----------------------------------
+# Upstream bug: tetra3rs/__init__.py calls version("tetra3rs") but pip installs
+# the dist-info directory as tetra3_python-*.dist-info, causing
+# PackageNotFoundError at import time. Patch the __init__.py in-place.
+LOG "Checking tetra3rs dist-info name patch"
+SITE_PACKAGES=$("$EFINDER_DIR/venv/bin/python" -c \
+  "import sysconfig; print(sysconfig.get_paths()['purelib'])" 2>/dev/null || true)
+if [ -n "$SITE_PACKAGES" ] && [ -f "$SITE_PACKAGES/tetra3rs/__init__.py" ]; then
+  if grep -q 'version("tetra3rs")' "$SITE_PACKAGES/tetra3rs/__init__.py"; then
+    LOG "  Patching $SITE_PACKAGES/tetra3rs/__init__.py"
+    sed -i 's/version("tetra3rs")/version("tetra3_python")/' \
+      "$SITE_PACKAGES/tetra3rs/__init__.py"
+  else
+    LOG "  tetra3rs dist-info patch not needed (already correct or not found)"
+  fi
+fi
+
 sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/python" -c "
 try:
     import tetra3rs
@@ -227,6 +244,42 @@ try:
 except ImportError as e:
     print('tetra3rs not available:', e, '-- cedar backend will be used')
 " || true
+
+# --- Generate tetra3rs binary database ---------------------------------------
+# tetra3rs uses its own binary format, incompatible with Python tetra3's .npz.
+# generate_from_gaia() uses the bundled gaia-catalog package (no download).
+# Baked into the image here so the device is ready on first boot.
+mkdir -p /var/lib/efinder
+TETRA3RS_DB="/var/lib/efinder/efinder-tetra-database.bin"
+if [ ! -f "$TETRA3RS_DB" ]; then
+  if "$EFINDER_DIR/venv/bin/python" -c "import tetra3rs" 2>/dev/null; then
+    LOG "Generating tetra3rs binary database..."
+    if "$EFINDER_DIR/venv/bin/python" -c "
+import sys
+try:
+    import tetra3rs
+    db = tetra3rs.SolverDatabase.generate_from_gaia(
+        max_fov_deg=14.0,
+        star_max_magnitude=8.0,
+        patterns_per_lattice_field=50,
+        epoch_proper_motion_year=2026,
+        verification_stars_per_fov=100,
+    )
+    db.save_to_file('/var/lib/efinder/efinder-tetra-database.bin')
+    print('tetra3rs database: stars=%d patterns=%d' % (db.num_stars, db.num_patterns))
+except Exception as e:
+    print('ERROR: tetra3rs db generation failed: %s' % e, file=sys.stderr)
+    sys.exit(1)
+"; then
+      chown "${EFINDER_USER}:${EFINDER_USER}" "$TETRA3RS_DB" 2>/dev/null || true
+      LOG "tetra3rs database baked into image"
+    else
+      WARN "tetra3rs database generation failed; tetra backend unavailable"
+    fi
+  else
+    WARN "tetra3rs not importable; skipping database generation"
+  fi
+fi
 
 # --- Install cedar-detect-server ---------------------------------------------
 # Priority: vendored binary in repo > EFINDER_CEDAR_DETECT_BIN_LOCAL env >

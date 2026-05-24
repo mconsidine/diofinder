@@ -134,6 +134,38 @@ fi
 mkdir -p /var/lib/efinder/captures
 chown -R efinder:efinder /var/lib/efinder 2>/dev/null || true
 
+# --- Regenerate tetra3rs database if missing (upgrade/recovery path) ---------
+# Normally baked into the image by install.sh. This fallback runs if the file
+# was somehow lost (e.g. manual deletion, failed image build).
+TETRA3RS_DB=/var/lib/efinder/efinder-tetra-database.bin
+if [ ! -f "$TETRA3RS_DB" ] && [ -x /opt/efinder/venv/bin/python ]; then
+  if /opt/efinder/venv/bin/python -c "import tetra3rs" 2>/dev/null; then
+    LOG "tetra3rs database missing — regenerating..."
+    if /opt/efinder/venv/bin/python -c "
+import sys
+try:
+    import tetra3rs
+    db = tetra3rs.SolverDatabase.generate_from_gaia(
+        max_fov_deg=14.0,
+        star_max_magnitude=8.0,
+        patterns_per_lattice_field=50,
+        epoch_proper_motion_year=2026,
+        verification_stars_per_fov=100,
+    )
+    db.save_to_file('/var/lib/efinder/efinder-tetra-database.bin')
+    print('tetra3rs database: stars=%d patterns=%d' % (db.num_stars, db.num_patterns))
+except Exception as e:
+    print('tetra3rs db generation failed: %s' % e, file=sys.stderr)
+    sys.exit(1)
+"; then
+      chown efinder:efinder "$TETRA3RS_DB" 2>/dev/null || true
+      LOG "tetra3rs database regenerated"
+    else
+      WARN "tetra3rs database generation failed; tetra backend unavailable"
+    fi
+  fi
+fi
+
 # --- Record last-run time (diagnostic only — NOT read as a gate) --------------
 
 date -u +"%Y-%m-%dT%H:%M:%SZ" > "$DONE_MARKER"
