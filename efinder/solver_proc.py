@@ -350,7 +350,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                 try:
                     resp = stub.ExtractCentroids(req, timeout=2.0)
                 except Exception as e:
-                    slots.release_read_slot()
+                    slots.release_read_slot()    
                     log.warning("cedar-detect call failed: %s", e)
                     latest_solution.update(_empty_solution(peak=local_peak))
                     if align_req is not None:
@@ -612,7 +612,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                         match_threshold=cfg.match_threshold,
                         solve_timeout_ms=timeout_ms,
                         attitude_hint=last_quaternion,
-                        hint_uncertainty_deg=5.0,
+                        hint_uncertainty_deg=0.1,
                         strict_hint=False,
                     )
                 except Exception as e:
