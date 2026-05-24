@@ -281,7 +281,7 @@ def api_camera_set():
                 errors.append(f"gain: {r.error}")
         except (ValueError, TypeError) as e:
             errors.append(f"gain invalid: {e}")
-    if "detect_sigma" in data or "solve_timeout_ms" in data:
+    if "detect_sigma" in data or "solve_timeout_ms" in data or "detect_use_binned" in data:
         pargs = {"persist": False}
         if "detect_sigma" in data:
             try:
@@ -293,6 +293,8 @@ def api_camera_set():
                 pargs["solve_timeout_ms"] = int(data["solve_timeout_ms"])
             except (ValueError, TypeError) as e:
                 errors.append(f"solve_timeout_ms invalid: {e}")
+        if "detect_use_binned" in data:
+            pargs["detect_use_binned"] = bool(data["detect_use_binned"])
         if len(pargs) > 1:
             r = _safe_call("solver_params_set", pargs)
             if r.ok:
@@ -318,6 +320,7 @@ def solver_params_set():
             pargs["solve_timeout_ms"] = int(request.form["solve_timeout_ms"])
         except ValueError:
             return "solve_timeout_ms must be integer", 400
+    pargs["detect_use_binned"] = request.form.get("detect_use_binned") == "on"
     r = _safe_call("solver_params_set", pargs)
     if not r.ok:
         return r.error, 400
