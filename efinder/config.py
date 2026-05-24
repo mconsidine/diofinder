@@ -110,11 +110,15 @@ class Config:
     lx200_client_timeout_s: float = 30.0
 
     # -------- CPU affinity --------
-    # Pi Zero 2W: 4 cores; 0 = kernel, 1 = comms, 2 = cedar-detect,
-    # 3 = solver. Camera shares 3 with solver; it blocks on hardware
-    # DMA during exposure so the overlap is minimal.
+    # Pi Zero 2W: 4 cores
+    #   0 = kernel / IRQs / system services (never pinned)
+    #   1 = comms_proc + efinder-webui  (I/O bound, low CPU)
+    #   2 = solver_proc + cedar-detect  (pipeline: cedar-detect runs then
+    #       yields; solver_proc consumes its output — they interleave, not
+    #       compete, so one core is enough and keeps gRPC latency tight)
+    #   3 = camera_proc alone           (ISP DMA + occasional memcpy)
     cpu_camera: int = 3
-    cpu_solver: int = 3
+    cpu_solver: int = 2
     cpu_comms: int = 1
 
     # -------- Diagnostics --------

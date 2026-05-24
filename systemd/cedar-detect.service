@@ -13,9 +13,11 @@ ExecStart=/usr/local/bin/cedar-detect-server --port 50051
 Restart=on-failure
 RestartSec=2
 
-# Pin cedar-detect to CPU 2. The solver (caller) runs on CPU 3. Keeping them
-# on separate cores eliminates context-switch contention during the gRPC call
-# that happens on every frame -- previously both ends competed for CPU 3.
+# Pin cedar-detect to CPU 2. solver_proc also runs on CPU 2. They pipeline
+# serially: cedar-detect processes the frame and then yields; solver_proc wakes
+# to consume the centroids. They do not compete -- one is always blocked while
+# the other is active -- so sharing a core keeps gRPC round-trip latency tight
+# and leaves CPU 3 entirely for the camera capture loop.
 CPUAffinity=2
 Nice=-5
 

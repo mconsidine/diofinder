@@ -99,10 +99,12 @@ when the lens is capped or the sky is completely dark.
 ### CPU affinity
 ✅ DONE.
 - CPU 0: kernel/IRQs/system services
-- CPU 1: comms_proc (LX200 + maint socket)
-- CPU 2: cedar-detect-server (CPUAffinity=2 in systemd unit)
-- CPU 3: solver_proc + camera_proc (camera blocks on ISP hardware
-  between frames, so sharing CPU 3 with the solver is fine)
+- CPU 1: comms_proc + efinder-webui (I/O bound)
+- CPU 2: solver_proc + cedar-detect-server — pipeline pair; cedar-detect
+  runs then yields, solver consumes the centroids. They interleave rather
+  than compete so one core is sufficient. CPUAffinity=2 in cedar-detect
+  systemd unit; cpu_solver=2 in config.py.
+- CPU 3: camera_proc alone — ISP DMA + memcpy to SHM
 
 ### Zram swap
 ✅ DONE. `install.sh` configures `zram-tools` with `PERCENT=50`
