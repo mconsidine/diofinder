@@ -124,13 +124,11 @@ fi
 
 # Check tetra3 Python DB via Python if available
 if command -v /opt/efinder/venv/bin/python3 &>/dev/null; then
-    t3_check=$(EFINDER_CONFIG="$CONF" /opt/efinder/venv/bin/python3 -c "
-import sys; sys.path.insert(0,'$(/opt/efinder/venv/bin/python3 -c "import tetra3; import os; print(os.path.dirname(tetra3.__file__))" 2>/dev/null || echo /opt/efinder)')
+    t3_check=$(/opt/efinder/venv/bin/python3 -c "
 try:
     import tetra3
-    db_name = '$t3_db'
-    t3 = tetra3.Tetra3(db_name)
-    print(f'OK  (loaded {db_name})')
+    t3 = tetra3.Tetra3('$t3_db')
+    print('OK  (loaded $t3_db)')
 except Exception as e:
     print(f'FAIL  {e}')
 " 2>&1 || echo "FAIL  python check error")
