@@ -1,5 +1,4 @@
-"""
-Solver worker process — combo branch.
+"""Solver worker process — combo branch.
 
 Supports two interchangeable plate-solve backends selectable at runtime
 via shared_cfg["solver_backend"] (default: "cedar"):
@@ -531,26 +530,41 @@ def solver_main(slots, latest_solution, shared_cfg,
                     time.sleep(0.1)
                     continue
 
+                if not cedar_available:
+                    slots.release_read_slot()
+                    if "tetra" not in _warned_unavailable:
+                        log.warning("Tetra hybrid mode requires cedar-detect; "
+                                    "cedar-detect is unavailable")
+                        _warned_unavailable.add("tetra")
+                    time.sleep(0.1)
+                    continue
+
                 frame_snapshot = (
                     np.copy(bufs[idx])
                     if (cfg.save_failed_frames or cfg.save_solved_frames)
                     else None
                 )
-                frame = frame_snapshot if frame_snapshot is not None \
-                    else np.copy(bufs[idx])
-                slots.release_read_slot()
 
+                shm_name   = f"{SHM_PREFIX}_{idx}"
+                reopen_shm = shm_name not in _cedar_shm_opened
+                if reopen_shm:
+                    _cedar_shm_opened.add(shm_name)
+                req = pb.CentroidsRequest(
+                    input_image=pb.Image(
+                        width=cfg.frame_width, height=cfg.frame_height,
+                        shmem_name=shm_name, reopen_shmem=reopen_shm,
+                    ),
+                    sigma=shared_cfg.get("detect_sigma", cfg.detect_sigma),
+                    detect_hot_pixels=cfg.detect_hot_pixels,
+                    use_binned_for_star_candidates=cfg.detect_use_binned,
+                    return_binned=False,
+                )
                 t_extract = time.monotonic()
                 try:
-                    extraction = tetra3rs.extract_centroids(
-                        frame,
-                        sigma_threshold=shared_cfg.get(
-                            "detect_sigma", cfg.detect_sigma),
-                        max_centroids=150,
-                    )
-                    centroids = extraction.centroids
+                    resp = stub.ExtractCentroids(req, timeout=2.0)
                 except Exception as e:
-                    log.warning("tetra3rs extract_centroids raised: %s", e)
+                    slots.release_read_slot()
+                    log.warning("cedar-detect call failed (tetra path): %s", e)
                     latest_solution.update(_empty_solution(peak=local_peak))
                     if align_req is not None:
                         align_response_q.put(AlignResult(
@@ -559,7 +573,15 @@ def solver_main(slots, latest_solution, shared_cfg,
                             completed_at=time.monotonic(),
                         ))
                     fail_streak += 1; time.sleep(0.05); continue
+                slots.release_read_slot()
 
+                # tetra3rs: center-relative (x, y), x+ right, y+ down
+                centroids = np.array(
+                    [[c.centroid_position.x - cfg.frame_width  / 2.0,
+                      c.centroid_position.y - cfg.frame_height / 2.0]
+                     for c in resp.star_candidates],
+                    dtype=np.float64,
+                )
                 n          = len(centroids)
                 extract_ms = (time.monotonic() - t_extract) * 1000.0
 
@@ -582,7 +604,8 @@ def solver_main(slots, latest_solution, shared_cfg,
                     result = db.solve_from_centroids(
                         centroids,
                         fov_estimate_deg=calibrator.get_fov_estimate(),
-                        fov_max_error_deg=calibrator.get_fov_max_error(),
+                        fov_max_error_deg=max(calibrator.get_fov_max_error(),
+                                              cfg.fov_max_error_deg),
                         image_width=cfg.frame_width,
                         image_height=cfg.frame_height,
                         match_radius=cfg.match_radius,
