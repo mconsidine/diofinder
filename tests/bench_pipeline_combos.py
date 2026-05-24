@@ -200,7 +200,9 @@ def _make_own_shm(frame):
         _s.close(); _s.unlink()
     except Exception:
         pass
+    import os
     shm = shared_memory.SharedMemory(name=OWN_SHM_NAME, create=True, size=frame.nbytes)
+    os.chmod(f'/dev/shm/{OWN_SHM_NAME}', 0o644)
     np.ndarray(frame.shape, dtype=np.uint8, buffer=shm.buf)[:] = frame
     return shm
 

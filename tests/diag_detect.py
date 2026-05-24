@@ -158,6 +158,10 @@ def _make_own_shm(frame: "np.ndarray") -> shared_memory.SharedMemory:
     except Exception:
         pass
     shm = shared_memory.SharedMemory(name=OWN_SHM_NAME, create=True, size=frame.nbytes)
+    # cedar-detect runs as the efinder service user; make the segment
+    # world-readable so it can open it even when this script runs as root.
+    import os
+    os.chmod(f'/dev/shm/{OWN_SHM_NAME}', 0o644)
     buf = np.ndarray(frame.shape, dtype=np.uint8, buffer=shm.buf)
     np.copyto(buf, frame)
     return shm
