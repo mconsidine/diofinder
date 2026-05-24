@@ -59,18 +59,15 @@ def _allocate_shared_frames(cfg):
 
 
 def _resolve_test_image(args):
-    """Return an absolute Path to the test image, or None.
-
-    In combo mode we search for a test image even without --test so the
-    default test mode has something to display. Returns None if no image
-    is found (live mode will be the only option until one is placed).
-    """
+    """Return an absolute Path to the test image, or None (live mode)."""
     if args.test_image:
         p = Path(args.test_image)
         if not p.exists():
             log.error("--test-image path not found: %s", p)
             sys.exit(1)
         return p
+    if not args.test:
+        return None
     search_dirs = [Path.cwd(), Path("/var/lib/efinder"), Path("/opt/efinder")]
     for name in ("test.png", "polaris.png"):
         for d in search_dirs:
@@ -78,15 +75,10 @@ def _resolve_test_image(args):
             if p.exists():
                 log.info("Test image found: %s", p)
                 return p
-    if args.test:
-        log.error(
-            "--test specified but no test image found in %s",
-            ", ".join(str(d) for d in search_dirs))
-        sys.exit(1)
-    log.info(
-        "No test image found; test mode unavailable until test.png is placed "
-        "at /var/lib/efinder/test.png")
-    return None
+    log.error(
+        "--test specified but no test image found in %s",
+        ", ".join(str(d) for d in search_dirs))
+    sys.exit(1)
 
 
 def main():
@@ -99,8 +91,8 @@ def main():
         "--test-image", metavar="PATH",
         help="Test mode: use the specified PNG instead of the camera")
     parser.add_argument(
-        "--backend", choices=("cedar", "tetra"), default="cedar",
-        help="Initial solver backend (default: cedar)")
+        "--backend", choices=("cedar", "tetra"), default="tetra",
+        help="Initial solver backend (default: tetra)")
     args = parser.parse_args()
 
     _setup_logging()
