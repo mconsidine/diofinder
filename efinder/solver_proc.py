@@ -157,6 +157,56 @@ def _handle_solver_cmd(cmd, calibrator, polar):
                               error=f"{type(e).__name__}: {e}")
 
 
+def _imu_propagate_hint(last_sky_q, last_imu_q, shared_cfg):
+    """
+    Option-C attitude hint: apply the IMU rotation delta since the last solve
+    to the last sky quaternion.
+
+    Approximation: treats IMU body axes ≈ camera axes.  Frame-mismatch error
+    (from non-ideal mounting) is absorbed by a wider uncertainty window rather
+    than requiring an explicit mount-calibration step.
+
+    Returns (q_hint, uncertainty_deg).  Falls back to (last_sky_q, 0.1) —
+    matching the previous behaviour — whenever the IMU is absent or stale.
+    """
+    if last_sky_q is None or last_imu_q is None:
+        return last_sky_q, 0.1
+    if not shared_cfg.get("imu_available", False):
+        return last_sky_q, 0.1
+    q_cur = shared_cfg.get("imu_q")
+    imu_t = shared_cfg.get("imu_t", 0.0)
+    if q_cur is None or time.monotonic() - imu_t > 2.0:
+        return last_sky_q, 0.1
+
+    # q_delta = q_cur * conj(q_ref)  —  rotation of the IMU since last solve
+    w0, x0, y0, z0 = q_cur
+    wr, xr, yr, zr = last_imu_q[0], -last_imu_q[1], -last_imu_q[2], -last_imu_q[3]
+    wd = w0*wr - x0*xr - y0*yr - z0*zr
+    xd = w0*xr + x0*wr + y0*zr - z0*yr
+    yd = w0*yr - x0*zr + y0*wr + z0*xr
+    zd = w0*zr + x0*yr - y0*xr + z0*wr
+    nd = math.sqrt(wd*wd + xd*xd + yd*yd + zd*zd)
+    if nd < 0.5:
+        return last_sky_q, 0.1
+    wd, xd, yd, zd = wd/nd, xd/nd, yd/nd, zd/nd
+
+    # q_hint = q_delta * q_last_sky
+    ws, xs, ys, zs = (float(v) for v in last_sky_q)
+    wh = wd*ws - xd*xs - yd*ys - zd*zs
+    xh = wd*xs + xd*ws + yd*zs - zd*ys
+    yh = wd*ys - xd*zs + yd*ws + zd*xs
+    zh = wd*zs + xd*ys - yd*xs + zd*ws
+
+    # Uncertainty: 1.5× the measured rotation angle, floor 2°.
+    # The 1.5× factor accounts for frame-mismatch between the IMU's body axes
+    # and the camera/sky axes; it ensures the true attitude stays inside the
+    # search window even with a moderately misaligned mount.
+    angle_deg = math.degrees(2.0 * math.acos(min(1.0, abs(wd))))
+    uncertainty_deg = max(2.0, angle_deg * 1.5)
+
+    return (wh, xh, yh, zh), uncertainty_deg
+
+
 def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg):
     if not shared_cfg.get("imu_available", False):
         return
@@ -255,7 +305,8 @@ def solver_main(slots, latest_solution, shared_cfg,
     tetra_available = False
     tetra3rs = None
     db = None
-    last_quaternion = None
+    last_quaternion  = None   # sky quaternion from last successful tetra solve
+    last_solve_imu_q = None   # IMU quaternion recorded at that same solve
 
     try:
         import tetra3rs as _tetra3rs
@@ -600,8 +651,15 @@ def solver_main(slots, latest_solution, shared_cfg,
 
                 timeout_ms = int(shared_cfg.get(
                     "solve_timeout_ms", cfg.solve_timeout_ms))
-                hint_label = "seeded" if last_quaternion is not None else "blind"
-                t_solve    = time.monotonic()
+                q_hint, hint_unc = _imu_propagate_hint(
+                    last_quaternion, last_solve_imu_q, shared_cfg)
+                if q_hint is not last_quaternion:
+                    hint_label = "imu"
+                elif last_quaternion is not None:
+                    hint_label = "seeded"
+                else:
+                    hint_label = "blind"
+                t_solve = time.monotonic()
                 try:
                     result = db.solve_from_centroids(
                         centroids,
@@ -613,8 +671,8 @@ def solver_main(slots, latest_solution, shared_cfg,
                         match_radius=cfg.match_radius,
                         match_threshold=cfg.match_threshold,
                         solve_timeout_ms=timeout_ms,
-                        attitude_hint=last_quaternion,
-                        hint_uncertainty_deg=0.1,
+                        attitude_hint=q_hint,
+                        hint_uncertainty_deg=hint_unc,
                         strict_hint=False,
                     )
                 except Exception as e:
@@ -653,8 +711,9 @@ def solver_main(slots, latest_solution, shared_cfg,
                         _save_frame(frame_snapshot, cfg, "tetra_failed")
                     continue
 
-                last_quaternion = result.quaternion
-                measured_fov    = result.fov_deg
+                last_quaternion  = result.quaternion
+                last_solve_imu_q = shared_cfg.get("imu_q")
+                measured_fov     = result.fov_deg
                 calibrator.update_from_solve(measured_fov, 0.0)
                 polar.update_from_solve(result.ra_deg, result.dec_deg)
 
