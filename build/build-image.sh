@@ -160,12 +160,13 @@ fi
 CONFIG_TXT="$ROOT/boot/firmware/config.txt"
 CMDLINE_TXT="$ROOT/boot/firmware/cmdline.txt"
 
-LOG "Patching $CONFIG_TXT for USB gadget + camera"
+LOG "Patching $CONFIG_TXT for USB gadget + camera + I2C"
 if [ -f "$CONFIG_TXT" ]; then
   for setting in \
     "camera_auto_detect=1" \
     "enable_uart=1" \
-    "dtoverlay=imx477"; do
+    "dtoverlay=imx477" \
+    "dtparam=i2c_arm=on"; do
     if ! grep -qF "$setting" "$CONFIG_TXT"; then
       echo "$setting" >> "$CONFIG_TXT"
       LOG "  Added: $setting"

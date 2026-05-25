@@ -56,6 +56,7 @@ REG_SYS_ERR         = 0x3A
 REG_UNIT_SEL        = 0x3B
 REG_OPR_MODE        = 0x3D
 REG_PWR_MODE        = 0x3E
+REG_TEMP_SOURCE     = 0x40   # 0x00 = accelerometer (default), 0x01 = gyroscope
 
 CHIP_ID_EXPECTED    = 0xA0
 ACC_ID_EXPECTED     = 0xFB
@@ -376,8 +377,15 @@ def main():
                 print(f"\nSwitching to {tname} mode ...")
                 _w(bus, addr, REG_OPR_MODE, OPR_CONFIG)
                 time.sleep(0.025)
+                # Use gyroscope as temperature source.  The accelerometer source
+                # has a known firmware quirk on many BNO055 modules: bit 7 of the
+                # temperature register is stuck high before the accel temperature
+                # compensation initialises, producing readings ~128 °C too cold
+                # (e.g. 25 °C reads as -103 °C).  The gyroscope source is clean.
+                _w(bus, addr, REG_TEMP_SOURCE, 0x01)
+                time.sleep(0.010)
                 _w(bus, addr, REG_OPR_MODE, target)
-                time.sleep(0.100)
+                time.sleep(0.500)   # temperature sensor needs ~500 ms to stabilise
                 print("  Done.")
             else:
                 cname = OPR_NAMES.get(snap['opr_mode'], "?")

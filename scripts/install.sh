@@ -377,6 +377,10 @@ if [ -f "$CONFIG_TXT" ]; then
   if ! grep -qxF "dtoverlay=imx477" "$CONFIG_TXT"; then
     echo "dtoverlay=imx477" >> "$CONFIG_TXT"
   fi
+  if ! grep -qxF "dtparam=i2c_arm=on" "$CONFIG_TXT"; then
+    echo "dtparam=i2c_arm=on" >> "$CONFIG_TXT"
+    LOG "Enabled I2C in $CONFIG_TXT"
+  fi
   if ! grep -qxF "dtoverlay=dwc2,dr_mode=peripheral" "$CONFIG_TXT"; then
     printf "\n[all]\n# USB serial gadget\ndtoverlay=dwc2,dr_mode=peripheral\n" \
       >> "$CONFIG_TXT"
@@ -391,6 +395,9 @@ libcomposite
 u_serial
 usb_f_acm
 EOF
+
+LOG "Enabling i2c-dev module for /dev/i2c-* device nodes"
+grep -qxF i2c-dev /etc/modules 2>/dev/null || echo i2c-dev >> /etc/modules
 
 LOG "Adding dwc2 module to initramfs"
 mkdir -p /etc/initramfs-tools
