@@ -241,8 +241,51 @@ pre.logs, pre.config {
 }
 .live-view img { display: block; width: 100%; height: auto; }
 
+.config-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+.config-table tr { border-bottom: 1px solid #1a0500; }
+.config-table tr:last-child { border-bottom: none; }
+.config-table td { padding: 0.35rem 0.75rem 0.35rem 0; vertical-align: top; }
+.config-key {
+  width: 1%;
+  white-space: nowrap;
+}
+.config-value {
+  width: 1%;
+  white-space: nowrap;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  color: #ff5500;
+}
+.config-desc { color: #882200; font-size: 0.85rem; }
+.config-default {
+  display: block;
+  font-size: 0.8rem;
+  color: #882200;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+}
+.config-badge {
+  display: inline-block;
+  font-size: 0.7rem;
+  padding: 0.1em 0.35em;
+  background: #3a0a00;
+  border: 1px solid #882200;
+  border-radius: 3px;
+  color: #cc3300;
+  vertical-align: middle;
+  margin-left: 0.3em;
+}
+.config-modified { background: #150300; }
+
 @media (max-width: 600px) {
   header { flex-direction: column; align-items: flex-start; }
   main { padding: 0 0.75rem; }
   .big-coords > div > span:last-child { font-size: 1.3rem; }
+  .config-table, .config-table tbody, .config-table tr, .config-table td {
+    display: block;
+  }
+  .config-table tr { border-bottom: 1px solid #2a0800; margin-bottom: 0.5rem; }
+  .config-desc { padding-left: 0; }
 }

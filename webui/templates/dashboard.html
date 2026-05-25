@@ -94,11 +94,9 @@
   <div class="card" id="imu-card">
     <h2>IMU</h2>
     {% if imu and imu.available %}
-      {% if imu.active %}
-        <p style="color:#ff5500; font-weight:500;">Active &mdash; smoothing SkySafari updates</p>
-      {% else %}
-        <p class="hint">Detected &mdash; calibrating&hellip;</p>
-      {% endif %}
+      <p id="imu-status-text" {% if imu.active %}style="color:#ff5500; font-weight:500;"{% else %}class="hint"{% endif %}>
+        {% if imu.active %}Active &mdash; smoothing SkySafari updates{% else %}Detected &mdash; calibrating&hellip;{% endif %}
+      </p>
       <dl class="stats">
         <dt>Solves</dt>
         <dd id="imu-n">{{ imu.calib_n }} / 3</dd>
@@ -107,6 +105,7 @@
         <dt>State</dt>
         <dd id="imu-state">{{ "active" if imu.active else "calibrating" }}</dd>
       </dl>
+      <p class="hint" style="margin-top:6px;">Refines <strong>SkySafari</strong> pointing between plate-solves only &mdash; not the web UI. To activate: move scope &ge;0.1&deg; between 3 successful solves.</p>
     {% else %}
       <p class="muted" id="imu-state">Not detected</p>
       <p class="hint">
@@ -188,14 +187,26 @@ async function refresh() {
     // IMU
     const imu = data.status.result.imu;
     if (imu) {
-      const nEl = document.getElementById('imu-n');
-      const qEl = document.getElementById('imu-quality');
-      const sEl = document.getElementById('imu-state');
+      const nEl  = document.getElementById('imu-n');
+      const qEl  = document.getElementById('imu-quality');
+      const sEl  = document.getElementById('imu-state');
+      const stEl = document.getElementById('imu-status-text');
       if (nEl) nEl.textContent = imu.calib_n + ' / 3';
       if (qEl) qEl.textContent = imu.quality.toFixed(2);
       if (sEl) sEl.textContent = !imu.available ? 'Not detected'
                                 : imu.active     ? 'active'
                                 :                  'calibrating';
+      if (stEl) {
+        if (imu.active) {
+          stEl.textContent  = 'Active — smoothing SkySafari updates';
+          stEl.style.cssText = 'color:#ff5500; font-weight:500;';
+          stEl.className    = '';
+        } else {
+          stEl.textContent  = 'Detected — calibrating…';
+          stEl.style.cssText = '';
+          stEl.className    = 'hint';
+        }
+      }
     }
     // Backend / mode toggles
     const backend  = data.status.result.solver_backend || 'cedar';
