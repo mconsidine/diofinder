@@ -71,7 +71,7 @@ done
 LOG "Checking Python files parse"
 PY=$(command -v python3 || true)
 [ -n "$PY" ] || FAIL "python3 not in PATH"
-find efinder webui -name "*.py" -print0 \
+find efinder webui tests -name "*.py" -print0 \
   | xargs -0 -I{} "$PY" -m py_compile {} \
   || FAIL "Python syntax errors detected"
 "$PY" -m py_compile scripts/efinder-ctl \
