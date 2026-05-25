@@ -8,6 +8,40 @@ sudo /opt/efinder/venv/bin/python3 tests/<script>.py [options]
 
 ---
 
+## `diag_bno055.py` — BNO055 IMU sensor diagnostic
+
+Tests for sensor presence and prints every data register the BNO055 exposes.
+Requires only `smbus2` (no Adafruit library).
+
+```bash
+sudo .../diag_bno055.py                    # auto-detect address, NDOF mode, 5 samples
+sudo .../diag_bno055.py --address 0x29     # force alternate I2C address
+sudo .../diag_bno055.py --bus 3            # different I2C bus
+sudo .../diag_bno055.py --samples 20       # more live samples
+sudo .../diag_bno055.py --interval 0.5     # faster sampling
+sudo .../diag_bno055.py --mode imuplus     # match the efinder daemon mode (no mag)
+sudo .../diag_bno055.py --no-mode-change   # leave sensor in whatever mode it is
+```
+
+Prints (in order):
+
+1. **Chip identification** — chip ID, accel/mag/gyro sub-IDs, firmware revision.
+   PASS/FAIL against expected values so a broken sensor or wiring fault is obvious.
+2. **System status** — operation mode, power mode, `SYS_STAT`, `SYS_ERR`,
+   clock source (internal RC vs external crystal).
+3. **Self-test result** — MCU, gyro, magnetometer, accel (PASS/FAIL each).
+4. **Calibration status** — system/gyro/accel/mag, each 0–3 with a bar display.
+   Includes tips for improving calibration (still at rest → gyro, figure-8 → mag).
+5. **Live samples** — per sample: temperature, quaternion + |q| sanity check,
+   Euler (heading/roll/pitch), raw accel, linear accel (gravity removed), gravity
+   vector, gyroscope, magnetometer + field strength with Earth-range check.
+
+Default mode is NDOF (full 9-DOF fusion) so all outputs are exercised.
+The efinder daemon uses IMUPLUS (accel + gyro only, magnetometer disabled) to
+avoid magnetic interference from telescope motors.
+
+---
+
 ## `diag_services.sh` — system health check
 
 ```bash
