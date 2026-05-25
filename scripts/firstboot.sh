@@ -71,7 +71,20 @@ LOG "Unblocking WiFi radio"
 iw reg set US 2>/dev/null || WARN "iw reg set US failed (non-fatal)"
 rfkill unblock wifi 2>/dev/null || WARN "rfkill unblock wifi failed (non-fatal)"
 nmcli radio wifi on 2>/dev/null || WARN "nmcli radio wifi on failed (non-fatal)"
-sleep 1
+
+# CYW43438 on Pi Zero 2W takes 3-8 s to initialise after rfkill unblock.
+# Poll until NM reports wlan0 as ready (disconnected or connected) before
+# creating or activating the AP profile. Without this, nmcli con up fires
+# too early, fails silently, and the AP only appears on the second boot.
+for _i in $(seq 1 20); do
+  _state=$(nmcli -t -f DEVICE,STATE dev 2>/dev/null | awk -F: '/^wlan0:/{print $2}')
+  if [ "$_state" = "disconnected" ] || [ "$_state" = "connected" ]; then
+    LOG "wlan0 ready after ${_i}s (state: $_state)"
+    break
+  fi
+  sleep 1
+done
+unset _i _state
 
 # --- Wi-Fi access point profile -----------------------------------------------
 # Create the AP profile if it doesn't exist. If it does, leave it alone
@@ -123,7 +136,7 @@ nmcli con modify efinder-ap \
 if ! nmcli -t -f NAME,DEVICE con show --active 2>/dev/null \
      | awk -F: '$2=="wlan0"{exit 0} END{exit 1}'; then
   LOG "Activating AP profile on wlan0"
-  nmcli con up efinder-ap 2>/dev/null \
+  nmcli -w 30 con up efinder-ap \
     || WARN "Could not bring up AP immediately (efinder-ensure-ap will retry)"
 else
   LOG "wlan0 already has an active connection — leaving it"
