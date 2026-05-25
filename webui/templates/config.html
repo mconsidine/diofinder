@@ -2,7 +2,71 @@
 {% block title %}eFinder Configuration{% endblock %}
 {% block content %}
 <h2>Configuration</h2>
-<p>Read-only view of <code>{{ path }}</code>. SSH in to edit, or use
-   <code>efinder-ctl</code> commands to change individual settings.</p>
-<pre class="config">{{ content }}</pre>
+
+<div style="margin-bottom:12px; font-size:0.9rem; color:#882200;">
+  <code>{{ path }}</code>
+  &mdash; read-only view. SSH in to edit, then
+  <code>sudo systemctl restart efinder</code>.
+</div>
+
+{% if not cfg_ok %}
+  <div class="alert alert-error">Could not read config file: {{ cfg_error }}</div>
+{% endif %}
+
+<div class="card" style="margin-bottom:1rem;">
+  <h3 style="margin:0 0 8px 0; font-size:1rem;">Runtime Status</h3>
+  {% if daemon_ok %}
+  <dl class="stats">
+    {% if runtime_backend %}
+      <dt>Solver backend</dt><dd>{{ runtime_backend }}</dd>
+    {% endif %}
+    {% if runtime_test_mode is not none %}
+      <dt>Camera mode</dt><dd>{{ "test image" if runtime_test_mode else "live" }}</dd>
+    {% endif %}
+    {% if runtime_imu %}
+      <dt>IMU</dt>
+      <dd>
+        {%- if runtime_imu.active -%}
+          active
+        {%- elif runtime_imu.available -%}
+          calibrating ({{ runtime_imu.calib_n }}/3 solves, R&sup2;={{ "%.2f"|format(runtime_imu.quality) }})
+        {%- else -%}
+          not detected
+        {%- endif -%}
+      </dd>
+    {% endif %}
+    {% if runtime_fov %}
+      <dt>Live FOV</dt><dd>{{ "%.4f"|format(runtime_fov) }}&deg;</dd>
+    {% endif %}
+    {% if runtime_boresight %}
+      <dt>Boresight</dt>
+      <dd>{{ "%.0f"|format(runtime_boresight.x) }}, {{ "%.0f"|format(runtime_boresight.y) }}&thinsp;px</dd>
+    {% endif %}
+  </dl>
+  {% else %}
+  <p class="muted">Daemon not running &mdash; file values shown below.</p>
+  {% endif %}
+</div>
+
+{% for section in sections %}
+<div class="card" style="margin-bottom:1rem;">
+  <h3 style="margin:0 0 10px 0; font-size:1rem;">{{ section.name }}</h3>
+  <table class="config-table">
+    <tbody>
+    {% for row in section.rows %}
+    <tr{% if row.modified %} class="config-modified"{% endif %}>
+      <td class="config-key">
+        <code>{{ row.key }}</code>{% if row.modified %}&nbsp;<span class="config-badge">edited</span>{% endif %}
+      </td>
+      <td class="config-value">
+        {{ row.value }}
+        {% if row.modified %}<span class="config-default">default:&nbsp;{{ row.default }}</span>{% endif %}
+      </td>
+      <td class="config-desc">{{ row.description }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endfor %}
 {% endblock %}

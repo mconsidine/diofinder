@@ -102,7 +102,9 @@ def main():
 
     _setup_logging()
     cfg = load_config()
-    log.info("eFinder %s starting; config: %s", cfg.version, cfg.summary())
+    os.sched_setaffinity(0, {cfg.cpu_comms})
+    log.info("eFinder %s starting; launcher/IMU pinned to CPU %d; config: %s",
+             cfg.version, cfg.cpu_comms, cfg.summary())
 
     test_image_path = _resolve_test_image(args)
     default_test_mode = args.test or (args.test_image is not None)
