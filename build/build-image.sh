@@ -228,7 +228,7 @@ mkdir -p "$ROOT/tmp/efinder-src"
 SRC_DIR="$(cd "$WORK/../.." && pwd)"
 
 # Required directories
-for d in efinder webui systemd scripts etc proto; do
+for d in efinder webui systemd scripts etc proto tests; do
   [ -d "$SRC_DIR/$d" ] || FAIL "missing source dir: $SRC_DIR/$d"
   cp -r "$SRC_DIR/$d" "$ROOT/tmp/efinder-src/"
 done
