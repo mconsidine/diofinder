@@ -205,6 +205,19 @@ def _sep(title=""):
         return f"{'─'*2}  {title}  {'─'*pad}"
     return "─" * w
 
+def _clock_stretch_indicators(d):
+    """Return list of register names whose bit 7 is stuck high by the BCM2835 bug."""
+    hits = []
+    for name, actual, expected in [
+        ("MAG_ID",  d['mag_id'],  MAG_ID_EXPECTED),
+        ("GYR_ID",  d['gyr_id'],  GYR_ID_EXPECTED),
+        ("SW_REV_MSB", (d['sw_rev'] >> 8) & 0xFF, (d['sw_rev'] >> 8) & 0x7F),
+    ]:
+        if (actual & 0x80) and not (expected & 0x80):
+            hits.append(f"{name}: 0x{actual:02X} (expected 0x{expected:02X}, bit 7 stuck high)")
+    return hits
+
+
 def print_static(d):
     print()
     print(_sep("CHIP IDENTIFICATION"))
@@ -214,6 +227,21 @@ def print_static(d):
     print(f"  Gyro ID      0x{d['gyr_id']:02X}  expect 0x0F  {_ok(d['gyr_id']  == GYR_ID_EXPECTED)}")
     print(f"  SW rev       0x{d['sw_rev']:04X}")
     print(f"  BL rev       0x{d['bl_rev']:02X}")
+
+    stretch = _clock_stretch_indicators(d)
+    if stretch:
+        print()
+        print(_sep("CLOCK STRETCHING DETECTED"))
+        print(f"  {_Y}The BCM2835 I2C master has a hardware bug: it releases SCL before the{_NC}")
+        print(f"  {_Y}slave finishes clock-stretching, sampling bit 7 incorrectly.{_NC}")
+        print(f"  {_Y}The BNO055 is a heavy clock-stretcher; these registers show the symptom:{_NC}")
+        for h in stretch:
+            print(f"    {h}")
+        print(f"\n  Fix: add the following line to /boot/firmware/config.txt and reboot:")
+        print(f"    dtparam=i2c_arm_baudrate=50000")
+        print(f"\n  At 50 kHz the BNO055 never needs to stretch the clock.")
+        print(f"  Until then, occasional corrupt sensor reads (wrong values, glitches)")
+        print(f"  in accel/gyro/mag data and temperature are expected.")
 
     print()
     print(_sep("SYSTEM STATUS"))
@@ -385,7 +413,9 @@ def main():
                 _w(bus, addr, REG_TEMP_SOURCE, 0x01)
                 time.sleep(0.010)
                 _w(bus, addr, REG_OPR_MODE, target)
-                time.sleep(0.500)   # temperature sensor needs ~500 ms to stabilise
+                # Temperature sensor (gyro source) needs ~3 s to output a valid
+                # reading after mode change; other sensors are ready in < 100 ms.
+                time.sleep(3.0)
                 print("  Done.")
             else:
                 cname = OPR_NAMES.get(snap['opr_mode'], "?")

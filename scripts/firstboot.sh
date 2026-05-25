@@ -147,6 +147,19 @@ fi
 mkdir -p /var/lib/efinder/captures
 chown -R efinder:efinder /var/lib/efinder 2>/dev/null || true
 
+# --- I2C clock speed ----------------------------------------------------------
+# The BCM2835/BCM2711 I2C master has a hardware bug: it releases SCL before a
+# slave finishes clock-stretching, causing bit 7 to be stuck high on some reads.
+# The BNO055 IMU is a heavy clock-stretcher. Dropping to 50kHz eliminates the
+# need for the sensor to stretch the clock at all.
+# config.txt changes take effect on next reboot -- that is fine because this
+# runs on every boot and the guard prevents duplicate appends.
+CONFIG_TXT=/boot/firmware/config.txt
+if [ -f "$CONFIG_TXT" ] && ! grep -qF "i2c_arm_baudrate" "$CONFIG_TXT"; then
+  echo "dtparam=i2c_arm_baudrate=50000" >> "$CONFIG_TXT"
+  LOG "Set I2C bus to 50kHz to fix BNO055 clock-stretching (reboot required)"
+fi
+
 # --- Regenerate tetra3rs database if missing (upgrade/recovery path) ---------
 # Normally baked into the image by install.sh. This fallback runs if the file
 # was somehow lost (e.g. manual deletion, failed image build).

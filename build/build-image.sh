@@ -166,7 +166,8 @@ if [ -f "$CONFIG_TXT" ]; then
     "camera_auto_detect=1" \
     "enable_uart=1" \
     "dtoverlay=imx477" \
-    "dtparam=i2c_arm=on"; do
+    "dtparam=i2c_arm=on" \
+    "dtparam=i2c_arm_baudrate=50000"; do
     if ! grep -qF "$setting" "$CONFIG_TXT"; then
       echo "$setting" >> "$CONFIG_TXT"
       LOG "  Added: $setting"

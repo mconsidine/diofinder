@@ -381,6 +381,10 @@ if [ -f "$CONFIG_TXT" ]; then
     echo "dtparam=i2c_arm=on" >> "$CONFIG_TXT"
     LOG "Enabled I2C in $CONFIG_TXT"
   fi
+  if ! grep -qF "i2c_arm_baudrate" "$CONFIG_TXT"; then
+    echo "dtparam=i2c_arm_baudrate=50000" >> "$CONFIG_TXT"
+    LOG "Set I2C to 50kHz (BNO055 clock-stretching fix)"
+  fi
   if ! grep -qxF "dtoverlay=dwc2,dr_mode=peripheral" "$CONFIG_TXT"; then
     printf "\n[all]\n# USB serial gadget\ndtoverlay=dwc2,dr_mode=peripheral\n" \
       >> "$CONFIG_TXT"
