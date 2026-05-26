@@ -38,9 +38,7 @@ jobs:
   # step below fails fast with a clear message if they are missing.
   # --------------------------------------------------------------------------
   image:
-    if: |
-      github.event_name == 'release' ||
-      (github.event_name == 'workflow_dispatch' && inputs.build_image)
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.build_image == true)
     runs-on: ubuntu-latest
     timeout-minutes: 90
 
