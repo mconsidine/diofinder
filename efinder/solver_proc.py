@@ -1,7 +1,7 @@
 """Solver worker process — combo branch.
 
-Supports two interchangeable plate-solve backends selectable at runtime
-via shared_cfg["solver_backend"] (default: "cedar"):
+Supports three interchangeable plate-solve backends selectable at runtime
+via shared_cfg["solver_backend"] (default: "tetra"):
 
   "cedar"  cedar-detect gRPC (C++ centroid server, port 50051) +
            tetra3 Python library for plate solving.
@@ -9,10 +9,15 @@ via shared_cfg["solver_backend"] (default: "cedar"):
 
   "tetra"  tetra3rs (Rust, in-process): centroid extraction + plate solve
            in a single step with no external server dependency.
+           Currently uses cedar-detect for extraction (hybrid mode).
 
-Both backends are loaded and initialised at startup. If one fails
+  "olive"  olive-solve tetra3-py (Rust, in-process): centroid extraction +
+           plate solve in a single call with no external server dependency.
+           Build and install olive-solve's tetra3-py wheel to enable.
+
+All three backends are loaded and initialised at startup. If one fails
 (missing library, service down) it is marked unavailable and a warning
-is logged; the other backend continues normally. Switching takes effect
+is logged; the other backends continue normally. Switching takes effect
 on the very next frame without restarting the process.
 """
 
@@ -318,7 +323,27 @@ def solver_main(slots, latest_solution, shared_cfg,
     except Exception as e:
         log.warning("Tetra3rs backend unavailable: %s", e)
 
-    if not cedar_available and not tetra_available:
+    # ---- Olive backend init ------------------------------------------------
+    # olive-solve installs its Python package as "tetra3".  We detect it by
+    # checking for solve_from_image_fast, which the original cedar-solve
+    # tetra3 library does not have.
+    olive_available = False
+    olive_t3 = None
+
+    try:
+        import tetra3 as _olive_tetra3
+        if not hasattr(_olive_tetra3.Tetra3, "solve_from_image_fast"):
+            raise ImportError(
+                "installed tetra3 lacks solve_from_image_fast; "
+                "install olive-solve's tetra3-py wheel to enable this backend")
+        log.info("Loading olive database %s", cfg.olive_db)
+        olive_t3 = _olive_tetra3.Tetra3(cfg.olive_db)
+        olive_available = True
+        log.info("Olive backend ready")
+    except Exception as e:
+        log.warning("Olive backend unavailable: %s", e)
+
+    if not cedar_available and not tetra_available and not olive_available:
         log.error("No solver backend available; exiting")
         time.sleep(5)
         raise RuntimeError("No solver backend available")
@@ -791,13 +816,171 @@ def solver_main(slots, latest_solution, shared_cfg,
                         extract_ms, solve_only_ms, elapsed_ms)
 
             # ================================================================
+            # Olive backend (olive-solve tetra3-py, fully in-process)
+            # ================================================================
+            elif backend == "olive":
+                if not olive_available:
+                    slots.release_read_slot()
+                    if "olive" not in _warned_unavailable:
+                        log.warning("Olive backend selected but not available; "
+                                    "build and install olive-solve's tetra3-py wheel")
+                        _warned_unavailable.add("olive")
+                    time.sleep(0.1)
+                    continue
+
+                frame_snapshot = (
+                    np.copy(bufs[idx])
+                    if (cfg.save_failed_frames or cfg.save_solved_frames)
+                    else None
+                )
+                # Copy frame then release slot; olive processes entirely in-process.
+                frame_u8 = np.copy(bufs[idx])
+                slots.release_read_slot()
+
+                bs_y = shared_cfg.get("boresight_y", cfg.boresight_y)
+                bs_x = shared_cfg.get("boresight_x", cfg.boresight_x)
+                target_pixel = np.array([[bs_y, bs_x]], dtype=np.float32)
+                target_sky   = None
+                if align_req is not None:
+                    target_sky = np.array(
+                        [[align_req.target_ra_deg, align_req.target_dec_deg]],
+                        dtype=np.float32)
+
+                t_solve = time.monotonic()
+                try:
+                    soln = olive_t3.solve_from_image_fast(
+                        frame_u8,
+                        sigma=shared_cfg.get("detect_sigma", cfg.detect_sigma),
+                        fov_estimate=calibrator.get_fov_estimate(),
+                        fov_max_error=calibrator.get_fov_max_error(),
+                        solve_timeout=shared_cfg.get(
+                            "solve_timeout_ms", cfg.solve_timeout_ms),
+                        match_threshold=cfg.match_threshold,
+                        match_radius=cfg.match_radius,
+                        target_pixel=target_pixel,
+                        target_sky_coord=target_sky,
+                        return_matches=False,
+                    )
+                except Exception as e:
+                    log.warning("olive solve_from_image_fast raised: %s", e)
+                    latest_solution.update(_empty_solution(peak=local_peak))
+                    if align_req is not None:
+                        align_response_q.put(AlignResult(
+                            success=False,
+                            error_message=f"solver raised: {e}",
+                            completed_at=time.monotonic(),
+                        ))
+                    fail_streak += 1; continue
+
+                elapsed_ms    = (time.monotonic() - t_solve) * 1000.0
+                extract_ms    = soln.get("T_extract", 0.0)
+                solve_only_ms = soln.get("T_solve",   0.0)
+                status        = soln.get("status", NO_MATCH)
+                solve_count  += 1
+
+                if status != MATCH_FOUND or soln.get("RA") is None:
+                    latest_solution.update(_empty_solution(
+                        stars=0, peak=local_peak,
+                        solve_ms=elapsed_ms, status=status))
+                    if align_req is not None:
+                        align_response_q.put(AlignResult(
+                            success=False,
+                            error_message=f"no match (status={status})",
+                            completed_at=time.monotonic(),
+                        ))
+                    fail_streak += 1
+                    if fail_streak == 1 or fail_streak % 20 == 0:
+                        log.info(
+                            "olive no solve: status=%d peak=%d "
+                            "t=%.0fms (ext=%.0fms slv=%.0fms)",
+                            status, local_peak, elapsed_ms,
+                            extract_ms, solve_only_ms)
+                    if cfg.save_failed_frames and frame_snapshot is not None:
+                        _save_frame(frame_snapshot, cfg, f"olive_failed_s{status}")
+                    continue
+
+                measured_fov        = soln.get("FOV", calibrator.get_fov_estimate())
+                measured_distortion = soln.get("distortion", 0.0)
+                calibrator.update_from_solve(measured_fov, measured_distortion)
+                polar.update_from_solve(soln["RA"], soln["Dec"])
+
+                ra_target  = soln.get("RA_target")
+                dec_target = soln.get("Dec_target")
+                if ra_target is None or dec_target is None:
+                    ra_out  = soln["RA"]
+                    dec_out = soln["Dec"]
+                else:
+                    ra_out  = ra_target[0]  if hasattr(ra_target,  "__len__") else ra_target
+                    dec_out = dec_target[0] if hasattr(dec_target, "__len__") else dec_target
+
+                # stars field: solve_from_image_fast reports matched count,
+                # not total detected; use Matches for both fields.
+                n_matches = soln.get("Matches", 0)
+                latest_solution.update(_filled_solution(
+                    ra=ra_out, dec=dec_out,
+                    roll=soln.get("Roll", 0.0), fov=measured_fov,
+                    stars=n_matches, matches=n_matches,
+                    peak=local_peak, noise=0.0,
+                    solve_ms=elapsed_ms, status=status,
+                ))
+                _imu_update_reference(
+                    shared_cfg, ra_out, dec_out, soln.get("Roll", 0.0))
+
+                if align_req is not None:
+                    xt = soln.get("x_target")
+                    yt = soln.get("y_target")
+                    if xt is None or yt is None:
+                        align_response_q.put(AlignResult(
+                            success=False,
+                            error_message="olive-solve returned no x_target/y_target",
+                            completed_at=time.monotonic(),
+                        ))
+                    else:
+                        x = xt[0] if hasattr(xt, "__len__") else xt
+                        y = yt[0] if hasattr(yt, "__len__") else yt
+                        if x is None or y is None:
+                            align_response_q.put(AlignResult(
+                                success=False,
+                                error_message="target outside camera FOV",
+                                completed_at=time.monotonic(),
+                            ))
+                        else:
+                            log.info(
+                                "ALIGN (olive): (%.4f, %.4f) -> "
+                                "pixel (y=%.2f, x=%.2f)",
+                                align_req.target_ra_deg,
+                                align_req.target_dec_deg, y, x)
+                            align_response_q.put(AlignResult(
+                                success=True,
+                                boresight_y=float(y), boresight_x=float(x),
+                                completed_at=time.monotonic(),
+                            ))
+
+                if cfg.save_solved_frames and frame_snapshot is not None:
+                    _save_frame(frame_snapshot, cfg, "olive_solved")
+
+                if fail_streak:
+                    log.info(
+                        "olive solved after %d failed: matches=%d "
+                        "t=%.0fms (ext=%.0fms slv=%.0fms)",
+                        fail_streak, n_matches,
+                        elapsed_ms, extract_ms, solve_only_ms)
+                    fail_streak = 0
+                elif solve_count % cfg.log_solve_stats_every_n == 0:
+                    log.info(
+                        "olive solve #%d: matches=%d peak=%d "
+                        "t=%.0fms (ext=%.0fms slv=%.0fms)",
+                        solve_count, n_matches, local_peak,
+                        elapsed_ms, extract_ms, solve_only_ms)
+
+            # ================================================================
             # Unknown backend
             # ================================================================
             else:
                 slots.release_read_slot()
                 if backend not in _warned_unavailable:
                     log.warning(
-                        "Unknown solver_backend %r; valid: cedar, tetra",
+                        "Unknown solver_backend %r; valid: cedar, tetra, olive",
                         backend)
                     _warned_unavailable.add(backend)
                 time.sleep(0.1)
