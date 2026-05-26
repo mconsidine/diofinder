@@ -3,7 +3,8 @@
 diag_camera.py — Camera exposure/gain sweep diagnostic for eFinder.
 
 Captures one frame for every combination of exposure and gain in the
-specified ranges, with optional 2×2 software binning.  Files are named:
+specified ranges, with optional 2×2 software binning.  Individual frames are
+named:
 
     YYYYMMDDHHMMSSMMM-EEE-GG[-2x2].png
 
@@ -11,6 +12,11 @@ where EEE is exposure in milliseconds (zero-padded to 3 digits) and GG is
 the analogue gain rounded to the nearest integer.  Example:
 
     20260603190304010-050-20-2x2.png   ← 50 ms, gain 20, 2×2 binned
+
+After all frames are captured they are bundled into a ZIP archive named
+after the sweep start timestamp (e.g. 20260603190304010.zip) and the
+individual PNGs are deleted.  The ZIP is the only artifact left in the
+output directory, making it easy to transfer off the device.
 
 Files are written to the directory where test.png lives (/var/lib/efinder
 by default), or the current working directory if test.png is not found.
@@ -43,6 +49,7 @@ import datetime
 import logging
 import sys
 import time
+import zipfile
 from pathlib import Path
 
 import numpy as np
@@ -218,8 +225,13 @@ def main():
     time.sleep(settle_s)
 
     # ---- Capture loop --------------------------------------------------------
-    saved   = 0
-    t_start = time.monotonic()
+    # Record the sweep start timestamp once — used as the ZIP filename.
+    sweep_dt  = datetime.datetime.now()
+    sweep_ts  = sweep_dt.strftime("%Y%m%d%H%M%S") + f"{sweep_dt.microsecond // 1000:03d}"
+
+    saved       = 0
+    saved_paths = []
+    t_start     = time.monotonic()
 
     try:
         for exp_s in exposures:
@@ -246,10 +258,11 @@ def main():
                 fname = _make_filename(exp_s, gain, args.binning)
                 fpath = output_dir / fname
                 Image.fromarray(frame, mode="L").save(fpath, format="PNG")
+                saved_paths.append(fpath)
 
                 saved += 1
-                peak  = int(frame.max())
-                mean  = float(frame.mean())
+                peak   = int(frame.max())
+                mean   = float(frame.mean())
                 log.info("[%2d/%d]  exp=%5.3fs  gain=%4.0f  peak=%3d  mean=%5.1f  %s",
                          saved, total, exp_s, gain, peak, mean, fname)
 
@@ -258,10 +271,32 @@ def main():
 
     elapsed = time.monotonic() - t_start
     print()
-    log.info("Done: %d/%d frames saved to %s  (%.1f s)",
-             saved, total, output_dir, elapsed)
+    log.info("Captured %d/%d frames in %.1f s", saved, total, elapsed)
     if saved < total:
         log.warning("%d captures were not saved (camera error)", total - saved)
+
+    # ---- Bundle into ZIP and remove individual PNGs -------------------------
+    if saved_paths:
+        zip_path = output_dir / f"{sweep_ts}.zip"
+        log.info("Creating %s …", zip_path)
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as zf:
+            for p in saved_paths:
+                zf.write(p, arcname=p.name)
+
+        # Verify the archive is intact before deleting the source files
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            bad = zf.testzip()
+        if bad is not None:
+            log.error("ZIP integrity check failed on %s — PNGs NOT deleted", bad)
+        else:
+            for p in saved_paths:
+                p.unlink()
+            log.info("ZIP OK (%d files, %.1f MB) — individual PNGs deleted",
+                     len(saved_paths),
+                     zip_path.stat().st_size / 1_048_576)
+            log.info("Archive: %s", zip_path)
+    else:
+        log.warning("No frames captured — no ZIP created")
 
 
 if __name__ == "__main__":

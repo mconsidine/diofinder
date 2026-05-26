@@ -939,12 +939,13 @@ sudo .../diag_camera.py [--exp-min S] [--exp-max S] [--exp-step S]
                          [--binning] [--output-dir PATH]
 ```
 
-Captures one frame for every combination of exposure and gain in the specified
-ranges.  Files are named `YYYYMMDDHHMMSSMMM-EEE-GG[-2x2].png` (e.g.
-`20260603190304010-050-20-2x2.png` = 50 ms, gain 20, 2×2 binned).  Saved to
+Captures one frame per (exposure, gain) combination.  Individual frames are
+named `YYYYMMDDHHMMSSMMM-EEE-GG[-2x2].png`; after all captures complete they
+are bundled into `YYYYMMDDHHMMSSMMM.zip` (sweep start timestamp), the PNGs
+are deleted, and the archive is ready to transfer off the device.  Saved to
 `/var/lib/efinder/` by default (where `test.png` lives).
 
-Per-frame log shows peak pixel and mean pixel value — useful for spotting
+Per-frame log shows peak and mean pixel value — useful for spotting
 saturation or underexposure before opening files.
 
 ```bash

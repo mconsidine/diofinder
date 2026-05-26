@@ -40,11 +40,17 @@ File naming convention: `YYYYMMDDHHMMSSMMM-EEE-GG[-2x2].png`
 Example: `20260603190304010-050-20-2x2.png` — captured 2026-06-03 at
 19:03:04.010, exposure 50 ms, gain 20, 2×2 binned.
 
+After all frames are captured they are bundled into a ZIP archive named
+`YYYYMMDDHHMMSSMMM.zip` (the sweep start timestamp) and the individual PNGs
+are deleted after a ZIP integrity check.  The archive is the only artifact
+left in the output directory, making it easy to transfer off the device with
+`scp` or the web file manager.
+
 Files are saved to wherever `test.png` lives (`/var/lib/efinder` by default),
 or the current directory if `test.png` is not found.  `--output-dir` overrides.
 
-Per-frame log shows exposure, gain, peak pixel value, and mean pixel value —
-useful for quickly spotting saturation or underexposure without opening every file.
+Per-frame log shows peak pixel and mean pixel value — useful for spotting
+saturation or underexposure without opening every file.
 
 ---
 
