@@ -4,7 +4,7 @@ eFinder main launcher — combo branch.
 
 Spawns three pinned worker processes:
   * camera_proc   -> CPU cfg.cpu_camera : picamera2 or test image -> shared memory
-  * solver_proc   -> CPU cfg.cpu_solver : cedar or tetra3rs (runtime-switchable)
+  * solver_proc   -> CPU cfg.cpu_solver : cedar, tetra3rs, or olive-solve (runtime-switchable)
   * comms_proc    -> CPU cfg.cpu_comms  : LX200 server + alignment + maint socket
 
 CPU 0 is left to the kernel.
@@ -14,7 +14,7 @@ Inter-process state:
   * latest_solution: Manager dict published by solver, read by comms
   * shared_cfg: Manager dict for live-mutable settings:
       boresight_x/y, detect_sigma, solve_timeout_ms,
-      solver_backend ("cedar" | "tetra"), test_mode (bool)
+      solver_backend ("cedar" | "tetra" | "olive"), test_mode (bool)
   * align_request_q / align_response_q: comms <-> solver alignment workflow
 """
 
@@ -96,7 +96,7 @@ def main():
         "--test-image", metavar="PATH",
         help="Test mode: use the specified PNG instead of the camera")
     parser.add_argument(
-        "--backend", choices=("cedar", "tetra"), default="tetra",
+        "--backend", choices=("cedar", "tetra", "olive"), default="tetra",
         help="Initial solver backend (default: tetra)")
     args = parser.parse_args()
 
@@ -176,7 +176,7 @@ def main():
         time.sleep(cfg.shutdown_grace_s)
         for p in procs:
             if p.is_alive():
-                log.warning("Force killing %s", p.name)
+                log.warning("Force killing %s", p)
                 p.kill()
         try:
             manager.shutdown()

@@ -87,6 +87,10 @@ class Config:
     # tetra3rs.SolverDatabase.generate_from_gaia(); it is incompatible
     # with the Python tetra3 .npz format.
     tetra3rs_db: str = "/var/lib/efinder/efinder-tetra-database.bin"
+    # olive-solve (tetra3-py) accepts the tetra3 .npz format, so this
+    # can reuse tetra3_db. Set a different path if you want a database
+    # built or tuned specifically for olive-solve.
+    olive_db: str = "default_database"
     fov_max_error_deg: float = 1.0
     min_centroids: int = 8
     solve_timeout_ms: int = 1500
