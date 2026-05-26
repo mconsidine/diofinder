@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-eFinder main launcher — combo branch.
+eFinder main launcher — olive branch.
 
 Spawns three pinned worker processes:
-  * camera_proc   -> CPU cfg.cpu_camera : picamera2 or test image -> shared memory
-  * solver_proc   -> CPU cfg.cpu_solver : cedar or tetra3rs (runtime-switchable)
-  * comms_proc    -> CPU cfg.cpu_comms  : LX200 server + alignment + maint socket
+  * camera_proc  -> CPU cfg.cpu_camera : picamera2 or test image -> shared memory
+  * solver_proc  -> CPUs {cfg.cpu_solver, cfg.cpu_camera} : olive-solve in-process
+  * comms_proc   -> CPU cfg.cpu_comms  : LX200 server + alignment + maint socket
 
 CPU 0 is left to the kernel.
 
@@ -13,8 +13,7 @@ Inter-process state:
   * Three SHM frame buffers, coordinated by FrameSlots
   * latest_solution: Manager dict published by solver, read by comms
   * shared_cfg: Manager dict for live-mutable settings:
-      boresight_x/y, detect_sigma, solve_timeout_ms,
-      solver_backend ("cedar" | "tetra"), test_mode (bool)
+      boresight_x/y, detect_sigma, solve_timeout_ms, test_mode (bool)
   * align_request_q / align_response_q: comms <-> solver alignment workflow
 """
 
@@ -59,12 +58,6 @@ def _allocate_shared_frames(cfg):
 
 
 def _resolve_test_image(args):
-    """Find a test image path if one exists; return Path or None.
-
-    Always searches the standard locations so camera_proc has the image
-    loaded and ready for runtime test-mode switching via the status page.
-    Only _starting_ in test mode requires --test or --test-image.
-    """
     if args.test_image:
         p = Path(args.test_image)
         if not p.exists():
@@ -87,7 +80,7 @@ def _resolve_test_image(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="eFinder star-tracker daemon (combo)")
+    parser = argparse.ArgumentParser(description="eFinder star-tracker daemon (olive)")
     test_grp = parser.add_mutually_exclusive_group()
     test_grp.add_argument(
         "--test", action="store_true",
@@ -95,9 +88,6 @@ def main():
     test_grp.add_argument(
         "--test-image", metavar="PATH",
         help="Test mode: use the specified PNG instead of the camera")
-    parser.add_argument(
-        "--backend", choices=("cedar", "tetra"), default="tetra",
-        help="Initial solver backend (default: tetra)")
     args = parser.parse_args()
 
     _setup_logging()
@@ -112,8 +102,7 @@ def main():
         log.info("Starting in TEST MODE — camera replaced by %s", test_image_path)
     else:
         log.info("Starting in LIVE MODE%s",
-                 f" (test image available for switching: {test_image_path})"
-                 if test_image_path else "")
+                 f" (test image available: {test_image_path})" if test_image_path else "")
 
     mp.set_start_method("spawn", force=True)
 
@@ -128,12 +117,10 @@ def main():
         "epoch_monotonic": 0.0,
     })
     shared_cfg = manager.dict({
-        "boresight_y":    cfg.boresight_y,
-        "boresight_x":    cfg.boresight_x,
-        "imu_available":  False,
-        # Combo runtime toggles
-        "solver_backend": args.backend,
-        "test_mode":      default_test_mode,
+        "boresight_y":   cfg.boresight_y,
+        "boresight_x":   cfg.boresight_x,
+        "imu_available": False,
+        "test_mode":     default_test_mode,
     })
     align_request_q  = mp.Queue(maxsize=4)
     align_response_q = mp.Queue(maxsize=4)

@@ -1,16 +1,9 @@
 # eFinder Python dependencies installed via pip wheels.
 #
-# This file does NOT include cedar-solve, which install.sh handles
-# separately because it needs --no-deps + --no-build-isolation flags
-# that don't fit into a requirements.txt.
+# Heavy compiled libraries (numpy, scipy, Pillow, flask, picamera2)
+# come from apt and are visible to the venv via --system-site-packages.
 #
-# It also does NOT include the heavy compiled libraries
-# (numpy, scipy, Pillow, flask, picamera2) -- those come from apt
-# (python3-numpy, python3-scipy, python3-pil, python3-flask,
-# python3-picamera2) and are visible to the venv via
-# --system-site-packages.
+# olive-solve's tetra3-py wheel is installed separately by install.sh
+# (maturin build + pip install from the local wheel).
 
-grpcio
-grpcio-tools
-protobuf
 smbus2

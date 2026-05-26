@@ -1,11 +1,7 @@
 [Unit]
-Description=eFinder plate-solving telescope finder (combo: cedar+tetra3rs)
+Description=eFinder plate-solving telescope finder (olive)
 Documentation=https://github.com/mconsidine/eFinder_cli
-After=cedar-detect.service network.target
-# Wants (not Requires): efinder starts even if cedar-detect is absent.
-# The cedar backend will fail per-solve until cedar-detect is running;
-# the tetra backend works without it entirely.
-Wants=cedar-detect.service
+After=network.target
 
 [Service]
 Type=simple

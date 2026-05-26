@@ -9,13 +9,14 @@ Pinned to its dedicated CPU. Two server endpoints:
 
   2. Maintenance Unix socket at /run/efinder/maint.sock -- accepts
      newline-delimited JSON requests for inspection, calibration,
-     boresight management, exposure tuning, and (combo) backend/mode
-     switching. Used by efinder-ctl and the web UI.
+     boresight management, exposure tuning, and mode switching.
+     Used by efinder-ctl and the web UI.
 
-Combo additions:
-  set_backend   {"backend": "cedar" | "tetra"}
+Available maintenance commands:
   set_test_mode {"enabled": true | false}
-  status response includes solver_backend and test_mode fields.
+  status, boresight_show/set/center, calibration_status/reset,
+  polar_start/status/cancel/set_latitude, exposure_get/set, gain_set,
+  solver_params_get/set
 """
 
 import datetime
@@ -379,7 +380,7 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "y": ctx.shared_cfg.get("boresight_y", ctx.cfg.boresight_y),
                     "x": ctx.shared_cfg.get("boresight_x", ctx.cfg.boresight_x),
                 },
-                "fov_deg":       ctx.shared_cfg.get("fov_deg", ctx.cfg.fov_deg),
+                "fov_deg":        ctx.shared_cfg.get("fov_deg", ctx.cfg.fov_deg),
                 "config_summary": ctx.cfg.summary(),
                 "imu": {
                     "available": imu_avail,
@@ -387,7 +388,7 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "quality":   round(imu_quality, 3),
                     "active":    imu_active,
                 },
-                "solver_backend": ctx.shared_cfg.get("solver_backend", "cedar"),
+                "solver_backend": "olive",
                 "test_mode":      ctx.shared_cfg.get("test_mode", False),
             })
 
@@ -545,11 +546,9 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
         if cmd == "solver_params_get":
             return MaintResponse(ok=True, result={
                 "detect_sigma":     ctx.shared_cfg.get(
-                    "detect_sigma",    ctx.cfg.detect_sigma),
+                    "detect_sigma",     ctx.cfg.detect_sigma),
                 "solve_timeout_ms": ctx.shared_cfg.get(
                     "solve_timeout_ms", ctx.cfg.solve_timeout_ms),
-                "detect_use_binned": ctx.shared_cfg.get(
-                    "detect_use_binned", ctx.cfg.detect_use_binned),
             })
 
         if cmd == "solver_params_set":
@@ -577,24 +576,10 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                                         error="solve_timeout_ms out of range")
                 ctx.shared_cfg["solve_timeout_ms"] = ms
                 updates["solve_timeout_ms"] = ms
-            if "detect_use_binned" in args:
-                ctx.shared_cfg["detect_use_binned"] = bool(args["detect_use_binned"])
-                updates["detect_use_binned"] = bool(args["detect_use_binned"])
             if persist and updates:
                 cfg_mod.save_keys(updates)
             return MaintResponse(ok=True, result={**updates, "persisted": persist})
 
-        # ---- Combo: solver backend toggle ----------------------------------
-        if cmd == "set_backend":
-            backend = str(args.get("backend", ""))
-            if backend not in ("cedar", "tetra"):
-                return MaintResponse(ok=False,
-                                     error="backend must be 'cedar' or 'tetra'")
-            ctx.shared_cfg["solver_backend"] = backend
-            log.info("Solver backend -> %s", backend)
-            return MaintResponse(ok=True, result={"solver_backend": backend})
-
-        # ---- Combo: test/live mode toggle ----------------------------------
         if cmd == "set_test_mode":
             try:
                 enabled = bool(args["enabled"])
