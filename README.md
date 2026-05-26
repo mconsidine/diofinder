@@ -33,6 +33,7 @@ Both backends use **cedar-detect** (Rust gRPC) for star centroid extraction.
 14. [Updating without a git repository](#updating-without-a-git-repository)
 15. [Architecture](#architecture)
 16. [Diagnostic guide (SSH / PuTTY)](#diagnostic-guide-ssh--putty)
+    - [Can't solve even though stars are visible](#cant-solve-even-though-stars-are-visible)
 17. [Benchmark and diagnostic scripts](#benchmark-and-diagnostic-scripts)
 18. [Performance characteristics](#performance-characteristics)
 19. [Building and development](#building-and-development)
@@ -226,7 +227,9 @@ Live camera view with controls that take effect immediately (no page reload):
 - **Gain (1–64)**: slider + numeric box + `−`/`+` buttons (±1 per click).
 - **Detection sigma**: star extraction threshold. Slider + numeric box +
   `−`/`+` buttons (±1.0 per click). Default 9. Lower finds fainter stars;
-  higher rejects noise. Valid range: 3–20.
+  higher rejects noise. Valid range: 3–20. **This is the first thing to adjust
+  if the solver is not finding enough stars** — see
+  [Can't solve even though stars are visible](#cant-solve-even-though-stars-are-visible).
 - **Solve timeout (ms)**: maximum time per frame. Slider + numeric box.
   Default 1500 ms.
 - **Binned star candidates**: checkbox. When checked (default), cedar-detect
@@ -933,6 +936,93 @@ web UI does not interrupt active plate-solving. Restarting `efinder` does.
 | `EACCES` on SHM in diagnostic scripts | Root-created SHM not readable by efinder user | Scripts now chmod 0o644 automatically; re-run after updating scripts |
 | Port 50051 not listening | Cedar-detect crashed | `sudo systemctl restart cedar-detect` and check its journal |
 
+### 13. Can't solve even though stars are visible
+
+This is the most common field problem.  Work through these steps in order.
+
+#### Step 1 — check what the solver is actually seeing
+
+The stars you see through the eyepiece or in the arcsinh-stretched live view
+are not necessarily the stars cedar-detect is extracting.  Run the sigma sweep
+to see the raw star count at each threshold:
+
+```bash
+sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_detect.py --sigma-sweep
+```
+
+This prints a table like:
+
+```
+sigma=3   stars=47
+sigma=5   stars=31
+sigma=7   stars=18
+sigma=9   stars=6      ← default; below the 8-star minimum → TOO_FEW
+sigma=11  stars=2
+```
+
+If sigma=9 yields fewer than 8 stars, **lower sigma on the Camera page**.
+Try 6 or 7 as a starting point.  The change takes effect immediately with no
+restart.  Use **Persist → Apply & save** to keep it across reboots.
+
+#### Step 2 — understand the frame pipeline
+
+The IMX477 native sensor is 4056×3040. When the efinder requests 960×760,
+picamera2 uses the 2×2 hardware-binned sensor mode (2028×1520) and the ISP
+scales the result to 960×760. **The full sensor area is used — this is not a
+crop, the full FOV is preserved.** The effective plate scale is ~50.8 "/px.
+Stars are still point sources at this scale so the downscale does not cause
+solve failures — sigma and FOV estimate are far more likely culprits.
+
+#### Step 3 — verify the FOV estimate
+
+If cedar-detect reports ≥ 8 stars but you still get `NO_MATCH`, the FOV
+estimate may be wrong.  Check the Config page for `fov_deg` and compare it
+to your actual optics.  Then reset calibration so the solver uses the full
+1° tolerance window:
+
+```bash
+efinder-ctl calibration reset
+```
+
+After a successful solve the eFinder self-calibrates the FOV and tightens the
+window automatically.
+
+#### Step 4 — capture frames for off-device analysis
+
+If the problem is hard to diagnose live, run the camera sweep to capture raw
+frames along with the current config and daemon status:
+
+```bash
+# Single frame at your current settings (e.g. exp=0.2s gain=20)
+sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_camera.py \
+    --exp-min 0.2 --exp-max 0.2 --gain-min 20 --gain-max 20
+
+# Or a sweep to evaluate different settings
+sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_camera.py \
+    --exp-min 0.1 --exp-max 0.4 --exp-step 0.1 \
+    --gain-min 15 --gain-max 30 --gain-step 5
+```
+
+The script saves a ZIP to `/var/lib/efinder/` containing the PNGs plus
+`capture_info.txt` (sweep parameters, system info, live daemon status) and
+`efinder.conf` (exact config at capture time).  Copy it to your laptop:
+
+```bash
+# From your laptop:
+scp efinder@efinder.local:/var/lib/efinder/YYYYMMDDHHMMSSMMM.zip .
+```
+
+Replace `YYYYMMDDHHMMSSMMM` with the timestamp printed by the script
+(or use tab-completion on the device).  Password is `12345678`.
+
+#### Quick-reference: sigma adjustment from the web UI
+
+1. Open `http://efinder.local/camera`
+2. Find the **Detection sigma** slider (default 9, range 3–20)
+3. Drag left or click `−` to lower it — change takes effect on the next frame
+4. Watch the dashboard for `stars` count to climb above 8
+5. When solving reliably, tick **Persist** and click **Apply & save**
+
 ---
 
 ## Benchmark and diagnostic scripts
@@ -957,8 +1047,14 @@ are bundled into `YYYYMMDDHHMMSSMMM.zip` (sweep start timestamp), the PNGs
 are deleted, and the archive is ready to transfer off the device.  Saved to
 `/var/lib/efinder/` by default (where `test.png` lives).
 
+The ZIP always contains two extra diagnostic files:
+- `capture_info.txt` — sweep parameters, frame pipeline explanation, hostname,
+  Pi model, OS, and live daemon status at the time of capture
+- `efinder.conf` — verbatim copy of the active config file
+
 Per-frame log shows peak and mean pixel value — useful for spotting
-saturation or underexposure before opening files.
+saturation or underexposure before opening files.  The script prints the
+exact `scp` command to copy the archive to your laptop when it finishes.
 
 ```bash
 # Default sweep (0.05–0.30 s step 0.05, gain 15–40 step 5)
@@ -968,8 +1064,14 @@ sudo .../diag_camera.py
 sudo .../diag_camera.py --exp-min 0.1 --exp-max 0.5 --exp-step 0.1 \
                          --gain-min 10 --gain-max 30 --gain-step 5 --binning
 
-# Single capture
+# Single capture at solver defaults (exp=0.2s gain=20, no binning)
 sudo .../diag_camera.py --exp-min 0.2 --exp-max 0.2 --gain-min 20 --gain-max 20
+```
+
+Transfer the archive to your laptop (from your laptop):
+
+```bash
+scp efinder@efinder.local:/var/lib/efinder/YYYYMMDDHHMMSSMMM.zip .
 ```
 
 ### `diag_services.sh` — system health check

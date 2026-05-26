@@ -24,7 +24,7 @@ sudo .../diag_camera.py --exp-min 0.1 --exp-max 0.5 --exp-step 0.1 \
                          --gain-min 10 --gain-max 30 --gain-step 5 \
                          --binning
 
-# Single exposure/gain pair (set min = max)
+# Single exposure/gain pair — matches solver defaults (exp=0.2s, gain=20)
 sudo .../diag_camera.py --exp-min 0.2 --exp-max 0.2 \
                          --gain-min 20 --gain-max 20
 
@@ -43,20 +43,52 @@ Example: `20260603190304010-050-20-2x2.png` — captured 2026-06-03 at
 After all frames are captured they are bundled into a ZIP archive named
 `YYYYMMDDHHMMSSMMM.zip` (the sweep start timestamp) and the individual PNGs
 are deleted after a ZIP integrity check.  The archive is the only artifact
-left in the output directory, making it easy to transfer off the device with
-`scp` or the web file manager.
+left in the output directory, making it easy to transfer off the device.
+
+**The ZIP always contains two extra diagnostic files:**
+- `capture_info.txt` — sweep parameters, frame pipeline explanation, hostname,
+  Pi model, OS version, live daemon status (solver backend, test mode, FOV,
+  star count, last solve time)
+- `efinder.conf` — verbatim copy of `/etc/efinder/efinder.conf` at the time
+  of capture, so the exact settings that produced the frames are preserved
 
 Files are saved to wherever `test.png` lives (`/var/lib/efinder` by default),
 or the current directory if `test.png` is not found.  `--output-dir` overrides.
 
 Per-frame log shows peak pixel and mean pixel value — useful for spotting
-saturation or underexposure without opening every file.
+saturation or underexposure without opening every file.  The script prints the
+`scp` command needed to copy the archive to your laptop when it finishes.
+
+### What you are capturing
+
+The IMX477 native sensor is 4056×3040.  When picamera2 is asked for 960×760
+(the efinder default), it selects the 2×2 hardware-binned sensor mode
+(2028×1520) and the ISP scales the result down to 960×760.  **The full sensor
+area (full FOV) is always used — this is not a crop.**  Captured PNGs are raw
+8-bit grayscale Y-plane with no display stretch applied, identical in content
+to what the efinder solver receives.  A frame captured without `--binning` at
+the default 960×760 is directly comparable to what cedar-detect and tetra3rs
+see during a live solve.
 
 **Note on the live-view stretch**: the web UI Camera page displays frames with
 an arcsinh sky-subtracted stretch (sky median subtracted, then
 `arcsinh(x / β)` scaled to the 99.9th percentile).  Frames captured by
-`diag_camera.py` are raw 8-bit PNGs saved before any stretch, which is what
-you want for exposure/gain evaluation.
+`diag_camera.py` are raw, which is what you want for exposure/gain evaluation.
+
+### Transferring the archive to a laptop
+
+The script prints the exact command when it finishes.  In general:
+
+```bash
+# From your laptop (replace IP or use efinder.local):
+scp efinder@efinder.local:/var/lib/efinder/YYYYMMDDHHMMSSMMM.zip .
+
+# If you used --output-dir:
+scp efinder@efinder.local:/tmp/frames/YYYYMMDDHHMMSSMMM.zip .
+```
+
+Password is `12345678` unless you changed it.  On Windows use WinSCP or
+`pscp` (PuTTY tools).
 
 ---
 

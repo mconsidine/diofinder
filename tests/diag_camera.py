@@ -18,6 +18,10 @@ after the sweep start timestamp (e.g. 20260603190304010.zip) and the
 individual PNGs are deleted.  The ZIP is the only artifact left in the
 output directory, making it easy to transfer off the device.
 
+The ZIP always contains two extra files for diagnostic purposes:
+  capture_info.txt  — sweep parameters, system info, and live daemon status
+  efinder.conf      — copy of /etc/efinder/efinder.conf at capture time
+
 Files are written to the directory where test.png lives (/var/lib/efinder
 by default), or the current working directory if test.png is not found.
 
@@ -46,7 +50,10 @@ Must run as root (or a member of the 'video' group) on the Pi.
 
 import argparse
 import datetime
+import json
 import logging
+import platform
+import socket
 import sys
 import time
 import zipfile
@@ -103,6 +110,87 @@ def _bin2x2(frame: np.ndarray) -> np.ndarray:
                  .astype(np.uint8))
 
 
+def _query_daemon_status() -> str:
+    """Query the efinder maint socket for live status. Returns formatted string."""
+    try:
+        s = socket.socket(socket.AF_UNIX)
+        s.settimeout(2.0)
+        s.connect("/run/efinder/maint.sock")
+        s.sendall(b'{"cmd":"status","args":{}}\n')
+        buf = b""
+        while b"\n" not in buf:
+            chunk = s.recv(4096)
+            if not chunk:
+                break
+            buf += chunk
+        s.close()
+        status = json.loads(buf.split(b"\n")[0])
+        return json.dumps(status, indent=2)
+    except Exception as exc:
+        return f"(unavailable: {exc})"
+
+
+def _build_info_txt(args, exposures, gains, width, height,
+                    sweep_ts, elapsed, saved, total) -> str:
+    """Build the capture_info.txt content bundled into the ZIP."""
+    lines = []
+
+    lines += [
+        "eFinder camera diagnostic sweep — capture info",
+        "=" * 52,
+        f"Sweep timestamp : {sweep_ts}",
+        f"Captured        : {saved}/{total} frames in {elapsed:.1f} s",
+        f"Frame size      : {width}×{height} px (capture resolution)",
+        f"Software binning: {'2×2 (saved images are half-size)' if args.binning else 'none (matches daemon resolution)'}",
+        f"Exposures       : {', '.join(f'{e:.3f}s' for e in exposures)}",
+        f"Gains           : {', '.join(f'{g:.0f}' for g in gains)}",
+        f"Warmup frames   : {args.warmup} per setting",
+        "",
+        "Frame pipeline note",
+        "-" * 52,
+        "The IMX477 native sensor is 4056×3040.  When picamera2 is asked for",
+        f"{width}×{height}, it selects the 2×2 hardware-binned sensor mode",
+        "(2028×1520) and the ISP scales the result to the requested size.",
+        "The full sensor area (full FOV) is always used — this is NOT a crop.",
+        "Captured PNGs are raw 8-bit grayscale Y-plane, identical to what the",
+        "efinder solver receives.  No display stretch is applied.",
+        "",
+    ]
+
+    # System info
+    lines += ["System", "-" * 52]
+    lines.append(f"Hostname : {socket.gethostname()}")
+    lines.append(f"Platform : {platform.platform()}")
+    try:
+        model = Path("/proc/device-tree/model").read_text().rstrip("\x00").strip()
+        lines.append(f"Pi model : {model}")
+    except Exception:
+        pass
+    try:
+        import subprocess
+        uname = subprocess.check_output(["uname", "-a"], text=True).strip()
+        lines.append(f"uname    : {uname}")
+    except Exception:
+        pass
+    lines.append("")
+
+    # efinder config
+    conf_path = Path("/etc/efinder/efinder.conf")
+    lines += ["efinder.conf", "-" * 52]
+    if conf_path.exists():
+        lines.append(conf_path.read_text())
+    else:
+        lines.append("(not found — /etc/efinder/efinder.conf does not exist)")
+    lines.append("")
+
+    # live daemon status
+    lines += ["Daemon status (maint socket)", "-" * 52]
+    lines.append(_query_daemon_status())
+    lines.append("")
+
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -137,6 +225,7 @@ def main():
 
     # ---- Resolve frame dimensions from config --------------------------------
     width, height = args.width, args.height
+    cfg = None
     if width is None or height is None:
         try:
             sys.path.insert(0, "/opt/efinder")
@@ -279,9 +368,17 @@ def main():
     if saved_paths:
         zip_path = output_dir / f"{sweep_ts}.zip"
         log.info("Creating %s …", zip_path)
+
+        info_txt  = _build_info_txt(args, exposures, gains, width, height,
+                                    sweep_ts, elapsed, saved, total)
+        conf_path = Path("/etc/efinder/efinder.conf")
+
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as zf:
             for p in saved_paths:
                 zf.write(p, arcname=p.name)
+            zf.writestr("capture_info.txt", info_txt)
+            if conf_path.exists():
+                zf.write(conf_path, arcname="efinder.conf")
 
         # Verify the archive is intact before deleting the source files
         with zipfile.ZipFile(zip_path, "r") as zf:
@@ -291,10 +388,12 @@ def main():
         else:
             for p in saved_paths:
                 p.unlink()
-            log.info("ZIP OK (%d files, %.1f MB) — individual PNGs deleted",
+            log.info("ZIP OK (%d files + capture_info.txt + efinder.conf, %.1f MB)"
+                     " — individual PNGs deleted",
                      len(saved_paths),
                      zip_path.stat().st_size / 1_048_576)
             log.info("Archive: %s", zip_path)
+        log.info("Transfer with:  scp efinder@efinder.local:%s .", zip_path)
     else:
         log.warning("No frames captured — no ZIP created")
 
