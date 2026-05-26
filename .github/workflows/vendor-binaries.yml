@@ -8,7 +8,7 @@ name: Vendor Binaries (combo)
 # commit/tag, then trigger manually via workflow_dispatch.
 on:
   push:
-    branches: [combo]
+    branches: [main]
     paths:
       - 'cedar-detect/**'
       - '.github/workflows/vendor-binaries.yml'
