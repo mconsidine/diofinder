@@ -1,5 +1,5 @@
 #!/bin/bash
-# eFinder SD card image builder.
+# eFinder SD card image builder — olive branch.
 #
 # Strategy:
 #   1. Download the official Raspberry Pi OS Trixie Lite image (or use
@@ -14,12 +14,11 @@
 # Run from the repo root as: sudo bash build/build-image.sh
 #
 # Environment:
-#   EFINDER_VERSION       Tag string for logging (default "main").
-#   REPO                  owner/repo (default "mconsidine/eFinder_cli").
-#   CEDAR_DETECT_BIN_LOCAL If set, points to a locally-built
-#                          cedar-detect-server binary that will be
-#                          installed into the image directly. Avoids
-#                          relying on a GitHub release URL during CI.
+#   EFINDER_VERSION        Tag string for logging (default "main").
+#   REPO                   owner/repo (default "mconsidine/eFinder_cli").
+#   EFINDER_CEDAR_SOLVE_REF  cedar-solve git ref used *only* for star
+#                          database generation inside install.sh.
+#                          Defaults to v0.6.0.
 #   EFINDER_BUILD_DRY_RUN  If "1", skip the actual chroot install
 #                          (useful for testing the loop-mount/resize
 #                          parts on your Dell without spending an
@@ -48,8 +47,6 @@ FAIL() { echo "ERROR: $*" >&2; exit 1; }
 [ -f scripts/install.sh ] || FAIL "missing scripts/install.sh"
 [ -d webui ] || FAIL "missing ./webui/"
 [ -d systemd ] || FAIL "missing ./systemd/"
-[ -d proto ] || FAIL "missing ./proto/ (cedar_detect.proto must be vendored)"
-[ -f proto/cedar_detect.proto ] || FAIL "missing ./proto/cedar_detect.proto"
 
 # Verify required system tools
 for tool in losetup parted e2fsck resize2fs mount umount xz; do
@@ -60,15 +57,6 @@ done
 if [ "$DRY_RUN" != "1" ]; then
   command -v qemu-aarch64-static >/dev/null 2>&1 \
     || FAIL "missing qemu-aarch64-static (apt install qemu-user-static)"
-fi
-
-if [ -n "${CEDAR_DETECT_BIN_LOCAL:-}" ]; then
-  [ -x "$CEDAR_DETECT_BIN_LOCAL" ] \
-    || FAIL "CEDAR_DETECT_BIN_LOCAL=$CEDAR_DETECT_BIN_LOCAL is not executable"
-  if ! file "$CEDAR_DETECT_BIN_LOCAL" 2>/dev/null | grep -q "ARM aarch64"; then
-    WARN "$CEDAR_DETECT_BIN_LOCAL doesn't look like an aarch64 binary"
-  fi
-  LOG "Using local cedar-detect-server: $CEDAR_DETECT_BIN_LOCAL"
 fi
 
 WORK="$(pwd)/build/output"
@@ -230,7 +218,7 @@ mkdir -p "$ROOT/tmp/efinder-src"
 SRC_DIR="$(cd "$WORK/../.." && pwd)"
 
 # Required directories
-for d in efinder webui systemd scripts etc proto tests; do
+for d in efinder webui systemd scripts etc tests; do
   [ -d "$SRC_DIR/$d" ] || FAIL "missing source dir: $SRC_DIR/$d"
   cp -r "$SRC_DIR/$d" "$ROOT/tmp/efinder-src/"
 done
@@ -241,14 +229,14 @@ for f in requirements.txt; do
   cp "$SRC_DIR/$f" "$ROOT/tmp/efinder-src/"
 done
 
-# vendor/ contains pre-built cedar-detect-server and tetra3rs wheels
-# committed by the 'Vendor Binaries' workflow. Stage it if present so
-# install.sh can use the vendored files without any network fetching.
+# vendor/ contains the pre-built tetra3-py wheel committed by the
+# 'Vendor Binaries (olive)' workflow. Stage it so install.sh can use
+# it without any network fetch.
 if [ -d "$SRC_DIR/vendor" ]; then
-  LOG "Staging vendor/ (pre-built binaries and wheels)"
+  LOG "Staging vendor/ (pre-built tetra3-py wheel)"
   cp -r "$SRC_DIR/vendor" "$ROOT/tmp/efinder-src/"
 else
-  WARN "vendor/ not found; install.sh will fall back to PyPI / release download"
+  WARN "vendor/ not found; install.sh will fail (run Vendor Binaries workflow first)"
 fi
 
 # Optional documentation
@@ -256,21 +244,12 @@ for f in README.md TODO.md; do
   [ -f "$SRC_DIR/$f" ] && cp "$SRC_DIR/$f" "$ROOT/tmp/efinder-src/" || true
 done
 
-# If a locally-built cedar-detect binary was provided, stage it so
-# install.sh can pick it up without a release URL fetch.
-if [ -n "${CEDAR_DETECT_BIN_LOCAL:-}" ]; then
-  LOG "Staging local cedar-detect-server binary"
-  install -m 755 "$CEDAR_DETECT_BIN_LOCAL" \
-    "$ROOT/tmp/efinder-src/cedar-detect-server.aarch64"
-fi
-
 cat > "$ROOT/tmp/run-install.sh" << EOSH
 #!/bin/bash
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 export EFINDER_CHROOT=1
 export EFINDER_VERSION="${EFINDER_VERSION}"
-${CEDAR_DETECT_BIN_LOCAL:+export EFINDER_CEDAR_DETECT_BIN_LOCAL=/tmp/efinder-src/cedar-detect-server.aarch64}
 ${EFINDER_CEDAR_SOLVE_REF:+export EFINDER_CEDAR_SOLVE_REF="${EFINDER_CEDAR_SOLVE_REF}"}
 
 cd /tmp/efinder-src

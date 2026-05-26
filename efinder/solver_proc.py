@@ -40,6 +40,16 @@ TIMEOUT     = 3
 CANCELLED   = 4
 TOO_FEW     = 5
 
+# olive-solve returns status as a Rust Debug string (e.g. "MatchFound").
+# Map both PascalCase (Debug format) and SCREAMING_SNAKE_CASE (docs) to ints.
+_OLIVE_STATUS = {
+    "MatchFound":  MATCH_FOUND, "MATCH_FOUND":  MATCH_FOUND,
+    "NoMatch":     NO_MATCH,    "NO_MATCH":     NO_MATCH,
+    "Timeout":     TIMEOUT,     "TIMEOUT":      TIMEOUT,
+    "Cancelled":   CANCELLED,   "CANCELLED":    CANCELLED,
+    "TooFew":      TOO_FEW,     "TOO_FEW":      TOO_FEW,
+}
+
 
 def _save_frame(frame, cfg, label: str) -> None:
     import datetime
@@ -249,8 +259,10 @@ def solver_main(slots, latest_solution, shared_cfg,
 
     # ---- Pre-allocate hot-path buffers -------------------------------------
     # Reused every frame to avoid per-frame heap allocation.
+    # target_pixel and target_sky_coord must be float64: the Rust PyO3
+    # binding extracts them as PyReadonlyArray2<f64>.
     frame_buf    = np.empty((cfg.frame_height, cfg.frame_width), dtype=np.uint8)
-    target_pixel = np.zeros((1, 2), dtype=np.float32)
+    target_pixel = np.zeros((1, 2), dtype=np.float64)
     _bs_y = float(cfg.boresight_y)
     _bs_x = float(cfg.boresight_x)
     target_pixel[0, 0] = _bs_y
@@ -300,11 +312,12 @@ def solver_main(slots, latest_solution, shared_cfg,
             np.copyto(frame_buf, bufs[idx])
             slots.release_read_slot()
 
+            # float64: Rust extracts target_sky_coord as PyReadonlyArray2<f64>
             target_sky = None
             if align_req is not None:
                 target_sky = np.array(
                     [[align_req.target_ra_deg, align_req.target_dec_deg]],
-                    dtype=np.float32)
+                    dtype=np.float64)
 
             t_solve = time.monotonic()
             try:
@@ -337,28 +350,31 @@ def solver_main(slots, latest_solution, shared_cfg,
             elapsed_ms    = (time.monotonic() - t_solve) * 1000.0
             extract_ms    = soln.get("T_extract", 0.0)
             solve_only_ms = soln.get("T_solve",   0.0)
-            status        = soln.get("status", NO_MATCH)
-            solve_count  += 1
+            # Status is a Rust Debug string; RA presence is the reliable
+            # success indicator.
+            status_str = soln.get("status", "NoMatch")
+            status_int = _OLIVE_STATUS.get(status_str, NO_MATCH)
+            solve_count += 1
 
-            if status != MATCH_FOUND or soln.get("RA") is None:
+            if soln.get("RA") is None:
                 latest_solution.update(_empty_solution(
                     stars=0, peak=local_peak,
-                    solve_ms=elapsed_ms, status=status))
+                    solve_ms=elapsed_ms, status=status_int))
                 if align_req is not None:
                     align_response_q.put(AlignResult(
                         success=False,
-                        error_message=f"no match (status={status})",
+                        error_message=f"no match (status={status_str})",
                         completed_at=time.monotonic(),
                     ))
                 fail_streak += 1
                 if fail_streak == 1 or fail_streak % 20 == 0:
                     log.info(
-                        "no solve: status=%d peak=%d "
+                        "no solve: status=%s peak=%d "
                         "t=%.0fms (ext=%.0fms slv=%.0fms)",
-                        status, local_peak,
+                        status_str, local_peak,
                         elapsed_ms, extract_ms, solve_only_ms)
                 if cfg.save_failed_frames and frame_snapshot is not None:
-                    _save_frame(frame_snapshot, cfg, f"failed_s{status}")
+                    _save_frame(frame_snapshot, cfg, f"failed_{status_str}")
                 continue
 
             measured_fov        = soln.get("FOV", calibrator.get_fov_estimate())
@@ -382,7 +398,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                 roll=soln.get("Roll", 0.0), fov=measured_fov,
                 stars=n_matches, matches=n_matches,
                 peak=local_peak, noise=0.0,
-                solve_ms=elapsed_ms, status=status,
+                solve_ms=elapsed_ms, status=MATCH_FOUND,
             ))
             _imu_update_reference(
                 shared_cfg, ra_out, dec_out, soln.get("Roll", 0.0))

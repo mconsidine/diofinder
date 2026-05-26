@@ -1,12 +1,12 @@
-name: Release
+name: Release (olive)
 
-# vendor/ binaries (cedar-detect-server + tetra3rs wheels) must be committed
-# by the 'Vendor Binaries' workflow before triggering an image build.
-# The pre-flight step below fails fast with a clear message if they are missing.
+# The tetra3-py wheel (vendor/wheels/tetra3-*.whl) must be committed by
+# the 'Vendor Binaries (olive)' workflow before triggering an image build.
+# The pre-flight step below fails fast with a clear message if it is missing.
 
 on:
   push:
-    branches: [main]
+    branches: [olive]
     paths:
       - 'efinder/**'
       - 'webui/**'
@@ -30,12 +30,15 @@ permissions:
 jobs:
 
   # --------------------------------------------------------------------------
-  # Build the SD card image. Only runs on tagged releases (or manual dispatch
-  # with build_image=true).
+  # Build the SD card image.
   #
-  # Both cedar-detect-server (vendor/bin/) and tetra3rs wheels (vendor/wheels/)
-  # must already be committed by the 'Vendor Binaries' workflow. The pre-flight
-  # step below fails fast with a clear message if they are missing.
+  # vendor/wheels/tetra3-*.whl must already be committed by the
+  # 'Vendor Binaries (olive)' workflow. The pre-flight step fails fast
+  # with a clear message if the wheel is absent.
+  #
+  # install.sh uses EFINDER_CEDAR_SOLVE_REF to temporarily install
+  # cedar-solve tetra3 for star database generation; olive-solve reuses
+  # the tetra3 .npz format but does not include its own generator.
   # --------------------------------------------------------------------------
   image:
     if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.build_image == true)
@@ -46,24 +49,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify vendor files are present
+      - name: Verify vendor wheel is present
         run: |
-          if [ ! -f vendor/bin/cedar-detect-server ]; then
-            echo "::error::vendor/bin/cedar-detect-server is missing."
-            echo "::error::Run the 'Vendor Binaries (combo)' workflow first, then retry."
-            exit 1
-          fi
-          WHL=$(ls vendor/wheels/tetra3rs-*.whl 2>/dev/null | head -1 || true)
+          WHL=$(ls vendor/wheels/tetra3-*.whl 2>/dev/null | head -1 || true)
           if [ -z "$WHL" ]; then
-            echo "::error::No tetra3rs wheel found in vendor/wheels/."
-            echo "::error::Run the 'Vendor Binaries (combo)' workflow first, then retry."
+            echo "::error::No tetra3-py wheel found in vendor/wheels/."
+            echo "::error::Run the 'Vendor Binaries (olive)' workflow first, then retry."
             exit 1
           fi
-          echo "Vendor files present:"
-          ls -lh vendor/bin/cedar-detect-server
-          ls -lh vendor/wheels/*.whl
-          file vendor/bin/cedar-detect-server | grep -q "ARM aarch64" \
-            || { echo "::error::vendor/bin/cedar-detect-server is not an aarch64 binary"; exit 1; }
+          echo "Vendor wheel: $WHL"
+          ls -lh "$WHL"
 
       - name: Determine version tag
         id: ver
@@ -82,26 +77,11 @@ jobs:
             xz-utils kpartx parted \
             wget curl ca-certificates
 
-      - name: Resolve cedar-solve commit
-        id: cedar_solve
-        env:
-          CEDAR_SOLVE_TAG: ${{ vars.CEDAR_SOLVE_TAG || 'v0.6.0' }}
-        run: |
-          SHA=$(git ls-remote https://github.com/smroid/cedar-solve.git \
-                "refs/tags/${CEDAR_SOLVE_TAG}" | awk '{print $1}')
-          if [ -z "$SHA" ]; then
-            echo "::error::Could not resolve cedar-solve tag ${CEDAR_SOLVE_TAG}"
-            exit 1
-          fi
-          echo "Resolved cedar-solve ${CEDAR_SOLVE_TAG}: $SHA"
-          echo "sha=$SHA" >> $GITHUB_OUTPUT
-          echo "tag=$CEDAR_SOLVE_TAG" >> $GITHUB_OUTPUT
-
       - name: Run image build
         env:
           EFINDER_VERSION: ${{ steps.ver.outputs.tag }}
           REPO: ${{ github.repository }}
-          EFINDER_CEDAR_SOLVE_REF: ${{ steps.cedar_solve.outputs.sha }}
+          EFINDER_CEDAR_SOLVE_REF: ${{ vars.CEDAR_SOLVE_TAG || 'v0.6.0' }}
         run: |
           sudo -E bash build/build-image.sh
 
@@ -133,9 +113,9 @@ jobs:
           xz -T0 -9 build/output/efinder.img
           BUILD_DATE=$(date -u +%Y%m%d)
           if [ "${{ github.event_name }}" = "release" ]; then
-            IMGNAME="efinder-${BUILD_DATE}-${{ steps.ver.outputs.tag }}.img.xz"
+            IMGNAME="efinder-olive-${BUILD_DATE}-${{ steps.ver.outputs.tag }}.img.xz"
           else
-            IMGNAME="efinder-${BUILD_DATE}.img.xz"
+            IMGNAME="efinder-olive-${BUILD_DATE}.img.xz"
           fi
           mv build/output/efinder.img.xz "build/output/${IMGNAME}"
           echo "imgname=${IMGNAME}" >> $GITHUB_OUTPUT
@@ -153,7 +133,7 @@ jobs:
         if: github.event_name != 'release'
         uses: actions/upload-artifact@v4
         with:
-          name: efinder-image-${{ steps.ver.outputs.tag }}
+          name: efinder-olive-image-${{ steps.ver.outputs.tag }}
           path: build/output/${{ steps.compress.outputs.imgname }}
           retention-days: 14
           if-no-files-found: error

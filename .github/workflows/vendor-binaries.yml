@@ -1,16 +1,20 @@
-name: Vendor Binaries (combo)
-# Builds cedar-detect-server and tetra3rs wheels, then commits them to
-# vendor/ in this branch so install.sh can use them without any network
-# fetch at install time.
+name: Vendor Binaries (olive)
+# Cross-compiles the olive-solve tetra3-py wheel for aarch64 (Pi Zero 2W)
+# with Cortex-A53 optimisations, then commits it to vendor/wheels/ so
+# install.sh can use it without any network fetch at image-build time.
 #
-# Triggers automatically when the cedar-detect submodule changes.
-# For tetra3rs upstream updates: bump vars.TETRA3RS_REF to the desired
-# commit/tag, then trigger manually via workflow_dispatch.
+# Cross-compilation (no QEMU) is used because tetra3-py uses PyO3's abi3
+# feature: a single stable-ABI wheel works across all Python 3.8+.
+# This runs in ~10-15 min vs ~3 h for QEMU-emulated cibuildwheel.
+#
+# To pick up upstream olive-solve changes:
+#   1. Set repo variable OLIVE_SOLVE_REF to the desired commit/tag.
+#   2. Trigger manually via workflow_dispatch.
+
 on:
   push:
-    branches: [main]
+    branches: [olive]
     paths:
-      - 'cedar-detect/**'
       - '.github/workflows/vendor-binaries.yml'
   workflow_dispatch:
 
@@ -20,162 +24,101 @@ permissions:
 jobs:
 
   # --------------------------------------------------------------------------
-  # Build cedar-detect-server (aarch64 / Cortex-A53)
+  # Build tetra3-py wheel (aarch64, Cortex-A53)
   #
-  # Optimization:
-  #   target-cpu=cortex-a53         A53-specific instruction scheduling
-  #   CARGO_PROFILE_RELEASE_LTO     thin LTO set at profile level, not via
-  #                                 RUSTFLAGS, so Rust embeds bitcode from
-  #                                 the start and never adds -C embed-bitcode=no
-  #   codegen-units=1               single CGU for maximum intra-crate opt
+  # Optimisation flags:
+  #   target-cpu=cortex-a53   A53-specific instruction scheduling
+  #   codegen-units=1         maximum intra-crate optimisation
+  #   lto=thin                safer than fat for cross-compilation; workspace
+  #                           Cargo.toml sets lto="fat" which is overridden
+  #                           here to avoid cross-linker plugin conflicts
   # --------------------------------------------------------------------------
-  cedar-detect:
+  build-wheel:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - name: Checkout (with submodules)
+      - name: Checkout olive-solve
         uses: actions/checkout@v4
         with:
-          submodules: recursive
+          repository: mconsidine/olive-solve
+          ref: ${{ vars.OLIVE_SOLVE_REF || 'main' }}
 
-      - name: Install build deps
+      - name: Install aarch64 cross-compiler
         run: |
           sudo apt-get update
-          sudo apt-get install -y protobuf-compiler gcc-aarch64-linux-gnu
+          sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      - name: Install Rust toolchain
+      - name: Install Rust aarch64 target
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-unknown-linux-gnu
 
-      - name: Cache cargo
+      - name: Cache Cargo
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            cedar-detect/target
-          key: cargo-aarch64-a53-lto-${{ hashFiles('cedar-detect/Cargo.lock') }}
-          restore-keys: cargo-aarch64-a53-lto-
+            target
+          key: cargo-olive-aarch64-a53-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-olive-aarch64-a53-
 
-      - name: Build cedar-detect-server
+      - name: Install maturin
+        run: pip install "maturin>=1.0,<2.0"
+
+      - name: Build tetra3-py wheel (aarch64, Cortex-A53)
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           RUSTFLAGS: "-C target-cpu=cortex-a53 -C codegen-units=1"
           CARGO_PROFILE_RELEASE_LTO: "thin"
-        working-directory: cedar-detect
+        working-directory: tetra3-py
         run: |
-          cargo build --release \
+          maturin build --release \
             --target aarch64-unknown-linux-gnu \
-            --bin cedar-detect-server
+            --out dist
 
-      - name: Strip and verify
+      - name: Verify wheel
         run: |
-          BIN=cedar-detect/target/aarch64-unknown-linux-gnu/release/cedar-detect-server
-          aarch64-linux-gnu-strip "$BIN"
-          file "$BIN" | grep -q "ARM aarch64"
-          ls -lh "$BIN"
+          ls -lh tetra3-py/dist/
+          WHL=$(ls tetra3-py/dist/tetra3-*.whl 2>/dev/null | head -1)
+          [ -n "$WHL" ] || { echo "::error::No tetra3 wheel produced"; exit 1; }
+          echo "Built: $WHL"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cedar-detect-server-aarch64
-          path: cedar-detect/target/aarch64-unknown-linux-gnu/release/cedar-detect-server
+          name: tetra3-py-wheel-aarch64
+          path: tetra3-py/dist/*.whl
           retention-days: 30
           if-no-files-found: error
 
   # --------------------------------------------------------------------------
-  # Build tetra3rs wheels (aarch64, cp311/cp312/cp313)
-  #
-  # Runtime target: Pi Zero 2W (Cortex-A53, ARMv8-A, mandatory NEON/ASIMD).
-  # Optimization:
-  #   target-cpu=cortex-a53   A53 pipeline scheduling
-  #   codegen-units=1         maximum intra-crate optimization
-  #
-  # Note: LTO is intentionally omitted. pip's wheel build pipeline adds
-  # -C embed-bitcode=no (reduces wheel size), which is mutually exclusive
-  # with -C lto regardless of how LTO is requested. codegen-units=1
-  # captures most of the same benefit within the crate.
-  #
-  # Build time: ~3 hours (QEMU emulation + Rust + ring crate first build).
-  # Subsequent Python versions reuse Cargo's incremental cache within the run.
-  #
-  # To pick up upstream tetra3rs changes:
-  #   1. Set repo variable TETRA3RS_REF to the desired commit/tag.
-  #   2. Trigger this workflow manually via workflow_dispatch.
-  # --------------------------------------------------------------------------
-  tetra3rs:
-    runs-on: ubuntu-latest
-    timeout-minutes: 210
-    steps:
-      - name: Checkout tetra3rs
-        uses: actions/checkout@v4
-        with:
-          repository: ssmichael1/tetra3rs
-          ref: ${{ vars.TETRA3RS_REF || 'main' }}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
-      - name: Build aarch64 wheels via cibuildwheel
-        uses: pypa/cibuildwheel@v2.22.0
-        env:
-          CIBW_ARCHS_LINUX: aarch64
-          CIBW_BUILD: "cp311-manylinux_aarch64 cp312-manylinux_aarch64 cp313-manylinux_aarch64"
-          CIBW_BEFORE_ALL_LINUX: >
-            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs
-            | sh -s -- -y --profile minimal
-          CIBW_ENVIRONMENT: >-
-            PATH="$HOME/.cargo/bin:$PATH"
-            RUSTFLAGS="-C target-cpu=cortex-a53 -C codegen-units=1"
-          CIBW_BEFORE_BUILD: pip install setuptools>=68 setuptools-rust>=1.10
-        with:
-          output-dir: dist
-
-      - name: Verify wheels
-        run: |
-          ls -lh dist/
-          [ $(ls dist/*.whl 2>/dev/null | wc -l) -ge 1 ] \
-            || { echo "::error::No wheels produced"; exit 1; }
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: tetra3rs-wheels-aarch64
-          path: dist/*.whl
-          retention-days: 30
-          if-no-files-found: error
-
-  # --------------------------------------------------------------------------
-  # Download both artifacts, commit them to vendor/, push back to this branch.
-  # [skip ci] in the commit message prevents re-triggering this workflow.
+  # Download the wheel, clear stale cedar/tetra3rs artifacts from vendor/,
+  # commit back to the olive branch.
+  # [skip ci] prevents re-triggering this workflow on the vendor commit.
   # --------------------------------------------------------------------------
   commit-vendor:
-    needs: [cedar-detect, tetra3rs]
+    needs: build-wheel
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout combo branch
+      - name: Checkout olive branch
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.ref_name }}
+          ref: olive
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download cedar-detect artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: cedar-detect-server-aarch64
-          path: vendor/bin
+      - name: Remove stale non-olive vendor artifacts
+        run: |
+          rm -f vendor/wheels/tetra3rs-*.whl
+          rm -f vendor/bin/cedar-detect-server
 
-      - name: Download tetra3rs wheels artifact
+      - name: Download tetra3-py wheel
         uses: actions/download-artifact@v4
         with:
-          name: tetra3rs-wheels-aarch64
+          name: tetra3-py-wheel-aarch64
           path: vendor/wheels
 
-      - name: Set execute bit on binary
-        run: chmod 755 vendor/bin/cedar-detect-server
-
-      - name: Commit and push vendor files
+      - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -183,15 +126,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "No vendor changes to commit"
           else
-            git commit -m "vendor: update cedar-detect-server and tetra3rs wheels [skip ci]"
-            git push origin ${{ github.ref_name }}
+            git commit -m "vendor: update tetra3-py (olive-solve) aarch64 wheel [skip ci]"
+            git push origin olive
           fi
-
-      - name: Attach to release (if tag build)
-        if: github.event_name == 'release'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload "${{ github.event.release.tag_name }}" \
-            vendor/bin/cedar-detect-server \
-            vendor/wheels/*.whl
