@@ -143,10 +143,11 @@ jobs:
 
       - name: Attach to release
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: build/output/${{ steps.compress.outputs.imgname }}
-          fail_on_unmatched_files: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            "build/output/${{ steps.compress.outputs.imgname }}"
 
       - name: Upload as workflow artifact (manual builds)
         if: github.event_name != 'release'
