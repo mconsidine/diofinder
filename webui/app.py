@@ -1,12 +1,8 @@
 """
-eFinder web UI — combo branch.
+eFinder web UI — olive branch.
 
-Adds two new endpoints on top of the standard web UI:
-  POST /backend/set    {backend: cedar|tetra}   — switch solver backend
-  POST /testmode/set   {enabled: true|false}     — switch camera mode
-
-The dashboard shows toggle buttons for both controls and updates their
-state via the existing /api/status polling loop.
+Single backend (olive-solve); the /backend/set endpoint is a no-op
+redirect kept for UI compatibility.
 """
 
 import io
@@ -120,9 +116,7 @@ def dashboard():
         cal_error=cal.error if not cal.ok else None,
         committed_focus=committed_focus,
         imu=(status.result.get("imu") if status.ok else None),
-        solver_backend=(
-            status.result.get("solver_backend", "cedar")
-            if status.ok else "cedar"),
+        solver_backend="olive",
         test_mode=(
             status.result.get("test_mode", True)
             if status.ok else True),
@@ -149,16 +143,10 @@ def boresight_center():
     return redirect(url_for("dashboard"))
 
 
-# ---- Combo toggles ----------------------------------------------------------
+# ---- Backend toggle (no-op: olive branch has a single backend) -------------
 
 @app.route("/backend/set", methods=["POST"])
 def backend_set():
-    backend = request.form.get("backend", "").strip()
-    if backend not in ("cedar", "tetra"):
-        return "backend must be 'cedar' or 'tetra'", 400
-    r = _safe_call("set_backend", {"backend": backend})
-    if not r.ok:
-        return r.error, 500
     return redirect(url_for("dashboard"))
 
 
@@ -281,7 +269,7 @@ def api_camera_set():
                 errors.append(f"gain: {r.error}")
         except (ValueError, TypeError) as e:
             errors.append(f"gain invalid: {e}")
-    if "detect_sigma" in data or "solve_timeout_ms" in data or "detect_use_binned" in data:
+    if "detect_sigma" in data or "solve_timeout_ms" in data:
         pargs = {"persist": False}
         if "detect_sigma" in data:
             try:
@@ -293,8 +281,6 @@ def api_camera_set():
                 pargs["solve_timeout_ms"] = int(data["solve_timeout_ms"])
             except (ValueError, TypeError) as e:
                 errors.append(f"solve_timeout_ms invalid: {e}")
-        if "detect_use_binned" in data:
-            pargs["detect_use_binned"] = bool(data["detect_use_binned"])
         if len(pargs) > 1:
             r = _safe_call("solver_params_set", pargs)
             if r.ok:
@@ -320,7 +306,6 @@ def solver_params_set():
             pargs["solve_timeout_ms"] = int(request.form["solve_timeout_ms"])
         except ValueError:
             return "solve_timeout_ms must be integer", 400
-    pargs["detect_use_binned"] = request.form.get("detect_use_binned") == "on"
     r = _safe_call("solver_params_set", pargs)
     if not r.ok:
         return r.error, 400
@@ -465,7 +450,6 @@ def logs():
         out = subprocess.check_output(
             ["journalctl", "--system",
              "-u", "efinder.service",
-             "-u", "cedar-detect.service",
              "-n", str(n), "--no-pager", "-o", "short-precise"],
             text=True, errors="replace",
             stderr=subprocess.STDOUT, timeout=5.0,
@@ -507,63 +491,60 @@ CONFIG_PATH = os.environ.get("EFINDER_CONFIG", "/etc/efinder/efinder.conf")
 
 _CONFIG_SECTIONS = [
     ("Camera", [
-        ("frame_width",               "Frame width",          "Sensor ROI width in pixels. Must match camera_proc ROI."),
+        ("frame_width",               "Frame width",          "Sensor ROI width in pixels."),
         ("frame_height",              "Frame height",         "Sensor ROI height in pixels."),
         ("exposure_s",                "Exposure (s)",         "Initial exposure; auto-exposure adjusts this at runtime."),
         ("gain",                      "Gain",                 "Analog gain. Higher = more sensitive but noisier."),
         ("auto_exposure_enabled",     "Auto-exposure",        "Adaptively adjust exposure to reach the target star count."),
         ("auto_exposure_target_stars","Target stars",         "Desired star count when auto-exposure is on."),
-        ("auto_exposure_min_s",       "Auto-exp min (s)",     "Minimum exposure floor for auto-exposure."),
-        ("auto_exposure_max_s",       "Auto-exp max (s)",     "Maximum exposure ceiling for auto-exposure."),
+        ("auto_exposure_min_s",       "Auto-exp min (s)",     "Minimum exposure floor."),
+        ("auto_exposure_max_s",       "Auto-exp max (s)",     "Maximum exposure ceiling."),
     ]),
     ("Optics / FOV", [
-        ("fov_deg",                      "Field of view (°)",    "Horizontal FOV in degrees. Self-calibrates from solved frames."),
-        ("arcsec_per_pixel",             "Plate scale (\"/px)",  "Arcseconds per pixel. Used for display; solving uses fov_deg."),
-        ("distortion",                   "Distortion",           "Barrel/pincushion coefficient. 0 = fit per-solve (recommended)."),
-        ("fov_calibrated",               "FOV calibrated",       "True once the calibrator converged; enables tighter tolerance."),
-        ("fov_calibrated_stddev",        "Cal. stddev (°)",      "Stddev threshold for declaring FOV stable."),
-        ("fov_calibrated_max_error_deg", "Cal. FOV tolerance",   "FOV search window after calibration (tighter = faster)."),
-        ("fov_max_error_deg",            "Uncal. FOV tolerance", "FOV search window before calibration."),
+        ("fov_deg",                      "Field of view (°)",   "Horizontal FOV. Self-calibrates from solved frames."),
+        ("arcsec_per_pixel",             "Plate scale (\"/px)", "Arcseconds per pixel. Used for display."),
+        ("distortion",                   "Distortion",          "Barrel/pincushion coefficient. 0 = fit per-solve."),
+        ("fov_calibrated",               "FOV calibrated",      "True once calibrator converged."),
+        ("fov_calibrated_stddev",        "Cal. stddev (°)",     "Stddev threshold for declaring FOV stable."),
+        ("fov_calibrated_max_error_deg", "Cal. FOV tolerance",  "FOV search window after calibration."),
+        ("fov_max_error_deg",            "Uncal. FOV tolerance","FOV search window before calibration."),
     ]),
     ("Observer Location", [
-        ("latitude_deg",  "Latitude (°)",  "Observer latitude (+N). Set automatically by SkySafari :St."),
-        ("longitude_deg", "Longitude (°)", "Observer longitude (+E). Set automatically by SkySafari :Sg."),
+        ("latitude_deg",  "Latitude (°)",  "Observer latitude (+N)."),
+        ("longitude_deg", "Longitude (°)", "Observer longitude (+E)."),
     ]),
-    ("Star Detection (cedar-detect)", [
-        ("detect_sigma",       "Detection sigma", "Threshold in units of background sigma. Higher = fewer, brighter stars only."),
-        ("detect_hot_pixels",  "Hot-pixel removal","Mask known hot pixels before detection."),
-        ("detect_use_binned",  "2× binning",  "Bin 2× before detection. Helps defocused or oversampled cameras."),
-        ("cedar_detect_socket","gRPC endpoint",   "Address of the cedar-detect star-detection service."),
+    ("Star Detection", [
+        ("detect_sigma", "Detection sigma",
+         "Threshold in units of background sigma passed to olive-solve's fast extractor."),
     ]),
-    ("Plate Solving", [
-        ("tetra3rs_db",      "Tetra3rs DB",        "Path to the binary star database (generated by install.sh from Gaia)."),
-        ("tetra3_db",        "Cedar-solve DB",     "Database name for cedar-solve (tetra3 .npz format)."),
-        ("min_centroids",    "Min stars",          "Minimum detected centroids required to attempt a solve."),
+    ("Plate Solving (olive-solve)", [
+        ("solver_db",        "Star database",      "Path to a tetra3 .npz database compatible with olive-solve."),
+        ("min_centroids",    "Min stars",          "Minimum detected stars required to attempt a solve."),
         ("solve_timeout_ms", "Solve timeout (ms)", "Hard timeout per solve attempt."),
-        ("match_threshold",  "Match threshold",    "Max false-positive probability for accepting a match (1e-5 = cedar default)."),
-        ("match_radius",     "Match radius",       "Max centroid-to-catalog distance as fraction of FOV (~8 px at our scale)."),
+        ("match_threshold",  "Match threshold",    "Max false-positive probability (1e-5 default)."),
+        ("match_radius",     "Match radius",       "Max centroid-catalog distance as fraction of FOV."),
     ]),
     ("Boresight", [
-        ("boresight_x", "Boresight X (px)", "Telescope axis X in pixels. Updated by SkySafari sync-on-star."),
+        ("boresight_x", "Boresight X (px)", "Telescope axis X in pixels."),
         ("boresight_y", "Boresight Y (px)", "Telescope axis Y in pixels."),
     ]),
     ("Communications (LX200)", [
-        ("lx200_port",             "LX200 port",         "TCP port for the LX200 server. SkySafari default: 4060."),
-        ("lx200_client_timeout_s", "Client timeout (s)", "Disconnect idle LX200 clients after this many seconds."),
+        ("lx200_port",             "LX200 port",         "TCP port for the LX200 server."),
+        ("lx200_client_timeout_s", "Client timeout (s)", "Disconnect idle LX200 clients."),
     ]),
     ("CPU Affinity", [
-        ("cpu_camera", "Camera CPU", "Core for camera_proc (ISP DMA + frame copy). Runs alone on CPU 3."),
-        ("cpu_solver", "Solver CPU", "Core for solver_proc + cedar-detect (pipeline pair). CPU 2."),
-        ("cpu_comms",  "Comms CPU",  "Core for comms_proc, web UI, and IMU thread. CPU 1, I/O bound."),
+        ("cpu_camera", "Camera CPU",  "Core for camera_proc. Also shared with solver rayon threads."),
+        ("cpu_solver", "Solver CPU",  "Primary core for solver_proc; rayon also uses cpu_camera."),
+        ("cpu_comms",  "Comms CPU",   "Core for comms_proc and web UI."),
     ]),
     ("Diagnostics", [
-        ("save_solved_frames",     "Save solved frames", "Write PNG for every successful solve (debug/replay)."),
-        ("save_failed_frames",     "Save failed frames", "Write PNG for every failed solve (debug/replay)."),
+        ("save_solved_frames",     "Save solved frames", "Write PNG for every successful solve."),
+        ("save_failed_frames",     "Save failed frames", "Write PNG for every failed solve."),
         ("failed_frames_dir",      "Captures dir",       "Directory for saved frame PNGs."),
         ("log_solve_stats_every_n","Log stats every N",  "Print solve performance stats every N solves."),
     ]),
     ("Shutdown", [
-        ("shutdown_grace_s", "Grace period (s)", "Seconds between SIGTERM and SIGKILL when stopping the daemon."),
+        ("shutdown_grace_s", "Grace period (s)", "Seconds between SIGTERM and SIGKILL."),
     ]),
 ]
 
@@ -615,11 +596,11 @@ def config_page():
         cfg_ok=cfg_ok,
         cfg_error=cfg_error,
         daemon_ok=rt.ok,
-        runtime_backend=(runtime.get("solver_backend") if runtime else None),
-        runtime_test_mode=(runtime.get("test_mode")    if runtime else None),
-        runtime_imu=(runtime.get("imu")                if runtime else None),
-        runtime_fov=(runtime.get("fov_deg")            if runtime else None),
-        runtime_boresight=(runtime.get("boresight")    if runtime else None),
+        runtime_backend="olive",
+        runtime_test_mode=(runtime.get("test_mode")  if runtime else None),
+        runtime_imu=(runtime.get("imu")              if runtime else None),
+        runtime_fov=(runtime.get("fov_deg")          if runtime else None),
+        runtime_boresight=(runtime.get("boresight")  if runtime else None),
     )
 
 
@@ -659,28 +640,10 @@ def frame_jpg():
     if frame is None:
         return "camera not running", 503, {"Content-Type": "text/plain"}
 
-    # Arcsinh stretch with sky subtraction.
-    #
-    # Linear percentile stretching fails on starfields because 99%+ of pixels
-    # are sky background, so the 99th-percentile white point lands at the sky
-    # level rather than the stars — the background fills the display range.
-    #
-    # This approach:
-    #   1. Subtracts the median sky so the background maps to near-black.
-    #   2. Applies arcsinh, which is linear for faint signals (preserving the
-    #      visibility of dim stars) and logarithmic for bright ones (preventing
-    #      a single bright star from dominating the stretch).
-    #   3. Scales so that the 99.9th percentile of the sky-subtracted,
-    #      arcsinh-transformed image is white (~730 pixels for our 960×760
-    #      frame, which lands in the PSF wings of real stars).
     sky  = float(np.median(frame))
     x    = np.clip(frame.astype(np.float32) - sky, 0.0, None)
-    # Softening: transition from linear to log at ~10% of sky level.
-    # Low sky (short exposure) → small beta → more aggressive log compression.
     beta = max(1.0, sky * 0.1)
     xs   = np.arcsinh(x / beta)
-    # White point: 99.9th percentile in arcsinh space (robust against cosmic
-    # rays / hot pixels that would otherwise clip everything else to black).
     scale = float(np.percentile(xs, 99.9))
     if scale < 1e-6:
         scale = float(xs.max()) or 1.0
