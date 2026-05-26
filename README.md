@@ -240,7 +240,13 @@ Browser-based Wi-Fi management. See [Wi-Fi modes](#wi-fi-modes).
 
 ### Configuration (`/config`)
 
-Read-only view of `/etc/efinder/efinder.conf`.
+Structured read-only view of `/etc/efinder/efinder.conf`, grouped into sections
+(Camera, Optics/FOV, Star Detection, Plate Solving, Boresight, Observer Location,
+Communications, CPU Affinity, Diagnostics, Shutdown).  Each entry shows the
+current value, a one-line description, and an **edited** badge with the default
+value wherever the file differs from the compiled-in default.  A Runtime Status
+block at the top shows live solver backend, camera mode, IMU state, and FOV from
+the daemon socket.
 
 ### Logs (`/logs`)
 
@@ -312,9 +318,25 @@ Adjust focus until the score peaks.
 
 ## IMU dead-reckoning (optional)
 
-A BNO055 on the I²C bus smooths SkySafari position updates between plate-solves
-to < 1 ms latency. Self-calibrates passively from consecutive solve pairs.
-Active once 3 pairs are collected and fit R² ≥ 0.85. Hot-pluggable.
+A BNO055 on the I²C bus provides two complementary benefits:
+
+1. **Attitude hint propagation** — after every successful tetra3rs solve the
+   solver records the IMU quaternion alongside the sky quaternion.  On the
+   next frame it computes the IMU rotation delta and applies it to the sky
+   quaternion, giving tetra3rs an up-to-date attitude hint even when the
+   scope has moved between frames.  The search window scales with the
+   measured motion (1.5× the rotation angle, minimum 2°) so slews of any
+   size still produce a useful hint.  Logs show `(imu)` / `(seeded)` /
+   `(blind)` per solve so the hint source is visible in the journal.
+
+2. **SkySafari smoothing** — self-calibrates passively from consecutive
+   solve pairs (IMU rotation vector vs. sky displacement).  Active once 3
+   pairs are collected and R² ≥ 0.85; smooths SkySafari `:GR#`/`:GD#`
+   responses to < 1 ms latency between solves.
+
+Hot-pluggable: if the sensor disappears the daemon degrades gracefully.
+The I²C bus runs at 50 kHz to avoid the BCM2835 clock-stretching hardware
+bug that causes corrupt reads at the standard 100 kHz rate.
 
 ### Wiring
 
@@ -389,35 +411,37 @@ sudo EFINDER_EXPOSURE_S=0.5 systemctl restart efinder
 | `exposure_s` | `0.2` | Exposure time in seconds (0.001–10.0) |
 | `gain` | `20.0` | Analogue gain (1.0–64.0) |
 | `fov_deg` | `13.5` | Initial FOV estimate in degrees. Self-calibrates after 30 solves. |
-| `detect_sigma` | `9.0` | Cedar-detect extraction threshold (σ above background). Default 9. |
+| `detect_sigma` | `9.0` | Cedar-detect extraction threshold (σ above background). Lower finds fainter stars; raise to reject noise. |
 | `detect_hot_pixels` | `true` | Cedar-detect hot-pixel removal. |
 | `detect_use_binned` | `true` | Use 2×2 binned image for candidate search (faster; negligible quality loss at this FOV). |
 | `solve_timeout_ms` | `1500` | Per-frame solver budget in ms. |
-| `tetra3rs_db` | `/var/lib/efinder/efinder-tetra-database.bin` | tetra3rs Rust database file. |
+| `tetra3rs_db` | `/var/lib/efinder/efinder-tetra-database.bin` | tetra3rs Rust database (generated from Gaia by install.sh). |
 | `tetra3_db` | `default_database` | tetra3 Python database name (used by cedar backend). |
 | `cedar_detect_socket` | `localhost:50051` | gRPC address of cedar-detect-server. |
 | `lx200_port` | `4060` | TCP port for the LX200 server. |
 | `boresight_y` | `380` | Boresight Y in pixels. Set by `:CM#` sync. |
 | `boresight_x` | `480` | Boresight X in pixels. Set by `:CM#` sync. |
-| `latitude_deg` | _(empty)_ | Observer latitude. Auto-populated from SkySafari `:St` on connect. |
-| `longitude_deg` | _(empty)_ | Observer longitude. Auto-populated from SkySafari `:Sg` on connect. |
-| `fov_max_error_deg` | `1.0` | FOV tolerance window. Tightened to 0.1° after calibration. |
-| `match_radius` | `0.01` | Tetra3rs match radius parameter. |
-| `match_threshold` | `1e-5` | Tetra3rs match probability threshold. |
+| `latitude_deg` | `0.0` | Observer latitude. Auto-populated from SkySafari `:St` on connect. |
+| `longitude_deg` | `0.0` | Observer longitude. Auto-populated from SkySafari `:Sg` on connect. |
+| `fov_max_error_deg` | `1.0` | FOV tolerance window before calibration. Tightened automatically after calibration. |
+| `fov_calibrated_max_error_deg` | `0.1` | FOV tolerance window after calibration. |
+| `match_radius` | `0.01` | Centroid-to-catalog match radius as fraction of FOV. |
+| `match_threshold` | `1e-5` | Max false-positive probability for accepting a match. |
 | `min_centroids` | `8` | Minimum centroids required to attempt a solve. |
-| `hint_uncertainty_deg` | `0.1` | Angular radius of the attitude hint for seeded solves. |
-| `cpu_camera` | `3` | CPU affinity for camera_proc. |
-| `cpu_solver` | `2` | CPU affinity for solver_proc. |
-| `cpu_comms` | `1` | CPU affinity for comms_proc. |
-| `save_failed_frames` | `false` | When true, saves failed frames to `/var/lib/efinder/captures/`. |
+| `cpu_camera` | `3` | CPU affinity for camera_proc (ISP DMA). |
+| `cpu_solver` | `2` | CPU affinity for solver_proc + cedar-detect (pipeline pair). |
+| `cpu_comms` | `1` | CPU affinity for comms_proc, web UI, and IMU thread. |
+| `save_failed_frames` | `false` | Save PNG for every failed solve to `failed_frames_dir`. |
+| `save_solved_frames` | `false` | Save PNG for every successful solve to `failed_frames_dir`. |
+| `failed_frames_dir` | `/var/lib/efinder/captures` | Directory for saved frame PNGs. |
 
 ### CPU affinity layout
 
 | CPU | Role |
 |---|---|
 | 0 | Linux kernel, IRQs, sshd, NetworkManager — never pinned |
-| 1 | `comms_proc` (LX200 + maint socket) + `efinder-webui` (Flask) |
-| 2 | `solver_proc` + `cedar-detect-server` — pipeline pair; cedar-detect runs first then yields, solver consumes the centroids |
+| 1 | `efinder_main` launcher + IMU thread (20 Hz I2C, I/O bound) · `comms_proc` (LX200 + maint socket) · `efinder-webui` (Flask) |
+| 2 | `solver_proc` + `cedar-detect-server` — pipeline pair; cedar-detect extracts centroids, solver consumes immediately |
 | 3 | `camera_proc` alone — ISP DMA + memcpy to SHM |
 
 ---
@@ -571,11 +595,16 @@ cedar-detect gRPC ExtractCentroids(shmem_name=...) [30–80 ms]
 star_candidates[]  (centroid x/y in image coordinates)
   │  convert to center-relative coords for tetra3rs
   ▼
+_imu_propagate_hint(last_sky_q, last_solve_imu_q, shared_cfg)
+  │  q_delta = q_imu_now ⊗ conj(q_imu_at_last_solve)
+  │  q_hint  = q_delta ⊗ q_last_sky
+  │  uncertainty = max(2°, 1.5 × rotation_angle)   ← 0.1°/tight when IMU absent
+  ▼
 tetra3rs SolverDatabase.solve_from_centroids(
     centroids, fov_estimate,
-    attitude_hint=last_quaternion,   ← blind on first frame
-    hint_uncertainty_deg=0.1,
-    solve_timeout_s=1.5)  [~10–60 ms seeded, ~300–800 ms blind]
+    attitude_hint=q_hint,            ← blind on first frame; imu/seeded after
+    hint_uncertainty_deg=uncertainty,
+    solve_timeout_ms=1500)  [~10–60 ms seeded/imu, ~300–800 ms blind]
   ▼
 SolveResult → RA, Dec, roll, fov_rad
   │  latest_solution.update(...)  [Manager dict]
@@ -590,8 +619,11 @@ comms_proc: serves RA/Dec on next :GR# / :GD# poll
 | Extraction | cedar-detect gRPC | cedar-detect gRPC |
 | Solve | tetra3 Python | tetra3rs Rust (in-process) |
 | First-frame (blind) | 200–1200 ms | 300–800 ms |
-| Seeded solve | N/A (always blind) | 10–60 ms |
-| Hint from | — | last quaternion, 0.1° window |
+| Seeded solve (stationary) | N/A (always blind) | 10–60 ms |
+| Seeded solve (after slew) | N/A (always blind) | 10–100 ms (IMU hint tracks the slew) |
+| Hint source | — | IMU-propagated quaternion (falls back to last-solve quaternion without IMU) |
+| Hint window | — | `max(2°, 1.5 × IMU_rotation_angle)`; 0.1° without IMU |
+| Log label | — | `(imu)` / `(seeded)` / `(blind)` per solve |
 | Runtime switch | dashboard toggle or `set_backend` maint cmd | same |
 
 ### Shared state
@@ -615,10 +647,12 @@ comms_proc: serves RA/Dec on next :GR# / :GD# poll
 | `solve_timeout_ms` | Solver budget, overrides config at runtime |
 | `boresight_y`, `boresight_x` | Current boresight pixel offset |
 | `imu_available` | BNO055 detected and responding |
-| `imu_q`, `imu_t` | Latest quaternion and its timestamp |
-| `imu_ref_*` | Reference solve for dead-reckoning prediction |
-| `imu_calib_C` | Fitted 2×3 IMU→camera transform matrix |
-| `imu_calib_quality` | R² of the current fit |
+| `imu_q`, `imu_t` | Latest quaternion and its monotonic timestamp |
+| `imu_ref_q/ra/dec/roll/t` | Sky-solve reference for SkySafari dead-reckoning |
+| `imu_calib_pairs` | Accumulated (IMU rotvec, sky delta) calibration pairs |
+| `imu_calib_C` | Fitted 2×3 IMU→sky-displacement matrix |
+| `imu_calib_n` | Number of calibration pairs collected |
+| `imu_calib_quality` | R² of the current fit (≥ 0.85 to activate smoothing) |
 
 ### Systemd units
 
@@ -897,6 +931,34 @@ All scripts require the venv Python and (for SHM access) root privileges:
 sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/<script>.py
 ```
 
+### `diag_camera.py` — camera exposure/gain sweep
+
+```bash
+sudo .../diag_camera.py [--exp-min S] [--exp-max S] [--exp-step S]
+                         [--gain-min G] [--gain-max G] [--gain-step G]
+                         [--binning] [--output-dir PATH]
+```
+
+Captures one frame for every combination of exposure and gain in the specified
+ranges.  Files are named `YYYYMMDDHHMMSSMMM-EEE-GG[-2x2].png` (e.g.
+`20260603190304010-050-20-2x2.png` = 50 ms, gain 20, 2×2 binned).  Saved to
+`/var/lib/efinder/` by default (where `test.png` lives).
+
+Per-frame log shows peak pixel and mean pixel value — useful for spotting
+saturation or underexposure before opening files.
+
+```bash
+# Default sweep (0.05–0.30 s step 0.05, gain 15–40 step 5)
+sudo .../diag_camera.py
+
+# Custom range with binning
+sudo .../diag_camera.py --exp-min 0.1 --exp-max 0.5 --exp-step 0.1 \
+                         --gain-min 10 --gain-max 30 --gain-step 5 --binning
+
+# Single capture
+sudo .../diag_camera.py --exp-min 0.2 --exp-max 0.2 --gain-min 20 --gain-max 20
+```
+
 ### `diag_services.sh` — system health check
 
 ```bash
@@ -958,8 +1020,9 @@ sigma 3–12 — useful for choosing the best sigma for your setup.
 | Camera capture (ISP hardware) | `exposure_s` + ~10 ms |
 | Frame copy to SHM | ~0.5 ms |
 | Cedar-detect extraction (gRPC, binned) | 25–60 ms |
-| tetra3rs solve, seeded (0.1° hint) | 10–60 ms |
-| tetra3rs solve, blind (first frame) | 300–800 ms |
+| tetra3rs solve, IMU-seeded (scope moving) | 10–100 ms |
+| tetra3rs solve, seeded (scope stationary) | 10–60 ms |
+| tetra3rs solve, blind (first frame / no IMU) | 300–800 ms |
 | LX200 report latency | < 1 ms |
 | IMU dead-reckoning (when active) | < 0.1 ms |
 | **Typical end-to-end (after first frame)** | **~0.5–1.0 s with 0.2 s exposure** |
@@ -1028,16 +1091,21 @@ bash build/check-tree.sh
 
 ## Known limitations and deferred work
 
-- **Dark frame / hot pixel calibration**: maintenance socket hooks exist;
-  `camera_proc.py` capture logic not yet written.
-- **Auto-exposure**: solver knows star count per frame; feedback loop to
-  camera not wired up.
-- **Frame save for diagnostics**: `save_failed_frames: true` in config but
-  write logic in `solver_proc.py` not implemented.
-- **Watchdog for solver hang**: systemd restarts on crash but not on hang.
-  A heartbeat monitor on `latest_solution.epoch_monotonic` is planned.
+- **Dark frame / hot pixel calibration**: per-frame hot-pixel removal via
+  cedar-detect is in place; a full dark-frame subtraction workflow (static
+  master dark) is not yet implemented.
+- **Auto-exposure**: solver reports star count per frame; the feedback loop
+  that adjusts exposure to hit a target star count is not yet wired up.
+- **Watchdog for solver hang**: systemd restarts on crash but not on a silent
+  hang. A heartbeat monitor on `latest_solution.epoch_monotonic` is planned.
 - **No authentication**: LX200 server and web UI are open to any device on
   the same network. Do not expose to the public internet.
-- **Single boresight offset**: one calibration for all eyepieces.
-- **Polar alignment assumes pure RA motion**: accidental dec movement
-  invalidates the result silently.
+- **Single boresight offset**: one calibration per session; swapping eyepieces
+  requires a new `:CM#` sync.
+- **Polar alignment assumes pure RA motion**: accidental Dec movement between
+  the three capture points invalidates the result silently.
+- **IMU hint frame mismatch (Option C)**: the attitude hint propagation assumes
+  the IMU body axes ≈ camera axes. A badly-rotated IMU mount will widen the
+  effective search window but will not cause solve failures (`strict_hint=False`).
+  Option B (calibrated C-matrix hint) or Option A (explicit mount calibration)
+  would be more precise.

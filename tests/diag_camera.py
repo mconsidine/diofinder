@@ -1,0 +1,268 @@
+#!/usr/bin/env python3
+"""
+diag_camera.py — Camera exposure/gain sweep diagnostic for eFinder.
+
+Captures one frame for every combination of exposure and gain in the
+specified ranges, with optional 2×2 software binning.  Files are named:
+
+    YYYYMMDDHHMMSSMMM-EEE-GG[-2x2].png
+
+where EEE is exposure in milliseconds (zero-padded to 3 digits) and GG is
+the analogue gain rounded to the nearest integer.  Example:
+
+    20260603190304010-050-20-2x2.png   ← 50 ms, gain 20, 2×2 binned
+
+Files are written to the directory where test.png lives (/var/lib/efinder
+by default), or the current working directory if test.png is not found.
+
+Usage:
+    sudo /opt/efinder/venv/bin/python3 tests/diag_camera.py [options]
+
+Examples:
+    # Default sweep (exposures 0.05–0.30 s step 0.05, gains 15–40 step 5)
+    sudo .../diag_camera.py
+
+    # Custom range with 2×2 binning
+    sudo .../diag_camera.py --exp-min 0.1 --exp-max 0.5 --exp-step 0.1 \\
+                             --gain-min 10 --gain-max 30 --gain-step 5 \\
+                             --binning
+
+    # Single exposure/gain pair (set min = max)
+    sudo .../diag_camera.py --exp-min 0.2 --exp-max 0.2 \\
+                             --gain-min 20 --gain-max 20
+
+    # Override frame size or output directory
+    sudo .../diag_camera.py --width 480 --height 380 --output-dir /tmp/frames
+
+Requires: picamera2, numpy, Pillow  (all present in the efinder venv)
+Must run as root (or a member of the 'video' group) on the Pi.
+"""
+
+import argparse
+import datetime
+import logging
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+
+log = logging.getLogger("diag_camera")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(message)s",
+    datefmt="%H:%M:%S",
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _find_output_dir() -> Path:
+    """Return the directory where test.png lives, or cwd."""
+    for d in [Path("/var/lib/efinder"), Path.cwd(), Path("/opt/efinder")]:
+        if (d / "test.png").exists():
+            return d
+    return Path.cwd()
+
+
+def _arange_float(start: float, stop: float, step: float) -> list:
+    """Inclusive float range.  Avoids floating-point fence-post errors."""
+    vals, v = [], start
+    while v <= stop + 1e-9:
+        vals.append(round(v, 9))
+        v += step
+    return vals
+
+
+def _make_filename(exp_s: float, gain: float, binning: bool) -> str:
+    now    = datetime.datetime.now()
+    ms     = now.microsecond // 1000
+    ts     = now.strftime("%Y%m%d%H%M%S") + f"{ms:03d}"
+    exp_ms = int(round(exp_s * 1000))
+    gs     = str(int(round(gain)))
+    suffix = "-2x2" if binning else ""
+    return f"{ts}-{exp_ms:03d}-{gs}{suffix}.png"
+
+
+def _bin2x2(frame: np.ndarray) -> np.ndarray:
+    """2×2 average downsample.  Input (H, W) uint8 → output (H//2, W//2) uint8."""
+    h, w   = frame.shape
+    frame  = frame[: h - h % 2, : w - w % 2]
+    h, w   = frame.shape
+    return (frame.reshape(h // 2, 2, w // 2, 2)
+                 .mean(axis=(1, 3))
+                 .astype(np.uint8))
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Camera exposure/gain sweep — saves one PNG per combination.")
+    ap.add_argument("--exp-min",    type=float, default=0.05,
+                    metavar="S", help="Min exposure in seconds (default: 0.05)")
+    ap.add_argument("--exp-max",    type=float, default=0.30,
+                    metavar="S", help="Max exposure in seconds (default: 0.30)")
+    ap.add_argument("--exp-step",   type=float, default=0.05,
+                    metavar="S", help="Exposure step in seconds (default: 0.05)")
+    ap.add_argument("--gain-min",   type=float, default=15.0,
+                    metavar="G", help="Min analogue gain (default: 15)")
+    ap.add_argument("--gain-max",   type=float, default=40.0,
+                    metavar="G", help="Max analogue gain (default: 40)")
+    ap.add_argument("--gain-step",  type=float, default=5.0,
+                    metavar="G", help="Gain step (default: 5)")
+    ap.add_argument("--binning",    action="store_true",
+                    help="Apply 2×2 software binning (halves width and height)")
+    ap.add_argument("--width",      type=int, default=None,
+                    help="Frame width in pixels (default: from efinder config or 960)")
+    ap.add_argument("--height",     type=int, default=None,
+                    help="Frame height in pixels (default: from efinder config or 760)")
+    ap.add_argument("--warmup",     type=int, default=3,
+                    help="Frames to discard after each settings change (default: 3)")
+    ap.add_argument("--output-dir", type=Path, default=None,
+                    metavar="PATH",
+                    help="Save directory (default: where test.png lives)")
+    args = ap.parse_args()
+
+    # ---- Resolve frame dimensions from config --------------------------------
+    width, height = args.width, args.height
+    if width is None or height is None:
+        try:
+            sys.path.insert(0, "/opt/efinder")
+            from efinder.config import load_config
+            cfg = load_config()
+            if width  is None: width  = cfg.frame_width
+            if height is None: height = cfg.frame_height
+        except Exception:
+            if width  is None: width  = 960
+            if height is None: height = 760
+
+    # ---- Build sweep arrays --------------------------------------------------
+    exposures = _arange_float(args.exp_min, args.exp_max, args.exp_step)
+    gains     = _arange_float(args.gain_min, args.gain_max, args.gain_step)
+
+    if not exposures:
+        log.error("Empty exposure range (check --exp-min/max/step)")
+        sys.exit(1)
+    if not gains:
+        log.error("Empty gain range (check --gain-min/max/step)")
+        sys.exit(1)
+
+    total = len(exposures) * len(gains)
+
+    output_dir = args.output_dir or _find_output_dir()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Rough time estimate: initial settle + (warmup+1) frames per combination
+    mean_exp  = (exposures[0] + exposures[-1]) / 2.0
+    est_s     = max(exposures[0] + 0.5, 1.5) + total * (args.warmup + 1) * mean_exp
+    img_dims  = (f"{width//2}×{height//2} (after binning)"
+                 if args.binning else f"{width}×{height}")
+
+    print("=" * 60)
+    print(" eFinder camera diagnostic sweep")
+    print("=" * 60)
+    log.info("Frame size:      %s", img_dims)
+    log.info("Exposures (%d):  %s s",
+             len(exposures), "  ".join(f"{e:.3f}" for e in exposures))
+    log.info("Gains (%d):      %s",
+             len(gains), "  ".join(f"{g:.0f}" for g in gains))
+    log.info("Binning:         %s", "2×2 software" if args.binning else "none")
+    log.info("Warmup frames:   %d per setting", args.warmup)
+    log.info("Total captures:  %d", total)
+    log.info("Output dir:      %s", output_dir)
+    log.info("Est. duration:   %.0f s", est_s)
+    print()
+
+    # ---- Import dependencies -------------------------------------------------
+    try:
+        from picamera2 import Picamera2
+    except ImportError:
+        log.error("picamera2 not found — run on the Pi using the efinder venv")
+        sys.exit(1)
+
+    try:
+        from PIL import Image
+    except ImportError:
+        log.error("Pillow not found — pip install Pillow")
+        sys.exit(1)
+
+    # ---- Initialise camera ---------------------------------------------------
+    cam        = Picamera2()
+    init_exp   = exposures[0]
+    init_gain  = gains[0]
+
+    config = cam.create_still_configuration(
+        main={
+            "format": "YUV420",
+            "size":   (width, height),
+        },
+        controls={
+            "ExposureTime":        int(init_exp * 1_000_000),
+            "AnalogueGain":        float(init_gain),
+            "AeEnable":            False,
+            "AwbEnable":           False,
+            "FrameDurationLimits": (int(init_exp * 1_000_000), 1_000_000_000),
+        },
+    )
+    cam.configure(config)
+    cam.start()
+
+    # Let the first settings settle before the loop begins.
+    settle_s = max(init_exp + 0.5, 1.5)
+    log.info("Camera started — settling for %.1f s …", settle_s)
+    time.sleep(settle_s)
+
+    # ---- Capture loop --------------------------------------------------------
+    saved   = 0
+    t_start = time.monotonic()
+
+    try:
+        for exp_s in exposures:
+            for gain in gains:
+                # Push new settings to the ISP
+                cam.set_controls({
+                    "ExposureTime":        int(exp_s * 1_000_000),
+                    "AnalogueGain":        float(gain),
+                    "FrameDurationLimits": (int(exp_s * 1_000_000), 1_000_000_000),
+                })
+
+                # Discard warmup frames so the ISP has fully applied the new
+                # exposure and gain before we capture the keeper
+                for _ in range(args.warmup):
+                    cam.capture_array("main")
+
+                # Capture the keeper
+                arr   = cam.capture_array("main")
+                frame = arr[:height, :width].copy()   # Y plane (grayscale)
+
+                if args.binning:
+                    frame = _bin2x2(frame)
+
+                fname = _make_filename(exp_s, gain, args.binning)
+                fpath = output_dir / fname
+                Image.fromarray(frame, mode="L").save(fpath, format="PNG")
+
+                saved += 1
+                peak  = int(frame.max())
+                mean  = float(frame.mean())
+                log.info("[%2d/%d]  exp=%5.3fs  gain=%4.0f  peak=%3d  mean=%5.1f  %s",
+                         saved, total, exp_s, gain, peak, mean, fname)
+
+    finally:
+        cam.stop()
+
+    elapsed = time.monotonic() - t_start
+    print()
+    log.info("Done: %d/%d frames saved to %s  (%.1f s)",
+             saved, total, output_dir, elapsed)
+    if saved < total:
+        log.warning("%d captures were not saved (camera error)", total - saved)
+
+
+if __name__ == "__main__":
+    main()
