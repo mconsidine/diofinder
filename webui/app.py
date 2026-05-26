@@ -659,15 +659,32 @@ def frame_jpg():
     if frame is None:
         return "camera not running", 503, {"Content-Type": "text/plain"}
 
-    lo = float(np.percentile(frame, 1))
-    hi = float(np.percentile(frame, 99))
-    if hi - lo >= 4:
-        stretched = np.clip(
-            (frame.astype(np.float32) - lo) / (hi - lo) * 255.0,
-            0, 255,
-        ).astype(np.uint8)
-    else:
-        stretched = frame
+    # Arcsinh stretch with sky subtraction.
+    #
+    # Linear percentile stretching fails on starfields because 99%+ of pixels
+    # are sky background, so the 99th-percentile white point lands at the sky
+    # level rather than the stars — the background fills the display range.
+    #
+    # This approach:
+    #   1. Subtracts the median sky so the background maps to near-black.
+    #   2. Applies arcsinh, which is linear for faint signals (preserving the
+    #      visibility of dim stars) and logarithmic for bright ones (preventing
+    #      a single bright star from dominating the stretch).
+    #   3. Scales so that the 99.9th percentile of the sky-subtracted,
+    #      arcsinh-transformed image is white (~730 pixels for our 960×760
+    #      frame, which lands in the PSF wings of real stars).
+    sky  = float(np.median(frame))
+    x    = np.clip(frame.astype(np.float32) - sky, 0.0, None)
+    # Softening: transition from linear to log at ~10% of sky level.
+    # Low sky (short exposure) → small beta → more aggressive log compression.
+    beta = max(1.0, sky * 0.1)
+    xs   = np.arcsinh(x / beta)
+    # White point: 99.9th percentile in arcsinh space (robust against cosmic
+    # rays / hot pixels that would otherwise clip everything else to black).
+    scale = float(np.percentile(xs, 99.9))
+    if scale < 1e-6:
+        scale = float(xs.max()) or 1.0
+    stretched = np.clip(xs / scale * 255.0, 0, 255).astype(np.uint8)
 
     img  = Image.fromarray(stretched, mode="L").convert("RGB")
     draw = ImageDraw.Draw(img)
