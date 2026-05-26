@@ -214,7 +214,13 @@ Auto-refreshes every 1.5 s. Shows:
 Live camera view with controls that take effect immediately (no page reload):
 
 - **Live frame**: JPEG from the current SHM buffer with a boresight crosshair.
-  Refreshes every 2 s.
+  Refreshes every 2 s.  The display uses an **arcsinh sky-subtracted stretch**:
+  the sky median is subtracted, the residual is passed through `arcsinh(x/β)`
+  (linear for faint signals, logarithmic for bright ones), and scaled to the
+  99.9th percentile of the transformed image.  This makes stars visible even at
+  the high gains and long exposures needed for faint fields, without blowing out
+  the background.  The stretch is cosmetic only — the solver reads the raw SHM
+  bytes and is unaffected.
 - **Exposure (seconds)**: log-scale slider + numeric box + `−`/`+` buttons
   (±0.05 s per click). Valid range: 0.001–10 s.
 - **Gain (1–64)**: slider + numeric box + `−`/`+` buttons (±1 per click).
@@ -584,7 +590,11 @@ numpy Y-plane slice 960×760 uint8
   │  np.copyto → FrameSlot buf[idx]  [~0.5 ms, lock-free triple buffer]
   ▼
 FrameSlots.publish(idx)
-  │  solver_proc: acquire_read_slot()
+  │  solver_proc: acquire_read_slot()       ← raw bytes, no display stretch
+  │  webui /camera frame_jpg():             ← display path (arcsinh stretch, cosmetic only)
+  │    sky = median(frame)
+  │    xs  = arcsinh((frame − sky) / max(1, sky×0.1))
+  │    scale to 99.9th pct → JPEG
   ▼
 peak pixel check: buf.max() < 20? → DARK fast-path (~0.1 ms), skip
   │  otherwise:
@@ -911,6 +921,8 @@ web UI does not interrupt active plate-solving. Restarting `efinder` does.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
+| Live view looks washed out / all white | Sky background very bright (long exposure / high gain at twilight) | Reduce exposure or gain; the arcsinh stretch is display-only and does not affect solving |
+| Live view very dark / stars invisible | Heavy underexposure | Increase exposure or gain on the Camera page |
 | Web UI shows stale layout after update | Browser cache | Hard-refresh (`Ctrl+Shift+R`) or open in incognito |
 | Always in test mode on startup | `test.png` found at startup; daemon used to auto-detect | Use web UI toggle or set_test_mode maint cmd |
 | `TOO_FEW` on every frame | Low star count — exposure too short or sigma too high | Lower sigma (try 6–7) or increase exposure; use `diag_detect.py --sigma-sweep` |
