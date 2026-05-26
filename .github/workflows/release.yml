@@ -1,16 +1,12 @@
 name: Release
 
-# combo branch: cedar-detect-server and tetra3rs wheels are pre-built and
-# committed to vendor/ by the 'Vendor Binaries' workflow. This workflow
-# only needs to build the SD card image; install.sh picks up both binaries
-# from vendor/ without any additional compilation here.
-#
-# IMPORTANT: run the 'Vendor Binaries' workflow at least once before
-# triggering an image build, or the pre-flight check below will fail.
+# vendor/ binaries (cedar-detect-server + tetra3rs wheels) must be committed
+# by the 'Vendor Binaries' workflow before triggering an image build.
+# The pre-flight step below fails fast with a clear message if they are missing.
 
 on:
   push:
-    branches: [combo]
+    branches: [main]
     paths:
       - 'efinder/**'
       - 'webui/**'
@@ -24,9 +20,9 @@ on:
   workflow_dispatch:
     inputs:
       build_image:
-        description: "Also build SD card image (slow)"
+        description: "Build SD card image"
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: write
