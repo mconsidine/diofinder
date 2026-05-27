@@ -74,21 +74,22 @@ jobs:
             wget curl ca-certificates
 
       - name: Generate tetra3 star database
-        # Run on the x86_64 CI runner where esa/tetra3 installs cleanly
-        # and hip_main.dat is bundled as proper package data.
-        # The resulting .npz is passed to build-image.sh via EFINDER_SOLVER_DB
-        # and copied into the image before the chroot starts.
+        # Clone esa/tetra3 so hip_main.dat is guaranteed to be present
+        # alongside the Python source at /tmp/esa-tetra3/tetra3/hip_main.dat.
+        # pip install git+... does not reliably install the data file on
+        # GitHub Actions runners.  Cloning avoids that entirely.
         run: |
           mkdir -p build/output
-          python3 -m pip install --quiet "git+https://github.com/esa/tetra3.git"
+          git clone --depth 1 https://github.com/esa/tetra3.git /tmp/esa-tetra3
+          python3 -m pip install --quiet numpy scipy pillow
           python3 - <<'PYEOF'
           import pathlib, sys
+          sys.path.insert(0, '/tmp/esa-tetra3')
           import tetra3
-          pkg_dir = pathlib.Path(tetra3.__file__).parent
-          cat = pkg_dir / 'hip_main.dat'
+          cat = pathlib.Path('/tmp/esa-tetra3/tetra3/hip_main.dat')
           if not cat.exists():
-              sys.exit(f"hip_main.dat not found at {cat}")
-          print(f"Star catalogue: {cat} ({cat.stat().st_size/1e6:.1f} MB)")
+              sys.exit(f'hip_main.dat not found at {cat}')
+          print(f'Star catalogue: {cat} ({cat.stat().st_size/1e6:.1f} MB)')
           t3 = tetra3.Tetra3(load_database=None)
           t3.generate_database(
               max_fov=14.0,
