@@ -13,7 +13,7 @@ Pinned to its dedicated CPU. Two server endpoints:
      switching. Used by efinder-ctl and the web UI.
 
 Combo additions:
-  set_backend   {"backend": "cedar" | "tetra"}
+  set_backend   {"backend": "cedar" | "tetra" | "olive"}
   set_test_mode {"enabled": true | false}
   status response includes solver_backend and test_mode fields.
 """
@@ -587,9 +587,9 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
         # ---- Combo: solver backend toggle ----------------------------------
         if cmd == "set_backend":
             backend = str(args.get("backend", ""))
-            if backend not in ("cedar", "tetra"):
+            if backend not in ("cedar", "tetra", "olive"):
                 return MaintResponse(ok=False,
-                                     error="backend must be 'cedar' or 'tetra'")
+                                     error="backend must be 'cedar', 'tetra', or 'olive'")
             ctx.shared_cfg["solver_backend"] = backend
             log.info("Solver backend -> %s", backend)
             return MaintResponse(ok=True, result={"solver_backend": backend})
