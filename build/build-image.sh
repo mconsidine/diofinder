@@ -16,6 +16,8 @@
 # Environment:
 #   EFINDER_VERSION       Tag string for logging (default "main").
 #   REPO                  owner/repo (default "mconsidine/eFinder_cli").
+#   EFINDER_SOLVER_DB     Path to a pre-generated .npz database. If set and
+#                         the file exists, the generation step is skipped.
 #   CEDAR_DETECT_BIN_LOCAL If set, points to a locally-built
 #                          cedar-detect-server binary that will be
 #                          installed into the image directly. Avoids
@@ -50,9 +52,10 @@ FAIL() { echo "ERROR: $*" >&2; exit 1; }
 [ -d systemd ] || FAIL "missing ./systemd/"
 [ -d proto ] || FAIL "missing ./proto/ (cedar_detect.proto must be vendored)"
 [ -f proto/cedar_detect.proto ] || FAIL "missing ./proto/cedar_detect.proto"
+[ -f build/generate_database.py ] || FAIL "missing ./build/generate_database.py"
 
 # Verify required system tools
-for tool in losetup parted e2fsck resize2fs mount umount xz; do
+for tool in losetup parted e2fsck resize2fs mount umount xz wget; do
   command -v "$tool" >/dev/null 2>&1 \
     || FAIL "missing required tool: $tool"
 done
@@ -73,9 +76,30 @@ fi
 
 WORK="$(pwd)/build/output"
 mkdir -p "$WORK"
+
+# --- Solver database generation (runs on host, before chroot) ---------------
+# Generates a tetra3 .npz database from the Hipparcos catalogue.
+# Set EFINDER_SOLVER_DB to a pre-existing .npz to skip generation.
+
+if [ -n "${EFINDER_SOLVER_DB:-}" ] && [ -f "${EFINDER_SOLVER_DB}" ]; then
+  LOG "Using pre-generated solver database: $EFINDER_SOLVER_DB"
+else
+  LOG "Generating tetra3 star database on host (this may take several minutes)..."
+  python3 -m pip install --quiet "git+https://github.com/esa/tetra3.git"
+  TETRA3_DIR=$(python3 -c 'import pathlib, tetra3; print(pathlib.Path(tetra3.__file__).parent)')
+  LOG "Downloading Hipparcos catalogue to $TETRA3_DIR/hip_main.dat"
+  wget -q --show-progress \
+       https://cdsarc.cds.unistra.fr/ftp/cats/I/239/hip_main.dat \
+       -O "${TETRA3_DIR}/hip_main.dat" || FAIL "hip_main.dat download failed"
+  export SOLVER_DB_PATH="$WORK/solver_database"
+  python3 build/generate_database.py || FAIL "Database generation failed"
+  export EFINDER_SOLVER_DB="${SOLVER_DB_PATH}.npz"
+  LOG "Database generated: $EFINDER_SOLVER_DB"
+fi
+
 cd "$WORK"
 
-# --- 1. Download base image ---------------------------------------------------
+# --- 1. Download base image --------------------------------------------------
 
 if [ ! -f base.img.xz ]; then
   LOG "Downloading base Raspberry Pi OS Lite image ($BASE_IMAGE_URL)"
@@ -91,7 +115,7 @@ fi
 LOG "Copying base.img -> efinder.img"
 cp base.img efinder.img
 
-# --- 2. Grow the image --------------------------------------------------------
+# --- 2. Grow the image -------------------------------------------------------
 
 LOG "Growing image by 2 GB"
 truncate -s +2G efinder.img
@@ -150,12 +174,6 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 # --- 4a. Edit boot partition files directly (outside chroot) -----------------
-#
-# We do these edits here, on the host, rather than relying solely on
-# install.sh inside the chroot because:
-#   - The host can write FAT32 files natively without qemu overhead.
-#   - It's easier to verify and debug by inspecting the mounted files.
-#   - belt-and-suspenders: install.sh does the same edits idempotently.
 
 CONFIG_TXT="$ROOT/boot/firmware/config.txt"
 CMDLINE_TXT="$ROOT/boot/firmware/cmdline.txt"
@@ -241,14 +259,14 @@ for f in requirements.txt; do
   cp "$SRC_DIR/$f" "$ROOT/tmp/efinder-src/"
 done
 
-# vendor/ contains pre-built cedar-detect-server and tetra3rs wheels
-# committed by the 'Vendor Binaries' workflow. Stage it if present so
-# install.sh can use the vendored files without any network fetching.
+# vendor/ contains pre-built cedar-detect-server and olive-solve wheels
+# committed by the workflow jobs. Stage it if present so install.sh
+# can use the vendored files without any network fetching.
 if [ -d "$SRC_DIR/vendor" ]; then
   LOG "Staging vendor/ (pre-built binaries and wheels)"
   cp -r "$SRC_DIR/vendor" "$ROOT/tmp/efinder-src/"
 else
-  WARN "vendor/ not found; install.sh will fall back to PyPI / release download"
+  WARN "vendor/ not found; install.sh will fall back to release download"
 fi
 
 # Optional documentation
@@ -264,6 +282,14 @@ if [ -n "${CEDAR_DETECT_BIN_LOCAL:-}" ]; then
     "$ROOT/tmp/efinder-src/cedar-detect-server.aarch64"
 fi
 
+# Stage the pre-generated solver database so install.sh doesn't need to
+# rebuild it inside the chroot.
+if [ -n "${EFINDER_SOLVER_DB:-}" ] && [ -f "$EFINDER_SOLVER_DB" ]; then
+  LOG "Staging solver database into image at /var/lib/efinder/default_database.npz"
+  mkdir -p "$ROOT/var/lib/efinder"
+  install -m 644 "$EFINDER_SOLVER_DB" "$ROOT/var/lib/efinder/default_database.npz"
+fi
+
 cat > "$ROOT/tmp/run-install.sh" << EOSH
 #!/bin/bash
 set -euo pipefail
@@ -271,7 +297,6 @@ export DEBIAN_FRONTEND=noninteractive
 export EFINDER_CHROOT=1
 export EFINDER_VERSION="${EFINDER_VERSION}"
 ${CEDAR_DETECT_BIN_LOCAL:+export EFINDER_CEDAR_DETECT_BIN_LOCAL=/tmp/efinder-src/cedar-detect-server.aarch64}
-${EFINDER_CEDAR_SOLVE_REF:+export EFINDER_CEDAR_SOLVE_REF="${EFINDER_CEDAR_SOLVE_REF}"}
 
 cd /tmp/efinder-src
 bash scripts/install.sh

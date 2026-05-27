@@ -48,7 +48,7 @@
       <div class="focus-score-sm">{{ "%.1f"|format(committed_focus) }}</div>
       <p class="hint">Score at last focus set. <a href="{{ url_for('focus_page') }}">Refocus &rarr;</a></p>
     {% else %}
-      <p class="muted">Not set. <a href="{{ url_for('focus_page') }}" style="color:#ff5500;">Focus &rarr;</a></p>
+      <p class="muted">Not set. <a href="{{ url_for('focus_page') }}" style="color:#ff1111;">Focus &rarr;</a></p>
     {% endif %}
   </div>
 
@@ -94,7 +94,7 @@
   <div class="card" id="imu-card">
     <h2>IMU</h2>
     {% if imu and imu.available %}
-      <p id="imu-status-text" {% if imu.active %}style="color:#ff5500; font-weight:500;"{% else %}class="hint"{% endif %}>
+      <p id="imu-status-text" {% if imu.active %}style="color:#ff1111; font-weight:500;"{% else %}class="hint"{% endif %}>
         {% if imu.active %}Active &mdash; smoothing SkySafari updates{% else %}Detected &mdash; calibrating&hellip;{% endif %}
       </p>
       <dl class="stats">
@@ -121,14 +121,14 @@
     <div style="margin-bottom:10px;">
       <span class="label">Solver:</span>
       <form method="post" action="{{ url_for('backend_set') }}" style="display:inline;margin-left:6px;">
-        <input type="hidden" name="backend" value="cedar">
-        <button type="submit" id="btn-cedar" class="btn"
-                style="{{ 'background:#ff5500;color:#fff;' if solver_backend == 'cedar' else '' }}">Cedar</button>
+        <input type="hidden" name="backend" value="hybrid">
+        <button type="submit" id="btn-hybrid" class="btn"
+                style="{{ 'background:#ff1111;color:#fff;' if solver_backend == 'hybrid' else '' }}">Hybrid</button>
       </form>
       <form method="post" action="{{ url_for('backend_set') }}" style="display:inline;margin-left:4px;">
-        <input type="hidden" name="backend" value="tetra">
-        <button type="submit" id="btn-tetra" class="btn"
-                style="{{ 'background:#ff5500;color:#fff;' if solver_backend == 'tetra' else '' }}">Tetra3rs</button>
+        <input type="hidden" name="backend" value="olive">
+        <button type="submit" id="btn-olive" class="btn"
+                style="{{ 'background:#ff1111;color:#fff;' if solver_backend == 'olive' else '' }}">Olive</button>
       </form>
     </div>
     <div>
@@ -136,12 +136,12 @@
       <form method="post" action="{{ url_for('testmode_set') }}" style="display:inline;margin-left:6px;">
         <input type="hidden" name="enabled" value="true">
         <button type="submit" id="btn-test" class="btn"
-                style="{{ 'background:#ff5500;color:#fff;' if test_mode else '' }}">Test</button>
+                style="{{ 'background:#ff1111;color:#fff;' if test_mode else '' }}">Test</button>
       </form>
       <form method="post" action="{{ url_for('testmode_set') }}" style="display:inline;margin-left:4px;">
         <input type="hidden" name="enabled" value="false">
         <button type="submit" id="btn-live" class="btn"
-                style="{{ 'background:#ff5500;color:#fff;' if not test_mode else '' }}">Live</button>
+                style="{{ 'background:#ff1111;color:#fff;' if not test_mode else '' }}">Live</button>
       </form>
     </div>
   </div>
@@ -199,7 +199,7 @@ async function refresh() {
       if (stEl) {
         if (imu.active) {
           stEl.textContent  = 'Active — smoothing SkySafari updates';
-          stEl.style.cssText = 'color:#ff5500; font-weight:500;';
+          stEl.style.cssText = 'color:#ff1111; font-weight:500;';
           stEl.className    = '';
         } else {
           stEl.textContent  = 'Detected — calibrating…';
@@ -209,10 +209,10 @@ async function refresh() {
       }
     }
     // Backend / mode toggles
-    const backend  = data.status.result.solver_backend || 'cedar';
+    const backend  = data.status.result.solver_backend || 'hybrid';
     const testMode = !!data.status.result.test_mode;
-    const ACTIVE = 'background:#ff5500;color:#fff;';
-    ['cedar','tetra'].forEach(b => {
+    const ACTIVE = 'background:#ff1111;color:#fff;';
+    ['hybrid','olive'].forEach(b => {
       const el = document.getElementById('btn-' + b);
       if (el) el.style.cssText = (b === backend) ? ACTIVE : '';
     });
