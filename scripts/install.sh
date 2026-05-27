@@ -92,7 +92,7 @@ apt-get install -y --no-install-recommends \
   rpicam-apps \
   python3-flask \
   build-essential pkg-config \
-  curl ca-certificates git wget \
+  curl ca-certificates git \
   protobuf-compiler \
   avahi-daemon \
   openssh-server \
@@ -330,23 +330,6 @@ sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/python" \
   || FAIL "cedar_detect_pb2.py not produced"
 [ -f "$EFINDER_DIR/proto/cedar_detect_pb2_grpc.py" ] \
   || FAIL "cedar_detect_pb2_grpc.py not produced"
-
-# --- Download solver test images (fresh install only) ------------------------
-# In chroot/image-build mode these are downloaded by build-image.sh after
-# the chroot exits, so they are already present in the image.
-
-if [ "$IN_CHROOT" != "1" ]; then
-  LOG "Downloading solver test images..."
-  mkdir -p "$EFINDER_DIR/tests/test-images"
-  OLIVE_RAW="https://raw.githubusercontent.com/mconsidine/olive-solve/main/tetra3/tests/fixtures/sample_images"
-  for img in orion_belt.jpg orion2.jpg pleiades.jpg orion_trees.jpg crappy.jpg; do
-    wget -q "${OLIVE_RAW}/${img}" \
-         -O "$EFINDER_DIR/tests/test-images/${img}" \
-      && LOG "  ${img}" \
-      || WARN "  Could not download: ${img} (non-fatal)"
-  done
-  chown -R "$EFINDER_USER:$EFINDER_USER" "$EFINDER_DIR/tests/test-images" || true
-fi
 
 # --- systemd units -----------------------------------------------------------
 
