@@ -11,10 +11,12 @@
 #                Source staged at /tmp/efinder-src/. EFINDER_CHROOT=1.
 #
 # Chroot-mode optional env:
-#   EFINDER_CEDAR_SOLVE_REF  cedar-solve git ref used *only* for star
-#                            database generation at bake time. olive-solve
-#                            reuses the tetra3 .npz format but does not
-#                            bundle a database generator. Defaults to v0.6.0.
+#   EFINDER_SOLVER_DB  Path (inside the chroot) to a pre-generated tetra3
+#                      .npz database. Staged by build-image.sh from the
+#                      output of the 'Generate tetra3 star database' step
+#                      in release.yml (runs on x86_64, not QEMU aarch64).
+#                      If absent, the image ships without a database and the
+#                      user must set solver_db in efinder.conf before use.
 
 set -euo pipefail
 
@@ -25,7 +27,6 @@ EFINDER_DIR="/opt/efinder"
 REPO_URL="https://github.com/mconsidine/eFinder_cli_new.git"
 TARGET_VERSION="${EFINDER_VERSION:-latest}"
 IN_CHROOT="${EFINDER_CHROOT:-0}"
-CEDAR_SOLVE_REF="${EFINDER_CEDAR_SOLVE_REF:-v0.6.0}"
 SRC_STAGED="/tmp/efinder-src"
 
 LOG()  { echo "==> $*"; }
@@ -160,64 +161,18 @@ sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install --upgrade \
   setuptools wheel \
   || FAIL "pip install setuptools wheel failed"
 
-# --- Locate olive-solve wheel (fail fast before slow db generation) -----------
+# --- Install olive-solve tetra3-py -------------------------------------------
+# Only aarch64 wheels are accepted. The armv6l pre-built wheel shipped in
+# olive-solve/tetra3-py/dist/ will NOT work on Pi Zero 2W (aarch64).
+# Run 'Vendor Binaries (olive)' to produce and commit the aarch64 wheel.
 
 VENDOR_WHEELS_DIR="$EFINDER_DIR/vendor/wheels"
-OLIVE_WHL=$(ls "$VENDOR_WHEELS_DIR"/tetra3-*.whl 2>/dev/null | head -1 || true)
-[ -n "$OLIVE_WHL" ] \
-  || FAIL "No tetra3-py wheel in $VENDOR_WHEELS_DIR. Run 'Vendor Binaries (olive)' workflow first."
-LOG "Found olive-solve wheel: $OLIVE_WHL"
-
-# --- Generate tetra3 star database -------------------------------------------
-# olive-solve reuses the tetra3 .npz database format but does not include
-# its own generator (one-time operation). We temporarily install cedar-solve's
-# tetra3 Python library to generate the database, then uninstall it before
-# installing the olive wheel so the olive tetra3 is the active package.
-
-mkdir -p /var/lib/efinder
-chown "${EFINDER_USER}:${EFINDER_USER}" /var/lib/efinder 2>/dev/null || true
-SOLVER_DB="/var/lib/efinder/default_database.npz"
-
-if [ ! -f "$SOLVER_DB" ]; then
-  LOG "Installing cedar-solve tetra3 temporarily (for database generation, ref=$CEDAR_SOLVE_REF)"
-  sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install \
-    --no-deps \
-    --no-build-isolation \
-    "git+https://github.com/smroid/cedar-solve.git@${CEDAR_SOLVE_REF}#egg=cedar-solve" \
-    || FAIL "cedar-solve temporary install failed"
-
-  LOG "Generating tetra3 star database (max_fov=14°, this takes a few minutes)"
-  if sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/python" -c "
-import sys
-try:
-    import tetra3
-    if hasattr(tetra3.Tetra3, 'solve_from_image_fast'):
-        print('ERROR: olive wheel is already active; cannot use it for db generation', file=sys.stderr)
-        sys.exit(1)
-    t3 = tetra3.Tetra3(load_database=None)
-    t3.generate_database(
-        max_fov=14.0,
-        min_fov=2.0,
-        save_as='/var/lib/efinder/default_database',
-    )
-    print('Database saved to /var/lib/efinder/default_database.npz')
-except Exception as e:
-    print('ERROR: %s' % e, file=sys.stderr)
-    sys.exit(1)
-"; then
-    chown "${EFINDER_USER}:${EFINDER_USER}" "$SOLVER_DB" 2>/dev/null || true
-    LOG "Star database baked into image"
-  else
-    WARN "Database generation failed; set solver_db in efinder.conf before first use"
-  fi
-
-  # Remove cedar-solve tetra3 so the olive wheel takes over cleanly.
-  sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" uninstall -y tetra3 2>/dev/null || true
+OLIVE_WHL=$(ls "$VENDOR_WHEELS_DIR"/tetra3-*aarch64*.whl 2>/dev/null | head -1 || true)
+if [ -z "$OLIVE_WHL" ]; then
+  FAIL "No aarch64 tetra3-py wheel found in $VENDOR_WHEELS_DIR." \
+  "Run the 'Vendor Binaries (olive)' workflow first."
 fi
-
-# --- Install olive-solve tetra3-py -------------------------------------------
-
-LOG "Installing olive-solve tetra3-py: $OLIVE_WHL"
+LOG "Installing olive-solve: $OLIVE_WHL"
 sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install "$OLIVE_WHL" \
   || FAIL "olive-solve tetra3-py install failed"
 
@@ -227,6 +182,25 @@ if not hasattr(tetra3.Tetra3, 'solve_from_image_fast'):
     raise RuntimeError('olive-solve wheel not active (solve_from_image_fast missing)')
 print('olive-solve tetra3-py OK')
 " || FAIL "olive-solve verification failed"
+
+# --- Install star database ---------------------------------------------------
+# The database is generated on the x86_64 CI runner by release.yml and
+# staged into the chroot by build-image.sh as EFINDER_SOLVER_DB.
+
+mkdir -p /var/lib/efinder
+chown "${EFINDER_USER}:${EFINDER_USER}" /var/lib/efinder 2>/dev/null || true
+SOLVER_DB="/var/lib/efinder/default_database.npz"
+
+if [ ! -f "$SOLVER_DB" ]; then
+  if [ -n "${EFINDER_SOLVER_DB:-}" ] && [ -f "${EFINDER_SOLVER_DB}" ]; then
+    LOG "Installing pre-generated star database ($(du -sh "${EFINDER_SOLVER_DB}" | cut -f1))"
+    cp "${EFINDER_SOLVER_DB}" "$SOLVER_DB"
+    chown "${EFINDER_USER}:${EFINDER_USER}" "$SOLVER_DB"
+    LOG "Star database installed at $SOLVER_DB"
+  else
+    WARN "No star database provided; set solver_db in /etc/efinder/efinder.conf before first use"
+  fi
+fi
 
 # --- systemd units -----------------------------------------------------------
 

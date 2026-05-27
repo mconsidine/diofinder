@@ -80,21 +80,21 @@ jobs:
       - name: Verify wheel
         run: |
           ls -lh tetra3-py/dist/
-          WHL=$(ls tetra3-py/dist/tetra3-*.whl 2>/dev/null | head -1)
-          [ -n "$WHL" ] || { echo "::error::No tetra3 wheel produced"; exit 1; }
+          WHL=$(ls tetra3-py/dist/tetra3-*aarch64*.whl 2>/dev/null | head -1)
+          [ -n "$WHL" ] || { echo "::error::No aarch64 tetra3 wheel produced"; exit 1; }
           echo "Built: $WHL"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: tetra3-py-wheel-aarch64
-          path: tetra3-py/dist/*.whl
+          path: tetra3-py/dist/tetra3-*aarch64*.whl
           retention-days: 30
           if-no-files-found: error
 
   # --------------------------------------------------------------------------
-  # Download the wheel, clear stale cedar/tetra3rs artifacts from vendor/,
-  # commit back to the olive branch.
+  # Download the wheel, clear ALL stale tetra3/tetra3rs/cedar artifacts
+  # from vendor/, commit back to the olive branch.
   # [skip ci] prevents re-triggering this workflow on the vendor commit.
   # --------------------------------------------------------------------------
   commit-vendor:
@@ -107,8 +107,11 @@ jobs:
           ref: olive
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Remove stale non-olive vendor artifacts
+      - name: Remove stale vendor artifacts
         run: |
+          # Clear all previous tetra3 wheels (including armv6l pre-built),
+          # tetra3rs wheels, and cedar-detect binary.
+          rm -f vendor/wheels/tetra3-*.whl
           rm -f vendor/wheels/tetra3rs-*.whl
           rm -f vendor/bin/cedar-detect-server
 

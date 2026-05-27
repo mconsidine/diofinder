@@ -16,9 +16,10 @@
 # Environment:
 #   EFINDER_VERSION        Tag string for logging (default "main").
 #   REPO                   owner/repo (default "mconsidine/eFinder_cli").
-#   EFINDER_CEDAR_SOLVE_REF  cedar-solve git ref used *only* for star
-#                          database generation inside install.sh.
-#                          Defaults to v0.6.0.
+#   EFINDER_SOLVER_DB      Path to a pre-generated tetra3 .npz database.
+#                          Created by release.yml on the CI runner before
+#                          this script is called. Staged into the chroot
+#                          so install.sh can copy it to /var/lib/efinder/.
 #   EFINDER_BUILD_DRY_RUN  If "1", skip the actual chroot install
 #                          (useful for testing the loop-mount/resize
 #                          parts on your Dell without spending an
@@ -138,12 +139,6 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 # --- 4a. Edit boot partition files directly (outside chroot) -----------------
-#
-# We do these edits here, on the host, rather than relying solely on
-# install.sh inside the chroot because:
-#   - The host can write FAT32 files natively without qemu overhead.
-#   - It's easier to verify and debug by inspecting the mounted files.
-#   - belt-and-suspenders: install.sh does the same edits idempotently.
 
 CONFIG_TXT="$ROOT/boot/firmware/config.txt"
 CMDLINE_TXT="$ROOT/boot/firmware/cmdline.txt"
@@ -229,9 +224,9 @@ for f in requirements.txt; do
   cp "$SRC_DIR/$f" "$ROOT/tmp/efinder-src/"
 done
 
-# vendor/ contains the pre-built tetra3-py wheel committed by the
-# 'Vendor Binaries (olive)' workflow. Stage it so install.sh can use
-# it without any network fetch.
+# vendor/ contains the pre-built tetra3-py aarch64 wheel committed by the
+# 'Vendor Binaries (olive)' workflow. Stage it so install.sh can use it
+# without any network fetch.
 if [ -d "$SRC_DIR/vendor" ]; then
   LOG "Staging vendor/ (pre-built tetra3-py wheel)"
   cp -r "$SRC_DIR/vendor" "$ROOT/tmp/efinder-src/"
@@ -244,13 +239,25 @@ for f in README.md TODO.md; do
   [ -f "$SRC_DIR/$f" ] && cp "$SRC_DIR/$f" "$ROOT/tmp/efinder-src/" || true
 done
 
+# Stage pre-generated star database (built on x86_64 CI runner before
+# this script runs, avoiding hip_main.dat issues inside QEMU aarch64).
+CHROOT_DB_PATH=""
+if [ -n "${EFINDER_SOLVER_DB:-}" ] && [ -f "${EFINDER_SOLVER_DB}" ]; then
+  LOG "Staging pre-generated star database ($(du -sh "${EFINDER_SOLVER_DB}" | cut -f1))"
+  mkdir -p "$ROOT/tmp/solver-db"
+  cp "${EFINDER_SOLVER_DB}" "$ROOT/tmp/solver-db/default_database.npz"
+  CHROOT_DB_PATH="/tmp/solver-db/default_database.npz"
+else
+  WARN "EFINDER_SOLVER_DB not set or file not found; database will not be baked in"
+fi
+
 cat > "$ROOT/tmp/run-install.sh" << EOSH
 #!/bin/bash
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 export EFINDER_CHROOT=1
 export EFINDER_VERSION="${EFINDER_VERSION}"
-${EFINDER_CEDAR_SOLVE_REF:+export EFINDER_CEDAR_SOLVE_REF="${EFINDER_CEDAR_SOLVE_REF}"}
+${CHROOT_DB_PATH:+export EFINDER_SOLVER_DB="${CHROOT_DB_PATH}"}
 
 cd /tmp/efinder-src
 bash scripts/install.sh
@@ -268,7 +275,7 @@ LOG "Cleaning up chroot"
 rm -f "$ROOT/usr/sbin/policy-rc.d"
 rm -f "$ROOT/etc/resolv.conf"
 mv "$ROOT/etc/resolv.conf.bak" "$ROOT/etc/resolv.conf" 2>/dev/null || true
-rm -rf "$ROOT/tmp/efinder-src" "$ROOT/tmp/run-install.sh"
+rm -rf "$ROOT/tmp/efinder-src" "$ROOT/tmp/run-install.sh" "$ROOT/tmp/solver-db"
 rm -f "$ROOT/usr/bin/qemu-aarch64-static"
 
 # Trim apt caches to reduce final image size

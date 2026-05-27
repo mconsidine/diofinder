@@ -1,8 +1,14 @@
 name: Release (olive)
 
-# The tetra3-py wheel (vendor/wheels/tetra3-*.whl) must be committed by
-# the 'Vendor Binaries (olive)' workflow before triggering an image build.
-# The pre-flight step below fails fast with a clear message if it is missing.
+# Prerequisites before triggering an image build:
+#   1. Run 'Vendor Binaries (olive)' to populate vendor/wheels/ with the
+#      aarch64 tetra3-py wheel.  The pre-flight step fails fast if absent.
+#
+# Database generation:
+#   The tetra3 .npz star database is generated on the x86_64 CI runner
+#   (using esa/tetra3) BEFORE the chroot step, then copied into the image
+#   by build-image.sh.  This avoids hip_main.dat lookup failures that
+#   occur when trying to run database generation inside QEMU-emulated aarch64.
 
 on:
   push:
@@ -29,32 +35,22 @@ permissions:
 
 jobs:
 
-  # --------------------------------------------------------------------------
-  # Build the SD card image.
-  #
-  # vendor/wheels/tetra3-*.whl must already be committed by the
-  # 'Vendor Binaries (olive)' workflow. The pre-flight step fails fast
-  # with a clear message if the wheel is absent.
-  #
-  # install.sh uses EFINDER_CEDAR_SOLVE_REF to temporarily install
-  # cedar-solve tetra3 for star database generation; olive-solve reuses
-  # the tetra3 .npz format but does not include its own generator.
-  # --------------------------------------------------------------------------
   image:
     if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.build_image == true)
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify vendor wheel is present
+      - name: Verify aarch64 vendor wheel is present
         run: |
-          WHL=$(ls vendor/wheels/tetra3-*.whl 2>/dev/null | head -1 || true)
+          WHL=$(ls vendor/wheels/tetra3-*aarch64*.whl 2>/dev/null | head -1 || true)
           if [ -z "$WHL" ]; then
-            echo "::error::No tetra3-py wheel found in vendor/wheels/."
+            echo "::error::No aarch64 tetra3-py wheel found in vendor/wheels/."
             echo "::error::Run the 'Vendor Binaries (olive)' workflow first, then retry."
+            echo "::error::Note: a linux_armv6l wheel does NOT satisfy this check."
             exit 1
           fi
           echo "Vendor wheel: $WHL"
@@ -77,11 +73,35 @@ jobs:
             xz-utils kpartx parted \
             wget curl ca-certificates
 
+      - name: Generate tetra3 star database
+        # Run on the x86_64 CI runner where esa/tetra3 installs cleanly
+        # and hip_main.dat is bundled as proper package data.
+        # The resulting .npz is passed to build-image.sh via EFINDER_SOLVER_DB
+        # and copied into the image before the chroot starts.
+        run: |
+          mkdir -p build/output
+          python3 -m pip install --quiet "git+https://github.com/esa/tetra3.git"
+          python3 - <<'PYEOF'
+          import pathlib, sys
+          import tetra3
+          pkg_dir = pathlib.Path(tetra3.__file__).parent
+          cat = pkg_dir / 'hip_main.dat'
+          if not cat.exists():
+              sys.exit(f"hip_main.dat not found at {cat}")
+          print(f"Star catalogue: {cat} ({cat.stat().st_size/1e6:.1f} MB)")
+          t3 = tetra3.Tetra3(load_database=None)
+          t3.generate_database(
+              max_fov=14.0,
+              save_as='build/output/solver_database',
+          )
+          PYEOF
+          ls -lh build/output/solver_database.npz
+
       - name: Run image build
         env:
           EFINDER_VERSION: ${{ steps.ver.outputs.tag }}
           REPO: ${{ github.repository }}
-          EFINDER_CEDAR_SOLVE_REF: ${{ vars.CEDAR_SOLVE_TAG || 'v0.6.0' }}
+          EFINDER_SOLVER_DB: ${{ github.workspace }}/build/output/solver_database.npz
         run: |
           sudo -E bash build/build-image.sh
 
