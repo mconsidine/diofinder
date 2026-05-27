@@ -12,8 +12,8 @@ Pi Zero 2W optimisations:
     it in-place via np.copyto, eliminating per-frame heap allocation.
   * The shared-memory slot is released immediately after np.copyto so
     camera_proc is never blocked waiting for a solve to finish.
-  * target_pixel is pre-allocated and updated in-place only when the
-    boresight actually changes — saves a numpy allocation per frame.
+  * target_pixel and target_sky_coord must be float64: the Rust PyO3
+    binding extracts them as PyReadonlyArray2<f64>.
   * solve_from_image_fast accepts the raw u8 frame directly; no float32
     conversion step is required.
 """
@@ -49,6 +49,23 @@ _OLIVE_STATUS = {
     "Cancelled":   CANCELLED,   "CANCELLED":    CANCELLED,
     "TooFew":      TOO_FEW,     "TOO_FEW":      TOO_FEW,
 }
+
+
+def _solver_db_path(raw: str) -> str:
+    """Expand a bare database name to an absolute .npz path.
+
+    If raw is already an absolute path it is used as-is.
+    Otherwise it is treated as a stem name relative to
+    /var/lib/efinder/ and .npz is appended.
+
+    Examples:
+        "default_database"                   -> /var/lib/efinder/default_database.npz
+        "/var/lib/efinder/mydb.npz"          -> /var/lib/efinder/mydb.npz
+        "/opt/efinder/data/custom_db.npz"    -> /opt/efinder/data/custom_db.npz
+    """
+    if os.path.isabs(raw):
+        return raw
+    return f"/var/lib/efinder/{raw}.npz"
 
 
 def _save_frame(frame, cfg, label: str) -> None:
@@ -236,8 +253,9 @@ def solver_main(slots, latest_solution, shared_cfg,
     # ---- Load olive-solve --------------------------------------------------
     try:
         import tetra3 as _tetra3
-        solver_t3 = _tetra3.Tetra3(cfg.solver_db)
-        log.info("olive-solve ready (db: %s)", cfg.solver_db)
+        db_path = _solver_db_path(cfg.solver_db)
+        solver_t3 = _tetra3.Tetra3(db_path)
+        log.info("olive-solve ready (db: %s)", db_path)
     except Exception as e:
         log.error("Failed to load olive-solve: %s", e)
         raise RuntimeError(f"olive-solve unavailable: {e}") from e
