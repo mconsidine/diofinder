@@ -9,8 +9,7 @@
 #   4. Bind-mount /dev /proc /sys, copy qemu-aarch64-static into the rootfs.
 #   5. Stage our source tree under /tmp/efinder-src in the chroot.
 #   6. Run install.sh in chroot mode.
-#   7. Download solver test images into the finished image.
-#   8. Unmount, sync, hand off to caller for compression.
+#   7. Unmount, sync, hand off to caller for compression.
 #
 # Database generation (x86_64 host, before chroot):
 #   If EFINDER_SOLVER_DB is already set to an existing .npz file, that
@@ -305,28 +304,7 @@ chmod +x "$ROOT/tmp/run-install.sh"
 LOG "Running install.sh inside chroot (this is the slow part, ~10-20 min)"
 chroot "$ROOT" /tmp/run-install.sh
 
-# --- 7. Download solver test images ------------------------------------------
-# Done AFTER the chroot so install.sh's existence check on /opt/efinder
-# is not tripped by a pre-existing directory.
-
-LOG "Downloading solver test images from olive-solve fixtures..."
-mkdir -p "$ROOT/opt/efinder/test-images"
-OLIVE_RAW="https://raw.githubusercontent.com/mconsidine/olive-solve/main/tetra3/tests/fixtures/sample_images"
-for img in \
-    orion_belt.jpg \
-    orion2.jpg \
-    pleiades.jpg \
-    orion_trees.jpg \
-    crappy.jpg \
-    "2019-07-29T204726_Alt40_Azi45_Try1.jpg"; do
-  wget -q "${OLIVE_RAW}/${img}" \
-       -O "$ROOT/opt/efinder/test-images/${img}" \
-    && LOG "  ${img}" \
-    || WARN "  Could not download: ${img} (non-fatal)"
-done
-chown -R efinder:efinder "$ROOT/opt/efinder/test-images" 2>/dev/null || true
-
-# --- 8. Cleanup --------------------------------------------------------------
+# --- 7. Cleanup --------------------------------------------------------------
 
 LOG "Cleaning up chroot"
 rm -f "$ROOT/usr/sbin/policy-rc.d"
