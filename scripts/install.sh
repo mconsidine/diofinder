@@ -88,7 +88,7 @@ apt-get install -y --no-install-recommends \
   rpicam-apps \
   python3-flask \
   build-essential pkg-config \
-  curl ca-certificates git \
+  curl ca-certificates git wget \
   avahi-daemon \
   openssh-server \
   network-manager \
@@ -200,6 +200,23 @@ if [ ! -f "$SOLVER_DB" ]; then
   else
     WARN "No star database provided; set solver_db in /etc/efinder/efinder.conf before first use"
   fi
+fi
+
+# --- Download solver test images (fresh install only) ------------------------
+# In chroot/image-build mode these are downloaded by build-image.sh after
+# the chroot exits, so they are already present in the image.
+
+if [ "$IN_CHROOT" != "1" ]; then
+  LOG "Downloading solver test images..."
+  mkdir -p "$EFINDER_DIR/test-images"
+  OLIVE_RAW="https://raw.githubusercontent.com/mconsidine/olive-solve/main/tetra3/tests/fixtures/sample_images"
+  for img in orion_belt.jpg orion2.jpg pleiades.jpg orion_trees.jpg crappy.jpg; do
+    wget -q "${OLIVE_RAW}/${img}" \
+         -O "$EFINDER_DIR/test-images/${img}" \
+      && LOG "  ${img}" \
+      || WARN "  Could not download: ${img} (non-fatal)"
+  done
+  chown -R "$EFINDER_USER:$EFINDER_USER" "$EFINDER_DIR/test-images" || true
 fi
 
 # --- systemd units -----------------------------------------------------------
