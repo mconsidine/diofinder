@@ -76,7 +76,9 @@ jobs:
       - name: Generate tetra3 star database
         # tetra3 is only on GitHub, not PyPI. Install the code via git,
         # then download hip_main.dat separately from the CDS Hipparcos
-        # catalogue (I/239) — it is not bundled with the GitHub package.
+        # catalogue (I/239) - it is not bundled with the GitHub package.
+        # save_as must be an absolute path; tetra3 resolves relative paths
+        # against its own package data directory, not the working directory.
         run: |
           mkdir -p build/output
           python3 -m pip install --quiet "git+https://github.com/esa/tetra3.git"
@@ -86,18 +88,21 @@ jobs:
           wget -q --show-progress \
             https://cdsarc.cds.unistra.fr/ftp/cats/I/239/hip_main.dat \
             -O "${TETRA3_DIR}/hip_main.dat"
+          export SOLVER_DB_PATH="$(pwd)/build/output/solver_database"
           python3 - <<'PYEOF'
-          import pathlib, sys
+          import os, pathlib, sys
           import tetra3
           pkg_dir = pathlib.Path(tetra3.__file__).parent
           cat = pkg_dir / 'hip_main.dat'
           if not cat.exists():
               sys.exit(f'hip_main.dat not found at {cat}')
           print(f'Star catalogue: {cat} ({cat.stat().st_size/1e6:.1f} MB)')
+          save_as = os.environ['SOLVER_DB_PATH']
+          print(f'Saving database to: {save_as}.npz')
           t3 = tetra3.Tetra3(load_database=None)
           t3.generate_database(
               max_fov=14.0,
-              save_as='build/output/solver_database',
+              save_as=save_as,
           )
           PYEOF
           ls -lh build/output/solver_database.npz
