@@ -74,19 +74,26 @@ jobs:
             wget curl ca-certificates
 
       - name: Generate tetra3 star database
-        # Clone esa/tetra3 so hip_main.dat is guaranteed to be present
-        # alongside the Python source at /tmp/esa-tetra3/tetra3/hip_main.dat.
-        # pip install git+... does not reliably install the data file on
-        # GitHub Actions runners.  Cloning avoids that entirely.
+        # tetra3 is installed from PyPI for the generate_database code.
+        # hip_main.dat is NOT bundled with the PyPI package; download it
+        # directly from the CDS Hipparcos catalogue (I/239) and place it
+        # in the tetra3 package directory where generate_database expects it.
         run: |
           mkdir -p build/output
-          git clone --depth 1 https://github.com/esa/tetra3.git /tmp/esa-tetra3
-          python3 -m pip install --quiet numpy scipy pillow
+          python3 -m pip install --quiet tetra3
+          TETRA3_DIR=$(python3 -c 'import pathlib, tetra3; print(pathlib.Path(tetra3.__file__).parent)')
+          echo "tetra3 package dir: $TETRA3_DIR"
+          if [ ! -f "${TETRA3_DIR}/hip_main.dat" ]; then
+            echo "Downloading hip_main.dat from CDS Hipparcos archive..."
+            curl -fsSL \
+              "https://cdsarc.cds.unistra.fr/ftp/cats/I/239/hip_main.dat" \
+              -o "${TETRA3_DIR}/hip_main.dat"
+          fi
           python3 - <<'PYEOF'
           import pathlib, sys
-          sys.path.insert(0, '/tmp/esa-tetra3')
           import tetra3
-          cat = pathlib.Path('/tmp/esa-tetra3/tetra3/hip_main.dat')
+          pkg_dir = pathlib.Path(tetra3.__file__).parent
+          cat = pkg_dir / 'hip_main.dat'
           if not cat.exists():
               sys.exit(f'hip_main.dat not found at {cat}')
           print(f'Star catalogue: {cat} ({cat.stat().st_size/1e6:.1f} MB)')
