@@ -71,13 +71,12 @@ jobs:
           sudo apt-get install -y \
             qemu-user-static binfmt-support \
             xz-utils kpartx parted \
-            wget curl ca-certificates unzip
+            wget curl ca-certificates
 
       - name: Generate tetra3 star database
         # tetra3 is only on GitHub, not PyPI. Install the code via git,
-        # then obtain hip_main.dat from the ESA Kelvins star-tracker dataset
-        # (20 MB zip, publicly accessible, contains hip_main.dat plus examples).
-        # unzip -j extracts the file flat regardless of its path inside the zip.
+        # then download hip_main.dat directly from the CDS Hipparcos
+        # catalogue (I/239) - it is not bundled with the GitHub package.
         env:
           SOLVER_DB_PATH: ${{ github.workspace }}/build/output/solver_database
         run: |
@@ -85,12 +84,10 @@ jobs:
           python3 -m pip install --quiet "git+https://github.com/esa/tetra3.git"
           TETRA3_DIR=$(python3 -c 'import pathlib, tetra3; print(pathlib.Path(tetra3.__file__).parent)')
           echo "tetra3 package dir: $TETRA3_DIR"
-          echo "Downloading ESA Kelvins star-tracker dataset..."
+          echo "Downloading hip_main.dat from CDS Hipparcos archive..."
           wget -q --show-progress \
-            https://kelvins.esa.int/media/public/competitions/star-trackers-first-contact/star-tracker-data.zip \
-            -O /tmp/star-tracker-data.zip
-          unzip -j /tmp/star-tracker-data.zip '*hip_main.dat' -d /tmp/hip-catalog/
-          cp /tmp/hip-catalog/hip_main.dat "${TETRA3_DIR}/hip_main.dat"
+            https://cdsarc.cds.unistra.fr/ftp/cats/I/239/hip_main.dat \
+            -O "${TETRA3_DIR}/hip_main.dat"
           python3 build/generate_database.py
           ls -lh build/output/solver_database.npz
 
