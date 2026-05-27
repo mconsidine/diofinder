@@ -12,15 +12,21 @@
 #   7. Download solver test images into the finished image.
 #   8. Unmount, sync, hand off to caller for compression.
 #
+# Database generation (x86_64 host, before chroot):
+#   If EFINDER_SOLVER_DB is already set to an existing .npz file, that
+#   database is used as-is (CI workflow pre-generates it this way).
+#   Otherwise build-image.sh generates it here using esa/tetra3 and
+#   hip_main.dat from the CDS Hipparcos archive, so local builds work
+#   without any extra setup.  SOLVER_DB_PATH is exported for
+#   build/generate_database.py to use as the output path.
+#
 # Run from the repo root as: sudo bash build/build-image.sh
 #
 # Environment:
 #   EFINDER_VERSION        Tag string for logging (default "main").
 #   REPO                   owner/repo (default "mconsidine/eFinder_cli").
 #   EFINDER_SOLVER_DB      Path to a pre-generated tetra3 .npz database.
-#                          Created by release.yml on the CI runner before
-#                          this script is called. Staged into the chroot
-#                          so install.sh can copy it to /var/lib/efinder/.
+#                          If absent, the database is generated here.
 #   EFINDER_BUILD_DRY_RUN  If "1", skip the actual chroot install
 #                          (useful for testing the loop-mount/resize
 #                          parts on your Dell without spending an
@@ -63,6 +69,35 @@ fi
 
 WORK="$(pwd)/build/output"
 mkdir -p "$WORK"
+
+# --- Pre: Generate tetra3 star database (x86_64 host) ------------------------
+# Skipped when EFINDER_SOLVER_DB already points at an existing file
+# (the CI workflow pre-generates it and exports the variable before
+# calling this script). For local builds the generation runs here.
+
+if [ -n "${EFINDER_SOLVER_DB:-}" ] && [ -f "${EFINDER_SOLVER_DB}" ]; then
+  LOG "Using pre-generated database: $EFINDER_SOLVER_DB"
+else
+  LOG "Generating tetra3 star database on host (takes ~20-40 min)..."
+  command -v python3 >/dev/null 2>&1 \
+    || FAIL "python3 required for database generation (apt install python3)"
+  python3 -m pip install --quiet "git+https://github.com/esa/tetra3.git" \
+    || FAIL "esa/tetra3 install failed"
+  TETRA3_DIR=$(python3 -c \
+    'import pathlib, tetra3; print(pathlib.Path(tetra3.__file__).parent)')
+  LOG "tetra3 package dir: $TETRA3_DIR"
+  LOG "Downloading hip_main.dat from CDS Hipparcos archive..."
+  wget -q --show-progress \
+    https://cdsarc.cds.unistra.fr/ftp/cats/I/239/hip_main.dat \
+    -O "${TETRA3_DIR}/hip_main.dat" \
+    || FAIL "hip_main.dat download failed"
+  export SOLVER_DB_PATH="$WORK/solver_database"
+  python3 build/generate_database.py \
+    || FAIL "Database generation failed"
+  export EFINDER_SOLVER_DB="${SOLVER_DB_PATH}.npz"
+  LOG "Database ready: $EFINDER_SOLVER_DB ($(du -sh "$EFINDER_SOLVER_DB" | cut -f1))"
+fi
+
 cd "$WORK"
 
 # --- 1. Download base image ---------------------------------------------------
@@ -240,16 +275,16 @@ for f in README.md TODO.md; do
   [ -f "$SRC_DIR/$f" ] && cp "$SRC_DIR/$f" "$ROOT/tmp/efinder-src/" || true
 done
 
-# Stage pre-generated star database (built on x86_64 CI runner before
-# this script runs, avoiding hip_main.dat issues inside QEMU aarch64).
+# Stage the star database (generated in the pre-step above, or passed
+# in by the caller via EFINDER_SOLVER_DB).
 CHROOT_DB_PATH=""
 if [ -n "${EFINDER_SOLVER_DB:-}" ] && [ -f "${EFINDER_SOLVER_DB}" ]; then
-  LOG "Staging pre-generated star database ($(du -sh "${EFINDER_SOLVER_DB}" | cut -f1))"
+  LOG "Staging star database ($(du -sh "${EFINDER_SOLVER_DB}" | cut -f1))"
   mkdir -p "$ROOT/tmp/solver-db"
   cp "${EFINDER_SOLVER_DB}" "$ROOT/tmp/solver-db/default_database.npz"
   CHROOT_DB_PATH="/tmp/solver-db/default_database.npz"
 else
-  WARN "EFINDER_SOLVER_DB not set or file not found; database will not be baked in"
+  WARN "No star database available; image will ship without one"
 fi
 
 cat > "$ROOT/tmp/run-install.sh" << EOSH
