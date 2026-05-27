@@ -1,24 +1,19 @@
 """Solver worker process — combo branch.
 
-Supports three interchangeable plate-solve backends selectable at runtime
-via shared_cfg["solver_backend"] (default: "tetra"):
+Supports two interchangeable plate-solve backends selectable at runtime
+via shared_cfg["solver_backend"] (default: "hybrid"):
 
-  "cedar"  cedar-detect gRPC (C++ centroid server, port 50051) +
-           tetra3 Python library for plate solving.
-           cedar-detect.service must be running.
+  "hybrid"  cedar-detect gRPC (C++ centroid server, port 50051) +
+            olive-solve tetra3-py solve_from_centroids (Rust plate solve).
+            cedar-detect.service must be running.
 
-  "tetra"  tetra3rs (Rust, in-process): centroid extraction + plate solve
-           in a single step with no external server dependency.
-           Currently uses cedar-detect for extraction (hybrid mode).
+  "olive"   olive-solve tetra3-py (Rust, in-process): centroid extraction +
+            plate solve in a single call with no external server dependency.
 
-  "olive"  olive-solve tetra3-py (Rust, in-process): centroid extraction +
-           plate solve in a single call with no external server dependency.
-           Build and install olive-solve's tetra3-py wheel to enable.
-
-All three backends are loaded and initialised at startup. If one fails
-(missing library, service down) it is marked unavailable and a warning
-is logged; the other backends continue normally. Switching takes effect
-on the very next frame without restarting the process.
+Both backends share a single olive-solve Tetra3 instance loaded at startup.
+If cedar-detect is unavailable the hybrid backend is disabled but olive
+continues normally. Switching takes effect on the very next frame without
+restarting the process.
 """
 
 import logging
@@ -183,7 +178,6 @@ def _imu_propagate_hint(last_sky_q, last_imu_q, shared_cfg):
     if q_cur is None or time.monotonic() - imu_t > 2.0:
         return last_sky_q, 0.1
 
-    # q_delta = q_cur * conj(q_ref)  —  rotation of the IMU since last solve
     w0, x0, y0, z0 = q_cur
     wr, xr, yr, zr = last_imu_q[0], -last_imu_q[1], -last_imu_q[2], -last_imu_q[3]
     wd = w0*wr - x0*xr - y0*yr - z0*zr
@@ -195,17 +189,12 @@ def _imu_propagate_hint(last_sky_q, last_imu_q, shared_cfg):
         return last_sky_q, 0.1
     wd, xd, yd, zd = wd/nd, xd/nd, yd/nd, zd/nd
 
-    # q_hint = q_delta * q_last_sky
     ws, xs, ys, zs = (float(v) for v in last_sky_q)
     wh = wd*ws - xd*xs - yd*ys - zd*zs
     xh = wd*xs + xd*ws + yd*zs - zd*ys
     yh = wd*ys - xd*zs + yd*ws + zd*xs
     zh = wd*zs + xd*ys - yd*xs + zd*ws
 
-    # Uncertainty: 1.5× the measured rotation angle, floor 2°.
-    # The 1.5× factor accounts for frame-mismatch between the IMU's body axes
-    # and the camera/sky axes; it ensures the true attitude stays inside the
-    # search window even with a moderately misaligned mount.
     angle_deg = math.degrees(2.0 * math.acos(min(1.0, abs(wd))))
     uncertainty_deg = max(2.0, angle_deg * 1.5)
 
@@ -276,14 +265,9 @@ def solver_main(slots, latest_solution, shared_cfg,
     )
     _pin_to_cpu(cfg.cpu_solver)
 
-    # ---- Cedar backend init ------------------------------------------------
-    cedar_available = False
-    stub = None
-    pb = None
-    pb_grpc = None
-    t3 = None
-    channel = None
+    # ---- cedar-detect gRPC (used by hybrid backend) ------------------------
     _cedar_shm_opened: set = set()
+    stub = None; pb = None; pb_grpc = None; channel = None
 
     proto_dir = str(pathlib.Path(__file__).parent.parent / "proto")
     if proto_dir not in sys.path:
@@ -293,40 +277,16 @@ def solver_main(slots, latest_solution, shared_cfg,
         import grpc as _grpc
         import cedar_detect_pb2 as _pb
         import cedar_detect_pb2_grpc as _pb_grpc
-        import tetra3 as _t3
         pb = _pb
         pb_grpc = _pb_grpc
         log.info("Connecting to cedar-detect at %s", cfg.cedar_detect_socket)
         channel = _grpc.insecure_channel(cfg.cedar_detect_socket)
         stub = _pb_grpc.CedarDetectStub(channel)
-        log.info("Loading tetra3 database %s", cfg.tetra3_db)
-        t3 = _t3.Tetra3(cfg.tetra3_db)
-        cedar_available = True
-        log.info("Cedar backend ready (gRPC + tetra3)")
+        log.info("cedar-detect gRPC channel open")
     except Exception as e:
-        log.warning("Cedar backend unavailable: %s", e)
+        log.warning("cedar-detect unavailable (hybrid backend disabled): %s", e)
 
-    # ---- Tetra3rs backend init ---------------------------------------------
-    tetra_available = False
-    tetra3rs = None
-    db = None
-    last_quaternion  = None   # sky quaternion from last successful tetra solve
-    last_solve_imu_q = None   # IMU quaternion recorded at that same solve
-
-    try:
-        import tetra3rs as _tetra3rs
-        tetra3rs = _tetra3rs
-        log.info("Loading tetra3rs database %s", cfg.tetra3rs_db)
-        db = tetra3rs.SolverDatabase.load_from_file(cfg.tetra3rs_db)
-        tetra_available = True
-        log.info("Tetra3rs backend ready")
-    except Exception as e:
-        log.warning("Tetra3rs backend unavailable: %s", e)
-
-    # ---- Olive backend init ------------------------------------------------
-    # olive-solve installs its Python package as "tetra3".  We detect it by
-    # checking for solve_from_image_fast, which the original cedar-solve
-    # tetra3 library does not have.
+    # ---- olive-solve (shared by hybrid + olive backends) -------------------
     olive_available = False
     olive_t3 = None
 
@@ -335,16 +295,19 @@ def solver_main(slots, latest_solution, shared_cfg,
         if not hasattr(_olive_tetra3.Tetra3, "solve_from_image_fast"):
             raise ImportError(
                 "installed tetra3 lacks solve_from_image_fast; "
-                "install olive-solve's tetra3-py wheel to enable this backend")
-        log.info("Loading olive database %s", cfg.olive_db)
-        olive_t3 = _olive_tetra3.Tetra3(cfg.olive_db)
+                "install olive-solve's tetra3-py wheel")
+        db_path = (cfg.olive_db if cfg.olive_db.startswith('/')
+                   else f'/var/lib/efinder/{cfg.olive_db}.npz')
+        olive_t3 = _olive_tetra3.Tetra3(db_path)
         olive_available = True
-        log.info("Olive backend ready")
+        log.info("Olive-solve ready (db: %s)", db_path)
     except Exception as e:
-        log.warning("Olive backend unavailable: %s", e)
+        log.warning("Olive-solve unavailable: %s", e)
 
-    if not cedar_available and not tetra_available and not olive_available:
-        log.error("No solver backend available; exiting")
+    hybrid_available = stub is not None and olive_available
+
+    if not olive_available:
+        log.error("No solver backend available (olive-solve required); exiting")
         time.sleep(5)
         raise RuntimeError("No solver backend available")
 
@@ -380,7 +343,7 @@ def solver_main(slots, latest_solution, shared_cfg,
             t0 = time.monotonic()
 
             align_req = _drain_align_queue(align_request_q, align_response_q)
-            backend   = shared_cfg.get("solver_backend", "cedar")
+            backend   = shared_cfg.get("solver_backend", "hybrid")
 
             local_peak = int(bufs[idx].max())
             if local_peak < 20:
@@ -389,15 +352,15 @@ def solver_main(slots, latest_solution, shared_cfg,
                 continue
 
             # ================================================================
-            # Cedar backend
+            # Hybrid backend: cedar-detect extraction + olive-solve centroids
             # ================================================================
-            if backend == "cedar":
-                if not cedar_available:
+            if backend == "hybrid":
+                if not hybrid_available:
                     slots.release_read_slot()
-                    if "cedar" not in _warned_unavailable:
-                        log.warning("Cedar backend selected but not available; "
-                                    "switch to 'tetra' via web UI or maint socket")
-                        _warned_unavailable.add("cedar")
+                    if "hybrid" not in _warned_unavailable:
+                        log.warning("Hybrid backend selected but not available; "
+                                    "cedar-detect required — switch to 'olive'")
+                        _warned_unavailable.add("hybrid")
                     time.sleep(0.1)
                     continue
 
@@ -427,7 +390,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                 try:
                     resp = stub.ExtractCentroids(req, timeout=2.0)
                 except Exception as e:
-                    slots.release_read_slot()    
+                    slots.release_read_slot()
                     log.warning("cedar-detect call failed: %s", e)
                     latest_solution.update(_empty_solution(peak=local_peak))
                     if align_req is not None:
@@ -458,35 +421,34 @@ def solver_main(slots, latest_solution, shared_cfg,
                 centroids = np.array(
                     [[c.centroid_position.y, c.centroid_position.x]
                      for c in resp.star_candidates],
-                    dtype=np.float32,
+                    dtype=np.float64,
                 )
                 bs_y = shared_cfg.get("boresight_y", cfg.boresight_y)
                 bs_x = shared_cfg.get("boresight_x", cfg.boresight_x)
-                target_pixel = np.array([[bs_y, bs_x]], dtype=np.float32)
+                target_pixel = np.array([[bs_y, bs_x]], dtype=np.float64)
                 target_sky   = None
                 if align_req is not None:
                     target_sky = np.array(
                         [[align_req.target_ra_deg, align_req.target_dec_deg]],
-                        dtype=np.float32)
+                        dtype=np.float64)
 
                 t_solve = time.monotonic()
                 try:
-                    soln = t3.solve_from_centroids(
+                    soln = olive_t3.solve_from_centroids(
                         centroids,
-                        (cfg.frame_height, cfg.frame_width),
+                        (float(cfg.frame_height), float(cfg.frame_width)),
                         fov_estimate=calibrator.get_fov_estimate(),
                         fov_max_error=calibrator.get_fov_max_error(),
                         solve_timeout=shared_cfg.get(
                             "solve_timeout_ms", cfg.solve_timeout_ms),
                         match_threshold=cfg.match_threshold,
                         match_radius=cfg.match_radius,
-                        distortion=calibrator.get_distortion_estimate(),
                         target_pixel=target_pixel,
                         target_sky_coord=target_sky,
                         return_matches=False,
                     )
                 except Exception as e:
-                    log.warning("cedar solve_from_centroids raised: %s", e)
+                    log.warning("hybrid solve_from_centroids raised: %s", e)
                     latest_solution.update(
                         _empty_solution(stars=n, peak=peak, noise=noise))
                     if align_req is not None:
@@ -516,11 +478,11 @@ def solver_main(slots, latest_solution, shared_cfg,
                     fail_streak += 1
                     if fail_streak == 1 or fail_streak % 20 == 0:
                         log.info(
-                            "cedar no solve: status=%d n=%d peak=%d "
+                            "hybrid no solve: status=%d n=%d peak=%d "
                             "t=%.0fms (det=%.0fms slv=%.0fms)",
                             status, n, peak, elapsed_ms, detect_ms, solve_only_ms)
                     if cfg.save_failed_frames and frame_snapshot is not None:
-                        _save_frame(frame_snapshot, cfg, f"cedar_failed_s{status}")
+                        _save_frame(frame_snapshot, cfg, f"hybrid_failed_s{status}")
                     continue
 
                 measured_fov        = soln.get("FOV", calibrator.get_fov_estimate())
@@ -553,7 +515,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                     if xt is None or yt is None:
                         align_response_q.put(AlignResult(
                             success=False,
-                            error_message="cedar-solve returned no x_target/y_target",
+                            error_message="hybrid-solve returned no x_target/y_target",
                             completed_at=time.monotonic(),
                         ))
                     else:
@@ -567,7 +529,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                             ))
                         else:
                             log.info(
-                                "ALIGN (cedar): (%.4f, %.4f) -> "
+                                "ALIGN (hybrid): (%.4f, %.4f) -> "
                                 "pixel (y=%.2f, x=%.2f)",
                                 align_req.target_ra_deg,
                                 align_req.target_dec_deg, y, x)
@@ -578,242 +540,21 @@ def solver_main(slots, latest_solution, shared_cfg,
                             ))
 
                 if cfg.save_solved_frames and frame_snapshot is not None:
-                    _save_frame(frame_snapshot, cfg, "cedar_solved")
+                    _save_frame(frame_snapshot, cfg, "hybrid_solved")
 
                 if fail_streak:
                     log.info(
-                        "cedar solved after %d failed: n=%d matches=%d "
+                        "hybrid solved after %d failed: n=%d matches=%d "
                         "t=%.0fms (det=%.0fms slv=%.0fms)",
                         fail_streak, n, soln.get("Matches", 0),
                         elapsed_ms, detect_ms, solve_only_ms)
                     fail_streak = 0
                 elif solve_count % cfg.log_solve_stats_every_n == 0:
                     log.info(
-                        "cedar solve #%d: n=%d matches=%d peak=%d "
+                        "hybrid solve #%d: n=%d matches=%d peak=%d "
                         "t=%.0fms (det=%.0fms slv=%.0fms)",
                         solve_count, n, soln.get("Matches", 0), peak,
                         elapsed_ms, detect_ms, solve_only_ms)
-
-            # ================================================================
-            # Tetra3rs backend
-            # ================================================================
-            elif backend == "tetra":
-                if not tetra_available:
-                    slots.release_read_slot()
-                    if "tetra" not in _warned_unavailable:
-                        log.warning("Tetra3rs backend selected but not available; "
-                                    "switch to 'cedar' via web UI or maint socket")
-                        _warned_unavailable.add("tetra")
-                    time.sleep(0.1)
-                    continue
-
-                if not cedar_available:
-                    slots.release_read_slot()
-                    if "tetra" not in _warned_unavailable:
-                        log.warning("Tetra hybrid mode requires cedar-detect; "
-                                    "cedar-detect is unavailable")
-                        _warned_unavailable.add("tetra")
-                    time.sleep(0.1)
-                    continue
-
-                frame_snapshot = (
-                    np.copy(bufs[idx])
-                    if (cfg.save_failed_frames or cfg.save_solved_frames)
-                    else None
-                )
-
-                shm_name   = f"{SHM_PREFIX}_{idx}"
-                reopen_shm = shm_name not in _cedar_shm_opened
-                if reopen_shm:
-                    _cedar_shm_opened.add(shm_name)
-                req = pb.CentroidsRequest(
-                    input_image=pb.Image(
-                        width=cfg.frame_width, height=cfg.frame_height,
-                        shmem_name=shm_name, reopen_shmem=reopen_shm,
-                    ),
-                    sigma=shared_cfg.get("detect_sigma", cfg.detect_sigma),
-                    detect_hot_pixels=cfg.detect_hot_pixels,
-                    use_binned_for_star_candidates=shared_cfg.get(
-                        "detect_use_binned", cfg.detect_use_binned),
-                    return_binned=False,
-                )
-                t_extract = time.monotonic()
-                try:
-                    resp = stub.ExtractCentroids(req, timeout=2.0)
-                except Exception as e:
-                    slots.release_read_slot()
-                    log.warning("cedar-detect call failed (tetra path): %s", e)
-                    latest_solution.update(_empty_solution(peak=local_peak))
-                    if align_req is not None:
-                        align_response_q.put(AlignResult(
-                            success=False,
-                            error_message=f"centroid extraction failed: {e}",
-                            completed_at=time.monotonic(),
-                        ))
-                    fail_streak += 1; time.sleep(0.05); continue
-                slots.release_read_slot()
-
-                # tetra3rs: center-relative (x, y), x+ right, y+ down
-                centroids = np.array(
-                    [[c.centroid_position.x - cfg.frame_width  / 2.0,
-                      c.centroid_position.y - cfg.frame_height / 2.0]
-                     for c in resp.star_candidates],
-                    dtype=np.float64,
-                )
-                n          = len(centroids)
-                extract_ms = (time.monotonic() - t_extract) * 1000.0
-
-                if n < cfg.min_centroids:
-                    latest_solution.update(_empty_solution(
-                        stars=n, peak=local_peak, status=TOO_FEW))
-                    if align_req is not None:
-                        align_response_q.put(AlignResult(
-                            success=False,
-                            error_message=f"only {n} stars (need {cfg.min_centroids})",
-                            completed_at=time.monotonic(),
-                        ))
-                    fail_streak += 1; continue
-
-                timeout_ms = int(shared_cfg.get(
-                    "solve_timeout_ms", cfg.solve_timeout_ms))
-                q_hint, hint_unc = _imu_propagate_hint(
-                    last_quaternion, last_solve_imu_q, shared_cfg)
-                if q_hint is not last_quaternion:
-                    hint_label = "imu"
-                elif last_quaternion is not None:
-                    hint_label = "seeded"
-                else:
-                    hint_label = "blind"
-                t_solve = time.monotonic()
-                try:
-                    result = db.solve_from_centroids(
-                        centroids,
-                        fov_estimate_deg=calibrator.get_fov_estimate(),
-                        fov_max_error_deg=max(calibrator.get_fov_max_error(),
-                                              cfg.fov_max_error_deg),
-                        image_width=cfg.frame_width,
-                        image_height=cfg.frame_height,
-                        match_radius=cfg.match_radius,
-                        match_threshold=cfg.match_threshold,
-                        solve_timeout_ms=timeout_ms,
-                        attitude_hint=q_hint,
-                        hint_uncertainty_deg=hint_unc,
-                        strict_hint=False,
-                    )
-                except Exception as e:
-                    log.warning("tetra3rs solve_from_centroids raised: %s", e)
-                    latest_solution.update(
-                        _empty_solution(stars=n, peak=local_peak))
-                    if align_req is not None:
-                        align_response_q.put(AlignResult(
-                            success=False,
-                            error_message=f"solver raised: {e}",
-                            completed_at=time.monotonic(),
-                        ))
-                    fail_streak += 1; continue
-
-                solve_only_ms = (time.monotonic() - t_solve) * 1000.0
-                elapsed_ms    = (time.monotonic() - t0) * 1000.0
-                solve_count  += 1
-
-                if result is None:
-                    latest_solution.update(_empty_solution(
-                        stars=n, peak=local_peak,
-                        solve_ms=elapsed_ms, status=NO_MATCH))
-                    if align_req is not None:
-                        align_response_q.put(AlignResult(
-                            success=False, error_message="no match",
-                            completed_at=time.monotonic(),
-                        ))
-                    fail_streak += 1
-                    if fail_streak == 1 or fail_streak % 20 == 0:
-                        log.info(
-                            "tetra no solve (%s): n=%d peak=%d "
-                            "ext=%.0fms slv=%.0fms",
-                            hint_label, n, local_peak,
-                            extract_ms, solve_only_ms)
-                    if cfg.save_failed_frames and frame_snapshot is not None:
-                        _save_frame(frame_snapshot, cfg, "tetra_failed")
-                    continue
-
-                last_quaternion  = result.quaternion
-                last_solve_imu_q = shared_cfg.get("imu_q")
-                measured_fov     = result.fov_deg
-                calibrator.update_from_solve(measured_fov, 0.0)
-                polar.update_from_solve(result.ra_deg, result.dec_deg)
-
-                bs_y   = shared_cfg.get("boresight_y", cfg.boresight_y)
-                bs_x   = shared_cfg.get("boresight_x", cfg.boresight_x)
-                bs_x_c = bs_x - cfg.frame_width  / 2.0
-                bs_y_c = bs_y - cfg.frame_height / 2.0
-                try:
-                    ra_out, dec_out = result.pixel_to_world(bs_x_c, bs_y_c)
-                    if ra_out is None or math.isnan(float(ra_out)):
-                        ra_out, dec_out = result.ra_deg, result.dec_deg
-                except Exception:
-                    ra_out, dec_out = result.ra_deg, result.dec_deg
-
-                ra_out  = float(ra_out)
-                dec_out = float(dec_out)
-                roll    = float(result.roll_deg)
-
-                latest_solution.update(_filled_solution(
-                    ra=ra_out, dec=dec_out, roll=roll, fov=measured_fov,
-                    stars=n, matches=int(result.num_matches),
-                    peak=local_peak, noise=0.0,
-                    solve_ms=elapsed_ms, status=MATCH_FOUND,
-                ))
-                _imu_update_reference(shared_cfg, ra_out, dec_out, roll)
-
-                if align_req is not None:
-                    try:
-                        x_c, y_c = result.world_to_pixel(
-                            align_req.target_ra_deg,
-                            align_req.target_dec_deg)
-                        if x_c is None or math.isnan(float(x_c)):
-                            align_response_q.put(AlignResult(
-                                success=False,
-                                error_message="target outside camera FOV",
-                                completed_at=time.monotonic(),
-                            ))
-                        else:
-                            new_bs_x = float(x_c) + cfg.frame_width  / 2.0
-                            new_bs_y = float(y_c) + cfg.frame_height / 2.0
-                            log.info(
-                                "ALIGN (tetra): (%.4f, %.4f) -> "
-                                "pixel (y=%.2f, x=%.2f)",
-                                align_req.target_ra_deg,
-                                align_req.target_dec_deg,
-                                new_bs_y, new_bs_x)
-                            align_response_q.put(AlignResult(
-                                success=True,
-                                boresight_y=new_bs_y, boresight_x=new_bs_x,
-                                completed_at=time.monotonic(),
-                            ))
-                    except Exception as e:
-                        align_response_q.put(AlignResult(
-                            success=False,
-                            error_message=f"world_to_pixel raised: {e}",
-                        ))
-
-                if cfg.save_solved_frames and frame_snapshot is not None:
-                    _save_frame(frame_snapshot, cfg, "tetra_solved")
-
-                if fail_streak:
-                    log.info(
-                        "tetra solved after %d failed (%s): "
-                        "n=%d matches=%d ext=%.0fms slv=%.0fms total=%.0fms",
-                        fail_streak, hint_label,
-                        n, result.num_matches,
-                        extract_ms, solve_only_ms, elapsed_ms)
-                    fail_streak = 0
-                elif solve_count % cfg.log_solve_stats_every_n == 0:
-                    log.info(
-                        "tetra solve #%d (%s): n=%d matches=%d peak=%d "
-                        "ext=%.0fms slv=%.0fms total=%.0fms",
-                        solve_count, hint_label,
-                        n, result.num_matches, local_peak,
-                        extract_ms, solve_only_ms, elapsed_ms)
 
             # ================================================================
             # Olive backend (olive-solve tetra3-py, fully in-process)
@@ -833,7 +574,6 @@ def solver_main(slots, latest_solution, shared_cfg,
                     if (cfg.save_failed_frames or cfg.save_solved_frames)
                     else None
                 )
-                # Copy frame then release slot; olive processes entirely in-process.
                 frame_u8 = np.copy(bufs[idx])
                 slots.release_read_slot()
 
@@ -913,8 +653,6 @@ def solver_main(slots, latest_solution, shared_cfg,
                     ra_out  = ra_target[0]  if hasattr(ra_target,  "__len__") else ra_target
                     dec_out = dec_target[0] if hasattr(dec_target, "__len__") else dec_target
 
-                # stars field: solve_from_image_fast reports matched count,
-                # not total detected; use Matches for both fields.
                 n_matches = soln.get("Matches", 0)
                 latest_solution.update(_filled_solution(
                     ra=ra_out, dec=dec_out,
@@ -980,7 +718,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                 slots.release_read_slot()
                 if backend not in _warned_unavailable:
                     log.warning(
-                        "Unknown solver_backend %r; valid: cedar, tetra, olive",
+                        "Unknown solver_backend %r; valid: hybrid, olive",
                         backend)
                     _warned_unavailable.add(backend)
                 time.sleep(0.1)

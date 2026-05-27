@@ -4,7 +4,7 @@ eFinder main launcher — combo branch.
 
 Spawns three pinned worker processes:
   * camera_proc   -> CPU cfg.cpu_camera : picamera2 or test image -> shared memory
-  * solver_proc   -> CPU cfg.cpu_solver : cedar, tetra3rs, or olive-solve (runtime-switchable)
+  * solver_proc   -> CPU cfg.cpu_solver : hybrid or olive backend (runtime-switchable)
   * comms_proc    -> CPU cfg.cpu_comms  : LX200 server + alignment + maint socket
 
 CPU 0 is left to the kernel.
@@ -14,7 +14,7 @@ Inter-process state:
   * latest_solution: Manager dict published by solver, read by comms
   * shared_cfg: Manager dict for live-mutable settings:
       boresight_x/y, detect_sigma, solve_timeout_ms,
-      solver_backend ("cedar" | "tetra" | "olive"), test_mode (bool)
+      solver_backend ("hybrid" | "olive"), test_mode (bool)
   * align_request_q / align_response_q: comms <-> solver alignment workflow
 """
 
@@ -59,12 +59,7 @@ def _allocate_shared_frames(cfg):
 
 
 def _resolve_test_image(args):
-    """Find a test image path if one exists; return Path or None.
-
-    Always searches the standard locations so camera_proc has the image
-    loaded and ready for runtime test-mode switching via the status page.
-    Only _starting_ in test mode requires --test or --test-image.
-    """
+    """Find a test image path if one exists; return Path or None."""
     if args.test_image:
         p = Path(args.test_image)
         if not p.exists():
@@ -96,8 +91,8 @@ def main():
         "--test-image", metavar="PATH",
         help="Test mode: use the specified PNG instead of the camera")
     parser.add_argument(
-        "--backend", choices=("cedar", "tetra", "olive"), default="tetra",
-        help="Initial solver backend (default: tetra)")
+        "--backend", choices=("hybrid", "olive"), default="hybrid",
+        help="Initial solver backend (default: hybrid)")
     args = parser.parse_args()
 
     _setup_logging()
