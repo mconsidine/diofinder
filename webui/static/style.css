@@ -7,7 +7,7 @@ html, body {
   margin: 0;
   padding: 0;
   background: #0d0000;
-  color: #cc3300;
+  color: #cc0000;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   font-size: 16px;
   line-height: 1.4;
@@ -16,22 +16,22 @@ html, body {
 header {
   background: #080000;
   padding: 0.6rem 1rem;
-  border-bottom: 1px solid #3a0a00;
+  border-bottom: 1px solid #2d0000;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 1rem;
 }
 header h1 { margin: 0; font-size: 1.2rem; }
-header h1 a { color: #cc3300; text-decoration: none; }
+header h1 a { color: #cc0000; text-decoration: none; }
 header nav { display: flex; gap: 1rem; flex-wrap: wrap; }
 header nav a {
-  color: #ff5500;
+  color: #ff1111;
   text-decoration: none;
   padding: 0.25rem 0.5rem;
   border-radius: 4px;
 }
-header nav a:hover { background: #1a0500; }
+header nav a:hover { background: #180000; }
 
 main {
   max-width: 900px;
@@ -39,12 +39,12 @@ main {
   padding: 0 1rem;
 }
 
-h2 { margin-top: 0; font-weight: 500; color: #cc3300; }
-h3 { color: #cc3300; font-weight: 500; }
+h2 { margin-top: 0; font-weight: 500; color: #cc0000; }
+h3 { color: #cc0000; font-weight: 500; }
 
 .card {
   background: #110000;
-  border: 1px solid #2a0800;
+  border: 1px solid #220000;
   border-radius: 6px;
   padding: 1rem;
   margin-bottom: 1rem;
@@ -71,12 +71,12 @@ h3 { color: #cc3300; font-weight: 500; }
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #882200;
+  color: #880000;
 }
 .big-coords > div > span:last-child {
   font-size: 1.6rem;
   font-family: "SF Mono", Menlo, Consolas, monospace;
-  color: #ff5500;
+  color: #ff1111;
 }
 
 dl.stats {
@@ -86,16 +86,16 @@ dl.stats {
   row-gap: 0.25rem;
   margin: 0.5rem 0;
 }
-dl.stats dt { color: #882200; }
+dl.stats dt { color: #880000; }
 dl.stats dd { margin: 0; font-family: "SF Mono", Menlo, Consolas, monospace; }
 
-.muted { color: #882200; }
-.hint { font-size: 0.85rem; color: #882200; margin-top: 0.5rem; }
+.muted { color: #880000; }
+.hint { font-size: 0.85rem; color: #880000; margin-top: 0.5rem; }
 .instruction {
   font-size: 1.1rem;
-  background: #1a0500;
+  background: #180000;
   padding: 0.75rem 1rem;
-  border-left: 3px solid #cc3300;
+  border-left: 3px solid #cc0000;
   border-radius: 4px;
 }
 
@@ -114,14 +114,14 @@ input[type="number"], input[type="text"], input[type="password"], select {
   max-width: 320px;
   padding: 0.5rem;
   background: #0d0000;
-  color: #cc3300;
-  border: 1px solid #3a0a00;
+  color: #cc0000;
+  border: 1px solid #2d0000;
   border-radius: 4px;
   font-family: "SF Mono", Menlo, Consolas, monospace;
 }
 select option { background: #0d0000; }
-details summary { font-size: 0.85rem; color: #882200; }
-details summary:hover { color: #cc3300; }
+details summary { font-size: 0.85rem; color: #880000; }
+details summary:hover { color: #cc0000; }
 code {
   font-family: "SF Mono", Menlo, Consolas, monospace;
   font-size: 0.9em;
@@ -133,38 +133,38 @@ code {
 .btn {
   display: inline-block;
   padding: 0.5rem 1rem;
-  background: #1a0500;
-  color: #cc3300;
-  border: 1px solid #3a0a00;
+  background: #180000;
+  color: #cc0000;
+  border: 1px solid #2d0000;
   border-radius: 4px;
   cursor: pointer;
   font-size: 0.95rem;
 }
-.btn:hover { background: #2a0800; }
-.btn-primary { background: #3a0a00; border-color: #cc3300; color: #ff5500; }
-.btn-primary:hover { background: #4a1000; }
-.btn-warning { background: #2a0800; border-color: #882200; }
-.btn-warning:hover { background: #3a0a00; }
+.btn:hover { background: #220000; }
+.btn-primary { background: #2d0000; border-color: #cc0000; color: #ff1111; }
+.btn-primary:hover { background: #3a0000; }
+.btn-warning { background: #220000; border-color: #880000; }
+.btn-warning:hover { background: #2d0000; }
 
 .alert {
   padding: 0.75rem 1rem;
   border-radius: 4px;
   margin: 0.5rem 0;
 }
-.alert-error { background: #1a0000; border: 1px solid #882200; color: #ff5500; }
-.alert-warning { background: #1a0800; border: 1px solid #882200; color: #cc3300; }
-.alert-inline { color: #cc3300; font-size: 0.85rem; margin-left: 0.5rem; }
+.alert-error { background: #1a0000; border: 1px solid #880000; color: #ff1111; }
+.alert-warning { background: #180000; border: 1px solid #880000; color: #cc0000; }
+.alert-inline { color: #cc0000; font-size: 0.85rem; margin-left: 0.5rem; }
 
 .actions { margin: 1rem 0; display: flex; gap: 0.5rem; flex-wrap: wrap; }
 
 pre.logs, pre.config {
   background: #080000;
-  border: 1px solid #2a0800;
+  border: 1px solid #220000;
   border-radius: 4px;
   padding: 1rem;
   overflow-x: auto;
   font-size: 0.85rem;
-  color: #cc3300;
+  color: #cc0000;
   max-height: 70vh;
   overflow-y: auto;
 }
@@ -172,7 +172,7 @@ pre.logs, pre.config {
 .focus-score-sm {
   font-size: 2rem;
   font-family: "SF Mono", Menlo, Consolas, monospace;
-  color: #ff5500;
+  color: #ff1111;
   margin: 0.25rem 0;
 }
 
@@ -184,7 +184,7 @@ pre.logs, pre.config {
 }
 .slider-row input[type="range"] {
   flex: 1;
-  accent-color: #cc3300;
+  accent-color: #cc0000;
   max-width: 180px;
 }
 .slider-row input[type="number"] {
@@ -201,7 +201,7 @@ pre.logs, pre.config {
 }
 .stepper-row input[type="range"] {
   flex: 1;
-  accent-color: #cc3300;
+  accent-color: #cc0000;
   max-width: 180px;
 }
 .stepper-row input[type="number"] {
@@ -210,8 +210,8 @@ pre.logs, pre.config {
 }
 .stepper-row .step-btn {
   background: #1e2230;
-  color: #cc3300;
-  border: 1px solid #cc3300;
+  color: #cc0000;
+  border: 1px solid #cc0000;
   border-radius: 4px;
   width: 2rem;
   height: 2rem;
@@ -224,7 +224,7 @@ pre.logs, pre.config {
   justify-content: center;
 }
 .stepper-row .step-btn:active {
-  background: #cc3300;
+  background: #cc0000;
   color: #0d0f17;
 }
 
@@ -246,7 +246,7 @@ pre.logs, pre.config {
   border-collapse: collapse;
   font-size: 0.9rem;
 }
-.config-table tr { border-bottom: 1px solid #1a0500; }
+.config-table tr { border-bottom: 1px solid #180000; }
 .config-table tr:last-child { border-bottom: none; }
 .config-table td { padding: 0.35rem 0.75rem 0.35rem 0; vertical-align: top; }
 .config-key {
@@ -257,27 +257,27 @@ pre.logs, pre.config {
   width: 1%;
   white-space: nowrap;
   font-family: "SF Mono", Menlo, Consolas, monospace;
-  color: #ff5500;
+  color: #ff1111;
 }
-.config-desc { color: #882200; font-size: 0.85rem; }
+.config-desc { color: #880000; font-size: 0.85rem; }
 .config-default {
   display: block;
   font-size: 0.8rem;
-  color: #882200;
+  color: #880000;
   font-family: "SF Mono", Menlo, Consolas, monospace;
 }
 .config-badge {
   display: inline-block;
   font-size: 0.7rem;
   padding: 0.1em 0.35em;
-  background: #3a0a00;
-  border: 1px solid #882200;
+  background: #2d0000;
+  border: 1px solid #880000;
   border-radius: 3px;
-  color: #cc3300;
+  color: #cc0000;
   vertical-align: middle;
   margin-left: 0.3em;
 }
-.config-modified { background: #150300; }
+.config-modified { background: #150000; }
 
 @media (max-width: 600px) {
   header { flex-direction: column; align-items: flex-start; }
@@ -286,6 +286,6 @@ pre.logs, pre.config {
   .config-table, .config-table tbody, .config-table tr, .config-table td {
     display: block;
   }
-  .config-table tr { border-bottom: 1px solid #2a0800; margin-bottom: 0.5rem; }
+  .config-table tr { border-bottom: 1px solid #220000; margin-bottom: 0.5rem; }
   .config-desc { padding-left: 0; }
 }
