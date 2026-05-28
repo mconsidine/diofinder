@@ -176,6 +176,49 @@ def _handle_solver_cmd(cmd, calibrator, polar):
                               error=f"{type(e).__name__}: {e}")
 
 
+def _imu_propagate_hint(last_sky_q, last_imu_q, shared_cfg):
+    """Return (q_hint, uncertainty_deg) for the upcoming solve.
+
+    Applies the IMU rotation delta since the last successful solve to the last
+    known sky quaternion.  Falls back to (last_sky_q, 0.1) — a very tight
+    cone reusing the exact last attitude — when the IMU is absent or stale.
+    Returns (None, 0) when no previous solve is available (blind solve).
+    """
+    if last_sky_q is None:
+        return None, 0.0
+    if last_imu_q is None or not shared_cfg.get("imu_available", False):
+        return last_sky_q, 0.1
+    q_cur = shared_cfg.get("imu_q")
+    imu_t = shared_cfg.get("imu_t", 0.0)
+    if q_cur is None or time.monotonic() - imu_t > 2.0:
+        return last_sky_q, 0.1
+
+    # q_delta = q_cur * conj(q_ref)  —  rotation of the IMU since last solve
+    w0, x0, y0, z0 = q_cur
+    wr, xr, yr, zr = last_imu_q[0], -last_imu_q[1], -last_imu_q[2], -last_imu_q[3]
+    wd = w0*wr - x0*xr - y0*yr - z0*zr
+    xd = w0*xr + x0*wr + y0*zr - z0*yr
+    yd = w0*yr - x0*zr + y0*wr + z0*xr
+    zd = w0*zr + x0*yr - y0*xr + z0*wr
+    nd = math.sqrt(wd*wd + xd*xd + yd*yd + zd*zd)
+    if nd < 0.5:
+        return last_sky_q, 0.1
+    wd, xd, yd, zd = wd/nd, xd/nd, yd/nd, zd/nd
+
+    # q_hint = q_delta * q_last_sky
+    ws, xs, ys, zs = (float(v) for v in last_sky_q)
+    wh = wd*ws - xd*xs - yd*ys - zd*zs
+    xh = wd*xs + xd*ws + yd*zs - zd*ys
+    yh = wd*ys - xd*zs + yd*ws + zd*xs
+    zh = wd*zs + xd*ys - yd*xs + zd*ws
+
+    # Uncertainty: 1.5× the measured rotation angle, floor 2°.
+    angle_deg = math.degrees(2.0 * math.acos(min(1.0, abs(wd))))
+    uncertainty_deg = max(2.0, angle_deg * 1.5)
+
+    return (wh, xh, yh, zh), uncertainty_deg
+
+
 def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg):
     """Record current IMU quaternion alongside the just-solved sky position.
     comms_proc uses these pairs to predict pointing between solves."""
@@ -286,6 +329,10 @@ def solver_main(slots, latest_solution, shared_cfg,
     target_pixel[0, 0] = _bs_y
     target_pixel[0, 1] = _bs_x
 
+    # IMU-seeded attitude hint state
+    last_sky_q       = None   # quaternion (w,x,y,z) from last successful solve
+    last_solve_imu_q = None   # IMU quaternion recorded at that same solve
+
     fail_streak = 0
     solve_count = 0
 
@@ -337,6 +384,9 @@ def solver_main(slots, latest_solution, shared_cfg,
                     [[align_req.target_ra_deg, align_req.target_dec_deg]],
                     dtype=np.float64)
 
+            q_hint, hint_unc = _imu_propagate_hint(
+                last_sky_q, last_solve_imu_q, shared_cfg)
+
             t_solve = time.monotonic()
             try:
                 soln = solver_t3.solve_from_image_fast(
@@ -352,6 +402,9 @@ def solver_main(slots, latest_solution, shared_cfg,
                     target_pixel=target_pixel,
                     target_sky_coord=target_sky,
                     return_matches=False,
+                    attitude_hint=q_hint,
+                    hint_uncertainty_deg=hint_unc,
+                    strict_hint=False,
                 )
             except Exception as e:
                 log.warning("solve_from_image_fast raised: %s", e)
@@ -399,6 +452,12 @@ def solver_main(slots, latest_solution, shared_cfg,
             measured_distortion = soln.get("distortion") or 0.0
             calibrator.update_from_solve(measured_fov, measured_distortion)
             polar.update_from_solve(soln["RA"], soln["Dec"])
+
+            # Update attitude hint state for next frame
+            q_solved = soln.get("quaternion")
+            if q_solved is not None:
+                last_sky_q       = tuple(q_solved)
+                last_solve_imu_q = shared_cfg.get("imu_q")
 
             ra_target  = soln.get("RA_target")
             dec_target = soln.get("Dec_target")
