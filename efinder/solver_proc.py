@@ -395,8 +395,8 @@ def solver_main(slots, latest_solution, shared_cfg,
                     _save_frame(frame_snapshot, cfg, f"failed_{status_str}")
                 continue
 
-            measured_fov        = soln.get("FOV", calibrator.get_fov_estimate())
-            measured_distortion = soln.get("distortion", 0.0)
+            measured_fov        = soln.get("FOV") or calibrator.get_fov_estimate()
+            measured_distortion = soln.get("distortion") or 0.0
             calibrator.update_from_solve(measured_fov, measured_distortion)
             polar.update_from_solve(soln["RA"], soln["Dec"])
 
