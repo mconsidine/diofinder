@@ -25,7 +25,7 @@
     {% endif %}
     {% if runtime_imu %}
       <dt>IMU</dt>
-      <dd>
+      <dd id="imu-dd">
         {%- if runtime_imu.active -%}
           active
         {%- elif runtime_imu.available -%}
@@ -69,4 +69,23 @@
   </table>
 </div>
 {% endfor %}
+{% if daemon_ok and runtime_imu %}
+<script>
+function _imuText(imu) {
+  if (imu.active) return 'active';
+  if (imu.available) return 'calibrating (' + imu.calib_n + '/3 solves, R²=' + imu.quality.toFixed(2) + ')';
+  return 'not detected';
+}
+setInterval(async function() {
+  try {
+    const resp = await fetch('/api/status');
+    if (!resp.ok) return;
+    const d = await resp.json();
+    const imu = d.status && d.status.ok && d.status.result && d.status.result.imu;
+    const dd = document.getElementById('imu-dd');
+    if (dd && imu) dd.textContent = _imuText(imu);
+  } catch(e) {}
+}, 3000);
+</script>
+{% endif %}
 {% endblock %}

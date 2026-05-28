@@ -660,6 +660,16 @@ def frame_jpg():
     draw.line([cx, cy - r - gap, cx, cy - r - 1],   fill=(220, 0, 0), width=1)
     draw.line([cx, cy + r + 1,   cx, cy + r + gap],  fill=(220, 0, 0), width=1)
 
+    try:
+        r_half = round(1800.0 / ecfg.arcsec_per_pixel)
+        r_one  = round(3600.0 / ecfg.arcsec_per_pixel)
+    except Exception:
+        r_half, r_one = 35, 71
+    draw.ellipse([cx - r_half, cy - r_half, cx + r_half, cy + r_half],
+                 outline=(180, 120, 0), width=1)
+    draw.ellipse([cx - r_one,  cy - r_one,  cx + r_one,  cy + r_one],
+                 outline=(180, 120, 0), width=1)
+
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=70)
     buf.seek(0)

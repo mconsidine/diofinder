@@ -63,6 +63,18 @@
 let _latReceived = {{ 'true' if polar.latitude_deg is not none and polar.latitude_deg != 0.0 else 'false' }};
 let _latTimer = null;
 
+function _updateBullseye(az, alt) {
+  const SCALE = 9, MAX_R = 90;
+  let bx = az * SCALE, by = -alt * SCALE;
+  const dist = Math.sqrt(bx * bx + by * by);
+  if (dist > MAX_R) { bx = bx * MAX_R / dist; by = by * MAX_R / dist; }
+  const dot = document.getElementById('polar-dot');
+  if (dot) {
+    dot.setAttribute('cx', (100 + bx).toFixed(1));
+    dot.setAttribute('cy', (100 + by).toFixed(1));
+  }
+}
+
 async function refresh() {
   try {
     const r = await fetch('/api/polar/status');
@@ -80,6 +92,18 @@ async function refresh() {
     if (action) action.textContent = data.result.needed_action;
     const elapsed = document.getElementById('elapsed');
     if (elapsed) elapsed.textContent = data.result.elapsed_s.toFixed(0) + ' s';
+
+    // Update bullseye and numbers when result is available in done state.
+    if (ps === 'done' && data.result.last_result) {
+      const lr = data.result.last_result;
+      const tot = document.getElementById('polar-total');
+      const azEl  = document.getElementById('polar-az');
+      const altEl = document.getElementById('polar-alt');
+      if (tot) tot.textContent = lr.total_error_arcmin.toFixed(1) + "'";
+      if (azEl)  azEl.textContent  = (lr.azimuth_error_arcmin  >= 0 ? '+' : '') + lr.azimuth_error_arcmin.toFixed(1)  + "'";
+      if (altEl) altEl.textContent = (lr.altitude_error_arcmin >= 0 ? '+' : '') + lr.altitude_error_arcmin.toFixed(1) + "'";
+      _updateBullseye(lr.azimuth_error_arcmin, lr.altitude_error_arcmin);
+    }
 
     // Update latitude once; stop polling for it after the first hit.
     if (!_latReceived) {

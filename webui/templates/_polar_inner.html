@@ -32,17 +32,46 @@
         <dd>RA {{ "%.4f"|format(r.axis_ra_deg) }}, Dec {{ "%.4f"|format(r.axis_dec_deg) }}</dd>
       </dl>
     {% else %}
+      {%- set _scale = 9 -%}
+      {%- set _bx = r.azimuth_error_arcmin * _scale -%}
+      {%- set _by = -(r.altitude_error_arcmin * _scale) -%}
+      {%- set _d2 = _bx ** 2 + _by ** 2 -%}
+      {%- if _d2 > 8100 -%}
+        {%- set _dist = _d2 ** 0.5 -%}
+        {%- set _dot_cx = (100 + _bx * 90.0 / _dist) | round | int -%}
+        {%- set _dot_cy = (100 + _by * 90.0 / _dist) | round | int -%}
+      {%- else -%}
+        {%- set _dot_cx = (100 + _bx) | round | int -%}
+        {%- set _dot_cy = (100 + _by) | round | int -%}
+      {%- endif -%}
       <div class="big-coords">
         <div><span class="label">Total</span>
-          <span>{{ "%.1f"|format(r.total_error_arcmin) }}'</span>
+          <span id="polar-total">{{ "%.1f"|format(r.total_error_arcmin) }}'</span>
         </div>
         <div><span class="label">Az</span>
-          <span>{{ "%+.1f"|format(r.azimuth_error_arcmin) }}'</span>
+          <span id="polar-az">{{ "%+.1f"|format(r.azimuth_error_arcmin) }}'</span>
         </div>
         <div><span class="label">Alt</span>
-          <span>{{ "%+.1f"|format(r.altitude_error_arcmin) }}'</span>
+          <span id="polar-alt">{{ "%+.1f"|format(r.altitude_error_arcmin) }}'</span>
         </div>
       </div>
+      <svg width="200" height="200" viewBox="0 0 200 200"
+           style="display:block;margin:0.5rem auto;"
+           data-az="{{ r.azimuth_error_arcmin }}"
+           data-alt="{{ r.altitude_error_arcmin }}">
+        <circle cx="100" cy="100" r="94" fill="#111" stroke="#2a2a2a" stroke-width="1"/>
+        <circle cx="100" cy="100" r="9"  fill="none" stroke="#444" stroke-width="1"/>
+        <circle cx="100" cy="100" r="45" fill="none" stroke="#444" stroke-width="1"/>
+        <circle cx="100" cy="100" r="90" fill="none" stroke="#555" stroke-width="1.5"/>
+        <line x1="100" y1="6"   x2="100" y2="194" stroke="#2a2a2a" stroke-width="1"/>
+        <line x1="6"   y1="100" x2="194" y2="100" stroke="#2a2a2a" stroke-width="1"/>
+        <text x="112" y="99" fill="#555" font-size="7" font-family="sans-serif">1'</text>
+        <text x="148" y="99" fill="#555" font-size="7" font-family="sans-serif">5'</text>
+        <text x="168" y="99" fill="#555" font-size="7" font-family="sans-serif">10'</text>
+        <text x="100" y="14" fill="#666" font-size="8" text-anchor="middle" font-family="sans-serif">N</text>
+        <text x="186" y="104" fill="#666" font-size="8" font-family="sans-serif">E</text>
+        <circle id="polar-dot" cx="{{ _dot_cx }}" cy="{{ _dot_cy }}" r="4" fill="#e84040"/>
+      </svg>
       <dl class="stats">
         <dt>Plane fit RMS</dt>
         <dd>{{ "%.2f"|format(r.plane_fit_rms_arcmin) }} arcmin
