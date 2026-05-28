@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# eFinder service & file health check.
+# eFinder service & file health check (olive backend).
 # Run as root (or with sudo) for full journal and process info.
 #
 # Usage:
@@ -19,38 +19,21 @@ sep()  { echo; echo -e "${BOLD}=== $* ===${NC}"; }
 CONF="${EFINDER_CONFIG:-/etc/efinder/efinder.conf}"
 
 # ---------------------------------------------------------------------------
-sep "Systemd services"
-for svc in efinder cedar-detect; do
-    state=$(systemctl is-active "$svc" 2>/dev/null || echo "unknown")
-    enabled=$(systemctl is-enabled "$svc" 2>/dev/null || echo "unknown")
-    case "$state" in
-        active)   pass "$svc: active  (enabled=$enabled)" ;;
-        inactive) warn "$svc: inactive (enabled=$enabled)" ;;
-        failed)   fail "$svc: FAILED  (enabled=$enabled)" ;;
-        *)        warn "$svc: state=$state  enabled=$enabled" ;;
-    esac
-done
-
-# ---------------------------------------------------------------------------
-sep "Cedar-detect gRPC port (50051)"
-if command -v ss &>/dev/null; then
-    listeners=$(ss -tnlp 2>/dev/null | grep ':50051' || true)
-else
-    listeners=$(netstat -tnlp 2>/dev/null | grep ':50051' || true)
-fi
-if [ -n "$listeners" ]; then
-    pass "Port 50051 is listening"
-    echo "$listeners" | sed 's/^/    /'
-else
-    fail "Nothing listening on :50051 — cedar-detect is not running"
-fi
+sep "Systemd service"
+state=$(systemctl is-active "efinder" 2>/dev/null || echo "unknown")
+enabled=$(systemctl is-enabled "efinder" 2>/dev/null || echo "unknown")
+case "$state" in
+    active)   pass "efinder: active  (enabled=$enabled)" ;;
+    inactive) warn "efinder: inactive (enabled=$enabled)" ;;
+    failed)   fail "efinder: FAILED  (enabled=$enabled)" ;;
+    *)        warn "efinder: state=$state  enabled=$enabled" ;;
+esac
 
 # ---------------------------------------------------------------------------
 sep "Maintenance socket"
 MAINT_SOCK="${EFINDER_MAINT_SOCKET:-/run/efinder/maint.sock}"
 if [ -S "$MAINT_SOCK" ]; then
     pass "$MAINT_SOCK exists"
-    # Quick JSON status query
     if command -v python3 &>/dev/null; then
         status_out=$(python3 -c "
 import sys, socket, json
@@ -65,14 +48,13 @@ try:
         if not chunk: break
         buf += chunk
     line = buf.partition(b'\n')[0]
-    obj = json.loads(line)
+    obj  = json.loads(line)
     if obj.get('ok'):
         r = obj['result']
-        print(f\"  backend={r.get('solver_backend','?')}  \"\
-              f\"test_mode={r.get('test_mode','?')}  \"\
-              f\"solved={r.get('solved','?')}  \"\
+        print(f\"  solved={r.get('solved','?')}  \"\
               f\"stars={r.get('stars','?')}  \"\
-              f\"solve_ms={r.get('solve_ms','?')}\")
+              f\"solve_ms={r.get('solve_ms','?'):.0f}  \"\
+              f\"fov={r.get('fov_deg','?')}\")
     else:
         print(f\"  error: {obj.get('error')}\")
 except Exception as e:
@@ -102,54 +84,54 @@ done
 [ "$found" -eq 0 ] && fail "No SHM buffers found — efinder daemon is not running"
 
 # ---------------------------------------------------------------------------
-sep "Database files"
+sep "Database file (olive-solve tetra3-py)"
 if [ -f "$CONF" ]; then
-    t3_db=$(grep -E '^\s*tetra3_db\s*:' "$CONF" 2>/dev/null | tail -1 \
-            | cut -d: -f2- | xargs 2>/dev/null || echo "default_database")
-    t3rs_db=$(grep -E '^\s*tetra3rs_db\s*:' "$CONF" 2>/dev/null | tail -1 \
-              | cut -d: -f2- | xargs 2>/dev/null || echo "/var/lib/efinder/efinder-tetra-database.bin")
+    solver_db=$(grep -E '^\s*solver_db\s*:' "$CONF" 2>/dev/null | tail -1 \
+                | cut -d: -f2- | xargs 2>/dev/null || echo "default_database")
 else
-    t3_db="default_database"
-    t3rs_db="/var/lib/efinder/efinder-tetra-database.bin"
+    solver_db="default_database"
 fi
-info "tetra3_db   = $t3_db"
-info "tetra3rs_db = $t3rs_db"
+# Expand to absolute path if needed
+if [[ "$solver_db" != /* ]]; then
+    solver_db="/var/lib/efinder/${solver_db}.npz"
+fi
+info "solver_db = $solver_db"
 
-if [ -f "$t3rs_db" ]; then
-    sz=$(du -h "$t3rs_db" | cut -f1)
-    pass "tetra3rs DB: $t3rs_db  ($sz)"
+if [ -f "$solver_db" ]; then
+    sz=$(du -h "$solver_db" | cut -f1)
+    pass "Database: $solver_db  ($sz)"
 else
-    fail "tetra3rs DB NOT FOUND: $t3rs_db"
+    fail "Database NOT FOUND: $solver_db"
+    warn "  Run: sudo bash build/build-image.sh  (or trigger vendor-binaries CI)"
 fi
 
-# Check tetra3 Python DB via Python if available
-if command -v /opt/efinder/venv/bin/python3 &>/dev/null; then
-    t3_check=$(/opt/efinder/venv/bin/python3 -c "
-try:
-    import tetra3
-    t3 = tetra3.Tetra3('$t3_db')
-    print('OK  (loaded $t3_db)')
-except Exception as e:
-    print(f'FAIL  {e}')
+# Verify database loads correctly
+PYTHON="${EFINDER_PYTHON:-/opt/efinder/venv/bin/python3}"
+if [ ! -x "$PYTHON" ]; then
+    PYTHON=$(command -v python3 2>/dev/null || echo "")
+fi
+if [ -n "$PYTHON" ] && [ -f "$solver_db" ]; then
+    db_check=$("$PYTHON" -c "
+import tetra3, time
+t0 = time.monotonic()
+t3 = tetra3.Tetra3('$solver_db')
+ms = (time.monotonic()-t0)*1000
+print(f'OK  loaded in {ms:.0f}ms')
 " 2>&1 || echo "FAIL  python check error")
-    if echo "$t3_check" | grep -q '^OK'; then
-        pass "tetra3 Python DB: $t3_check"
+    if echo "$db_check" | grep -q '^OK'; then
+        pass "Database loads: $db_check"
     else
-        fail "tetra3 Python DB: $t3_check"
+        fail "Database load failed: $db_check"
     fi
 fi
 
 # ---------------------------------------------------------------------------
 sep "Python libraries"
-PYTHON="${EFINDER_PYTHON:-/opt/efinder/venv/bin/python3}"
-if [ ! -x "$PYTHON" ]; then
-    PYTHON=$(command -v python3 2>/dev/null || echo "")
-fi
-if [ -z "$PYTHON" ]; then
+if [ -z "${PYTHON:-}" ]; then
     warn "No python3 found; skipping library checks"
 else
     info "Using $PYTHON"
-    for lib in grpc numpy tetra3 tetra3rs picamera2 PIL; do
+    for lib in numpy tetra3 picamera2 PIL; do
         result=$("$PYTHON" -c "import $lib; print('ok')" 2>&1 || true)
         if [ "$result" = "ok" ]; then
             pass "$lib"
@@ -160,12 +142,13 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-sep "efinder / cedar processes"
-procs=$(ps aux 2>/dev/null | grep -E '(efinder|cedar)' | grep -v grep | grep -v 'diag_services' || true)
+sep "efinder processes"
+procs=$(ps aux 2>/dev/null | grep -E '(efinder|solver_proc|camera_proc|comms_proc)' \
+        | grep -v grep | grep -v 'diag_services' || true)
 if [ -n "$procs" ]; then
     echo "$procs"
 else
-    warn "No efinder/cedar processes found"
+    warn "No efinder processes found"
 fi
 
 # ---------------------------------------------------------------------------
@@ -178,14 +161,9 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-sep "Recent journal: efinder (last 40 lines)"
-journalctl -u efinder --no-pager -n 40 2>/dev/null \
-    || journalctl -u efinder -n 40 2>/dev/null \
+sep "Recent journal: efinder (last 50 lines)"
+journalctl -u efinder --no-pager -n 50 2>/dev/null \
+    || journalctl -u efinder -n 50 2>/dev/null \
     || warn "No journal for efinder (not a systemd unit or insufficient privileges)"
-
-sep "Recent journal: cedar-detect (last 20 lines)"
-journalctl -u cedar-detect --no-pager -n 20 2>/dev/null \
-    || journalctl -u cedar-detect -n 20 2>/dev/null \
-    || warn "No journal for cedar-detect"
 
 echo

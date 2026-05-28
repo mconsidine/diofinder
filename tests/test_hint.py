@@ -95,8 +95,8 @@ def main():
                     help='FOV max error in degrees')
     ap.add_argument('--timeout', type=int,   help='Solve timeout in ms')
     ap.add_argument('--sigma',   type=float, help='Detection sigma threshold')
-    ap.add_argument('--hint-unc', type=float, default=15.0, dest='hint_unc',
-                    help='Hint uncertainty cone in degrees (default 15.0)')
+    ap.add_argument('--hint-unc', type=float, default=5.0, dest='hint_unc',
+                    help='Hint uncertainty cone in degrees (default 5.0)')
     args = ap.parse_args()
 
     # Load config when available; fall back to safe defaults

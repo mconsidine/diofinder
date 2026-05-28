@@ -1,17 +1,57 @@
 # Diagnostic and benchmark scripts
 
-All scripts require the venv Python. Most need root for SHM access:
+All scripts require the venv Python.  Most need root for SHM access:
 
 ```bash
 sudo /opt/efinder/venv/bin/python3 tests/<script>.py [options]
 ```
+
+The solver backend is **olive-solve** (Rust, in-process tetra3-py wheel).
+No cedar-detect daemon, gRPC, or external server is involved.
+
+---
+
+## Quick reference
+
+| Script | Purpose |
+|---|---|
+| `diag_services.sh` | System health check — first stop when anything is broken |
+| `diag_camera.py` | Camera exposure/gain sweep, saves PNGs + ZIP |
+| `diag_bno055.py` | BNO055 IMU sensor registers and live samples |
+| `diag_detect.py` | Centroid extraction timing and sigma sweep |
+| `diag_solve.py` | Full pipeline diagnostic: extract → solve (paths A/B/C) |
+| `solve_image.py` | Quick single-image solve with `solve_from_image_fast` |
+| `bench_pipeline_combos.py` | Benchmark all three solve paths with optional sweeps |
+| `test_hint.py` | Attitude-hint effectiveness across a sequence of shifted images |
+
+---
+
+## `diag_services.sh` — system health check
+
+```bash
+sudo bash tests/diag_services.sh
+```
+
+Full system health check. Covers:
+- `efinder` systemd service state
+- Maintenance socket `/run/efinder/maint.sock` with live status query
+  (solved, stars, solve_ms, fov)
+- Shared memory frame buffers (`/dev/shm/efinder_frame_*`)
+- Solver database (`solver_db` config key, defaults to
+  `/var/lib/efinder/default_database.npz`), including a live load test
+- Python library imports (`numpy`, `tetra3`, `picamera2`, `PIL`)
+- Process list (efinder, solver_proc, camera_proc, comms_proc)
+- Active configuration
+- Last 50 lines of the efinder journal
+
+Run this first when anything is broken.
 
 ---
 
 ## `diag_camera.py` — camera exposure/gain sweep
 
 Captures one frame for every combination of exposure and gain in the
-specified ranges and saves each as a PNG.  Useful for finding the right
+specified ranges and saves each as a PNG. Useful for finding the right
 exposure and gain before a session, evaluating read noise vs. sky background,
 or assessing focus quality across settings.
 
@@ -37,58 +77,25 @@ File naming convention: `YYYYMMDDHHMMSSMMM-EEE-GG[-2x2].png`
 - `GG`  = gain (integer)
 - `-2x2` suffix present when `--binning` is specified
 
-Example: `20260603190304010-050-20-2x2.png` — captured 2026-06-03 at
-19:03:04.010, exposure 50 ms, gain 20, 2×2 binned.
-
 After all frames are captured they are bundled into a ZIP archive named
-`YYYYMMDDHHMMSSMMM.zip` (the sweep start timestamp) and the individual PNGs
-are deleted after a ZIP integrity check.  The archive is the only artifact
-left in the output directory, making it easy to transfer off the device.
+`YYYYMMDDHHMMSSMMM.zip` and the individual PNGs are deleted after a ZIP
+integrity check. The archive is the only artifact left in the output
+directory, making it easy to transfer off the device.
 
 **The ZIP always contains two extra diagnostic files:**
 - `capture_info.txt` — sweep parameters, frame pipeline explanation, hostname,
-  Pi model, OS version, live daemon status (solver backend, test mode, FOV,
+  Pi model, OS version, live daemon status (backend, test mode, FOV,
   star count, last solve time)
 - `efinder.conf` — verbatim copy of `/etc/efinder/efinder.conf` at the time
-  of capture, so the exact settings that produced the frames are preserved
+  of capture
 
-Files are saved to wherever `test.png` lives (`/var/lib/efinder` by default),
-or the current directory if `test.png` is not found.  `--output-dir` overrides.
-
-Per-frame log shows peak pixel and mean pixel value — useful for spotting
-saturation or underexposure without opening every file.  The script prints the
-`scp` command needed to copy the archive to your laptop when it finishes.
-
-### What you are capturing
-
-The IMX477 native sensor is 4056×3040.  When picamera2 is asked for 960×760
-(the efinder default), it selects the 2×2 hardware-binned sensor mode
-(2028×1520) and the ISP scales the result down to 960×760.  **The full sensor
-area (full FOV) is always used — this is not a crop.**  Captured PNGs are raw
-8-bit grayscale Y-plane with no display stretch applied, identical in content
-to what the efinder solver receives.  A frame captured without `--binning` at
-the default 960×760 is directly comparable to what cedar-detect and tetra3rs
-see during a live solve.
-
-**Note on the live-view stretch**: the web UI Camera page displays frames with
-an arcsinh sky-subtracted stretch (sky median subtracted, then
-`arcsinh(x / β)` scaled to the 99.9th percentile).  Frames captured by
-`diag_camera.py` are raw, which is what you want for exposure/gain evaluation.
-
-### Transferring the archive to a laptop
-
-The script prints the exact command when it finishes.  In general:
+Captured PNGs are raw 8-bit grayscale Y-plane with no display stretch applied,
+identical in content to what olive-solve receives during a live solve.
 
 ```bash
-# From your laptop (replace IP or use efinder.local):
+# Transfer the archive to a laptop:
 scp efinder@efinder.local:/var/lib/efinder/YYYYMMDDHHMMSSMMM.zip .
-
-# If you used --output-dir:
-scp efinder@efinder.local:/tmp/frames/YYYYMMDDHHMMSSMMM.zip .
 ```
-
-Password is `12345678` unless you changed it.  On Windows use WinSCP or
-`pscp` (PuTTY tools).
 
 ---
 
@@ -110,46 +117,23 @@ sudo .../diag_bno055.py --no-mode-change   # leave sensor in whatever mode it is
 Prints (in order):
 
 1. **Chip identification** — chip ID, accel/mag/gyro sub-IDs, firmware revision.
-   PASS/FAIL against expected values so a broken sensor or wiring fault is obvious.
+   PASS/FAIL against expected values.
 2. **System status** — operation mode, power mode, `SYS_STAT`, `SYS_ERR`,
-   clock source (internal RC vs external crystal).
+   clock source.
 3. **Self-test result** — MCU, gyro, magnetometer, accel (PASS/FAIL each).
 4. **Calibration status** — system/gyro/accel/mag, each 0–3 with a bar display.
-   Includes tips for improving calibration (still at rest → gyro, figure-8 → mag).
-5. **Live samples** — per sample: temperature, quaternion + |q| sanity check,
-   Euler (heading/roll/pitch), raw accel, linear accel (gravity removed), gravity
-   vector, gyroscope, magnetometer + field strength with Earth-range check.
+5. **Live samples** — quaternion + |q| sanity check, Euler, raw/linear accel,
+   gravity, gyroscope, magnetometer.
 
-Default mode is NDOF (full 9-DOF fusion) so all outputs are exercised.
 The efinder daemon uses IMUPLUS (accel + gyro only, magnetometer disabled) to
-avoid magnetic interference from telescope motors.
+avoid magnetic interference from telescope motors. When the IMU is available,
+its quaternion is used to propagate the attitude hint between solves.
 
 ---
 
-## `diag_services.sh` — system health check
+## `diag_detect.py` — centroid extraction diagnostic
 
-```bash
-sudo bash tests/diag_services.sh
-```
-
-Full system health check. Covers:
-- `efinder` and `cedar-detect` service state
-- Port 50051 (cedar-detect gRPC listener)
-- Maintenance socket `/run/efinder/maint.sock` with live status query
-- Shared memory frame buffers
-- tetra3rs and tetra3 Python database files
-- Python library imports (grpc, numpy, tetra3, tetra3rs, picamera2, PIL)
-- Process list
-- Active configuration
-- Last 40 lines of each service's journal
-
-Run this first when anything is broken.
-
----
-
-## `diag_detect.py` — cedar-detect extraction diagnostic
-
-Tests cedar-detect centroid extraction in isolation.
+Tests olive-solve centroid extraction in isolation with timing and star count.
 
 ```bash
 sudo .../diag_detect.py                          # live SHM from running daemon
@@ -157,65 +141,127 @@ sudo .../diag_detect.py --image /path/to/img.png # use a saved frame
 sudo .../diag_detect.py --sigma 7.0              # override sigma
 sudo .../diag_detect.py --reps 10                # more timing repetitions
 sudo .../diag_detect.py --sigma-sweep            # sweep sigma 3–12, show star count table
-sudo .../diag_detect.py --binned                 # force binned candidate search on
+sudo .../diag_detect.py --compare-full           # also time f32 variant for comparison
 ```
 
 Stages:
 1. Config + library imports
-2. Cedar-detect gRPC connectivity
+2. Database load (required for the extraction call)
 3. Frame source — live SHM / provided PNG / synthetic star field fallback
-4. ExtractCentroids timing (warm-up + N repetitions)
+4. `get_centroids_from_image_fast` (u8) timing — N repetitions
+   - This is the same call `solver_proc.py` uses at runtime
 5. Sigma sweep (if `--sigma-sweep`)
 
-Works with the daemon in test mode or live mode — reads from whatever SHM
-buffer the daemon has populated, non-destructively.
+`--compare-full` additionally times `get_centroids_from_image` (f32), the
+slower float32 variant, so you can see the speed difference.
+
+`--sigma-sweep` is the quickest way to confirm whether `detect_sigma=9` is
+appropriate for your setup. Lower sigma → more stars detected; higher sigma
+→ fewer but more reliable. The solver needs at least `min_centroids` stars
+(default 8) to attempt a solve.
 
 ---
 
 ## `diag_solve.py` — full pipeline diagnostic
 
-Tests the complete frame → extract → solve pipeline.
+Tests the complete extraction + solve pipeline with per-step timing.
 
 ```bash
-sudo .../diag_solve.py                           # tetra3rs backend, live SHM
-sudo .../diag_solve.py --backend cedar           # tetra3 Python backend
-sudo .../diag_solve.py --image /path/to/img.png
+sudo .../diag_solve.py                           # test images in /opt/efinder/test-images
+sudo .../diag_solve.py --image /path/to/img.png  # single image
+sudo .../diag_solve.py --live-shm                # live daemon frame
 sudo .../diag_solve.py --reps 5
+sudo .../diag_solve.py --sigma 7.0 --timeout 2000
+sudo .../diag_solve.py --extended-timeout        # retry at 3× when normal fails
+sudo .../diag_solve.py --skip-a                  # skip path A to save time
 ```
 
-Reports per-stage timing (extraction, solve), solve status (SOLVED /
-NO_MATCH / TIMEOUT / TOO_FEW), and RA/Dec/roll/FOV when solved.
+Three paths are timed per image:
+
+| Path | Call | Description |
+|------|------|-------------|
+| A | `solve_from_image_fast` | Combined reference baseline |
+| B | `get_centroids_from_image_fast` + `solve_from_centroids` | **Daemon pipeline (blind)** |
+| C | same as B + `attitude_hint` | **Daemon pipeline (seeded)** |
+
+**Path B is what `solver_proc.py` runs on every frame.**
+Path C is what it runs after the first successful solve (quaternion is chained
+from path B's result). Path A is kept for reference timing comparison.
+
+Reports per-step timing (`ext_ms`, `slv_ms`, `total_ms`), solve status,
+RA/Dec/roll/FOV/matches, and a summary table across all tested images.
 
 ---
 
-## `bench_pipeline_combos.py` — four-combination benchmark
+## `solve_image.py` — quick single-image solve
 
-Benchmarks all four extraction × solve combinations:
-
-| Combo | Extraction | Solve |
-|---|---|---|
-| 1 | cedar-detect gRPC | tetra3 Python |
-| 2 | tetra3rs native | tetra3rs Rust |
-| 3 | tetra3rs native | tetra3 Python |
-| 4 | cedar-detect gRPC | tetra3rs Rust ← matches the daemon's default |
+Quick one-shot solver using `solve_from_image_fast`. Useful for checking that
+the database and FOV are correct before a session.
 
 ```bash
-sudo .../bench_pipeline_combos.py                    # all 4 combos, live SHM
-sudo .../bench_pipeline_combos.py --image img.png    # use a saved frame
-sudo .../bench_pipeline_combos.py --reps 5
-sudo .../bench_pipeline_combos.py --sigma 7.0
-sudo .../bench_pipeline_combos.py --binned
-
-# Hint uncertainty sweep (seeded solve speed vs reliability):
-sudo .../bench_pipeline_combos.py --hint-sweep
-
-# Sigma sweep (cedar vs tetra3rs star yield across sigma 3–12):
-sudo .../bench_pipeline_combos.py --sigma-sweep
+sudo .../solve_image.py --image /path/to/image.png
+sudo .../solve_image.py --image img.png --db /var/lib/efinder/mydb.npz
+sudo .../solve_image.py --image img.png --fov 13.5 --fov-err 1.0 --timeout 3000
+sudo .../solve_image.py --image img.png --reps 5   # timing over multiple reps
 ```
 
-`--hint-sweep` varies `hint_uncertainty_deg` across [5.0, 2.0, 1.0, 0.5,
-0.2, 0.1, 0.05, 0.02] with both `strict_hint=False` and `True`. Use this
-to choose the best hint window for your sky conditions and move frequency.
+Prints RA, Dec, Roll, FOV, and match count on success; suggests corrective
+flags on failure.
 
-`--sigma-sweep` is the quickest way to confirm whether the default sigma=9
-is appropriate for your setup or whether it should be tuned up or down.
+---
+
+## `bench_pipeline_combos.py` — pipeline benchmark
+
+Benchmarks all three olive-solve paths with optional sweeps.
+
+```bash
+sudo .../bench_pipeline_combos.py --image img.png
+sudo .../bench_pipeline_combos.py --live-shm
+sudo .../bench_pipeline_combos.py --image img.png --reps 10
+sudo .../bench_pipeline_combos.py --image img.png --hint-sweep
+sudo .../bench_pipeline_combos.py --image img.png --sigma-sweep
+```
+
+| Path | Pipeline | Notes |
+|------|----------|-------|
+| 1 | `solve_from_image_fast` (combined) | Reference baseline |
+| 2 | `get_centroids_from_image_fast` + `solve_from_centroids`, blind | Daemon pipeline |
+| 3 | Same as 2 + `attitude_hint` | Daemon pipeline + hint |
+
+**`--hint-sweep`** varies `hint_uncertainty_deg` from 0.5° to 30° with both
+`strict_hint=False` and `True`. Use this to find the best cone size for your
+typical slew speed. The default used by the daemon is 5°.
+
+**`--sigma-sweep`** sweeps sigma 3–12, shows star count and extraction time
+at each threshold. Also shows which values exceed `min_centroids` and which
+hit `max_solve_stars` (the centroid cap).
+
+---
+
+## `test_hint.py` — attitude-hint effectiveness test
+
+Solves a sequence of shifted star-field images and compares blind vs. hint
+solve time. The first image is always a blind solve; subsequent images are
+solved twice (blind + hint) so the speedup is directly visible.
+
+```bash
+sudo .../test_hint.py --images img1.png img2.png img3.png
+sudo .../test_hint.py --images *.png --hint-unc 10
+sudo .../test_hint.py --images img1.png img2.png --db /path/to/db.npz \
+                       --fov 13.5 --timeout 2000
+```
+
+Output per image:
+- Detected star count
+- Blind solve: `ext_ms`, `slv_ms`, `total_ms`, RA/Dec
+- Hint solve: same fields, plus speedup vs. blind
+- Angular separation from image 1
+
+Summary table at the end: per-image blind vs. hint time, speedup, and
+average time saved.
+
+The hint chains forward: image 1 seeds image 2, image 2 (if solved) seeds
+image 3, and so on — matching the live daemon behaviour.
+
+The default `--hint-unc` is 5°, appropriate for small telescope shifts.
+Widen it with e.g. `--hint-unc 15` if the images cover a larger slew.
