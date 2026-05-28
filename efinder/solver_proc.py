@@ -387,11 +387,60 @@ def solver_main(slots, latest_solution, shared_cfg,
             q_hint, hint_unc = _imu_propagate_hint(
                 last_sky_q, last_solve_imu_q, shared_cfg)
 
-            t_solve = time.monotonic()
+            # --- Step 1: extract centroids -----------------------------------
+            t_extract = time.monotonic()
             try:
-                soln = solver_t3.solve_from_image_fast(
+                centroids = solver_t3.get_centroids_from_image_fast(
                     frame_buf,
                     sigma=shared_cfg.get("detect_sigma", cfg.detect_sigma),
+                )
+            except Exception as e:
+                log.warning("get_centroids_from_image_fast raised: %s", e)
+                latest_solution.update(_empty_solution(peak=local_peak))
+                if align_req is not None:
+                    align_response_q.put(AlignResult(
+                        success=False,
+                        error_message=f"centroid extraction raised: {e}",
+                        completed_at=time.monotonic(),
+                    ))
+                fail_streak += 1
+                continue
+
+            extract_ms = (time.monotonic() - t_extract) * 1000.0
+            n_stars    = len(centroids) if centroids is not None else 0
+
+            # --- Step 2: star-count gate -------------------------------------
+            min_c = shared_cfg.get("min_centroids", cfg.min_centroids)
+            if n_stars < min_c:
+                latest_solution.update(_empty_solution(
+                    stars=n_stars, peak=local_peak,
+                    solve_ms=extract_ms, status=TOO_FEW))
+                if align_req is not None:
+                    align_response_q.put(AlignResult(
+                        success=False,
+                        error_message=f"too few stars ({n_stars}<{min_c})",
+                        completed_at=time.monotonic(),
+                    ))
+                fail_streak += 1
+                if fail_streak == 1 or fail_streak % 20 == 0:
+                    log.info(
+                        "no solve: too few stars (%d<%d) peak=%d ext=%.0fms",
+                        n_stars, min_c, local_peak, extract_ms)
+                if cfg.save_failed_frames and frame_snapshot is not None:
+                    _save_frame(frame_snapshot, cfg, "failed_TooFew")
+                continue
+
+            # --- Step 3: centroid cap ----------------------------------------
+            max_c = shared_cfg.get("max_solve_stars", cfg.max_solve_stars)
+            if n_stars > max_c:
+                centroids = centroids[:max_c]
+
+            # --- Step 4: plate solve -----------------------------------------
+            t_solve = time.monotonic()
+            try:
+                soln = solver_t3.solve_from_centroids(
+                    centroids,
+                    (cfg.frame_height, cfg.frame_width),
                     fov_estimate=calibrator.get_fov_estimate(),
                     fov_max_error=calibrator.get_fov_max_error(),
                     solve_timeout=shared_cfg.get(
@@ -407,8 +456,10 @@ def solver_main(slots, latest_solution, shared_cfg,
                     strict_hint=False,
                 )
             except Exception as e:
-                log.warning("solve_from_image_fast raised: %s", e)
-                latest_solution.update(_empty_solution(peak=local_peak))
+                log.warning("solve_from_centroids raised: %s", e)
+                latest_solution.update(_empty_solution(
+                    stars=n_stars, peak=local_peak,
+                    solve_ms=extract_ms, status=NO_MATCH))
                 if align_req is not None:
                     align_response_q.put(AlignResult(
                         success=False,
@@ -418,9 +469,8 @@ def solver_main(slots, latest_solution, shared_cfg,
                 fail_streak += 1
                 continue
 
-            elapsed_ms    = (time.monotonic() - t_solve) * 1000.0
-            extract_ms    = soln.get("T_extract", 0.0)
-            solve_only_ms = soln.get("T_solve",   0.0)
+            solve_only_ms = (time.monotonic() - t_solve) * 1000.0
+            elapsed_ms    = extract_ms + solve_only_ms
             # Status is a Rust Debug string; RA presence is the reliable
             # success indicator.
             status_str = soln.get("status", "NoMatch")
@@ -429,7 +479,7 @@ def solver_main(slots, latest_solution, shared_cfg,
 
             if soln.get("RA") is None:
                 latest_solution.update(_empty_solution(
-                    stars=0, peak=local_peak,
+                    stars=n_stars, peak=local_peak,
                     solve_ms=elapsed_ms, status=status_int))
                 if align_req is not None:
                     align_response_q.put(AlignResult(
@@ -440,9 +490,9 @@ def solver_main(slots, latest_solution, shared_cfg,
                 fail_streak += 1
                 if fail_streak == 1 or fail_streak % 20 == 0:
                     log.info(
-                        "no solve: status=%s peak=%d "
+                        "no solve: status=%s stars=%d peak=%d "
                         "t=%.0fms (ext=%.0fms slv=%.0fms)",
-                        status_str, local_peak,
+                        status_str, n_stars, local_peak,
                         elapsed_ms, extract_ms, solve_only_ms)
                 if cfg.save_failed_frames and frame_snapshot is not None:
                     _save_frame(frame_snapshot, cfg, f"failed_{status_str}")
@@ -468,12 +518,11 @@ def solver_main(slots, latest_solution, shared_cfg,
                 ra_out  = ra_target[0]  if hasattr(ra_target,  "__len__") else ra_target
                 dec_out = dec_target[0] if hasattr(dec_target, "__len__") else dec_target
 
-            # solve_from_image_fast reports matched count, not total detected.
             n_matches = soln.get("Matches", 0)
             latest_solution.update(_filled_solution(
                 ra=ra_out, dec=dec_out,
                 roll=soln.get("Roll", 0.0), fov=measured_fov,
-                stars=n_matches, matches=n_matches,
+                stars=n_stars, matches=n_matches,
                 peak=local_peak, noise=0.0,
                 solve_ms=elapsed_ms, status=MATCH_FOUND,
             ))
@@ -514,16 +563,16 @@ def solver_main(slots, latest_solution, shared_cfg,
 
             if fail_streak:
                 log.info(
-                    "solved after %d failed: matches=%d "
+                    "solved after %d failed: stars=%d matches=%d "
                     "t=%.0fms (ext=%.0fms slv=%.0fms)",
-                    fail_streak, n_matches,
+                    fail_streak, n_stars, n_matches,
                     elapsed_ms, extract_ms, solve_only_ms)
                 fail_streak = 0
             elif solve_count % cfg.log_solve_stats_every_n == 0:
                 log.info(
-                    "solve #%d: matches=%d peak=%d "
+                    "solve #%d: stars=%d matches=%d peak=%d "
                     "t=%.0fms (ext=%.0fms slv=%.0fms)",
-                    solve_count, n_matches, local_peak,
+                    solve_count, n_stars, n_matches, local_peak,
                     elapsed_ms, extract_ms, solve_only_ms)
 
     finally:

@@ -63,6 +63,7 @@ class Config:
     solver_db: str = "default_database"
     fov_max_error_deg: float = 1.0
     min_centroids: int = 8
+    max_solve_stars: int = 50
     solve_timeout_ms: int = 1500
     match_threshold: float = 1e-5
     match_radius: float = 0.01
