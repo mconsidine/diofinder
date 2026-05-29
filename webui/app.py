@@ -10,13 +10,17 @@ import json
 import logging
 import math
 import os
+import pathlib
 import re as _re
 import subprocess
 import sys
 import threading
+import zipfile
+from datetime import datetime
 
 from flask import (
     Flask, render_template, redirect, url_for, request, jsonify, abort,
+    send_file,
 )
 
 sys.path.insert(0, "/opt/efinder")
@@ -802,6 +806,179 @@ def focus_reset():
 
 
 # ---- Health -----------------------------------------------------------------
+
+@app.route("/debug/collect", methods=["POST"])
+def debug_collect():
+    """Build and return a timestamped debug ZIP (frames + config + journal + status)."""
+    import numpy as np
+    from multiprocessing import shared_memory
+
+    ts = datetime.now().strftime("%Y%m%d%H%M%S")
+    zip_name = f"diofinder_debug_{ts}.zip"
+
+    try:
+        from efinder.config import load_config as _lcfg
+        ecfg = _lcfg()
+        W, H = ecfg.frame_width, ecfg.frame_height
+        arcsec_px = ecfg.arcsec_per_pixel
+    except Exception:
+        W, H, arcsec_px = 960, 760, 50.8
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+
+        # ── Config file ──────────────────────────────────────────────────────
+        conf_path = os.environ.get("EFINDER_CONFIG", "/etc/efinder/efinder.conf")
+        try:
+            zf.write(conf_path, "efinder.conf")
+        except Exception as e:
+            zf.writestr("efinder.conf", f"# could not read: {e}\n")
+
+        # ── Daemon status (JSON) ─────────────────────────────────────────────
+        status = _safe_call("status")
+        cal    = _safe_call("calibration_status")
+        try:
+            zf.writestr("status.json", json.dumps({
+                "status":      {"ok": status.ok, "result": status.result,
+                                "error": status.error},
+                "calibration": {"ok": cal.ok,    "result": cal.result,
+                                "error": cal.error},
+            }, indent=2, default=str))
+        except Exception as e:
+            zf.writestr("status.json", json.dumps({"error": str(e)}))
+
+        # ── Journal ──────────────────────────────────────────────────────────
+        try:
+            j = subprocess.run(
+                ["journalctl", "-u", "efinder", "-n", "300", "--no-pager"],
+                capture_output=True, text=True, timeout=10,
+            )
+            zf.writestr("journal.txt", j.stdout + (j.stderr or ""))
+        except Exception as e:
+            zf.writestr("journal.txt", f"error collecting journal: {e}\n")
+
+        # ── Camera frames from SHM ───────────────────────────────────────────
+        from PIL import Image, ImageDraw
+        try:
+            from efinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
+        except Exception:
+            SHM_PREFIX, NUM_BUFFERS = "efinder_frame", 3
+
+        bs_r = _safe_call("status")
+        bs   = bs_r.result.get("boresight") if bs_r.ok and bs_r.result else None
+        cx   = int(round(bs["x"])) if bs else W // 2
+        cy   = int(round(bs["y"])) if bs else H // 2
+
+        def _capture_frame():
+            for i in range(NUM_BUFFERS):
+                try:
+                    shm = shared_memory.SharedMemory(
+                        name=f"{SHM_PREFIX}_{i}", create=False)
+                    frame = np.ndarray(
+                        (H, W), dtype=np.uint8, buffer=shm.buf).copy()
+                    shm.close()
+                    return frame
+                except Exception:
+                    continue
+            return None
+
+        def _save_frame_pair(zf, idx, frame):
+            # Raw grayscale PNG
+            raw_buf = io.BytesIO()
+            Image.fromarray(frame, mode="L").save(raw_buf, format="PNG")
+            zf.writestr(f"frame_{idx:02d}_raw.png", raw_buf.getvalue())
+            # Arcsinh-stretched display JPEG with boresight overlay
+            sky   = float(np.median(frame))
+            x     = np.clip(frame.astype(np.float32) - sky, 0.0, None)
+            beta  = max(1.0, sky * 0.1)
+            xs    = np.arcsinh(x / beta)
+            scale = float(np.percentile(xs, 99.9)) or float(xs.max()) or 1.0
+            disp  = np.clip(xs / scale * 255.0, 0, 255).astype(np.uint8)
+            img   = Image.fromarray(disp, mode="L").convert("RGB")
+            draw  = ImageDraw.Draw(img)
+            r = 28
+            draw.ellipse([cx-r, cy-r, cx+r, cy+r], outline=(220, 0, 0), width=2)
+            try:
+                r_half = round(1800.0 / arcsec_px)
+                r_one  = round(3600.0 / arcsec_px)
+                draw.ellipse([cx-r_half, cy-r_half, cx+r_half, cy+r_half],
+                             outline=(180, 120, 0), width=1)
+                draw.ellipse([cx-r_one,  cy-r_one,  cx+r_one,  cy+r_one],
+                             outline=(180, 120, 0), width=1)
+            except Exception:
+                pass
+            disp_buf = io.BytesIO()
+            img.save(disp_buf, format="JPEG", quality=85)
+            zf.writestr(f"frame_{idx:02d}_display.jpg", disp_buf.getvalue())
+
+        frames_saved = 0
+        for attempt in range(2):
+            if attempt > 0:
+                import time; time.sleep(0.6)
+            f = _capture_frame()
+            if f is not None:
+                try:
+                    _save_frame_pair(zf, attempt + 1, f)
+                    frames_saved += 1
+                except Exception:
+                    pass
+
+        # ── System summary ───────────────────────────────────────────────────
+        lines = [
+            f"diofinder debug bundle",
+            f"collected: {datetime.now().isoformat(timespec='seconds')}",
+            "=" * 52,
+        ]
+        try:
+            lines.append("hostname: " +
+                subprocess.check_output(["hostname"], text=True).strip())
+        except Exception:
+            pass
+        try:
+            with open("/etc/os-release") as f:
+                for line in f:
+                    if line.startswith("PRETTY_NAME"):
+                        lines.append("OS: " + line.split("=", 1)[1].strip().strip('"'))
+                        break
+        except Exception:
+            pass
+        try:
+            with open("/proc/cpuinfo") as f:
+                for line in f:
+                    if line.startswith("Model"):
+                        lines.append("hardware: " + line.split(":", 1)[1].strip())
+                        break
+        except Exception:
+            pass
+        lines.append(f"frames_in_bundle: {frames_saved}")
+        if status.ok and status.result:
+            r = status.result
+            lines.append(f"test_mode: {r.get('test_mode')}")
+            lines.append(f"fov_deg: {r.get('fov_deg')}")
+            sol = r.get("solution") or {}
+            lines.append(f"last_solve_status: {sol.get('status')}")
+            lines.append(f"last_solve_ms: {sol.get('solve_ms')}")
+            imu = r.get("imu") or {}
+            lines.append(f"imu_active: {imu.get('active')}")
+        zf.writestr("capture_info.txt", "\n".join(lines) + "\n")
+
+    # Save a copy to disk so scp/curl also works
+    out_dir = pathlib.Path("/var/lib/efinder")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = out_dir / zip_name
+    try:
+        zip_path.write_bytes(buf.getvalue())
+    except Exception:
+        pass
+
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name=zip_name,
+    )
+
 
 @app.route("/healthz")
 def healthz():

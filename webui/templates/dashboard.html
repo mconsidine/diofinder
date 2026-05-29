@@ -133,6 +133,15 @@
     </div>
   </div>
 
+  <div class="card" id="debug-card">
+    <h2>Debug</h2>
+    <p class="hint" style="margin:0 0 8px 0;">
+      Collects frames, config, and journal into a ZIP you can email for support.
+    </p>
+    <button id="debug-btn" class="btn">Collect debug bundle</button>
+    <span id="debug-status" style="margin-left:10px;font-size:0.85rem;color:#888;"></span>
+  </div>
+
 </section>
 
 <script>
@@ -226,6 +235,39 @@ function formatDMS(d) {
   return `${sign}${String(D).padStart(2,'0')}°${String(M).padStart(2,'0')}'${String(S).padStart(2,'0')}"`;
 }
 setInterval(refresh, 1500);
+
+// ── Debug bundle collection ──────────────────────────────────────────────────
+document.getElementById('debug-btn').addEventListener('click', async function() {
+  const btn = this;
+  const st  = document.getElementById('debug-status');
+  btn.disabled  = true;
+  btn.textContent = 'Collecting…';
+  st.textContent  = '';
+  try {
+    const r = await fetch('/debug/collect', {method: 'POST'});
+    if (!r.ok) {
+      st.textContent = 'Error: server returned ' + r.status;
+      btn.textContent = 'Collect debug bundle';
+      btn.disabled = false;
+      return;
+    }
+    const blob = await r.blob();
+    const cd = r.headers.get('Content-Disposition') || '';
+    const fn = (cd.match(/filename="([^"]+)"/) || [])[1] || 'diofinder_debug.zip';
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = fn;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(a.href);
+    st.textContent = '✓ ' + fn;
+  } catch(e) {
+    st.textContent = 'Error: ' + e.message;
+  }
+  btn.textContent = 'Collect debug bundle';
+  btn.disabled = false;
+});
 </script>
 
 {% endif %}
