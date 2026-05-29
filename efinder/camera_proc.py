@@ -116,6 +116,23 @@ def _load_test_image(path, frame_height, frame_width):
     return np.array(img, dtype=np.uint8)
 
 
+def _find_test_image(cfg):
+    """Search standard paths for a test image; return loaded array or None."""
+    from pathlib import Path
+    search_dirs = [Path.cwd(), Path("/var/lib/efinder"), Path("/opt/efinder")]
+    for name in ("test.png", "polaris.png"):
+        for d in search_dirs:
+            p = d / name
+            if p.exists():
+                try:
+                    frame = _load_test_image(p, cfg.frame_height, cfg.frame_width)
+                    log.info("Test image auto-discovered: %s", p)
+                    return frame
+                except Exception as e:
+                    log.warning("Could not load test image %s: %s", p, e)
+    return None
+
+
 def _init_camera(cfg, current_state):
     """Initialise and start picamera2 using current_state for exposure/gain."""
     from picamera2 import Picamera2
@@ -184,8 +201,10 @@ def camera_main(slots, camera_cmd_q, camera_cmd_reply_q, cfg,
 
             if use_test:
                 if test_frame is None:
+                    test_frame = _find_test_image(cfg)
+                if test_frame is None:
                     log.warning(
-                        "Test mode requested but no test image loaded; "
+                        "Test mode requested but no test image found; "
                         "switching to live mode")
                     if shared_cfg is not None:
                         shared_cfg["test_mode"] = False
