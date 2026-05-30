@@ -644,14 +644,12 @@ def frame_jpg():
     if frame is None:
         return "camera not running", 503, {"Content-Type": "text/plain"}
 
-    sky  = float(np.median(frame))
-    x    = np.clip(frame.astype(np.float32) - sky, 0.0, None)
-    beta = max(1.0, sky * 0.1)
-    xs   = np.arcsinh(x / beta)
-    scale = float(np.percentile(xs, 99.9))
-    if scale < 1e-6:
-        scale = float(xs.max()) or 1.0
-    stretched = np.clip(xs / scale * 255.0, 0, 255).astype(np.uint8)
+    sky     = float(np.percentile(frame, 50))
+    signal  = np.clip(frame.astype(np.float32) - sky, 0.0, None)
+    white   = float(np.percentile(signal, 99.9))
+    if white < 1.0:
+        white = float(signal.max()) or 1.0
+    stretched = np.clip(signal / white * 255.0, 0, 255).astype(np.uint8)
 
     img  = Image.fromarray(stretched, mode="L").convert("RGB")
     draw = ImageDraw.Draw(img)
@@ -670,9 +668,9 @@ def frame_jpg():
     except Exception:
         r_half, r_one = 35, 71
     draw.ellipse([cx - r_half, cy - r_half, cx + r_half, cy + r_half],
-                 outline=(180, 120, 0), width=1)
+                 outline=(220, 0, 0), width=1)
     draw.ellipse([cx - r_one,  cy - r_one,  cx + r_one,  cy + r_one],
-                 outline=(180, 120, 0), width=1)
+                 outline=(220, 0, 0), width=1)
 
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=70)
@@ -902,9 +900,9 @@ def debug_collect():
                 r_half = round(1800.0 / arcsec_px)
                 r_one  = round(3600.0 / arcsec_px)
                 draw.ellipse([cx-r_half, cy-r_half, cx+r_half, cy+r_half],
-                             outline=(180, 120, 0), width=1)
+                             outline=(220, 0, 0), width=1)
                 draw.ellipse([cx-r_one,  cy-r_one,  cx+r_one,  cy+r_one],
-                             outline=(180, 120, 0), width=1)
+                             outline=(220, 0, 0), width=1)
             except Exception:
                 pass
             disp_buf = io.BytesIO()

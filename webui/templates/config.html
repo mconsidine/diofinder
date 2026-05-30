@@ -25,14 +25,22 @@
     {% endif %}
     {% if runtime_imu %}
       <dt>IMU</dt>
-      <dd id="imu-dd">
-        {%- if runtime_imu.active -%}
-          active
-        {%- elif runtime_imu.available -%}
-          calibrating ({{ runtime_imu.calib_n }}/3 solves, R&sup2;={{ "%.2f"|format(runtime_imu.quality) }})
-        {%- else -%}
-          not detected
-        {%- endif -%}
+      <dd>
+        <span id="imu-status">
+          {%- if runtime_imu.active -%}
+            active
+          {%- elif runtime_imu.available -%}
+            calibrating ({{ runtime_imu.calib_n }}/3 pairs, R&sup2;={{ "%.2f"|format(runtime_imu.quality) }})
+          {%- else -%}
+            not detected
+          {%- endif -%}
+        </span>
+        <span id="imu-ts" style="font-size:0.75em;color:#666;"></span>
+        {% if runtime_imu.available and not runtime_imu.active %}
+        <p class="hint" style="margin:2px 0 0 0;">
+          Pairs accumulate only when the mount moves 0.1°–15° between solves.
+        </p>
+        {% endif %}
       </dd>
     {% endif %}
     {% if runtime_fov %}
@@ -73,7 +81,10 @@
 <script>
 function _imuText(imu) {
   if (imu.active) return 'active';
-  if (imu.available) return 'calibrating (' + imu.calib_n + '/3 solves, R²=' + imu.quality.toFixed(2) + ')';
+  if (imu.available) {
+    const q = (typeof imu.quality === 'number') ? imu.quality.toFixed(2) : '—';
+    return 'calibrating (' + imu.calib_n + '/3 pairs, R²=' + q + ')';
+  }
   return 'not detected';
 }
 setInterval(async function() {
@@ -82,8 +93,10 @@ setInterval(async function() {
     if (!resp.ok) return;
     const d = await resp.json();
     const imu = d.status && d.status.ok && d.status.result && d.status.result.imu;
-    const dd = document.getElementById('imu-dd');
-    if (dd && imu) dd.textContent = _imuText(imu);
+    const st = document.getElementById('imu-status');
+    const ts = document.getElementById('imu-ts');
+    if (st && imu) st.textContent = _imuText(imu);
+    if (ts) ts.textContent = ' · ' + new Date().toLocaleTimeString();
   } catch(e) {}
 }, 3000);
 </script>
