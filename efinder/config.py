@@ -68,6 +68,11 @@ class Config:
     match_threshold: float = 1e-5
     match_radius: float = 0.01
 
+    # -------- Extractor backend --------
+    # "olive"    — use olive-solve get_centroids_from_image_fast (default)
+    # "sycamore" — use sycamore-extract star_detect (requires star_detect wheel)
+    extract_backend: str = "olive"
+
     # -------- Boresight offset --------
     boresight_y: float = 380.0   # frame_height / 2
     boresight_x: float = 480.0   # frame_width / 2

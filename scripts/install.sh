@@ -183,6 +183,22 @@ if not hasattr(tetra3.Tetra3, 'solve_from_image_fast'):
 print('olive-solve tetra3-py OK')
 " || FAIL "olive-solve verification failed"
 
+# --- Install sycamore-extract star_detect (optional) -------------------------
+# Install only if a wheel exists in vendor/wheels/. Skip gracefully if absent.
+
+SYCAMORE_WHL=$(ls "$VENDOR_WHEELS_DIR"/star_detect-*aarch64*.whl 2>/dev/null | head -1 || true)
+if [ -n "$SYCAMORE_WHL" ]; then
+  LOG "Installing sycamore-extract: $SYCAMORE_WHL"
+  sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install "$SYCAMORE_WHL" \
+    || WARN "sycamore-extract install failed (non-fatal; olive backend will be used)"
+  sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/python" -c "
+import star_detect
+print('sycamore star_detect OK')
+" 2>/dev/null && LOG "sycamore star_detect verified" || WARN "sycamore star_detect import check failed (non-fatal)"
+else
+  LOG "No sycamore-extract wheel in $VENDOR_WHEELS_DIR — skipping (optional)"
+fi
+
 # --- Install star database ---------------------------------------------------
 # The database is generated on the x86_64 CI runner by release.yml and
 # staged into the chroot by build-image.sh as EFINDER_SOLVER_DB.
