@@ -1,0 +1,77 @@
+name: Vendor Sycamore (star_detect)
+
+# Downloads a pre-built sycamore-extract star_detect wheel from GitHub Releases
+# and commits it to vendor/wheels/ so install.sh can use it without a network
+# fetch at image-build time.
+#
+# Configure:
+#   SYCAMORE_VERSION  — repo variable, e.g. "0.6.2"  (default: "0.6.2")
+#   SYCAMORE_PYTHON   — repo variable, e.g. "cp313"   (default: "cp313")
+#
+# The wheel URL pattern is:
+#   https://github.com/mconsidine/sycamore-extract/releases/download/v{version}/
+#     star_detect-{version}-{python}-{python}-manylinux_2_17_aarch64.manylinux2014_aarch64.whl
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'sycamore-extract version (e.g. 0.6.2)'
+        required: false
+        default: ''
+      python:
+        description: 'CPython tag (e.g. cp313)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+jobs:
+  vendor-sycamore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout olive branch
+        uses: actions/checkout@v4
+        with:
+          ref: olive
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve version and python tag
+        id: vars
+        run: |
+          VER="${{ github.event.inputs.version || vars.SYCAMORE_VERSION || '0.6.2' }}"
+          PY="${{ github.event.inputs.python || vars.SYCAMORE_PYTHON || 'cp313' }}"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "python=$PY"   >> "$GITHUB_OUTPUT"
+          WHL="star_detect-${VER}-${PY}-${PY}-manylinux_2_17_aarch64.manylinux2014_aarch64.whl"
+          URL="https://github.com/mconsidine/sycamore-extract/releases/download/v${VER}/${WHL}"
+          echo "whl=$WHL"   >> "$GITHUB_OUTPUT"
+          echo "url=$URL"   >> "$GITHUB_OUTPUT"
+
+      - name: Download star_detect wheel
+        run: |
+          mkdir -p vendor/wheels
+          echo "Downloading ${{ steps.vars.outputs.url }}"
+          curl -fsSL -o "vendor/wheels/${{ steps.vars.outputs.whl }}" \
+            "${{ steps.vars.outputs.url }}"
+          ls -lh "vendor/wheels/${{ steps.vars.outputs.whl }}"
+
+      - name: Remove stale sycamore wheels
+        run: |
+          # Remove any older star_detect wheels before adding the new one
+          find vendor/wheels -name 'star_detect-*.whl' \
+            ! -name '${{ steps.vars.outputs.whl }}' -delete || true
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add vendor/wheels/
+          if git diff --staged --quiet; then
+            echo "No vendor changes to commit (wheel already up to date)"
+          else
+            git commit -m "vendor: add sycamore star_detect ${{ steps.vars.outputs.version }} (${{ steps.vars.outputs.python }}) aarch64 wheel [skip ci]"
+            git push origin olive
+          fi

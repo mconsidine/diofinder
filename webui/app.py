@@ -116,7 +116,7 @@ def dashboard():
         cal_error=cal.error if not cal.ok else None,
         committed_focus=committed_focus,
         imu=(status.result.get("imu") if status.ok else None),
-        solver_backend="olive",
+        solver_backend=(status.result.get("solver_backend", "olive") if status.ok else "olive"),
         test_mode=(
             status.result.get("test_mode", True)
             if status.ok else True),
@@ -143,10 +143,14 @@ def boresight_center():
     return redirect(url_for("dashboard"))
 
 
-# ---- Backend toggle (no-op: olive branch has a single backend) -------------
+# ---- Extractor backend toggle -----------------------------------------------
 
 @app.route("/backend/set", methods=["POST"])
 def backend_set():
+    backend = request.form.get("backend", "olive").strip().lower()
+    r = _safe_call("set_extract_backend", {"backend": backend})
+    if not r.ok:
+        return r.error, 500
     return redirect(url_for("dashboard"))
 
 

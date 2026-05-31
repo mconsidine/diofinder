@@ -303,6 +303,17 @@ def solver_main(slots, latest_solution, shared_cfg,
         log.error("Failed to load olive-solve: %s", e)
         raise RuntimeError(f"olive-solve unavailable: {e}") from e
 
+    # ---- Load sycamore extractor (optional) --------------------------------
+    _sycamore_ok = False
+    try:
+        import star_detect as _star_detect
+        # One-time thread-count init; solver process owns two CPU cores.
+        _star_detect.set_num_threads(2)
+        _sycamore_ok = True
+        log.info("sycamore star_detect available")
+    except ImportError:
+        log.info("sycamore star_detect not installed — sycamore backend unavailable")
+
     calibrator = FovCalibrator(cfg, shared_cfg)
     log.info("Calibrator: state=%s fov=%.4f° tolerance=%.3f°",
              calibrator.state.value,
@@ -389,13 +400,31 @@ def solver_main(slots, latest_solution, shared_cfg,
 
             # --- Step 1: extract centroids -----------------------------------
             t_extract = time.monotonic()
+            sigma = shared_cfg.get("detect_sigma", cfg.detect_sigma)
+            _backend = shared_cfg.get("extract_backend", cfg.extract_backend)
             try:
-                centroids = solver_t3.get_centroids_from_image_fast(
-                    frame_buf,
-                    sigma=shared_cfg.get("detect_sigma", cfg.detect_sigma),
-                )
+                if _backend == "sycamore" and _sycamore_ok:
+                    _raw = _star_detect.detect_stars(
+                        frame_buf,
+                        sigma=sigma,
+                        bin=1,
+                        centroid_full_res=True,
+                    )
+                    # sycamore returns (x=col, y=row, brightness, peak).
+                    # tetra3 solve_from_centroids expects (row, col) = (y, x).
+                    centroids = (
+                        np.array([[s[1], s[0]] for s in _raw], dtype=np.float32)
+                        if _raw else None
+                    )
+                else:
+                    if _backend == "sycamore" and not _sycamore_ok:
+                        log.warning(
+                            "sycamore backend requested but not available; "
+                            "falling back to olive")
+                    centroids = solver_t3.get_centroids_from_image_fast(
+                        frame_buf, sigma=sigma)
             except Exception as e:
-                log.warning("get_centroids_from_image_fast raised: %s", e)
+                log.warning("centroid extraction raised (%s): %s", _backend, e)
                 latest_solution.update(_empty_solution(peak=local_peak))
                 if align_req is not None:
                     align_response_q.put(AlignResult(

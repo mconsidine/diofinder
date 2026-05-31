@@ -117,10 +117,11 @@ def main():
         "epoch_monotonic": 0.0,
     })
     shared_cfg = manager.dict({
-        "boresight_y":   cfg.boresight_y,
-        "boresight_x":   cfg.boresight_x,
-        "imu_available": False,
-        "test_mode":     default_test_mode,
+        "boresight_y":      cfg.boresight_y,
+        "boresight_x":      cfg.boresight_x,
+        "imu_available":    False,
+        "test_mode":        default_test_mode,
+        "extract_backend":  cfg.extract_backend,
     })
     align_request_q  = mp.Queue(maxsize=4)
     align_response_q = mp.Queue(maxsize=4)
