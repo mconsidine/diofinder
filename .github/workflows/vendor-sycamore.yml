@@ -1,5 +1,5 @@
 name: Vendor Sycamore (star_detect)
-
+#
 # Downloads a pre-built sycamore-extract star_detect wheel from GitHub Releases
 # and commits it to vendor/wheels/ so install.sh can use it without a network
 # fetch at image-build time.
