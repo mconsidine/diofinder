@@ -1,21 +1,57 @@
 #!/usr/bin/env python3
 """
-eFinder olive-solve pipeline benchmark.
+eFinder pipeline-combination benchmark.
 
-Times the three solve paths in order of increasing capability:
+Times every meaningful solve path end-to-end on the same sky frame so you
+can compare total latency, extractor speed, and solve reliability in one run.
 
-  Path 1  solve_from_image_fast (u8)          — combined reference baseline
-  Path 2  get_centroids_from_image_fast (u8)   — split pipeline, blind
-           + solve_from_centroids
-  Path 3  same as path 2, but with an          — split pipeline + hint
-           attitude hint seeded from path 2
+─── What each path represents ────────────────────────────────────────────────
 
-Path 2 is what solver_proc.py uses for every frame.
-Path 3 is what solver_proc.py uses after the first successful solve.
+  Path 1  solve_from_image_fast (olive, combined)
+          The single-call Rust baseline: extraction + solve happen inside one
+          function.  Not used by the daemon directly, but useful as a reference
+          ceiling — it gives the theoretical fastest time when the solver library
+          does everything itself.
 
-Optional sweeps:
-  --hint-sweep   vary hint_uncertainty_deg to find the best cone size
-  --sigma-sweep  vary sigma to show the detection/solve trade-off
+  Path 2  olive get_centroids_from_image_fast  +  solve_from_centroids  (blind)
+          The split pipeline the daemon uses on *every frame* before it has ever
+          solved.  Extracting centroids separately lets the daemon gate on star
+          count, apply the boresight offset, and cap the centroid list before
+          handing off to the solver.  The blind solve searches the entire sky.
+
+  Path 3  olive get_centroids_from_image_fast  +  solve_from_centroids  (+ hint)
+          Same split pipeline, but after the first successful solve the daemon
+          passes the previous solution's quaternion as an attitude hint.  The
+          solver restricts its search to a cone around that hint (default ±5°),
+          which cuts solve time substantially on a tracking mount.  This is what
+          the daemon uses for every subsequent frame once it has locked on.
+
+  Path 4  sycamore detect_stars  +  solve_from_centroids  (blind)   [optional]
+          Identical to path 2 but with the sycamore-extract centroid detector.
+          Lets you compare whether sycamore's extraction speed or star-count
+          yield makes a practical difference to total latency or solve rate.
+          Skipped silently if the star_detect wheel is not installed.
+
+  Path 5  sycamore detect_stars  +  solve_from_centroids  (+ hint)  [optional]
+          Identical to path 3 but with sycamore extraction — the "best-case"
+          sycamore pipeline matching what the daemon would use on steady frames.
+          Skipped silently if sycamore is unavailable or blind solve (path 4)
+          did not produce a quaternion.
+
+─── Optional sweeps ──────────────────────────────────────────────────────────
+
+  --hint-sweep   Vary hint_uncertainty_deg (0.5°–30°) to find the cone size
+                 that gives the best blend of speed and reliability on your sky.
+
+  --sigma-sweep  Sweep sigma 3–12 to show how the detection threshold trades
+                 star count against extraction noise.  Helps pick the right
+                 sigma value for your exposure and gain settings.
+
+─── For a deeper extractor-only comparison see ───────────────────────────────
+
+  tests/bench_extractor_compare.py  — runs both extractors in isolation,
+  reports per-backend extraction time, star count, and solve outcomes in a
+  single side-by-side table with delta rows.
 
 Usage:
   # Daemon stopped, using a saved capture:
@@ -25,7 +61,7 @@ Usage:
   # Live frame from running daemon:
   sudo /opt/efinder/venv/bin/python3 tests/bench_pipeline_combos.py --live-shm
 
-  # Extra reps and hint sweep:
+  # Extra reps, hint sweep:
   sudo /opt/efinder/venv/bin/python3 tests/bench_pipeline_combos.py \\
       --image img.png --reps 10 --hint-sweep
 
@@ -120,6 +156,15 @@ except Exception as e:
     tag(FAIL, f'tetra3 / database: {e}')
     sys.exit(1)
 
+sycamore_ok = False
+try:
+    import star_detect as _sd
+    _sd.set_num_threads(2)
+    sycamore_ok = True
+    tag(PASS, 'sycamore star_detect — paths 4 & 5 will run')
+except ImportError:
+    tag(INFO, 'sycamore star_detect not installed — paths 4 & 5 will be skipped')
+
 
 # ── Stage 1: Frame source ─────────────────────────────────────────────────────
 sep('Stage 1: Frame source')
@@ -200,6 +245,19 @@ def _extract(frame, sig):
     ms   = (time.monotonic() - t0) * 1000
     n    = len(cent) if cent is not None else 0
     if n > max_c:
+        cent = cent[:max_c]
+    return cent, n, ms
+
+
+def _extract_sycamore(frame, sig):
+    t0  = time.monotonic()
+    raw = _sd.detect_stars(frame, sigma=sig, bin=1, centroid_full_res=True)
+    ms  = (time.monotonic() - t0) * 1000
+    n   = len(raw) if raw else 0
+    # (x=col, y=row) → (row, col) for tetra3
+    cent = (np.array([[s[1], s[0]] for s in raw], dtype=np.float32)
+            if raw else None)
+    if cent is not None and len(cent) > max_c:
         cent = cent[:max_c]
     return cent, n, ms
 
@@ -386,26 +444,145 @@ else:
                   'avg_tot': sum(p3_tot)/len(p3_tot) if p3_tot else 0}
 
 
+# ── Path 4: sycamore split pipeline, blind ────────────────────────────────────
+if sycamore_ok:
+    sep(f'Path 4: sycamore split pipeline, blind   N={args.reps}')
+    tag(INFO, 'sycamore detect_stars + solve_from_centroids — blind')
+
+    p4_ext, p4_slv, p4_tot, p4_solved = [], [], [], 0
+    last_good_q4 = None
+
+    for i in range(args.reps):
+        try:
+            cent, n, ext_ms = _extract_sycamore(raw_frame, sigma)
+            p4_ext.append(ext_ms)
+
+            if n < min_c:
+                tag(WARN, f'[{i+1:2d}] ext={ext_ms:.0f} ms  '
+                          f'stars={n} < min_centroids={min_c} — skipping solve')
+                p4_tot.append(ext_ms); p4_slv.append(0)
+                continue
+
+            soln, slv_ms = _solve_blind(cent, raw_frame.shape)
+            total = ext_ms + slv_ms
+            p4_slv.append(slv_ms); p4_tot.append(total)
+
+            ok = _solved(soln)
+            if ok:
+                p4_solved += 1
+                if soln.get('quaternion'):
+                    last_good_q4 = tuple(soln['quaternion'])
+            lbl = PASS if ok else FAIL
+            tag(lbl, f'[{i+1:2d}] total={total:.0f} ms  '
+                     f'ext={ext_ms:.0f} ms  slv={slv_ms:.0f} ms  '
+                     f'stars={n}  {soln.get("status","?") if soln else "None"}')
+            if ok and soln.get('RA'):
+                tag(PASS, f'      RA={soln["RA"]:.4f}  Dec={soln["Dec"]:.4f}  '
+                          f'FOV={soln.get("FOV",0):.4f}°  m={soln.get("Matches","?")}')
+        except Exception as e:
+            tag(FAIL, f'[{i+1:2d}] raised: {e}')
+
+    if p4_tot:
+        avg_e = sum(p4_ext)/len(p4_ext)
+        avg_s = sum(p4_slv)/len(p4_slv) if p4_slv else 0
+        avg_t = sum(p4_tot)/len(p4_tot)
+        print(f'\n  Solved: {p4_solved}/{len(p4_tot)}  '
+              f'ext avg={avg_e:.1f} ms  slv avg={avg_s:.1f} ms  total avg={avg_t:.1f} ms')
+        if summary[2]['avg_tot'] > 0:
+            delta = avg_t - summary[2]['avg_tot']
+            sign  = '+' if delta >= 0 else ''
+            print(f'  vs Path 2 (olive blind): {sign}{delta:.1f} ms avg')
+    summary[4] = {'solved': p4_solved, 'n': len(p4_tot),
+                  'avg_ext': sum(p4_ext)/len(p4_ext) if p4_ext else 0,
+                  'avg_slv': sum(p4_slv)/len(p4_slv) if p4_slv else 0,
+                  'avg_tot': sum(p4_tot)/len(p4_tot) if p4_tot else 0}
+else:
+    summary[4] = None
+
+# ── Path 5: sycamore split pipeline + hint ────────────────────────────────────
+if sycamore_ok:
+    sep(f'Path 5: sycamore split pipeline + hint ({args.hint_unc:.1f}°)   N={args.reps}')
+
+    # Prefer a hint from path 4; fall back to any hint from path 2/3
+    hint_q5 = last_good_q4 or last_good_q
+
+    if hint_q5 is None:
+        tag(WARN, 'No quaternion available — path 5 skipped')
+        summary[5] = None
+    else:
+        tag(INFO, f'Hint q=({hint_q5[0]:.4f}, {hint_q5[1]:.4f}, '
+                  f'{hint_q5[2]:.4f}, {hint_q5[3]:.4f})  unc={args.hint_unc:.1f}°')
+        p5_ext, p5_slv, p5_tot, p5_solved = [], [], [], 0
+
+        for i in range(args.reps):
+            try:
+                cent, n, ext_ms = _extract_sycamore(raw_frame, sigma)
+                p5_ext.append(ext_ms)
+
+                if n < min_c:
+                    tag(WARN, f'[{i+1:2d}] ext={ext_ms:.0f} ms  stars={n} — skipping')
+                    p5_tot.append(ext_ms); p5_slv.append(0)
+                    continue
+
+                soln, slv_ms = _solve_hint(cent, raw_frame.shape, hint_q5, args.hint_unc)
+                total = ext_ms + slv_ms
+                p5_slv.append(slv_ms); p5_tot.append(total)
+
+                ok = _solved(soln)
+                if ok:
+                    p5_solved += 1
+                lbl = PASS if ok else FAIL
+                tag(lbl, f'[{i+1:2d}] total={total:.0f} ms  '
+                         f'ext={ext_ms:.0f} ms  slv={slv_ms:.0f} ms  '
+                         f'stars={n}  {soln.get("status","?") if soln else "None"}')
+                if ok and soln.get('RA'):
+                    tag(PASS, f'      RA={soln["RA"]:.4f}  Dec={soln["Dec"]:.4f}  '
+                               f'FOV={soln.get("FOV",0):.4f}°  m={soln.get("Matches","?")}')
+            except Exception as e:
+                tag(FAIL, f'[{i+1:2d}] raised: {e}')
+
+        if p5_tot:
+            avg_e = sum(p5_ext)/len(p5_ext)
+            avg_s = sum(p5_slv)/len(p5_slv) if p5_slv else 0
+            avg_t = sum(p5_tot)/len(p5_tot)
+            print(f'\n  Solved: {p5_solved}/{len(p5_tot)}  '
+                  f'ext avg={avg_e:.1f} ms  slv avg={avg_s:.1f} ms  total avg={avg_t:.1f} ms')
+            if summary[4] and summary[4]['avg_tot'] > 0:
+                delta = summary[4]['avg_tot'] - avg_t
+                print(f'  Hint vs blind (sycamore): {avg_t:.1f} ms vs '
+                      f'{summary[4]["avg_tot"]:.1f} ms  '
+                      f'(hint {"saves" if delta >= 0 else "costs"} {abs(delta):.1f} ms avg)')
+
+        summary[5] = {'solved': p5_solved, 'n': len(p5_tot),
+                      'avg_ext': sum(p5_ext)/len(p5_ext) if p5_ext else 0,
+                      'avg_slv': sum(p5_slv)/len(p5_slv) if p5_slv else 0,
+                      'avg_tot': sum(p5_tot)/len(p5_tot) if p5_tot else 0}
+else:
+    summary[5] = None
+
+
 # ── Summary table ──────────────────────────────────────────────────────────────
 sep('Summary')
-print(f'  {"#":<2}  {"Pipeline":<44}  {"avg_ext":>8}  {"avg_slv":>8}  '
+print(f'  {"#":<2}  {"Pipeline":<50}  {"avg_ext":>8}  {"avg_slv":>8}  '
       f'{"avg_tot":>8}  {"solved":>8}')
 hr()
 names = {
-    1: 'solve_from_image_fast (combined)',
-    2: 'split pipeline, blind',
-    3: f'split pipeline + hint ({args.hint_unc:.1f}°)',
+    1: 'olive  solve_from_image_fast (combined)',
+    2: 'olive  split pipeline, blind',
+    3: f'olive  split pipeline + hint ({args.hint_unc:.1f}°)',
+    4: 'sycamore  split pipeline, blind',
+    5: f'sycamore  split pipeline + hint ({args.hint_unc:.1f}°)',
 }
 for n, label in names.items():
     s = summary.get(n)
     if s is None:
-        print(f'  {n:<2}  {label:<44}  {"—":>8}  {"—":>8}  {"—":>8}  {"skipped":>8}')
+        print(f'  {n:<2}  {label:<50}  {"—":>8}  {"—":>8}  {"—":>8}  {"skipped":>8}')
         continue
     ext = f'{s.get("avg_ext",0):.1f}ms' if n > 1 else '—'
     slv = f'{s.get("avg_slv",0):.1f}ms' if n > 1 else '—'
     tot = f'{s.get("avg",s.get("avg_tot",0)):.1f}ms'
     rat = f'{s["solved"]}/{s["n"]}'
-    print(f'  {n:<2}  {label:<44}  {ext:>8}  {slv:>8}  {tot:>8}  {rat:>8}')
+    print(f'  {n:<2}  {label:<50}  {ext:>8}  {slv:>8}  {tot:>8}  {rat:>8}')
 hr()
 print(f'  Frame: {w}x{h}  FOV: {fov_est:.3f}°±{fov_err:.3f}°  '
       f'timeout: {timeout_ms} ms  sigma: {sigma}  reps: {args.reps}')
