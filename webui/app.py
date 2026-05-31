@@ -659,12 +659,12 @@ def frame_jpg():
     draw = ImageDraw.Draw(img)
     r    = 28
     draw.ellipse([cx - r, cy - r, cx + r, cy + r],
-                 outline=(220, 0, 0), width=2)
+                 outline=(255, 80, 80), width=2)
     gap = 6
-    draw.line([cx - r - gap, cy, cx - r - 1, cy],   fill=(220, 0, 0), width=1)
-    draw.line([cx + r + 1,   cy, cx + r + gap, cy],  fill=(220, 0, 0), width=1)
-    draw.line([cx, cy - r - gap, cx, cy - r - 1],   fill=(220, 0, 0), width=1)
-    draw.line([cx, cy + r + 1,   cx, cy + r + gap],  fill=(220, 0, 0), width=1)
+    draw.line([cx - r - gap, cy, cx - r - 1, cy],   fill=(255, 120, 120), width=1)
+    draw.line([cx + r + 1,   cy, cx + r + gap, cy],  fill=(255, 120, 120), width=1)
+    draw.line([cx, cy - r - gap, cx, cy - r - 1],   fill=(255, 120, 120), width=1)
+    draw.line([cx, cy + r + 1,   cx, cy + r + gap],  fill=(255, 120, 120), width=1)
 
     try:
         r_half = round(1800.0 / ecfg.arcsec_per_pixel)
@@ -672,9 +672,9 @@ def frame_jpg():
     except Exception:
         r_half, r_one = 35, 71
     draw.ellipse([cx - r_half, cy - r_half, cx + r_half, cy + r_half],
-                 outline=(220, 0, 0), width=1)
+                 outline=(255, 120, 120), width=1)
     draw.ellipse([cx - r_one,  cy - r_one,  cx + r_one,  cy + r_one],
-                 outline=(220, 0, 0), width=1)
+                 outline=(255, 120, 120), width=1)
 
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=70)
@@ -899,14 +899,14 @@ def debug_collect():
             img   = Image.fromarray(disp, mode="L").convert("RGB")
             draw  = ImageDraw.Draw(img)
             r = 28
-            draw.ellipse([cx-r, cy-r, cx+r, cy+r], outline=(220, 0, 0), width=2)
+            draw.ellipse([cx-r, cy-r, cx+r, cy+r], outline=(255, 80, 80), width=2)
             try:
                 r_half = round(1800.0 / arcsec_px)
                 r_one  = round(3600.0 / arcsec_px)
                 draw.ellipse([cx-r_half, cy-r_half, cx+r_half, cy+r_half],
-                             outline=(220, 0, 0), width=1)
+                             outline=(255, 120, 120), width=1)
                 draw.ellipse([cx-r_one,  cy-r_one,  cx+r_one,  cy+r_one],
-                             outline=(220, 0, 0), width=1)
+                             outline=(255, 120, 120), width=1)
             except Exception:
                 pass
             disp_buf = io.BytesIO()

@@ -71,7 +71,7 @@ h3 { color: #cc0000; font-weight: 500; }
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: #880000;
+  color: #cc3333;
 }
 .big-coords > div > span:last-child {
   font-size: 1.6rem;
@@ -86,11 +86,11 @@ dl.stats {
   row-gap: 0.25rem;
   margin: 0.5rem 0;
 }
-dl.stats dt { color: #880000; }
+dl.stats dt { color: #cc3333; }
 dl.stats dd { margin: 0; font-family: "SF Mono", Menlo, Consolas, monospace; }
 
-.muted { color: #880000; }
-.hint { font-size: 0.85rem; color: #880000; margin-top: 0.5rem; }
+.muted { color: #cc3333; }
+.hint { font-size: 0.85rem; color: #cc3333; margin-top: 0.5rem; }
 .instruction {
   font-size: 1.1rem;
   background: #180000;
@@ -120,7 +120,7 @@ input[type="number"], input[type="text"], input[type="password"], select {
   font-family: "SF Mono", Menlo, Consolas, monospace;
 }
 select option { background: #0d0000; }
-details summary { font-size: 0.85rem; color: #880000; }
+details summary { font-size: 0.85rem; color: #cc3333; }
 details summary:hover { color: #cc0000; }
 code {
   font-family: "SF Mono", Menlo, Consolas, monospace;
@@ -143,7 +143,7 @@ code {
 .btn:hover { background: #220000; }
 .btn-primary { background: #2d0000; border-color: #cc0000; color: #ff1111; }
 .btn-primary:hover { background: #3a0000; }
-.btn-warning { background: #220000; border-color: #880000; }
+.btn-warning { background: #220000; border-color: #cc3333; }
 .btn-warning:hover { background: #2d0000; }
 
 .alert {
@@ -151,8 +151,8 @@ code {
   border-radius: 4px;
   margin: 0.5rem 0;
 }
-.alert-error { background: #1a0000; border: 1px solid #880000; color: #ff1111; }
-.alert-warning { background: #180000; border: 1px solid #880000; color: #cc0000; }
+.alert-error { background: #1a0000; border: 1px solid #cc3333; color: #ff1111; }
+.alert-warning { background: #180000; border: 1px solid #cc3333; color: #cc0000; }
 .alert-inline { color: #cc0000; font-size: 0.85rem; margin-left: 0.5rem; }
 
 .actions { margin: 1rem 0; display: flex; gap: 0.5rem; flex-wrap: wrap; }
@@ -259,11 +259,11 @@ pre.logs, pre.config {
   font-family: "SF Mono", Menlo, Consolas, monospace;
   color: #ff1111;
 }
-.config-desc { color: #880000; font-size: 0.85rem; }
+.config-desc { color: #cc3333; font-size: 0.85rem; }
 .config-default {
   display: block;
   font-size: 0.8rem;
-  color: #880000;
+  color: #cc3333;
   font-family: "SF Mono", Menlo, Consolas, monospace;
 }
 .config-badge {
@@ -271,7 +271,7 @@ pre.logs, pre.config {
   font-size: 0.7rem;
   padding: 0.1em 0.35em;
   background: #2d0000;
-  border: 1px solid #880000;
+  border: 1px solid #cc3333;
   border-radius: 3px;
   color: #cc0000;
   vertical-align: middle;
