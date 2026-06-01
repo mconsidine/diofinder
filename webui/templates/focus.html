@@ -18,9 +18,9 @@
           <img id="patch-img" src="/focus/patch.jpg" alt="Star patch"
                width="240" height="240"
                style="image-rendering:pixelated; background:#080000; display:block;">
-          <!-- SVG overlay: 5-camera-pixel reference circle.
+          <!-- SVG overlay: 5-camera-pixel FWHM reference circle.
                Patch is 60×60 px rendered at 4×, so 1 cam px = 4 display px.
-               5 cam px = 20 display px diameter → radius = 10 px. -->
+               5 px FWHM = 5 px diameter = radius 2.5 cam px = 10 display px. -->
           <svg width="240" height="240"
                style="position:absolute;top:0;left:0;pointer-events:none;"
                aria-hidden="true">
@@ -29,7 +29,7 @@
             <circle cx="120" cy="120" r="1.5"
                     fill="rgba(255,120,120,0.9)"/>
             <text x="133" y="115" fill="rgba(255,120,120,0.85)"
-                  font-size="9" font-family="monospace">5 px</text>
+                  font-size="9" font-family="monospace">5 px FWHM</text>
           </svg>
         </div>
         <p class="hint" id="patch-coords"></p>
