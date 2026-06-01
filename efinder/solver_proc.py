@@ -402,6 +402,7 @@ def solver_main(slots, latest_solution, shared_cfg,
             t_extract = time.monotonic()
             sigma = shared_cfg.get("detect_sigma", cfg.detect_sigma)
             _backend = shared_cfg.get("extract_backend", cfg.extract_backend)
+            _gate    = shared_cfg.get("sycamore_gate_mode", cfg.sycamore_gate_mode)
             try:
                 if _backend == "sycamore" and _sycamore_ok:
                     _raw = _star_detect.detect_stars(
@@ -409,6 +410,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                         sigma=sigma,
                         bin=1,
                         centroid_full_res=True,
+                        gate_mode=_gate,
                     )
                     # sycamore returns (x=col, y=row, brightness, peak).
                     # tetra3 solve_from_centroids expects (row, col) = (y, x).

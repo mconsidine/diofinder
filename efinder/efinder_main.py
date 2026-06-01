@@ -121,7 +121,8 @@ def main():
         "boresight_x":      cfg.boresight_x,
         "imu_available":    False,
         "test_mode":        default_test_mode,
-        "extract_backend":  cfg.extract_backend,
+        "extract_backend":    cfg.extract_backend,
+        "sycamore_gate_mode": cfg.sycamore_gate_mode,
     })
     align_request_q  = mp.Queue(maxsize=4)
     align_response_q = mp.Queue(maxsize=4)

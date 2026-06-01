@@ -73,6 +73,11 @@ class Config:
     # "sycamore" — use sycamore-extract star_detect (requires star_detect wheel)
     extract_backend: str = "olive"
 
+    # Gate algorithm used when extract_backend = "sycamore".
+    # "matched_filter" (default) — Gaussian matched filter, v0.8.0+ default.
+    # "cedar"                    — cedar-detect heuristic (pre-v0.8.0 behaviour).
+    sycamore_gate_mode: str = "matched_filter"
+
     # -------- Boresight offset --------
     boresight_y: float = 380.0   # frame_height / 2
     boresight_x: float = 480.0   # frame_width / 2

@@ -524,6 +524,10 @@ _CONFIG_SECTIONS = [
     ("Star Detection", [
         ("detect_sigma", "Detection sigma",
          "Threshold in units of background sigma passed to olive-solve's fast extractor."),
+        ("extract_backend", "Extractor",
+         "\"olive\" (default) uses olive-solve's fast extractor. \"sycamore\" uses star_detect."),
+        ("sycamore_gate_mode", "Sycamore gate",
+         "Gate algorithm when extract_backend=sycamore. \"matched_filter\" (default, v0.8.0+) or \"cedar\"."),
     ]),
     ("Plate Solving (olive-solve)", [
         ("solver_db",        "Star database",      "Path to a tetra3 .npz database compatible with olive-solve."),
