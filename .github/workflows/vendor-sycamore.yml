@@ -5,7 +5,7 @@ name: Vendor Sycamore (star_detect)
 # fetch at image-build time.
 #
 # Configure:
-#   SYCAMORE_VERSION  — repo variable, e.g. "0.6.2"  (default: "0.6.2")
+#   SYCAMORE_VERSION  — repo variable, e.g. "0.7.0"  (default: "0.7.0")
 #   SYCAMORE_PYTHON   — repo variable, e.g. "cp313"   (default: "cp313")
 #
 # The wheel URL pattern is:
@@ -41,7 +41,7 @@ jobs:
       - name: Resolve version and python tag
         id: vars
         run: |
-          VER="${{ github.event.inputs.version || vars.SYCAMORE_VERSION || '0.6.2' }}"
+          VER="${{ github.event.inputs.version || vars.SYCAMORE_VERSION || '0.7.0' }}"
           PY="${{ github.event.inputs.python || vars.SYCAMORE_PYTHON || 'cp313' }}"
           echo "version=$VER" >> "$GITHUB_OUTPUT"
           echo "python=$PY"   >> "$GITHUB_OUTPUT"
