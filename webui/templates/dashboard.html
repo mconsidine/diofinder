@@ -80,7 +80,7 @@
       </dl>
     {% endif %}
     <form method="post" action="{{ url_for('boresight_center') }}">
-      <button type="submit" class="btn">Reset to center</button>
+      <button type="submit" class="btn btn-primary">Reset to center</button>
     </form>
     <p class="hint">Use SkySafari &ldquo;Align&rdquo; on a known star for normal alignment.</p>
   </div>
@@ -145,7 +145,7 @@
     <p class="hint" style="margin:0 0 8px 0;">
       Collects frames, config, and journal into a ZIP you can email for support.
     </p>
-    <button id="debug-btn" class="btn">Collect debug bundle</button>
+    <button id="debug-btn" class="btn btn-primary">Collect debug bundle</button>
     <span id="debug-status" style="margin-left:10px;font-size:0.85rem;color:#888;"></span>
   </div>
 
@@ -266,8 +266,14 @@ document.getElementById('debug-btn').addEventListener('click', async function() 
       return;
     }
     const blob = await r.blob();
-    const cd = r.headers.get('Content-Disposition') || '';
-    const fn = (cd.match(/filename="([^"]+)"/) || [])[1] || 'diofinder_debug.zip';
+    const _n = new Date();
+    const _ts = _n.getFullYear().toString()
+      + String(_n.getMonth()+1).padStart(2,'0')
+      + String(_n.getDate()).padStart(2,'0')
+      + String(_n.getHours()).padStart(2,'0')
+      + String(_n.getMinutes()).padStart(2,'0')
+      + String(_n.getSeconds()).padStart(2,'0');
+    const fn = `diofinder_debug_${_ts}.zip`;
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = fn;

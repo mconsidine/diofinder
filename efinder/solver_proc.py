@@ -412,8 +412,9 @@ def solver_main(slots, latest_solution, shared_cfg,
                     )
                     # sycamore returns (x=col, y=row, brightness, peak).
                     # tetra3 solve_from_centroids expects (row, col) = (y, x).
+                    # Must be float64: Rust PyO3 binding rejects float32.
                     centroids = (
-                        np.array([[s[1], s[0]] for s in _raw], dtype=np.float32)
+                        np.array([[s[1], s[0]] for s in _raw], dtype=np.float64)
                         if _raw else None
                     )
                 else:

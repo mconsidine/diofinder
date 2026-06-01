@@ -627,7 +627,7 @@ def frame_jpg():
     except Exception:
         width, height = 960, 760
 
-    bs_r = _safe_call("status")
+    bs_r = _safe_call("status", timeout=2.0)
     bs   = bs_r.result.get("boresight") if bs_r.ok and bs_r.result else None
     cx   = int(round(bs["x"])) if bs else width  // 2
     cy   = int(round(bs["y"])) if bs else height // 2
