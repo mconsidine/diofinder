@@ -50,6 +50,10 @@
       <dt>Boresight</dt>
       <dd>{{ "%.0f"|format(runtime_boresight.x) }}, {{ "%.0f"|format(runtime_boresight.y) }}&thinsp;px</dd>
     {% endif %}
+    {% if runtime_lat is not none %}
+      <dt>Location</dt>
+      <dd>{{ "%+.4f"|format(runtime_lat) }}&deg;&thinsp;N&ensp;{{ "%+.4f"|format(runtime_lon) }}&deg;&thinsp;E</dd>
+    {% endif %}
   </dl>
   {% else %}
   <p class="muted">Daemon not running &mdash; file values shown below.</p>

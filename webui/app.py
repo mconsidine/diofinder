@@ -609,6 +609,8 @@ def config_page():
         runtime_imu=(runtime.get("imu")              if runtime else None),
         runtime_fov=(runtime.get("fov_deg")          if runtime else None),
         runtime_boresight=(runtime.get("boresight")  if runtime else None),
+        runtime_lat=cfg.latitude_deg,
+        runtime_lon=cfg.longitude_deg,
     )
 
 

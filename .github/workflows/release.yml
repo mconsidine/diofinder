@@ -29,6 +29,14 @@ on:
         description: "Build SD card image"
         type: boolean
         default: true
+      db_max_fov:
+        description: "Database max FOV in degrees (default 14.0)"
+        required: false
+        default: ''
+      db_min_fov:
+        description: "Database min FOV in degrees (default auto)"
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -73,12 +81,20 @@ jobs:
             xz-utils kpartx parted \
             wget curl ca-certificates
 
+      - name: Resolve database FOV parameters
+        id: dbfov
+        run: |
+          echo "max_fov=${{ github.event.inputs.db_max_fov || vars.DB_MAX_FOV || '14.0' }}" >> $GITHUB_OUTPUT
+          echo "min_fov=${{ github.event.inputs.db_min_fov || vars.DB_MIN_FOV || '' }}"     >> $GITHUB_OUTPUT
+
       - name: Generate tetra3 star database
         # tetra3 is only on GitHub, not PyPI. Install the code via git,
         # then download hip_main.dat directly from the CDS Hipparcos
         # catalogue (I/239) - it is not bundled with the GitHub package.
         env:
           SOLVER_DB_PATH: ${{ github.workspace }}/build/output/solver_database
+          DB_MAX_FOV: ${{ steps.dbfov.outputs.max_fov }}
+          DB_MIN_FOV: ${{ steps.dbfov.outputs.min_fov }}
         run: |
           mkdir -p build/output
           python3 -m pip install --quiet "git+https://github.com/esa/tetra3.git"
