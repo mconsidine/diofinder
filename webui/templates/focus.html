@@ -64,6 +64,45 @@
     </div>
   </div>
 
+  {% if exposure %}
+  <div class="card card-wide">
+    <h2>Exposure</h2>
+    <div class="focus-layout">
+      <div style="flex:1 1 220px;">
+        <label>
+          Exposure (seconds)
+          <div class="stepper-row">
+            <button type="button" class="step-btn" onclick="stepExp(-1)">&#8722;</button>
+            <input type="range" id="exp_slider" min="-3" max="1" step="0.001"
+                   value="{{ (exposure.exposure_s | float) | log10 }}"
+                   oninput="expSliderChange(this.value)">
+            <input type="number" step="any" min="0.001" max="10"
+                   name="exposure_s" id="exp_num"
+                   value="{{ exposure.exposure_s }}">
+            <button type="button" class="step-btn" onclick="stepExp(1)">&#43;</button>
+          </div>
+        </label>
+      </div>
+      <div style="flex:1 1 220px;">
+        <label>
+          Gain (1–64)
+          <div class="stepper-row">
+            <button type="button" class="step-btn" onclick="stepGain(-1)">&#8722;</button>
+            <input type="range" id="gain_slider" min="1" max="64" step="1"
+                   value="{{ exposure.gain }}"
+                   oninput="gainSliderChange(this.value)">
+            <input type="number" step="1" min="1" max="64"
+                   name="gain" id="gain_num"
+                   value="{{ exposure.gain }}">
+            <button type="button" class="step-btn" onclick="stepGain(1)">&#43;</button>
+          </div>
+        </label>
+      </div>
+    </div>
+    <p id="exp-status" class="hint" style="min-height:1.2em;">&nbsp;</p>
+  </div>
+  {% endif %}
+
 </section>
 
 <style>
@@ -144,6 +183,80 @@ async function refreshFocus() {
 
 setInterval(refreshFocus, 500);
 refreshFocus();
+
+// --- Exposure controls -------------------------------------------------------
+function debounce(fn, ms) {
+  let t;
+  return function(...args) { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+
+function setExpStatus(msg, ok) {
+  const el = document.getElementById('exp-status');
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = ok ? '#44cc44' : '#ff5500';
+  if (ok) setTimeout(() => { if (el.textContent === msg) el.textContent = ' '; }, 2000);
+}
+
+async function applyExposure(params) {
+  setExpStatus('Applying…', true);
+  try {
+    const r = await fetch('/api/camera/set', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(params),
+    });
+    const data = await r.json();
+    if (data.ok) setExpStatus('Applied', true);
+    else setExpStatus('Error: ' + (data.errors || []).join(', '), false);
+  } catch(e) {
+    setExpStatus('Error: ' + e.message, false);
+  }
+}
+
+const applyExp  = debounce(s => applyExposure({exposure_s: s}), 400);
+const applyGain = debounce(g => applyExposure({gain: g}),        400);
+
+function expSliderChange(v) {
+  const s = Math.pow(10, parseFloat(v));
+  document.getElementById('exp_num').value = s.toFixed(4).replace(/\.?0+$/, '');
+  applyExp(s);
+}
+function expNumChange(v) {
+  const s = parseFloat(v);
+  if (s > 0) { document.getElementById('exp_slider').value = Math.log10(s); applyExp(s); }
+}
+function gainSliderChange(v) {
+  const g = Math.round(v);
+  document.getElementById('gain_num').value = g;
+  applyGain(g);
+}
+function gainNumChange(v) {
+  const g = Math.round(parseFloat(v));
+  document.getElementById('gain_slider').value = g;
+  applyGain(g);
+}
+function stepExp(dir) {
+  const el = document.getElementById('exp_num');
+  if (!el) return;
+  const s = Math.max(0.001, Math.min(10, parseFloat(el.value || 0.2) + dir * 0.05));
+  el.value = parseFloat(s.toFixed(3));
+  document.getElementById('exp_slider').value = Math.log10(s);
+  applyExp(s);
+}
+function stepGain(dir) {
+  const el = document.getElementById('gain_num');
+  if (!el) return;
+  const g = Math.max(1, Math.min(64, Math.round(parseFloat(el.value || 1)) + dir));
+  el.value = g;
+  document.getElementById('gain_slider').value = g;
+  applyGain(g);
+}
+
+const expNum  = document.getElementById('exp_num');
+const gainNum = document.getElementById('gain_num');
+if (expNum)  expNum.addEventListener('input',  e => expNumChange(e.target.value));
+if (gainNum) gainNum.addEventListener('input', e => gainNumChange(e.target.value));
 </script>
 
 {% endblock %}

@@ -652,9 +652,7 @@ def frame_jpg():
 
     sky     = float(np.percentile(frame, 50))
     signal  = np.clip(frame.astype(np.float32) - sky, 0.0, None)
-    white   = float(np.percentile(signal, 99.9))
-    if white < 1.0:
-        white = float(signal.max()) or 1.0
+    white   = max(float(np.percentile(signal, 99.9)), 20.0)
     stretched = np.clip(signal / white * 255.0, 0, 255).astype(np.uint8)
 
     img  = Image.fromarray(stretched, mode="L").convert("RGB")
@@ -753,7 +751,12 @@ def _read_focus_data():
 def focus_page():
     with _focus_lock:
         committed = _focus_state["committed_score"]
-    return render_template("focus.html", committed_score=committed)
+    exposure = _safe_call("exposure_get")
+    return render_template(
+        "focus.html",
+        committed_score=committed,
+        exposure=(exposure.result if exposure.ok else None),
+    )
 
 
 @app.route("/api/focus")
