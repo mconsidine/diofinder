@@ -33,6 +33,14 @@ class Config:
     frame_width: int = 960
     frame_height: int = 760
 
+    # Full sensor readout dimensions for the IMX477.  picamera2's
+    # create_still_configuration defaults to the smallest sensor sub-mode that
+    # can produce the requested output size (1332×990 for 960×760), which crops
+    # ~35% of the sensor and reduces FOV.  Specifying the full array forces the
+    # ISP to downscale from the complete sensor, restoring the expected FOV.
+    sensor_full_width: int = 4056
+    sensor_full_height: int = 3040
+
     exposure_s: float = 0.2
     gain: float = 20.0
 
@@ -43,7 +51,7 @@ class Config:
 
     # Optical properties
     fov_deg: float = 13.5
-    arcsec_per_pixel: float = 50.8
+    arcsec_per_pixel: float = 51.15  # 6.2 µm eff. pixel × 206265 / 25 mm FL
 
     latitude_deg: float = 0.0
     longitude_deg: float = 0.0
