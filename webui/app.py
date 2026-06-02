@@ -923,16 +923,30 @@ def debug_collect():
             zf.writestr(f"frame_{idx:02d}_display.jpg", disp_buf.getvalue())
 
         frames_saved = 0
+        import time as _time
+        first_frame = None
         for attempt in range(2):
             if attempt > 0:
-                import time; time.sleep(0.6)
+                # Wait long enough for the camera to deliver a genuinely new
+                # frame (exposure may be up to ~1 s, plus camera overhead).
+                _time.sleep(max(1.2, ecfg.exposure_s + 0.4))
             f = _capture_frame()
             if f is not None:
-                try:
-                    _save_frame_pair(zf, attempt + 1, f)
-                    frames_saved += 1
-                except Exception:
-                    pass
+                # Skip second frame if it is identical to the first (can
+                # happen at slow frame rates when two SHM reads hit the
+                # same slot).
+                if attempt > 0 and first_frame is not None:
+                    import hashlib
+                    if hashlib.md5(f.tobytes()).digest() == hashlib.md5(first_frame.tobytes()).digest():
+                        f = None
+                if f is not None:
+                    try:
+                        _save_frame_pair(zf, attempt + 1, f)
+                        frames_saved += 1
+                        if first_frame is None:
+                            first_frame = f
+                    except Exception:
+                        pass
 
         # ── System summary ───────────────────────────────────────────────────
         lines = [
