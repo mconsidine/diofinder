@@ -3,7 +3,7 @@ Boresight alignment workflow.
 
 Bridges the comms process (which receives LX200 sync commands from
 SkySafari) with the solver process (which can compute pixel coordinates
-for a given RA/Dec via cedar-solve's target_sky_coord parameter).
+for a given RA/Dec via olive-solve's solve_from_centroids).
 
 Two primary alignment paths:
 

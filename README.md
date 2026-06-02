@@ -1,17 +1,15 @@
-# eFinder — combo edition (Pi Zero 2W)
+# eFinder — olive branch (Pi Zero 2W)
 
 Plate-solving electronic finder for amateur telescopes. Runs on a Raspberry Pi
 Zero 2W with an Arducam 12 MP IMX477. Reports live pointing to SkySafari (or
 any LX200-speaking application) over Wi-Fi or USB tether, with sub-arcsecond
 boresight registration and a built-in three-point polar alignment assistant.
 
-**Solver backends (runtime-switchable):**
-- **tetra3rs** (default) — Rust in-process solver, ~10–60 ms per solve when
-  seeded with the previous position, ~300–800 ms blind. No external process.
-- **cedar** — tetra3 Python solver, ~200–1200 ms. Slower but retains legacy
-  compatibility.
+**Solver: olive-solve** (Rust tetra3-py, fully in-process — no external daemon or gRPC server)
 
-Both backends use **cedar-detect** (Rust gRPC) for star centroid extraction.
+**Extraction backends (runtime-switchable):**
+- **olive** (default) — `get_centroids_from_image_fast`, hard sigma threshold, fastest
+- **sycamore** (optional) — `star_detect.detect_stars` with matched-filter gate, installed from `vendor/wheels/`
 
 ---
 
@@ -52,13 +50,16 @@ SkySafari in real time via the LX200 protocol.
 **Core capabilities:**
 
 - **Continuous plate-solving** at ~1–2 s per frame (960×760). Each solve
-  reports RA, Dec, field-of-view, and image orientation (position angle / roll).
-- **Two solver backends**, switchable live from the dashboard: tetra3rs (Rust,
-  default, fast seeded solves) and cedar (Python, legacy-compatible).
-- **Boresight calibration** via SkySafari's Sync command: center a star, tap
+  reports RA, Dec, field-of-view, and image orientation (roll).
+- **In-process solver**: olive-solve's Rust tetra3-py wheel runs entirely inside
+  `solver_proc` — no external service, no gRPC, no open ports.
+- **Two extraction backends**, switchable live from the dashboard:
+  olive (default, fast hard-threshold) and sycamore (matched-filter gate,
+  better sensitivity in moderate conditions).
+- **Boresight calibration** via SkySafari's Sync command: centre a star, tap
   Sync, and the eFinder stores the pixel offset. Persisted across reboots.
 - **FOV self-calibration**: after ~30 successful solves the eFinder commits
-  the median field-of-view and uses a tighter (0.1°) window — improving speed
+  the median field-of-view and uses a tighter search window, improving speed
   and reliability.
 - **Polar alignment assistant**: rotate the mount in RA only at three positions.
   The eFinder fits a great circle through the three plate-solve results, derives
@@ -66,7 +67,8 @@ SkySafari in real time via the LX200 protocol.
 - **IMU dead-reckoning** (optional, BNO055): smooths SkySafari position updates
   between solves to < 1 ms latency. Self-calibrating. Hot-pluggable.
 - **Live web UI** on port 80: dashboard, camera controls, solver parameters,
-  polar alignment, Wi-Fi switching, configuration viewer, live log tail.
+  extraction backend toggle, polar alignment, Wi-Fi switching, configuration
+  viewer, live log tail, debug ZIP download.
 - **Dark frame fast-path**: frames below 20 ADU peak are detected in ~0.1 ms
   and skipped entirely.
 - **Dual network**: USB Ethernet gadget (`10.55.0.1`) and self-hosted Wi-Fi AP
@@ -106,14 +108,14 @@ SkySafari in real time via the LX200 protocol.
 ### Install on an existing Pi OS Trixie Lite card
 
 ```bash
-git clone https://github.com/mconsidine/efinder-combo
-cd efinder-combo
+git clone https://github.com/mconsidine/diofinder
+cd diofinder
 sudo bash scripts/install.sh
 ```
 
 `install.sh` is idempotent — safe to re-run after updates. It installs system
-packages, Python dependencies, gRPC stubs, the cedar-detect binary, tetra3rs,
-and all systemd unit files. Reboot after the first run.
+packages, Python dependencies, the olive-solve tetra3-py wheel, and all
+systemd unit files. Reboot after the first run.
 
 ---
 
@@ -175,16 +177,15 @@ The eFinder records the pixel offset and writes it to config. Survives restarts.
 |---|---|---|
 | `:GR#` | Get RA | `HH:MM:SS#` |
 | `:GD#` | Get Dec | `±DD°MM:SS#` |
-| `:CM#` | Sync / boresight calibration | `M31 EX GAL MOC 99#` |
+| `:CM#` | Sync / boresight calibration | `M31 EX GAL MAG 3.5 SZ178.0'#` |
 | `:St dd*mm#` | Set observer latitude | `1` |
 | `:Sg ddd*mm#` | Set observer longitude | `1` |
 | `:Gt#` | Get latitude | `sDD*MM#` |
 | `:Gg#` | Get longitude | `sDDD*MM#` |
 | `:SL HH:MM:SS#` | Set local time | `1` |
-| `:SC MM/DD/YY#` | Set date | `1Updating Planetary Data#` |
+| `:SC MM/DD/YY#` | Set date (syncs system clock) | `1Updating Planetary Data#` |
 | `:MS#` | Move to target (ignored) | `0` |
 | `:Q#` | Stop (ignored) | _(empty)_ |
-| `:P#` | Toggle precision (no-op) | `HIGH PRECISION` |
 | `:GVP#` | Product name | `eFinder#` |
 | `:GVN#` | Firmware version | version string |
 
@@ -200,7 +201,7 @@ Auto-refreshes every 1.5 s. Shows:
 
 - **Pointing**: RA/Dec, star count, match count, solve time, peak pixel, FOV,
   roll. Status badge: SOLVED / TOO_FEW / NO_MATCH / TIMEOUT / DARK.
-- **Solver backend toggle**: switch between **tetra3rs** and **cedar** live,
+- **Extraction backend toggle**: switch between **olive** and **sycamore** live,
   without restarting the daemon.
 - **Test / Live mode toggle**: switch to a static test image (if one is present
   at `/var/lib/efinder/test.png`) or back to the live camera.
@@ -215,13 +216,10 @@ Auto-refreshes every 1.5 s. Shows:
 Live camera view with controls that take effect immediately (no page reload):
 
 - **Live frame**: JPEG from the current SHM buffer with a boresight crosshair.
-  Refreshes every 2 s.  The display uses an **arcsinh sky-subtracted stretch**:
+  Refreshes every 2 s. The display uses an **arcsinh sky-subtracted stretch**:
   the sky median is subtracted, the residual is passed through `arcsinh(x/β)`
   (linear for faint signals, logarithmic for bright ones), and scaled to the
-  99.9th percentile of the transformed image.  This makes stars visible even at
-  the high gains and long exposures needed for faint fields, without blowing out
-  the background.  The stretch is cosmetic only — the solver reads the raw SHM
-  bytes and is unaffected.
+  99.9th percentile. This is cosmetic only — the solver reads raw bytes.
 - **Exposure (seconds)**: log-scale slider + numeric box + `−`/`+` buttons
   (±0.05 s per click). Valid range: 0.001–10 s.
 - **Gain (1–64)**: slider + numeric box + `−`/`+` buttons (±1 per click).
@@ -232,9 +230,6 @@ Live camera view with controls that take effect immediately (no page reload):
   [Can't solve even though stars are visible](#cant-solve-even-though-stars-are-visible).
 - **Solve timeout (ms)**: maximum time per frame. Slider + numeric box.
   Default 1500 ms.
-- **Binned star candidates**: checkbox. When checked (default), cedar-detect
-  searches a 2×2 binned image for candidate regions before centroiding at full
-  resolution. Roughly 20–40% faster extraction with negligible loss at this FOV.
 
 All controls auto-apply on change. Use **Persist** checkbox + **Apply & save**
 button to write values to `/etc/efinder/efinder.conf`.
@@ -242,6 +237,12 @@ button to write values to `/etc/efinder/efinder.conf`.
 ### Polar alignment (`/polar`)
 
 Step-by-step three-point polar alignment workflow. See [Polar alignment](#polar-alignment).
+
+### Focus (`/focus`)
+
+Live focus assistant: real-time Laplacian variance score and a 4× zoomed crop
+of the brightest star. Use the **Commit** button to record the peak score as a
+dashboard reference.
 
 ### Wi-Fi (`/wifi`)
 
@@ -251,25 +252,25 @@ Browser-based Wi-Fi management. See [Wi-Fi modes](#wi-fi-modes).
 
 Structured read-only view of `/etc/efinder/efinder.conf`, grouped into sections
 (Camera, Optics/FOV, Star Detection, Plate Solving, Boresight, Observer Location,
-Communications, CPU Affinity, Diagnostics, Shutdown).  Each entry shows the
+Communications, CPU Affinity, Diagnostics, Shutdown). Each entry shows the
 current value, a one-line description, and an **edited** badge with the default
-value wherever the file differs from the compiled-in default.  A Runtime Status
+value wherever the file differs from the compiled-in default. A Runtime Status
 block at the top shows live solver backend, camera mode, IMU state, and FOV from
 the daemon socket.
 
 ### Logs (`/logs`)
 
-Live `journalctl` tail for `efinder.service` and `cedar-detect.service`.
+Live `journalctl` tail for `efinder.service`.
 
 ### Update (`/update`)
 
-One-click `efinder-update`. Fetches the latest tagged release, updates
-dependencies, regenerates gRPC stubs, downloads the matching cedar-detect
-binary, and restarts both services. Does not touch `efinder.conf`.
+One-click `efinder-update`. Refreshes Python dependencies, installs the latest
+olive-solve wheel from `vendor/wheels/`, and restarts the service. Does not
+touch `efinder.conf`.
 
 ### Health endpoint (`/healthz`)
 
-Returns HTTP 200 `{"status": "ok"}` if the daemon is reachable.
+Returns HTTP 200 `ok` if the daemon is reachable, else HTTP 503.
 
 ---
 
@@ -312,7 +313,7 @@ efinder-ctl polar cancel              # abort if needed
 
 ## Focus assessment
 
-The dashboard shows a **focus score** (Laplacian variance) from the brightest
+The focus page shows a **focus score** (Laplacian variance) from the brightest
 detected star. Higher = sharper. Typical values:
 
 | Condition | Score |
@@ -321,7 +322,8 @@ detected star. Higher = sharper. Typical values:
 | Reasonable | 500–2000 |
 | Well focused, good seeing | > 2000 |
 
-Adjust focus until the score peaks.
+Adjust focus until the score peaks, then click **Commit** to save as the
+reference on the dashboard.
 
 ---
 
@@ -329,19 +331,19 @@ Adjust focus until the score peaks.
 
 A BNO055 on the I²C bus provides two complementary benefits:
 
-1. **Attitude hint propagation** — after every successful tetra3rs solve the
-   solver records the IMU quaternion alongside the sky quaternion.  On the
-   next frame it computes the IMU rotation delta and applies it to the sky
-   quaternion, giving tetra3rs an up-to-date attitude hint even when the
-   scope has moved between frames.  The search window scales with the
-   measured motion (1.5× the rotation angle, minimum 2°) so slews of any
-   size still produce a useful hint.  Logs show `(imu)` / `(seeded)` /
-   `(blind)` per solve so the hint source is visible in the journal.
+1. **Attitude hint propagation** — after every successful solve the solver
+   records the IMU quaternion alongside the sky quaternion. On the next frame
+   it computes the IMU rotation delta and applies it to the sky quaternion,
+   giving olive-solve an up-to-date attitude hint even when the scope has moved
+   between frames. The search window scales with the measured motion (1.5× the
+   rotation angle, minimum 2°) so slews of any size still produce a useful hint.
+   Logs show `(imu)` / `(seeded)` / `(blind)` per solve so the hint source is
+   visible in the journal.
 
-2. **SkySafari smoothing** — self-calibrates passively from consecutive
-   solve pairs (IMU rotation vector vs. sky displacement).  Active once 3
-   pairs are collected and R² ≥ 0.85; smooths SkySafari `:GR#`/`:GD#`
-   responses to < 1 ms latency between solves.
+2. **SkySafari smoothing** — self-calibrates passively from consecutive solve
+   pairs (IMU rotation vector vs. sky displacement). Active once 3 pairs are
+   collected and R² ≥ 0.85; smooths SkySafari `:GR#`/`:GD#` responses to
+   < 1 ms latency between solves.
 
 Hot-pluggable: if the sensor disappears the daemon degrades gracefully.
 The I²C bus runs at 50 kHz to avoid the BCM2835 clock-stretching hardware
@@ -417,41 +419,51 @@ sudo EFINDER_EXPOSURE_S=0.5 systemctl restart efinder
 |---|---|---|
 | `frame_width` | `960` | Capture width in pixels |
 | `frame_height` | `760` | Capture height in pixels |
+| `sensor_full_width` | `4056` | Full IMX477 sensor width — forces libcamera full-array readout |
+| `sensor_full_height` | `3040` | Full IMX477 sensor height — forces libcamera full-array readout |
 | `exposure_s` | `0.2` | Exposure time in seconds (0.001–10.0) |
 | `gain` | `20.0` | Analogue gain (1.0–64.0) |
-| `fov_deg` | `13.5` | Initial FOV estimate in degrees. Self-calibrates after 30 solves. |
-| `detect_sigma` | `9.0` | Cedar-detect extraction threshold (σ above background). Lower finds fainter stars; raise to reject noise. |
-| `detect_hot_pixels` | `true` | Cedar-detect hot-pixel removal. |
-| `detect_use_binned` | `true` | Use 2×2 binned image for candidate search (faster; negligible quality loss at this FOV). |
+| `auto_exposure_enabled` | `false` | Adaptively adjust exposure to reach `auto_exposure_target_stars` |
+| `auto_exposure_target_stars` | `20` | Desired star count when auto-exposure is active |
+| `auto_exposure_min_s` | `0.05` | Minimum exposure when auto-exposure is active |
+| `auto_exposure_max_s` | `1.0` | Maximum exposure when auto-exposure is active |
+| `fov_deg` | `13.5` | Initial FOV estimate in degrees. Self-calibrates after ~30 solves. |
+| `arcsec_per_pixel` | `51.15` | Plate scale in arcsec/px (display only; solver uses fov_deg). |
+| `distortion` | `0.0` | Barrel/pincushion coefficient. 0 = fit per-solve. |
+| `detect_sigma` | `9.0` | Olive-solve extraction threshold (σ above background). Lower finds fainter stars; raise to reject noise. |
+| `extract_backend` | `olive` | Extraction backend: `olive` (default) or `sycamore`. |
+| `sycamore_gate_mode` | `matched_filter` | Gate algorithm when `extract_backend=sycamore`: `matched_filter` (default) or `cedar` (legacy heuristic). |
+| `solver_db` | `default_database` | tetra3 `.npz` database name (relative to `/var/lib/efinder/` or absolute path). |
+| `min_centroids` | `8` | Minimum detected stars required to attempt a solve. |
+| `max_solve_stars` | `50` | Cap on centroids passed to the solver (performance guard). |
 | `solve_timeout_ms` | `1500` | Per-frame solver budget in ms. |
-| `tetra3rs_db` | `/var/lib/efinder/efinder-tetra-database.bin` | tetra3rs Rust database (generated from Gaia by install.sh). |
-| `tetra3_db` | `default_database` | tetra3 Python database name (used by cedar backend). |
-| `cedar_detect_socket` | `localhost:50051` | gRPC address of cedar-detect-server. |
-| `lx200_port` | `4060` | TCP port for the LX200 server. |
+| `match_threshold` | `1e-5` | Max false-positive probability for accepting a match. |
+| `match_radius` | `0.01` | Centroid-to-catalog match radius as fraction of FOV. |
+| `fov_max_error_deg` | `1.0` | FOV tolerance window before calibration. |
+| `fov_calibrated_max_error_deg` | `0.1` | FOV tolerance window after calibration. |
+| `fov_calibrated_stddev` | `0.05` | Stddev threshold (°) for declaring FOV stable. |
 | `boresight_y` | `380` | Boresight Y in pixels. Set by `:CM#` sync. |
 | `boresight_x` | `480` | Boresight X in pixels. Set by `:CM#` sync. |
+| `lx200_port` | `4060` | TCP port for the LX200 server. |
+| `lx200_client_timeout_s` | `30.0` | Disconnect idle LX200 clients. |
 | `latitude_deg` | `0.0` | Observer latitude. Auto-populated from SkySafari `:St` on connect. |
 | `longitude_deg` | `0.0` | Observer longitude. Auto-populated from SkySafari `:Sg` on connect. |
-| `fov_max_error_deg` | `1.0` | FOV tolerance window before calibration. Tightened automatically after calibration. |
-| `fov_calibrated_max_error_deg` | `0.1` | FOV tolerance window after calibration. |
-| `match_radius` | `0.01` | Centroid-to-catalog match radius as fraction of FOV. |
-| `match_threshold` | `1e-5` | Max false-positive probability for accepting a match. |
-| `min_centroids` | `8` | Minimum centroids required to attempt a solve. |
-| `cpu_camera` | `3` | CPU affinity for camera_proc (ISP DMA). |
-| `cpu_solver` | `2` | CPU affinity for solver_proc + cedar-detect (pipeline pair). |
-| `cpu_comms` | `1` | CPU affinity for comms_proc, web UI, and IMU thread. |
+| `cpu_camera` | `3` | CPU affinity for camera_proc. Also used as a secondary core for olive-solve's rayon thread pool. |
+| `cpu_solver` | `2` | Primary CPU affinity for solver_proc. |
+| `cpu_comms` | `1` | CPU affinity for comms_proc and web UI. |
 | `save_failed_frames` | `false` | Save PNG for every failed solve to `failed_frames_dir`. |
 | `save_solved_frames` | `false` | Save PNG for every successful solve to `failed_frames_dir`. |
 | `failed_frames_dir` | `/var/lib/efinder/captures` | Directory for saved frame PNGs. |
+| `log_solve_stats_every_n` | `50` | Print solve performance stats every N solves. |
 
 ### CPU affinity layout
 
 | CPU | Role |
 |---|---|
 | 0 | Linux kernel, IRQs, sshd, NetworkManager — never pinned |
-| 1 | `efinder_main` launcher + IMU thread (20 Hz I2C, I/O bound) · `comms_proc` (LX200 + maint socket) · `efinder-webui` (Flask) |
-| 2 | `solver_proc` + `cedar-detect-server` — pipeline pair; cedar-detect extracts centroids, solver consumes immediately |
-| 3 | `camera_proc` alone — ISP DMA + memcpy to SHM |
+| 1 | `comms_proc` (LX200 + maint socket) · `efinder-webui` (Flask) · IMU thread (20 Hz I²C) |
+| 2 | `solver_proc` primary — olive-solve tetra3-py in-process |
+| 3 | `camera_proc` (ISP DMA + SHM copy) · olive-solve rayon secondary thread pool |
 
 ---
 
@@ -480,9 +492,14 @@ efinder-ctl exposure set 0.3
 efinder-ctl exposure set 0.3 --persist
 efinder-ctl gain set 15.0 --persist
 
-# Solver backend (live switch, no restart)
-efinder-ctl raw '{"cmd":"set_backend","args":{"backend":"tetra"}}'
-efinder-ctl raw '{"cmd":"set_backend","args":{"backend":"cedar"}}'
+# Solver parameters
+efinder-ctl solver-params get
+efinder-ctl solver-params set --sigma 7.0
+efinder-ctl solver-params set --timeout 2000 --persist
+
+# Extraction backend (live switch, no restart)
+efinder-ctl raw '{"cmd":"set_extract_backend","args":{"backend":"sycamore"}}'
+efinder-ctl raw '{"cmd":"set_extract_backend","args":{"backend":"olive"}}'
 
 # Test / live mode
 efinder-ctl raw '{"cmd":"set_test_mode","args":{"enabled":false}}'
@@ -508,7 +525,7 @@ files from the GitHub repository.
 ### Update all application files
 
 ```bash
-BASE="https://raw.githubusercontent.com/mconsidine/efinder-combo/main"
+BASE="https://raw.githubusercontent.com/mconsidine/diofinder/main"
 
 curl -fsSL "$BASE/efinder/efinder_main.py"     -o /opt/efinder/efinder/efinder_main.py
 curl -fsSL "$BASE/efinder/config.py"           -o /opt/efinder/efinder/config.py
@@ -522,33 +539,12 @@ curl -fsSL "$BASE/webui/static/style.css"      -o /opt/efinder/webui/static/styl
 sudo systemctl restart efinder efinder-webui
 ```
 
-### Verify a file is current
-
-Grep for a string that only exists in the new version. For example, after
-updating `camera.html`:
-
-```bash
-grep -c "binned_chk" /opt/efinder/webui/templates/camera.html   # should print 1
-grep -c "stepper-row" /opt/efinder/webui/static/style.css        # should print 1+
-grep -c "detect_use_binned" /opt/efinder/efinder/comms_proc.py   # should print 1+
-```
-
-### Update a systemd service file
-
-```bash
-BASE="https://raw.githubusercontent.com/mconsidine/efinder-combo/main"
-curl -fsSL "$BASE/systemd/cedar-detect.service" \
-     -o /etc/systemd/system/cedar-detect.service
-sudo systemctl daemon-reload
-sudo systemctl restart cedar-detect
-```
-
 ### Pin to a specific branch or commit
 
 Replace `main` with the branch name or full commit SHA:
 
 ```bash
-BASE="https://raw.githubusercontent.com/mconsidine/efinder-combo/<branch-or-sha>"
+BASE="https://raw.githubusercontent.com/mconsidine/diofinder/<branch-or-sha>"
 ```
 
 ---
@@ -563,61 +559,57 @@ BASE="https://raw.githubusercontent.com/mconsidine/efinder-combo/<branch-or-sha>
 │  efinder_main (launcher, exits after spawning workers)                         │
 │    imu_thread (daemon thread, reads BNO055 at 20 Hz, writes shared_cfg)        │
 │                                                                                │
-│   ┌──────────────┐    ┌──────────────┐    ┌──────────────────────────────┐    │
-│   │ comms_proc   │    │ camera_proc  │    │ solver_proc                  │    │
-│   │  CPU 1       │    │  CPU 3       │    │  CPU 2                       │    │
-│   │              │    │              │    │                              │    │
-│   │ LX200 :4060  │    │ picamera2    │    │ cedar-detect (gRPC) →        │    │
-│   │ maint.sock   │◄──►│ → SHM bufs  │◄───│   extract centroids          │    │
-│   │ align queues │    │ FrameSlots   │    │ tetra3rs (Rust, in-process)→ │    │
-│   └──────┬───────┘    └──────────────┘    │   solve_from_centroids()     │    │
-│          │                                │ OR tetra3 Python →           │    │
-│          │                                │   solve_from_centroids()     │    │
-│          │                                └──────────────────────────────┘    │
+│   ┌──────────────┐    ┌──────────────┐    ┌──────────────────────────────────┐ │
+│   │ comms_proc   │    │ camera_proc  │    │ solver_proc                      │ │
+│   │  CPU 1       │    │  CPU 3       │    │  CPU 2 + CPU 3 (rayon)           │ │
+│   │              │    │              │    │                                  │ │
+│   │ LX200 :4060  │    │ picamera2    │    │ olive-solve (in-process)         │ │
+│   │ maint.sock   │◄──►│ → SHM bufs  │◄───│   get_centroids_from_image_fast  │ │
+│   │ align queues │    │ FrameSlots   │    │   solve_from_centroids           │ │
+│   └──────┬───────┘    └──────────────┘    │ OR sycamore star_detect          │ │
+│          │                                └──────────────────────────────────┘ │
 └──────────┼────────────────────────────────────────────────────────────────────┘
            │ maint.sock
-    ┌──────▼───────┐          ┌─────────────────────────────┐
-    │ efinder-webui│          │ cedar-detect.service (Rust) │
-    │ Flask :80    │          │  CPU 2  gRPC :50051          │
-    │ CPU 1 (float)│          │  reads SHM directly          │
-    └──────────────┘          └─────────────────────────────┘
+    ┌──────▼───────┐
+    │ efinder-webui│
+    │ Flask :80    │
+    │ CPU 1 (float)│
+    └──────────────┘
 ```
 
-### Frame pipeline (tetra3rs backend, default)
+### Frame pipeline
 
 ```
 picamera2 ISP hardware
   │  capture_array("main")  [exposure_s + ~10 ms]
+  │  sensor={"output_size":(4056,3040)} → full array, 4× downscale to 960×760
   ▼
 numpy Y-plane slice 960×760 uint8
   │  np.copyto → FrameSlot buf[idx]  [~0.5 ms, lock-free triple buffer]
   ▼
 FrameSlots.publish(idx)
   │  solver_proc: acquire_read_slot()       ← raw bytes, no display stretch
-  │  webui /camera frame_jpg():             ← display path (arcsinh stretch, cosmetic only)
-  │    sky = median(frame)
-  │    xs  = arcsinh((frame − sky) / max(1, sky×0.1))
-  │    scale to 99.9th pct → JPEG
+  │  webui /camera frame_jpg():             ← display path (arcsinh stretch, cosmetic)
   ▼
 peak pixel check: buf.max() < 20? → DARK fast-path (~0.1 ms), skip
   │  otherwise:
   ▼
-cedar-detect gRPC ExtractCentroids(shmem_name=...) [30–80 ms]
-  │  cedar-detect reads SHM directly — no 730 KB payload over gRPC
+get_centroids_from_image_fast(frame_u8, sigma)  [~5–30 ms, olive rayon on CPUs 2+3]
+  │  OR star_detect.detect_stars(frame_u8, sigma)  [sycamore, ~10–60 ms]
   ▼
 star_candidates[]  (centroid x/y in image coordinates)
-  │  convert to center-relative coords for tetra3rs
+  │  convert to centre-relative float64 coords
   ▼
 _imu_propagate_hint(last_sky_q, last_solve_imu_q, shared_cfg)
   │  q_delta = q_imu_now ⊗ conj(q_imu_at_last_solve)
   │  q_hint  = q_delta ⊗ q_last_sky
-  │  uncertainty = max(2°, 1.5 × rotation_angle)   ← 0.1°/tight when IMU absent
+  │  uncertainty = max(2°, 1.5 × rotation_angle)
   ▼
-tetra3rs SolverDatabase.solve_from_centroids(
-    centroids, fov_estimate,
-    attitude_hint=q_hint,            ← blind on first frame; imu/seeded after
+solve_from_centroids(
+    centroids, image_size, fov_estimate,
+    attitude_hint=q_hint,
     hint_uncertainty_deg=uncertainty,
-    solve_timeout_ms=1500)  [~10–60 ms seeded/imu, ~300–800 ms blind]
+    solve_timeout_ms=1500)  [~10 ms seeded, ~300–800 ms blind]
   ▼
 SolveResult → RA, Dec, roll, fov_rad
   │  latest_solution.update(...)  [Manager dict]
@@ -625,25 +617,21 @@ SolveResult → RA, Dec, roll, fov_rad
 comms_proc: serves RA/Dec on next :GR# / :GD# poll
 ```
 
-### Solver backends
+### Extraction backends
 
-| | cedar backend | tetra3rs backend (default) |
+| | olive (default) | sycamore (optional) |
 |---|---|---|
-| Extraction | cedar-detect gRPC | cedar-detect gRPC |
-| Solve | tetra3 Python | tetra3rs Rust (in-process) |
-| First-frame (blind) | 200–1200 ms | 300–800 ms |
-| Seeded solve (stationary) | N/A (always blind) | 10–60 ms |
-| Seeded solve (after slew) | N/A (always blind) | 10–100 ms (IMU hint tracks the slew) |
-| Hint source | — | IMU-propagated quaternion (falls back to last-solve quaternion without IMU) |
-| Hint window | — | `max(2°, 1.5 × IMU_rotation_angle)`; 0.1° without IMU |
-| Log label | — | `(imu)` / `(seeded)` / `(blind)` per solve |
-| Runtime switch | dashboard toggle or `set_backend` maint cmd | same |
+| Module | `olive_solve.get_centroids_from_image_fast` | `star_detect.detect_stars` |
+| Sigma | Hard threshold | Matched-filter gate (more conservative at equal sigma) |
+| Speed | ~5–30 ms | ~10–60 ms |
+| Recommended sigma | 9 | 7–8 |
+| Install | Built-in (vendor/wheels/tetra3-*.whl) | Optional (vendor/wheels/star_detect-*.whl) |
 
 ### Shared state
 
 | Object | Type | Writers | Readers |
 |---|---|---|---|
-| `FrameSlots` | `shared_memory` (3 × 730 KB) | `camera_proc` | `solver_proc`, `cedar-detect` |
+| `FrameSlots` | `shared_memory` (3 × 730 KB) | `camera_proc` | `solver_proc`, webui |
 | `latest_solution` | `Manager().dict()` | `solver_proc` | `comms_proc`, web UI |
 | `shared_cfg` | `Manager().dict()` | `comms_proc` (maint cmds), `solver_proc` (IMU ref), `imu_thread` | `solver_proc`, `comms_proc`, web UI |
 | `camera_cmd_q` | `multiprocessing.Queue` | `comms_proc` | `camera_proc` |
@@ -653,29 +641,28 @@ comms_proc: serves RA/Dec on next :GR# / :GD# poll
 
 | Key | Description |
 |---|---|
-| `solver_backend` | `"tetra"` or `"cedar"` — which solve path to use |
+| `extract_backend` | `"olive"` or `"sycamore"` — which centroid extractor to use |
 | `test_mode` | `True` = serve static test image; `False` = live camera |
 | `detect_sigma` | Extraction threshold, overrides config at runtime |
-| `detect_use_binned` | Binned candidate search, overrides config at runtime |
 | `solve_timeout_ms` | Solver budget, overrides config at runtime |
 | `boresight_y`, `boresight_x` | Current boresight pixel offset |
 | `imu_available` | BNO055 detected and responding |
 | `imu_q`, `imu_t` | Latest quaternion and its monotonic timestamp |
 | `imu_ref_q/ra/dec/roll/t` | Sky-solve reference for SkySafari dead-reckoning |
-| `imu_calib_pairs` | Accumulated (IMU rotvec, sky delta) calibration pairs |
 | `imu_calib_C` | Fitted 2×3 IMU→sky-displacement matrix |
 | `imu_calib_n` | Number of calibration pairs collected |
 | `imu_calib_quality` | R² of the current fit (≥ 0.85 to activate smoothing) |
+| `fov_deg` | Current calibrated FOV (updated post-solve) |
 
 ### Systemd units
 
 | Unit | Description |
 |---|---|
 | `efinder.service` | Main daemon (camera + solver + comms). `Restart=always`. |
-| `cedar-detect.service` | Rust gRPC centroid server. `After=` efinder. `CPUAffinity=2`. |
 | `efinder-webui.service` | Flask web UI on port 80. Survives an efinder restart. |
 | `efinder-firstboot.service` | Network setup — idempotent, runs every boot. |
 | `efinder-ensure-ap.service` | 60 s watchdog that restores AP mode if NetworkManager suppressed it. |
+| `efinder-usb-gadget.service` | USB Ethernet gadget setup. |
 
 ---
 
@@ -701,16 +688,14 @@ sudo bash /opt/efinder/tests/diag_services.sh
 ```
 
 This comprehensive script checks:
-- `efinder` and `cedar-detect` systemd service state
-- Port 50051 (cedar-detect gRPC listener)
+- `efinder` systemd service state
 - Maintenance socket `/run/efinder/maint.sock` — queries current status
 - Shared memory frame buffers `/dev/shm/efinder_frame_0/1/2`
-- tetra3rs database file presence and size
-- tetra3 Python database import
-- Python library versions
-- efinder / cedar process list
+- Solver database file presence and a live load test
+- Python library imports (`numpy`, `tetra3`, `picamera2`, `PIL`)
+- Process list (efinder procs)
 - Active configuration
-- Last 40 lines of journal for each service
+- Last 50 lines of the efinder journal
 
 Interpret the output:
 - `PASS` (green) = OK
@@ -719,18 +704,14 @@ Interpret the output:
 
 ### 3. Inspect live logs
 
-Watch both services in real time:
-
 ```bash
-sudo journalctl -fu efinder &
-sudo journalctl -fu cedar-detect
+sudo journalctl -fu efinder
 ```
 
-Or look at recent history (last 100 lines):
+Or look at recent history:
 
 ```bash
 sudo journalctl -u efinder -n 100 --no-pager
-sudo journalctl -u cedar-detect -n 100 --no-pager
 ```
 
 Key things to look for:
@@ -739,17 +720,16 @@ Key things to look for:
 |---|---|
 | `Starting in LIVE MODE` | Correct default startup |
 | `Starting in TEST MODE` | Daemon is using a static image, not the camera |
-| `solver_backend -> tetra` | tetra3rs is active |
+| `extract_backend: olive` | olive-solve extraction active |
+| `extract_backend: sycamore` | sycamore extraction active |
 | `dark frame` | Frame too dim; check exposure/gain |
 | `TOO_FEW centroids` | Not enough stars detected; lower sigma or increase exposure |
 | `NO_MATCH` | Stars detected but no solve; check database, FOV estimate |
-| `TIMEOUT` | Solve exceeded budget; increase `solve_timeout_ms` or use tetra3rs |
-| `camera init failed` | picamera2 error; camera cable or reboot |
-| `cedar-detect` gRPC errors | cedar-detect service not running |
+| `TIMEOUT` | Solve exceeded budget; increase `solve_timeout_ms` |
+| `camera init failed` | picamera2 error; check camera cable or reboot |
+| `Sensor mode: output_size=(4056, 3040)` | Full-sensor readout confirmed (expected) |
 
 ### 4. Check the maint socket directly
-
-Query live daemon state without the web UI:
 
 ```bash
 python3 -c "
@@ -767,13 +747,13 @@ Key fields in the response:
 
 | Field | Expected |
 |---|---|
-| `solver_backend` | `"tetra"` (default) or `"cedar"` |
+| `solver_backend` | `"olive"` (default) or `"sycamore"` |
 | `test_mode` | `false` for live operation |
 | `solved` | `true` when a valid solution exists |
 | `stars` | Number of detected centroids |
 | `solve_ms` | Last solve duration in ms |
 
-### 5. Test cedar-detect extraction in isolation
+### 5. Test extraction in isolation
 
 ```bash
 sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_detect.py
@@ -781,7 +761,7 @@ sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_detect.py
 
 Options:
 ```bash
-# Use a saved PNG instead of the live camera:
+# Use a saved PNG instead of the live SHM:
 sudo .../diag_detect.py --image /var/lib/efinder/test.png
 
 # Override sigma:
@@ -789,70 +769,32 @@ sudo .../diag_detect.py --sigma 7.0
 
 # Sweep sigma 3–12 to find the best setting:
 sudo .../diag_detect.py --sigma-sweep
-
-# Override binning flag:
-sudo .../diag_detect.py --binned   # force on
-sudo .../diag_detect.py           # uses config default
 ```
 
-The script runs through:
-- Stage 0: config + library imports
-- Stage 1: cedar-detect gRPC connectivity
-- Stage 2: frame source (live SHM / test PNG / synthetic fallback)
-- Stage 3: ExtractCentroids timing (N repetitions, median/min/max)
-- Stage 4 (if `--sigma-sweep`): star count vs sigma table
-
-Healthy output looks like:
-```
-  [PASS] Warm-up: 45ms  stars=23  peak=187  noise=3.42
-  [PASS] [ 1]  43.2ms  stars=23  peak=187  noise=3.42
-```
-
-If you see `FAIL` at Stage 1, cedar-detect is not running:
-```bash
-sudo systemctl start cedar-detect
-sudo systemctl status cedar-detect
-```
+The script runs olive-solve centroid extraction with detailed timing.
+Use `--sigma-sweep` to find the optimal sigma for your sky conditions.
 
 ### 6. Test the full solve pipeline
 
 ```bash
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_solve.py
+sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_solve.py --live-shm
 ```
 
 Options:
 ```bash
-sudo .../diag_solve.py --backend tetra    # tetra3rs (default)
-sudo .../diag_solve.py --backend cedar    # Python tetra3
 sudo .../diag_solve.py --image /var/lib/efinder/test.png
-sudo .../diag_solve.py --reps 10
+sudo .../diag_solve.py --reps 5
+sudo .../diag_solve.py --sigma 7.0 --timeout 2000
 ```
 
-This tests the full pipeline: frame → cedar-detect → solve → result. Reports:
-- Centroid count and extraction time
-- Solve status (SOLVED / NO_MATCH / TIMEOUT / TOO_FEW)
-- RA / Dec / roll / FOV when solved
-- Timing breakdown per stage
+Tests paths A/B/C using olive-solve. Reports centroid count, extraction time,
+solve status (SOLVED / NO_MATCH / TIMEOUT / TOO_FEW), RA/Dec/roll/FOV, and
+timing breakdown per stage.
 
 ### 7. Check test mode
 
-A common startup problem: the daemon boots in test mode because `test.png`
-exists on disk. Check:
-
 ```bash
-# Look for the startup log message:
 sudo journalctl -u efinder -n 20 | grep -E "LIVE|TEST"
-
-# Or query via maint socket:
-python3 -c "
-import socket,json
-s=socket.socket(socket.AF_UNIX); s.connect('/run/efinder/maint.sock')
-s.sendall(b'{\"cmd\":\"status\",\"args\":{}}\n')
-buf=b''
-while b'\n' not in buf: buf+=s.recv(4096)
-r=json.loads(buf.split(b'\n')[0])
-print('test_mode:', r['result']['test_mode'])
-"
 ```
 
 To force live mode without restarting:
@@ -880,32 +822,33 @@ sudo systemctl status efinder
 sudo systemctl start efinder
 ```
 
-### 9. Check the tetra3rs database
+### 9. Check the solver database
 
 ```bash
-ls -lh /var/lib/efinder/efinder-tetra-database.bin
+ls -lh /var/lib/efinder/default_database.npz
 ```
 
-Should be several hundred MB. If absent or wrong size:
+Should be present (typically a few hundred MB). If absent:
+
 ```bash
-sudo /usr/local/bin/efinder-update   # re-downloads the database
+sudo /usr/local/bin/efinder-update   # reinstalls from the vendor wheel
 ```
 
-### 10. Force a backend switch without a web browser
+### 10. Force an extraction backend switch without a web browser
 
 ```bash
-# Switch to cedar backend:
+# Switch to sycamore:
 python3 -c "
 import socket
 s=socket.socket(socket.AF_UNIX); s.connect('/run/efinder/maint.sock')
-s.sendall(b'{\"cmd\":\"set_backend\",\"args\":{\"backend\":\"cedar\"}}\n')
+s.sendall(b'{\"cmd\":\"set_extract_backend\",\"args\":{\"backend\":\"sycamore\"}}\n')
 "
 
-# Switch back to tetra3rs:
+# Switch back to olive:
 python3 -c "
 import socket
 s=socket.socket(socket.AF_UNIX); s.connect('/run/efinder/maint.sock')
-s.sendall(b'{\"cmd\":\"set_backend\",\"args\":{\"backend\":\"tetra\"}}\n')
+s.sendall(b'{\"cmd\":\"set_extract_backend\",\"args\":{\"backend\":\"olive\"}}\n')
 "
 ```
 
@@ -913,37 +856,33 @@ s.sendall(b'{\"cmd\":\"set_backend\",\"args\":{\"backend\":\"tetra\"}}\n')
 
 ```bash
 sudo systemctl restart efinder          # restarts camera + solver + comms
-sudo systemctl restart cedar-detect     # restarts gRPC centroid server only
 sudo systemctl restart efinder-webui    # restarts Flask UI only (solver keeps running)
 ```
 
 The web UI (`efinder-webui`) runs independently of the solver. Restarting the
-web UI does not interrupt active plate-solving. Restarting `efinder` does.
+web UI does not interrupt active plate-solving.
 
 ### 12. Common problems and fixes
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Live view looks washed out / all white | Sky background very bright (long exposure / high gain at twilight) | Reduce exposure or gain; the arcsinh stretch is display-only and does not affect solving |
+| Live view looks washed out / all white | Sky background very bright (long exposure / high gain at twilight) | Reduce exposure or gain; the arcsinh stretch is display-only |
 | Live view very dark / stars invisible | Heavy underexposure | Increase exposure or gain on the Camera page |
 | Web UI shows stale layout after update | Browser cache | Hard-refresh (`Ctrl+Shift+R`) or open in incognito |
-| Always in test mode on startup | `test.png` found at startup; daemon used to auto-detect | Use web UI toggle or set_test_mode maint cmd |
+| Always in test mode on startup | `test.png` found at startup | Use web UI toggle or `set_test_mode` maint cmd |
 | `TOO_FEW` on every frame | Low star count — exposure too short or sigma too high | Lower sigma (try 6–7) or increase exposure; use `diag_detect.py --sigma-sweep` |
-| `NO_MATCH` with plenty of stars | FOV estimate wrong or database mismatch | Reset calibration (`efinder-ctl calibration reset`), verify tetra3rs database |
-| Solve time > 1.5 s constantly | tetra3rs not finding a seeded hint (first-frame or after solve gap) | Normal on first frame after startup; if persistent, check `solve_timeout_ms` |
-| Cedar-detect FAIL on `diag_services.sh` | Service not running | `sudo systemctl start cedar-detect` |
-| `tetra3 Python DB: FAIL` on `diag_services.sh` | False negative from old diagnostic | Verify with `python3 -c "import tetra3; print(tetra3.__file__)"` — if it prints a path ending in `__init__.py`, tetra3 is fine |
-| `EACCES` on SHM in diagnostic scripts | Root-created SHM not readable by efinder user | Scripts now chmod 0o644 automatically; re-run after updating scripts |
-| Port 50051 not listening | Cedar-detect crashed | `sudo systemctl restart cedar-detect` and check its journal |
+| `NO_MATCH` with plenty of stars | FOV estimate wrong or database mismatch | Reset calibration (`efinder-ctl calibration reset`), verify database |
+| Solve time > 1.5 s constantly | Blind solve on first frame or after a solve gap | Normal on first frame; if persistent, check `solve_timeout_ms` |
+| `Sensor mode: output_size=(1332, 990)` in journal | `sensor=` hint not applied | Ensure camera_proc.py is up to date; restart efinder |
 
 ### 13. Can't solve even though stars are visible
 
-This is the most common field problem.  Work through these steps in order.
+This is the most common field problem. Work through these steps in order.
 
 #### Step 1 — check what the solver is actually seeing
 
 The stars you see through the eyepiece or in the arcsinh-stretched live view
-are not necessarily the stars cedar-detect is extracting.  Run the sigma sweep
+are not necessarily the stars olive-solve is extracting. Run the sigma sweep
 to see the raw star count at each threshold:
 
 ```bash
@@ -961,23 +900,31 @@ sigma=11  stars=2
 ```
 
 If sigma=9 yields fewer than 8 stars, **lower sigma on the Camera page**.
-Try 6 or 7 as a starting point.  The change takes effect immediately with no
-restart.  Use **Persist → Apply & save** to keep it across reboots.
+Try 6 or 7 as a starting point. The change takes effect immediately with no
+restart. Use **Persist → Apply & save** to keep it across reboots.
 
 #### Step 2 — understand the frame pipeline
 
-The IMX477 native sensor is 4056×3040. When the efinder requests 960×760,
-picamera2 uses the 2×2 hardware-binned sensor mode (2028×1520) and the ISP
-scales the result to 960×760. **The full sensor area is used — this is not a
-crop, the full FOV is preserved.** The effective plate scale is ~50.8 "/px.
-Stars are still point sources at this scale so the downscale does not cause
-solve failures — sigma and FOV estimate are far more likely culprits.
+The IMX477 native sensor is 4056×3040. The eFinder configures libcamera with
+`sensor={"output_size": (4056, 3040)}` to force a full-array readout; the ISP
+then downscales 4× to 960×760. This gives an effective pixel pitch of 6.2 µm
+and a plate scale of ~51.15 arcsec/px, yielding a ~13.6° horizontal FOV with
+a 25 mm focal length lens.
+
+Without this hint, libcamera silently selects the 1332×990 sub-mode (central
+65% of sensor, 2×2 binned), producing ~8.8° FOV — which would cause 100%
+`NO_MATCH` if `fov_deg` is set to 13.5°. Check the journal:
+
+```bash
+sudo journalctl -u efinder | grep "Sensor mode"
+# Expected: Sensor mode: output_size=(4056, 3040)
+```
 
 #### Step 3 — verify the FOV estimate
 
-If cedar-detect reports ≥ 8 stars but you still get `NO_MATCH`, the FOV
-estimate may be wrong.  Check the Config page for `fov_deg` and compare it
-to your actual optics.  Then reset calibration so the solver uses the full
+If olive-solve reports ≥ 8 stars but you still get `NO_MATCH`, the FOV
+estimate may be wrong. Check the Config page for `fov_deg` and compare it
+to your actual optics. Then reset calibration so the solver uses the full
 1° tolerance window:
 
 ```bash
@@ -989,31 +936,18 @@ window automatically.
 
 #### Step 4 — capture frames for off-device analysis
 
-If the problem is hard to diagnose live, run the camera sweep to capture raw
-frames along with the current config and daemon status:
+If the problem is hard to diagnose live, collect a debug bundle from the web UI
+(**Update** page → **Collect debug ZIP**) or capture frames directly:
 
 ```bash
-# Single frame at your current settings (e.g. exp=0.2s gain=20)
 sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_camera.py \
     --exp-min 0.2 --exp-max 0.2 --gain-min 20 --gain-max 20
-
-# Or a sweep to evaluate different settings
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_camera.py \
-    --exp-min 0.1 --exp-max 0.4 --exp-step 0.1 \
-    --gain-min 15 --gain-max 30 --gain-step 5
 ```
 
-The script saves a ZIP to `/var/lib/efinder/` containing the PNGs plus
-`capture_info.txt` (sweep parameters, system info, live daemon status) and
-`efinder.conf` (exact config at capture time).  Copy it to your laptop:
-
+Copy to your laptop:
 ```bash
-# From your laptop:
 scp efinder@efinder.local:/var/lib/efinder/YYYYMMDDHHMMSSMMM.zip .
 ```
-
-Replace `YYYYMMDDHHMMSSMMM` with the timestamp printed by the script
-(or use tab-completion on the device).  Password is `12345678`.
 
 #### Quick-reference: sigma adjustment from the web UI
 
@@ -1027,131 +961,52 @@ Replace `YYYYMMDDHHMMSSMMM` with the timestamp printed by the script
 
 ## Benchmark and diagnostic scripts
 
-All scripts require the venv Python and (for SHM access) root privileges:
+See `tests/README.md` for the full catalogue. All scripts require the venv
+Python and (for SHM access) root privileges:
 
 ```bash
 sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/<script>.py
 ```
 
-### `diag_camera.py` — camera exposure/gain sweep
-
-```bash
-sudo .../diag_camera.py [--exp-min S] [--exp-max S] [--exp-step S]
-                         [--gain-min G] [--gain-max G] [--gain-step G]
-                         [--binning] [--output-dir PATH]
-```
-
-Captures one frame per (exposure, gain) combination.  Individual frames are
-named `YYYYMMDDHHMMSSMMM-EEE-GG[-2x2].png`; after all captures complete they
-are bundled into `YYYYMMDDHHMMSSMMM.zip` (sweep start timestamp), the PNGs
-are deleted, and the archive is ready to transfer off the device.  Saved to
-`/var/lib/efinder/` by default (where `test.png` lives).
-
-The ZIP always contains two extra diagnostic files:
-- `capture_info.txt` — sweep parameters, frame pipeline explanation, hostname,
-  Pi model, OS, and live daemon status at the time of capture
-- `efinder.conf` — verbatim copy of the active config file
-
-Per-frame log shows peak and mean pixel value — useful for spotting
-saturation or underexposure before opening files.  The script prints the
-exact `scp` command to copy the archive to your laptop when it finishes.
-
-```bash
-# Default sweep (0.05–0.30 s step 0.05, gain 15–40 step 5)
-sudo .../diag_camera.py
-
-# Custom range with binning
-sudo .../diag_camera.py --exp-min 0.1 --exp-max 0.5 --exp-step 0.1 \
-                         --gain-min 10 --gain-max 30 --gain-step 5 --binning
-
-# Single capture at solver defaults (exp=0.2s gain=20, no binning)
-sudo .../diag_camera.py --exp-min 0.2 --exp-max 0.2 --gain-min 20 --gain-max 20
-```
-
-Transfer the archive to your laptop (from your laptop):
-
-```bash
-scp efinder@efinder.local:/var/lib/efinder/YYYYMMDDHHMMSSMMM.zip .
-```
-
-### `diag_services.sh` — system health check
-
-```bash
-sudo bash /opt/efinder/tests/diag_services.sh
-```
-
-Full system health check: services, ports, SHM, databases, Python imports,
-process list, journals. The first thing to run when something is wrong.
-
-### `diag_detect.py` — extraction diagnostic
-
-```bash
-sudo .../diag_detect.py [--image PNG] [--sigma N] [--reps N] [--sigma-sweep] [--binned]
-```
-
-Tests cedar-detect centroid extraction in isolation with detailed timing.
-Use `--sigma-sweep` to find the optimal sigma for your sky conditions.
-
-### `diag_solve.py` — full pipeline diagnostic
-
-```bash
-sudo .../diag_solve.py [--backend tetra|cedar] [--image PNG] [--reps N]
-```
-
-Tests the full frame → extract → solve pipeline for both backends with
-per-stage timing. Shows solve status, star count, and RA/Dec/FOV when solved.
-
-### `bench_pipeline_combos.py` — four-combination benchmark
-
-```bash
-sudo .../bench_pipeline_combos.py [--image PNG] [--reps N] \
-    [--sigma-sweep] [--hint-sweep] [--binned]
-```
-
-Benchmarks all four pipeline combinations:
-
-| Combo | Extraction | Solve |
-|---|---|---|
-| 1 | cedar-detect gRPC | tetra3 Python |
-| 2 | tetra3rs native | tetra3rs Rust |
-| 3 | tetra3rs native | tetra3 Python |
-| 4 | cedar-detect gRPC | tetra3rs Rust ← matches daemon tetra backend |
-
-`--hint-sweep`: varies `hint_uncertainty_deg` from 5.0° down to 0.02° for
-both `strict_hint=False` and `True` — shows where speed vs reliability
-trade off for seeded solves.
-
-`--sigma-sweep`: compares cedar-detect vs tetra3rs-native star yield across
-sigma 3–12 — useful for choosing the best sigma for your setup.
+| Script | Purpose |
+|---|---|
+| `diag_services.sh` | System health check — first stop when anything is broken |
+| `diag_camera.py` | Camera exposure/gain sweep, saves PNGs + ZIP |
+| `diag_bno055.py` | BNO055 IMU sensor registers and live samples |
+| `diag_detect.py` | Olive-solve centroid extraction timing and sigma sweep |
+| `diag_solve.py` | Full pipeline: extract → solve (paths A/B/C) with timing |
+| `solve_image.py` | Quick single-image solve with `solve_from_image_fast` |
+| `bench_pipeline_combos.py` | Benchmark all three olive-solve paths with optional sweeps |
+| `bench_extractor_compare.py` | Compare olive vs. sycamore extraction speed and yield |
+| `test_hint.py` | Attitude-hint effectiveness across a sequence of shifted images |
 
 ---
 
 ## Performance characteristics
 
-### Solve pipeline timing (Pi Zero 2W, 960×760, clear sky, tetra3rs backend)
+### Solve pipeline timing (Pi Zero 2W, 960×760, clear sky)
 
 | Stage | Time |
 |---|---|
 | Camera capture (ISP hardware) | `exposure_s` + ~10 ms |
 | Frame copy to SHM | ~0.5 ms |
-| Cedar-detect extraction (gRPC, binned) | 25–60 ms |
-| tetra3rs solve, IMU-seeded (scope moving) | 10–100 ms |
-| tetra3rs solve, seeded (scope stationary) | 10–60 ms |
-| tetra3rs solve, blind (first frame / no IMU) | 300–800 ms |
+| Olive-solve extraction (`get_centroids_from_image_fast`) | ~5–30 ms |
+| Sycamore extraction (`star_detect.detect_stars`) | ~10–60 ms |
+| Solve, IMU-seeded (scope stationary/moving) | ~10–100 ms |
+| Solve, blind (first frame / no IMU) | ~300–800 ms |
 | LX200 report latency | < 1 ms |
 | IMU dead-reckoning (when active) | < 0.1 ms |
-| **Typical end-to-end (after first frame)** | **~0.5–1.0 s with 0.2 s exposure** |
+| **Typical end-to-end (after first frame)** | **~0.2–0.5 s with 0.2 s exposure** |
 
 ### RAM usage
 
 | Process | Typical RSS |
 |---|---|
 | `camera_proc` | ~60 MB |
-| `solver_proc` (tetra3rs loaded) | ~180 MB |
+| `solver_proc` (olive-solve loaded) | ~180 MB |
 | `comms_proc` | ~25 MB |
 | `efinder-webui` (Flask) | ~35 MB |
-| `cedar-detect-server` | ~15 MB |
-| **Total** | **~315 MB** |
+| **Total** | **~300 MB** |
 
 With zram swap (~256 MB LZ4), the system operates comfortably within the
 Zero 2W's 512 MB physical RAM. Verify zram is active:
@@ -1172,22 +1027,15 @@ sudo EFINDER_VERSION=dev bash build/build-image.sh
 # Output: build/output/efinder.img
 ```
 
-### Cross-compiling cedar-detect-server
+### Updating vendor wheels
 
-```bash
-git submodule update --init --recursive
-rustup target add aarch64-unknown-linux-gnu
-sudo apt-get install -y gcc-aarch64-linux-gnu protobuf-compiler
+The olive-solve (`tetra3-*.whl`) and sycamore-extract (`star_detect-*.whl`)
+wheels are pre-built aarch64 binaries in `vendor/wheels/`. To update:
 
-cd cedar-detect
-CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
-RUSTFLAGS="-C target-cpu=cortex-a53" \
-cargo build --release --target aarch64-unknown-linux-gnu --bin cedar-detect-server
-
-aarch64-linux-gnu-strip target/aarch64-unknown-linux-gnu/release/cedar-detect-server
-scp target/.../cedar-detect-server efinder@efinder.local:/usr/local/bin/
-ssh efinder@efinder.local "sudo systemctl restart cedar-detect"
-```
+1. Run the **Vendor Binaries** or **Vendor Sycamore** GitHub Actions workflow
+   with the desired version tag.
+2. Merge the resulting commit (it updates the wheel file) before tagging a
+   release.
 
 ### Running the web UI in development
 
@@ -1206,11 +1054,12 @@ bash build/check-tree.sh
 
 ## Known limitations and deferred work
 
-- **Dark frame / hot pixel calibration**: per-frame hot-pixel removal via
-  cedar-detect is in place; a full dark-frame subtraction workflow (static
-  master dark) is not yet implemented.
+- **Dark frame / hot pixel calibration**: the dark-frame fast-path skips
+  completely dark frames; a full master-dark subtraction workflow is not yet
+  implemented.
 - **Auto-exposure**: solver reports star count per frame; the feedback loop
-  that adjusts exposure to hit a target star count is not yet wired up.
+  that adjusts exposure to hit `auto_exposure_target_stars` is wired in config
+  but not yet active.
 - **Watchdog for solver hang**: systemd restarts on crash but not on a silent
   hang. A heartbeat monitor on `latest_solution.epoch_monotonic` is planned.
 - **No authentication**: LX200 server and web UI are open to any device on
@@ -1219,8 +1068,6 @@ bash build/check-tree.sh
   requires a new `:CM#` sync.
 - **Polar alignment assumes pure RA motion**: accidental Dec movement between
   the three capture points invalidates the result silently.
-- **IMU hint frame mismatch (Option C)**: the attitude hint propagation assumes
-  the IMU body axes ≈ camera axes. A badly-rotated IMU mount will widen the
-  effective search window but will not cause solve failures (`strict_hint=False`).
-  Option B (calibrated C-matrix hint) or Option A (explicit mount calibration)
-  would be more precise.
+- **IMU hint frame mismatch**: the attitude hint propagation assumes the IMU
+  body axes ≈ camera axes. A badly-rotated IMU mount will widen the effective
+  search window but will not cause solve failures (`strict_hint=False`).
