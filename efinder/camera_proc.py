@@ -137,9 +137,16 @@ def _init_camera(cfg, current_state):
     """Initialise and start picamera2 using current_state for exposure/gain."""
     from picamera2 import Picamera2
     cam = Picamera2()
+    # Request the full sensor readout (4056×3040) so the ISP downscales from
+    # the complete pixel array rather than the default 1332×990 sub-mode.
+    # Without this hint libcamera picks the smallest viable sensor mode, which
+    # crops ~35% of the sensor and reduces the horizontal FOV from ~13.5° to
+    # ~8.8° for a 25mm lens on the IMX477.
+    full_sensor = (cfg.sensor_full_width, cfg.sensor_full_height)
     config = cam.create_still_configuration(
         main={"format": "YUV420",
               "size": (cfg.frame_width, cfg.frame_height)},
+        sensor={"output_size": full_sensor},
         controls={
             "ExposureTime": int(current_state["exposure_s"] * 1_000_000),
             "AnalogueGain": float(current_state["gain"]),
