@@ -83,7 +83,7 @@ class Config:
 
     # Gate algorithm used when extract_backend = "sycamore".
     # "matched_filter" (default) — Gaussian matched filter, v0.8.0+ default.
-    # "cedar"                    — cedar-detect heuristic (pre-v0.8.0 behaviour).
+    # "cedar"                    — legacy heuristic gate (pre-v0.8.0 behaviour).
     sycamore_gate_mode: str = "matched_filter"
 
     # -------- Boresight offset --------
@@ -102,8 +102,7 @@ class Config:
     #
     # The solver process is allowed affinity {cpu_solver, cpu_camera}
     # so olive-solve's rayon thread pool can spread star extraction
-    # across two physical cores. cedar-detect no longer occupies
-    # cpu_solver, so both CPUs 2 and 3 are available for the solver.
+    # across two physical cores (CPUs 2 and 3).
     cpu_camera: int = 3
     cpu_solver: int = 2
     cpu_comms: int = 1

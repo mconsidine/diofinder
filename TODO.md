@@ -39,7 +39,7 @@ state of its own. Pages:
              focus score, calibration, boresight
 - `/polar`   step-by-step polar alignment workflow with live status
 - `/config`  read-only view of `/etc/efinder/efinder.conf`
-- `/logs`    live journalctl tail for efinder + cedar-detect
+- `/logs`    live journalctl tail for efinder.service
 - `/update`  trigger efinder-update in one click
 - `/healthz` 200 OK ping endpoint
 
@@ -91,20 +91,19 @@ with one daemon thread per connection + TTL cache for frequent reads
 
 ### Dark frame fast-path
 ✅ DONE. After camera publishes a frame, solver checks
-`bufs[idx].max() < 20` before invoking cedar-detect or cedar-solve.
+`bufs[idx].max() < 20` before invoking olive-solve extraction.
 If true, the frame is published as an empty solution and the slot is
-released in ~0.1 ms. Eliminates the full detect+solve cycle (~1.5 s)
-when the lens is capped or the sky is completely dark.
+released in ~0.1 ms. Eliminates the full detect+solve cycle when the
+lens is capped or the sky is completely dark.
 
 ### CPU affinity
 ✅ DONE.
 - CPU 0: kernel/IRQs/system services
 - CPU 1: comms_proc + efinder-webui (I/O bound)
-- CPU 2: solver_proc + cedar-detect-server — pipeline pair; cedar-detect
-  runs then yields, solver consumes the centroids. They interleave rather
-  than compete so one core is sufficient. CPUAffinity=2 in cedar-detect
-  systemd unit; cpu_solver=2 in config.py.
-- CPU 3: camera_proc alone — ISP DMA + memcpy to SHM
+- CPU 2: solver_proc primary core; olive-solve's rayon thread pool also
+  uses CPU 3 for star extraction, spreading the work across two cores.
+  cpu_solver=2 in config.py.
+- CPU 3: camera_proc (ISP DMA + memcpy to SHM) + solver rayon secondary
 
 ### Zram swap
 ✅ DONE. `install.sh` configures `zram-tools` with `PERCENT=50`
@@ -204,7 +203,7 @@ Target: v0.8.
   Re-running clears them via the unlink-before-create dance. A
   `ExecStartPre` cleanup in `efinder.service` would be more robust.
 
-- **grpcio build from source in chroot**: if no aarch64 wheel exists for
-  the Python version on Trixie, pip builds grpcio from source. The
-  chroot has `build-essential` so it works but adds 10–20 minutes to
-  the image build.
+- **Vendor wheel freshness**: the olive-solve and sycamore-extract wheels
+  in `vendor/wheels/` are pre-built aarch64 binaries. If a new version is
+  needed, run the corresponding GitHub Actions workflow to rebuild and
+  commit the updated wheel before tagging a release.

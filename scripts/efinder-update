@@ -1,19 +1,19 @@
 #!/bin/bash
-# eFinder in-place updater. Pulls latest application code, fetches the
-# latest cedar-detect-server binary from GitHub releases, and restarts
-# the service.
+# eFinder in-place updater (olive branch).
+# Pulls latest application code, refreshes the olive-solve and optional
+# sycamore-extract wheels from vendor/wheels/, and restarts the service.
+# No cedar-detect binary or gRPC stubs are involved.
 #
 # Usage:
 #   sudo /usr/local/bin/efinder-update                 # latest release
-#   sudo /usr/local/bin/efinder-update v0.7.1          # specific version
+#   sudo /usr/local/bin/efinder-update v0.8.1          # specific version
 #
 # Refuses to update if the working tree has local modifications.
 
 set -euo pipefail
 
 EFINDER_DIR=/opt/efinder
-REPO=mconsidine/eFinder_cli_new
-BINARY=cedar-detect-server
+REPO=mconsidine/diofinder
 TARGET_VERSION="${1:-latest}"
 
 LOG() { echo "[update] $*"; }
@@ -43,57 +43,42 @@ fi
 LOG "Updating to $TAG"
 sudo -u efinder git checkout --quiet "$TAG"
 
-# --- Refresh Python deps ------------------------------------------------------
+# --- Refresh Python dependencies ----------------------------------------------
 
 LOG "Refreshing Python dependencies"
 sudo -u efinder "$EFINDER_DIR/venv/bin/pip" install --quiet --upgrade \
   -r "$EFINDER_DIR/requirements.txt"
 
-# cedar-solve is not in requirements.txt (needs --no-deps --no-build-isolation)
-# so we upgrade it explicitly.  Pinned to the same ref install.sh uses;
-# use EFINDER_CEDAR_SOLVE_REF to override if needed.
-CEDAR_SOLVE_REF="${EFINDER_CEDAR_SOLVE_REF:-v0.6.0}"
-LOG "Refreshing cedar-solve from git@${CEDAR_SOLVE_REF}"
-sudo -u efinder "$EFINDER_DIR/venv/bin/pip" install --quiet \
-  --no-deps --no-build-isolation \
-  "git+https://github.com/smroid/cedar-solve.git@${CEDAR_SOLVE_REF}#egg=cedar-solve"
+# --- Install olive-solve wheel ------------------------------------------------
 
-# Regenerate gRPC stubs in case cedar_detect.proto changed.
-LOG "Regenerating gRPC stubs"
-sudo -u efinder "$EFINDER_DIR/venv/bin/python" \
-  -m grpc_tools.protoc \
-  -I "$EFINDER_DIR/proto" \
-  --python_out="$EFINDER_DIR/proto" \
-  --grpc_python_out="$EFINDER_DIR/proto" \
-  "$EFINDER_DIR/proto/cedar_detect.proto" \
-  || FAIL "protoc stub regeneration failed"
+VENDOR_WHEELS="$EFINDER_DIR/vendor/wheels"
+OLIVE_WHL=$(ls "$VENDOR_WHEELS"/tetra3-*.whl 2>/dev/null | sort -V | tail -n1)
 
-# --- Pull cedar-detect binary -------------------------------------------------
-
-LOG "Fetching cedar-detect-server binary for $TAG"
-if [ "$TAG" = "latest" ] || [ -z "$TAG" ]; then
-  URL=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-        | grep "browser_download_url" \
-        | grep "${BINARY}" \
-        | head -n1 \
-        | cut -d'"' -f4)
+if [ -n "$OLIVE_WHL" ]; then
+  LOG "Installing olive-solve: $(basename "$OLIVE_WHL")"
+  sudo -u efinder "$EFINDER_DIR/venv/bin/pip" install --quiet \
+    --force-reinstall --no-deps "$OLIVE_WHL" \
+    || FAIL "olive-solve wheel install failed"
 else
-  URL="https://github.com/${REPO}/releases/download/${TAG}/${BINARY}"
+  FAIL "No olive-solve (tetra3) wheel found in $VENDOR_WHEELS. Run the 'Vendor Binaries' workflow."
 fi
 
-[ -n "$URL" ] || FAIL "Could not resolve cedar-detect-server URL"
+# --- Install sycamore-extract wheel (optional) --------------------------------
 
-TMP=$(mktemp)
-trap 'rm -f "$TMP"' EXIT
-curl -fsSL "$URL" -o "$TMP"
-install -m 755 "$TMP" /usr/local/bin/${BINARY}
+SYCAMORE_WHL=$(ls "$VENDOR_WHEELS"/star_detect-*.whl 2>/dev/null | sort -V | tail -n1)
+if [ -n "$SYCAMORE_WHL" ]; then
+  LOG "Installing sycamore-extract: $(basename "$SYCAMORE_WHL")"
+  sudo -u efinder "$EFINDER_DIR/venv/bin/pip" install --quiet \
+    --force-reinstall --no-deps "$SYCAMORE_WHL" \
+    || LOG "WARN: sycamore-extract install failed (non-fatal; olive backend will be used)"
+fi
 
 # --- Record version & restart -------------------------------------------------
 
 echo "$TAG $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /var/lib/efinder/version
 
 LOG "Restarting services"
-systemctl restart cedar-detect.service
 systemctl restart efinder.service
+systemctl restart efinder-webui.service
 
 LOG "Update to $TAG complete"

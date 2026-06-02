@@ -87,7 +87,7 @@
         <label>
           Solve timeout (ms)
           <p class="hint" style="margin:0 0 4px">
-            Maximum time cedar-solve may spend per frame. Default: 1500 ms.
+            Maximum time olive-solve may spend per frame. Default: 1500 ms.
           </p>
           <div class="slider-row">
             <input type="range" id="timeout_slider" min="500" max="5000" step="100"
@@ -97,13 +97,6 @@
                    name="solve_timeout_ms" id="timeout_num"
                    value="{{ solver_params.solve_timeout_ms }}">
           </div>
-        </label>
-        <label class="checkbox" style="margin-top:0.75rem;">
-          <input type="checkbox" id="binned_chk" name="detect_use_binned"
-                 onchange="binnedChange(this.checked)"
-                 {{ 'checked' if solver_params.detect_use_binned else '' }}>
-          Binned star candidates
-          <span class="hint" style="margin-left:0.4rem;">(faster detection)</span>
         </label>
         <p id="solver-status" class="hint" style="min-height:1.2em;">&nbsp;</p>
         <label class="checkbox">
@@ -252,11 +245,6 @@ function stepSigma(dir) {
   el.value = s.toFixed(1);
   document.getElementById('sigma_slider').value = s;
   applySigma(s);
-}
-
-// --- Binning toggle ----------------------------------------------------------
-function binnedChange(checked) {
-  applyParams({detect_use_binned: checked}, 'solver-status');
 }
 
 const expNum = document.getElementById('exp_num');

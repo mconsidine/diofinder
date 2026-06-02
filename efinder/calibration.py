@@ -99,20 +99,20 @@ class FovCalibrator:
         return self.state == CalState.CALIBRATED
 
     def get_fov_estimate(self) -> float:
-        """Best current FOV estimate to feed to cedar-solve."""
+        """Best current FOV estimate to feed to olive-solve."""
         if self.committed_fov is not None:
             return self.committed_fov
         return self.cfg.fov_deg
 
     def get_fov_max_error(self) -> float:
-        """Tolerance to feed to cedar-solve. Tight after calibration."""
+        """Tolerance to feed to olive-solve. Tight after calibration."""
         if self.use_tight_tolerance:
             return getattr(self.cfg, "fov_calibrated_max_error_deg", 0.1)
         return self.cfg.fov_max_error_deg
 
     def get_distortion_estimate(self) -> float:
-        """Distortion coefficient to feed to cedar-solve. 0.0 means
-        caller has no estimate; cedar-solve fits distortion itself.
+        """Distortion coefficient to feed to olive-solve. 0.0 means
+        caller has no estimate; olive-solve fits distortion itself.
         """
         return self.committed_distortion
 

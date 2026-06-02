@@ -4,8 +4,8 @@
 <h2>Update</h2>
 <p>Current version: <strong>{{ version }}</strong></p>
 <p>This will pull the latest tagged release from GitHub, refresh
-   the cedar-detect binary, and restart the service. Total downtime
-   is usually under a minute.</p>
+   Python dependencies (including the olive-solve wheel), and restart
+   the service. Total downtime is usually under a minute.</p>
 <form method="post" action="{{ url_for('update_page') }}"
       onsubmit="return confirm('Update eFinder to latest release? The service will be briefly unavailable.');">
   <button type="submit" class="btn btn-primary">Update to latest</button>

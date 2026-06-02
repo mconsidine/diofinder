@@ -6,8 +6,8 @@ No external server dependency.
 Pi Zero 2W optimisations:
   * Solver process affinity is set to {cpu_solver, cpu_camera} so
     olive-solve's rayon thread pool can spread parallel star extraction
-    across two physical cores. cedar-detect no longer occupies either
-    core, so both CPUs 2 and 3 are free for solver work.
+    across two physical cores; CPUs 2 and 3 are both available for
+    solver work.
   * Frame buffer pre-allocated once with np.empty; each iteration fills
     it in-place via np.copyto, eliminating per-frame heap allocation.
   * The shared-memory slot is released immediately after np.copyto so
@@ -286,7 +286,7 @@ def solver_main(slots, latest_solution, shared_cfg,
 
     # Allow solver threads (including rayon worker pool) to use two cores.
     # CPUs {cpu_solver, cpu_camera}: cpu_camera is available because
-    # cedar-detect no longer runs there, and camera_proc is mostly sleeping.
+    # camera_proc is I/O-bound and mostly sleeping between captures.
     try:
         os.sched_setaffinity(0, {cfg.cpu_solver, cfg.cpu_camera})
         log.info("Solver pinned to CPUs {%d, %d}", cfg.cpu_solver, cfg.cpu_camera)

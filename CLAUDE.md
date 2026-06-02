@@ -109,7 +109,7 @@ All LX200 handling lives in `efinder/comms_proc.py::_handle_lx200_command`.
 2. Return a `bytes` object ending in `b"#"` per LX200 convention, or `b""` for
    commands that expect no reply (`:M*`, `:R*`, `:Q`).
 3. Update the docstring listing implemented commands.
-4. Test with `tests/diag_lx200.py` or telnet to port 4060.
+4. Test with `nc efinder.local 4060` (telnet/netcat) or add a simple test to `tests/diag_solve.py`.
 
 There is no registration table — the function is a plain if/elif chain.
 
@@ -218,9 +218,9 @@ See `tests/README.md` for the full test catalogue. Quick smoke-test on device:
 
 ```bash
 cd /opt/efinder
-python3 tests/diag_services.py          # check all processes alive
-python3 tests/diag_solve.py             # one-shot solve with current image
-python3 tests/bench_pipeline_combos.py  # olive vs sycamore timing comparison
+sudo bash tests/diag_services.sh                  # check all processes alive
+sudo python3 tests/diag_solve.py --live-shm       # one-shot solve with current image
+sudo python3 tests/bench_pipeline_combos.py --live-shm  # olive path timing
 ```
 
 `EFINDER_LOGLEVEL=DEBUG sudo systemctl restart efinder` enables verbose logging.
