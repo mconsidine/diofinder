@@ -55,6 +55,7 @@ _solver_cache_lock = threading.Lock()
 
 
 def _cached_call_solver(op, solver_cmd_q, solver_cmd_reply_q, ttl_s: float):
+    """Call solver RPC, returning a cached reply if one exists and is younger than ttl_s."""
     now = time.monotonic()
     with _solver_cache_lock:
         entry = _solver_cache.get(op)
@@ -68,6 +69,7 @@ def _cached_call_solver(op, solver_cmd_q, solver_cmd_reply_q, ttl_s: float):
 
 
 def _invalidate_solver_cache(op=None):
+    """Drop cached solver replies for op, or all entries when op is None."""
     with _solver_cache_lock:
         if op is None:
             _solver_cache.clear()
@@ -76,6 +78,7 @@ def _invalidate_solver_cache(op=None):
 
 
 def _pin_to_cpu(cpu: int) -> None:
+    """Set the calling process's CPU affinity to {cpu}."""
     try:
         os.sched_setaffinity(0, {cpu})
         log.info("Pinned to CPU %d", cpu)
@@ -84,6 +87,7 @@ def _pin_to_cpu(cpu: int) -> None:
 
 
 def _format_ra(ra_hours: float) -> str:
+    """Return LX200-protocol RA string HH:MM:SS# from fractional hours."""
     ra_hours = ra_hours % 24.0
     h = int(ra_hours); m_full = (ra_hours - h) * 60.0
     m = int(m_full); s = int(round((m_full - m) * 60.0))
@@ -93,6 +97,7 @@ def _format_ra(ra_hours: float) -> str:
 
 
 def _format_dec(dec_deg: float) -> str:
+    """Return LX200-protocol Dec string ±DD*MM:SS# from decimal degrees."""
     sign = "+" if dec_deg >= 0 else "-"
     a = abs(dec_deg); d = int(a)
     m_full = (a - d) * 60.0; m = int(m_full)
@@ -103,6 +108,7 @@ def _format_dec(dec_deg: float) -> str:
 
 
 def _wait_for_reply(reply_q, request_id, timeout_s=5.0):
+    """Block up to timeout_s for the reply matching request_id; returns None on timeout."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
         remaining = max(0.05, deadline - time.monotonic())
@@ -118,6 +124,7 @@ def _wait_for_reply(reply_q, request_id, timeout_s=5.0):
 
 
 def _call_solver(op, args, solver_cmd_q, solver_cmd_reply_q, timeout_s=5.0):
+    """Send op/args to solver_proc and return the SolverCmdReply, or None on timeout."""
     rid = next(_request_id_seq)
     with _solver_call_lock:
         solver_cmd_q.put(SolverCmd(op=op, args=args or {}, request_id=rid))
@@ -125,6 +132,7 @@ def _call_solver(op, args, solver_cmd_q, solver_cmd_reply_q, timeout_s=5.0):
 
 
 def _call_camera(op, args, camera_cmd_q, camera_cmd_reply_q, timeout_s=2.0):
+    """Send op/args to camera_proc and return the CameraCmdReply, or None on timeout."""
     rid = next(_request_id_seq)
     with _camera_call_lock:
         camera_cmd_q.put(CameraCmd(op=op, args=args or {}, request_id=rid))
@@ -133,6 +141,7 @@ def _call_camera(op, args, camera_cmd_q, camera_cmd_reply_q, timeout_s=2.0):
 
 def _do_alignment(align_state, cfg, shared_cfg,
                   align_request_q, align_response_q):
+    """Execute :CM# alignment: send target to solver, wait for result, persist boresight."""
     req = align_state.build_request()
     if req is None:
         return "no align target#"
@@ -185,6 +194,7 @@ def _do_alignment(align_state, cfg, shared_cfg,
 
 
 def _imu_predict(shared_cfg):
+    """Return (ra_deg, dec_deg) predicted from IMU rotation since last solve, or None if unavailable."""
     if not shared_cfg.get("imu_available", False):
         return None
     if shared_cfg.get("imu_calib_n", 0) < 3:
@@ -224,6 +234,7 @@ def _imu_predict(shared_cfg):
 
 
 def _sync_clock(sl, sg, sc):
+    """Set system clock from SkySafari's :SG/:SL/:SC local-time + UTC-offset sequence."""
     try:
         local_dt = datetime.datetime.strptime(f"{sc} {sl}", "%m/%d/%y %H:%M:%S")
         sg_hours = float(sg)
@@ -252,6 +263,7 @@ def _sync_clock(sl, sg, sc):
 def _handle_lx200_command(cmd, latest_solution, align_state, time_state,
                           cfg, shared_cfg,
                           align_request_q, align_response_q, ctx=None):
+    """Dispatch one LX200 command string and return the raw bytes reply."""
     if cmd == ":GR":
         pred = _imu_predict(shared_cfg)
         if pred is not None:
@@ -358,6 +370,7 @@ def _handle_lx200_command(cmd, latest_solution, align_state, time_state,
 
 
 def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
+    """Dispatch one maintenance-socket command and return a MaintResponse."""
     cmd  = req.cmd
     args = req.args
 
@@ -608,6 +621,8 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
 
 
 class _MaintContext:
+    """Holds all IPC handles needed by _handle_maint_command."""
+
     def __init__(self, *, cfg, latest_solution, shared_cfg,
                  solver_cmd_q, solver_cmd_reply_q,
                  camera_cmd_q, camera_cmd_reply_q):
@@ -621,6 +636,7 @@ class _MaintContext:
 
 
 def _handle_maint_client(client, ctx):
+    """Serve one maintenance socket connection: read newline-delimited JSON, write JSON replies."""
     client.settimeout(15.0)
     try:
         buf = b""
@@ -652,6 +668,7 @@ def _handle_maint_client(client, ctx):
 
 
 def _serve_maint_socket(ctx, socket_path=None):
+    """Bind the Unix maintenance socket and accept clients, each handled in a daemon thread."""
     if socket_path is None:
         socket_path = SOCKET_PATH
     sock_dir = os.path.dirname(socket_path)
@@ -685,6 +702,7 @@ def _serve_maint_socket(ctx, socket_path=None):
 
 def _serve_lx200(latest_solution, shared_cfg, cfg,
                  align_request_q, align_response_q, ctx):
+    """Bind the LX200 TCP socket and serve clients, one active connection at a time."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("0.0.0.0", cfg.lx200_port))

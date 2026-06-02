@@ -41,6 +41,7 @@ app.jinja_env.filters['log10'] = \
 
 
 def _safe_call(cmd, args=None, timeout=15.0):
+    """Call the maintenance daemon; return MaintResponse(ok=False) on any connection error."""
     try:
         return maint_call(cmd, args, timeout=timeout)
     except FileNotFoundError:
@@ -52,6 +53,7 @@ def _safe_call(cmd, args=None, timeout=15.0):
 
 
 def _format_solution(sol):
+    """Reshape a raw latest_solution dict into a template-friendly form."""
     if not sol:
         return None
     if not sol.get("solved"):
@@ -80,6 +82,7 @@ def _format_solution(sol):
 
 
 def _hms(hours):
+    """Format fractional hours as HHhMMmSSs."""
     hours = hours % 24.0
     h = int(hours); m = int((hours - h) * 60)
     s = int(round((hours - h - m / 60) * 3600))
@@ -89,6 +92,7 @@ def _hms(hours):
 
 
 def _dms(deg):
+    """Format decimal degrees as ±DD°MM'SS\"."""
     sign = "+" if deg >= 0 else "-"
     a = abs(deg)
     d = int(a); m = int((a - d) * 60)
@@ -100,6 +104,7 @@ def _dms(deg):
 
 @app.route("/")
 def dashboard():
+    """Main dashboard: current solution, boresight, calibration, and IMU status."""
     status = _safe_call("status")
     cal    = _safe_call("calibration_status")
 
@@ -129,6 +134,7 @@ def dashboard():
 
 @app.route("/api/status")
 def api_status():
+    """JSON snapshot of daemon status and calibration state for auto-refresh."""
     status = _safe_call("status")
     cal    = _safe_call("calibration_status")
     return jsonify({
@@ -141,6 +147,7 @@ def api_status():
 
 @app.route("/boresight/center", methods=["POST"])
 def boresight_center():
+    """Reset boresight to the frame center and redirect to dashboard."""
     r = _safe_call("boresight_center")
     if not r.ok:
         return r.error, 500
@@ -151,6 +158,7 @@ def boresight_center():
 
 @app.route("/backend/set", methods=["POST"])
 def backend_set():
+    """Switch the star-extraction backend (olive or sycamore) and redirect to dashboard."""
     backend = request.form.get("backend", "olive").strip().lower()
     r = _safe_call("set_extract_backend", {"backend": backend})
     if not r.ok:
@@ -160,6 +168,7 @@ def backend_set():
 
 @app.route("/testmode/set", methods=["POST"])
 def testmode_set():
+    """Toggle test-image vs. live-camera mode and redirect to dashboard."""
     raw     = request.form.get("enabled", "false").strip().lower()
     enabled = raw in ("true", "1", "yes")
     r = _safe_call("set_test_mode", {"enabled": enabled})
@@ -172,6 +181,7 @@ def testmode_set():
 
 @app.route("/polar")
 def polar_page():
+    """Polar-alignment page: shows current status and start/cancel controls."""
     status = _safe_call("polar_status")
     return render_template(
         "polar.html",
@@ -183,24 +193,28 @@ def polar_page():
 
 @app.route("/api/polar/status")
 def api_polar_status():
+    """JSON polar-alignment status for the polar page's auto-refresh."""
     r = _safe_call("polar_status")
     return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
 
 
 @app.route("/polar/start", methods=["POST"])
 def polar_start():
+    """Start a polar-alignment session and redirect to the polar page."""
     _safe_call("polar_start")
     return redirect(url_for("polar_page"))
 
 
 @app.route("/polar/cancel", methods=["POST"])
 def polar_cancel():
+    """Cancel the running polar-alignment session and redirect to the polar page."""
     _safe_call("polar_cancel")
     return redirect(url_for("polar_page"))
 
 
 @app.route("/polar/set-latitude", methods=["POST"])
 def polar_set_latitude():
+    """Persist a new observer latitude and push it to the solver, then redirect."""
     try:
         lat = float(request.form.get("latitude_deg", ""))
     except ValueError:
@@ -214,6 +228,7 @@ def polar_set_latitude():
 
 @app.route("/calibration/reset", methods=["POST"])
 def calibration_reset():
+    """Reset the FOV rolling-window calibration and redirect to the dashboard."""
     r = _safe_call("calibration_reset")
     if not r.ok:
         return r.error, 500
@@ -222,6 +237,7 @@ def calibration_reset():
 
 @app.route("/camera")
 def camera_page():
+    """Camera and solver settings page."""
     exposure      = _safe_call("exposure_get")
     solver_params = _safe_call("solver_params_get")
     return render_template(
@@ -233,6 +249,7 @@ def camera_page():
 
 @app.route("/exposure/set", methods=["POST"])
 def exposure_set():
+    """Apply exposure and optional gain from the camera-settings form."""
     persist = request.form.get("persist") == "on"
     try:
         s = float(request.form.get("exposure_s", ""))
@@ -254,6 +271,7 @@ def exposure_set():
 
 @app.route("/api/camera/set", methods=["POST"])
 def api_camera_set():
+    """JSON API for live camera/solver parameter changes without a page reload."""
     data   = request.get_json(silent=True) or {}
     errors = []
     applied = {}
@@ -302,6 +320,7 @@ def api_camera_set():
 
 @app.route("/solver/params/set", methods=["POST"])
 def solver_params_set():
+    """Apply detect_sigma and solve_timeout_ms from the solver-settings form."""
     persist = request.form.get("persist") == "on"
     pargs   = {"persist": persist}
     if request.form.get("detect_sigma"):
@@ -323,6 +342,7 @@ def solver_params_set():
 # ---- Wi-Fi ------------------------------------------------------------------
 
 def _get_wifi_status():
+    """Query nmcli for the active wlan0 connection name, mode (ap/station), SSID, and IP."""
     result = {"mode": "disconnected", "ssid": None, "connection": None,
               "ip": None}
     try:
@@ -363,6 +383,7 @@ def _get_wifi_status():
 
 
 def _scan_networks():
+    """Return visible Wi-Fi networks as [{ssid, signal}] sorted by signal, excluding our own AP."""
     try:
         out = subprocess.check_output(
             ["nmcli", "-t", "-f", "SSID,SIGNAL",
@@ -393,6 +414,7 @@ _wifi_connect_proc = None
 
 @app.route("/wifi")
 def wifi_page():
+    """Wi-Fi management page: current status and list of visible networks."""
     status   = _get_wifi_status()
     networks = _scan_networks()
     return render_template("wifi.html", status=status, networks=networks)
@@ -400,6 +422,7 @@ def wifi_page():
 
 @app.route("/wifi/ap", methods=["POST"])
 def wifi_ap():
+    """Switch wlan0 to access-point mode via ap.sh and redirect to the Wi-Fi page."""
     try:
         subprocess.run(["sudo", "/usr/local/bin/ap.sh"],
                        timeout=30, capture_output=True)
@@ -410,6 +433,7 @@ def wifi_ap():
 
 @app.route("/wifi/station", methods=["POST"])
 def wifi_station():
+    """Start connecting wlan0 to the given SSID via station.sh and redirect to the connecting page."""
     global _wifi_connect_proc
     ssid     = request.form.get("ssid",     "").strip()
     password = request.form.get("password", "").strip()
@@ -429,17 +453,20 @@ def wifi_station():
 
 @app.route("/wifi/connecting")
 def wifi_connecting():
+    """Show the connecting spinner page while station.sh runs in the background."""
     ssid = request.args.get("ssid", "")
     return render_template("wifi_connecting.html", ssid=ssid)
 
 
 @app.route("/api/wifi/status")
 def api_wifi_status():
+    """JSON current wlan0 status for the connecting-page auto-refresh."""
     return jsonify(_get_wifi_status())
 
 
 @app.route("/api/wifi/scan")
 def api_wifi_scan():
+    """Trigger an nmcli rescan and return the updated network list as JSON."""
     try:
         subprocess.run(["nmcli", "dev", "wifi", "rescan"],
                        timeout=10, capture_output=True)
@@ -452,6 +479,7 @@ def api_wifi_scan():
 
 @app.route("/logs")
 def logs():
+    """Show the most recent n lines (10–500) from the efinder.service journal."""
     n = int(request.args.get("n", 100))
     n = max(10, min(n, 500))
     try:
@@ -475,6 +503,7 @@ def logs():
 
 @app.route("/update", methods=["GET", "POST"])
 def update_page():
+    """OTA update page: GET shows current version; POST fires efinder-update in the background."""
     if request.method == "POST":
         try:
             subprocess.Popen(
@@ -562,6 +591,7 @@ _CONFIG_SECTIONS = [
 
 
 def _fmt_val(v):
+    """Format a config value for display (booleans → lowercase, floats → %g)."""
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, float):
@@ -571,6 +601,7 @@ def _fmt_val(v):
 
 @app.route("/config")
 def config_page():
+    """Config viewer: all settings with their defaults and current runtime values."""
     from efinder.config import Config, load_config as _load_config
     defaults = Config()
     cfg_ok    = True
@@ -622,6 +653,7 @@ def config_page():
 
 @app.route("/frame.jpg")
 def frame_jpg():
+    """Serve the current camera frame as a histogram-stretched JPEG with boresight overlay."""
     import numpy as np
     from multiprocessing import shared_memory
     from PIL import Image, ImageDraw
@@ -702,6 +734,7 @@ _focus_state = {
 
 
 def _read_focus_data():
+    """Read one frame and compute a Laplacian-variance focus score around the brightest star."""
     import numpy as np
     from multiprocessing import shared_memory
     from scipy.ndimage import laplace as nd_laplace
@@ -753,6 +786,7 @@ def _read_focus_data():
 
 @app.route("/focus")
 def focus_page():
+    """Focus assistant page."""
     with _focus_lock:
         committed = _focus_state["committed_score"]
     exposure = _safe_call("exposure_get")
@@ -765,6 +799,7 @@ def focus_page():
 
 @app.route("/api/focus")
 def api_focus():
+    """JSON focus score and session maximum for the focus page's live polling."""
     data = _read_focus_data()
     if data is None:
         return jsonify({"error": "camera not running"}), 503
@@ -788,6 +823,7 @@ def api_focus():
 
 @app.route("/focus/patch.jpg")
 def focus_patch_jpg():
+    """Serve a 4× zoomed JPEG crop of the brightest star for the focus assistant."""
     with _focus_lock:
         patch_bytes = _focus_state.get("patch_bytes")
     if patch_bytes is None:
@@ -804,6 +840,7 @@ def focus_patch_jpg():
 
 @app.route("/focus/commit", methods=["POST"])
 def focus_commit():
+    """Save the current focus score as the committed reference and redirect to dashboard."""
     with _focus_lock:
         _focus_state["committed_score"] = _focus_state.get("score")
     return redirect(url_for("dashboard"))
@@ -811,6 +848,7 @@ def focus_commit():
 
 @app.route("/focus/reset", methods=["POST"])
 def focus_reset():
+    """Reset the session-maximum focus score (returns 204 No Content)."""
     with _focus_lock:
         _focus_state["session_max"] = None
     return ("", 204)
@@ -1007,6 +1045,7 @@ def debug_collect():
 
 @app.route("/healthz")
 def healthz():
+    """200 ok if the daemon socket responds to ping, else 503."""
     r = _safe_call("ping", timeout=2.0)
     if r.ok:
         return "ok\n", 200
