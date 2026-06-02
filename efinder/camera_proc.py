@@ -156,6 +156,18 @@ def _init_camera(cfg, current_state):
     log.info("Camera started: %dx%d exp=%.3fs gain=%.1f",
              cfg.frame_width, cfg.frame_height,
              current_state["exposure_s"], current_state["gain"])
+    # Log the actual sensor mode chosen by libcamera so plate-scale can be
+    # verified against the configured arcsec_per_pixel.
+    try:
+        sc = cam.camera_configuration().get("sensor", {})
+        log.info("Sensor mode: output_size=%s bit_depth=%s",
+                 sc.get("output_size"), sc.get("bit_depth"))
+        raw = cam.camera_configuration().get("raw")
+        if raw:
+            log.info("Raw stream: size=%s format=%s",
+                     raw.get("size"), raw.get("format"))
+    except Exception as e:
+        log.debug("Could not read sensor mode: %s", e)
     return cam
 
 
