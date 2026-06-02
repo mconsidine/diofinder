@@ -2,10 +2,18 @@
 """
 Solve a star-field image with olive-solve (tetra3-py).
 
+Backends
+  olive    — solve_from_image_fast (combined extraction + solve, default)
+  sycamore — detect_stars (matched-filter gate) + solve_from_centroids
+
 Usage (on device):
   sudo /opt/efinder/venv/bin/python3 tests/solve_image.py --image /path/to/image.jpg
 
-Usage (with explicit database):
+  # Sycamore backend:
+  sudo /opt/efinder/venv/bin/python3 tests/solve_image.py \\
+      --image image.jpg --backend sycamore --sigma 7.0
+
+  # Explicit database:
   python3 tests/solve_image.py --image image.jpg --db /path/to/database.npz
 
 Defaults are read from /etc/efinder/efinder.conf when present.
@@ -27,7 +35,13 @@ def main():
     p.add_argument('--fov', type=float, help='FOV estimate in degrees (overrides config)')
     p.add_argument('--fov-err', type=float, help='FOV max error in degrees (overrides config)')
     p.add_argument('--timeout', type=int, help='Solve timeout in ms (overrides config)')
+    p.add_argument('--sigma', type=float, help='Detection sigma threshold (overrides config)')
     p.add_argument('--reps', type=int, default=1, help='Repetitions for timing (default 1)')
+    p.add_argument('--backend', default='olive', choices=['olive', 'sycamore'],
+                   help='Extraction backend (default: olive)')
+    p.add_argument('--gate-mode', default='matched_filter',
+                   choices=['matched_filter', 'cedar'],
+                   help='Sycamore gate algorithm (default: matched_filter)')
     args = p.parse_args()
 
     # Load config if available; fall back to defaults
@@ -39,16 +53,32 @@ def main():
         fov      = args.fov      or cfg.fov_deg
         fov_err  = args.fov_err  or cfg.fov_max_error_deg
         timeout  = args.timeout  or cfg.solve_timeout_ms
+        sigma    = args.sigma    or cfg.detect_sigma
+        gate     = args.gate_mode or getattr(cfg, 'sycamore_gate_mode', 'matched_filter')
     except Exception:
         db_path  = pathlib.Path('/var/lib/efinder/default_database.npz')
         fov      = args.fov     or 13.5
         fov_err  = args.fov_err or 1.0
         timeout  = args.timeout or 1500
+        sigma    = args.sigma   or 9.0
+        gate     = args.gate_mode
 
     if args.db:
         db_path = pathlib.Path(args.db)
 
-    # Load database
+    # Load image
+    img_path = pathlib.Path(args.image)
+    if not img_path.exists():
+        sys.exit(f'ERROR: image not found at {img_path}')
+
+    try:
+        import numpy as np
+        from PIL import Image
+        arr = np.array(Image.open(img_path).convert('L'), dtype=np.uint8)
+    except Exception as e:
+        sys.exit(f'ERROR loading image: {e}')
+
+    # Load tetra3 database
     print(f'Database : {db_path}')
     if not db_path.exists():
         sys.exit(f'ERROR: database not found at {db_path}')
@@ -62,22 +92,22 @@ def main():
     t3 = tetra3.Tetra3(str(db_path))
     print(f'Loaded   : {(time.monotonic() - t0)*1000:.0f} ms')
 
-    # Load image
-    img_path = pathlib.Path(args.image)
-    if not img_path.exists():
-        sys.exit(f'ERROR: image not found at {img_path}')
-
-    try:
-        import numpy as np
-        from PIL import Image
-        img  = Image.open(img_path).convert('L')
-        arr  = np.array(img, dtype=np.uint8)
-    except Exception as e:
-        sys.exit(f'ERROR loading image: {e}')
+    # Load sycamore if needed
+    if args.backend == 'sycamore':
+        try:
+            import star_detect as _sd
+            _sd.set_num_threads(2)
+        except ImportError:
+            sys.exit('ERROR: sycamore star_detect not installed '
+                     '(run from the efinder venv or use --backend olive)')
 
     print(f'Image    : {img_path.name}  {arr.shape[1]}x{arr.shape[0]}')
+    print(f'Backend  : {args.backend}'
+          + (f'  gate_mode={gate}' if args.backend == 'sycamore' else ''))
     print(f'FOV      : {fov:.2f} deg  +/-{fov_err:.2f} deg')
     print(f'Timeout  : {timeout} ms')
+    if args.backend == 'sycamore':
+        print(f'Sigma    : {sigma}')
     print()
 
     solve_kwargs = dict(
@@ -88,13 +118,35 @@ def main():
 
     times = []
     result = None
-    for i in range(args.reps):
-        t0 = time.monotonic()
-        result = t3.solve_from_image_fast(arr, **solve_kwargs)
-        elapsed = (time.monotonic() - t0) * 1000
-        times.append(elapsed)
-        status = result.get('status', 'unknown') if result else 'None'
-        print(f'  [{i+1:2d}] {elapsed:6.0f} ms  {status}')
+
+    if args.backend == 'sycamore':
+        # Split pipeline: sycamore extraction + solve_from_centroids
+        for i in range(args.reps):
+            t0  = time.monotonic()
+            raw = _sd.detect_stars(arr, sigma=sigma, bin=1, centroid_full_res=True,
+                                   gate_mode=gate)
+            n   = len(raw) if raw else 0
+            cent = (np.array([[s[1], s[0]] for s in raw], dtype=np.float64)
+                    if raw else None)
+            if cent is None or n == 0:
+                elapsed = (time.monotonic() - t0) * 1000
+                times.append(elapsed)
+                print(f'  [{i+1:2d}] {elapsed:6.0f} ms  TooFew (stars={n})')
+                continue
+            result = t3.solve_from_centroids(cent, arr.shape, **solve_kwargs)
+            elapsed = (time.monotonic() - t0) * 1000
+            times.append(elapsed)
+            status = result.get('status', 'unknown') if result else 'None'
+            print(f'  [{i+1:2d}] {elapsed:6.0f} ms  {status}  stars={n}')
+    else:
+        # Olive combined path
+        for i in range(args.reps):
+            t0 = time.monotonic()
+            result = t3.solve_from_image_fast(arr, sigma=sigma, **solve_kwargs)
+            elapsed = (time.monotonic() - t0) * 1000
+            times.append(elapsed)
+            status = result.get('status', 'unknown') if result else 'None'
+            print(f'  [{i+1:2d}] {elapsed:6.0f} ms  {status}')
 
     if args.reps > 1:
         print(f'\n  avg={sum(times)/len(times):.0f} ms  '
@@ -115,6 +167,9 @@ def main():
         status = result.get('status', 'unknown') if result else 'unknown'
         print(f'NO MATCH  (status={status})')
         print(f'  Try: --fov <degrees>  --fov-err <degrees>  --timeout <ms>')
+        if args.backend == 'sycamore':
+            print(f'  Sycamore tip: try --sigma lower than {sigma:.1f} '
+                  '(matched-filter is more conservative; sigma 7–8 is typical)')
 
 
 if __name__ == '__main__':

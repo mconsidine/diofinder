@@ -1,28 +1,30 @@
 #!/usr/bin/env python3
 """
-eFinder olive-solve full-pipeline diagnostic.
+eFinder full-pipeline diagnostic.
 
 Tests the complete extraction + solve pipeline with per-step timing.
-No cedar-detect, gRPC, or external server required.
+No external server required.
 
 Three paths are timed for each image:
-  A  solve_from_image_fast (u8)           — single combined Rust call
-  B  get_centroids_from_image_fast (u8)   — split pipeline (matches daemon)
+  A  solve_from_image_fast (u8)           — single combined Rust call (olive only)
+  B  <backend> extraction                 — split pipeline (matches daemon)
      + solve_from_centroids
   C  same as B but with attitude hint     — seeded from path B result
 
-Paths B and C reflect exactly what solver_proc.py does at runtime.
-Path A is a useful timing reference but is no longer the live code path.
+Paths B and C use the backend selected with --backend (default: olive).
+Path A always uses olive's solve_from_image_fast regardless of --backend.
 
 Usage:
-  # Loop over installed test images (default):
+  # Loop over installed test images, olive backend (default):
   sudo /opt/efinder/venv/bin/python3 tests/diag_solve.py
 
-  # Single image:
-  sudo /opt/efinder/venv/bin/python3 tests/diag_solve.py --image /path/to/image.png
+  # Live frame, sycamore backend:
+  sudo /opt/efinder/venv/bin/python3 tests/diag_solve.py \\
+      --live-shm --backend sycamore
 
-  # Live frame from running daemon:
-  sudo /opt/efinder/venv/bin/python3 tests/diag_solve.py --live-shm
+  # Single image, custom sigma:
+  sudo /opt/efinder/venv/bin/python3 tests/diag_solve.py \\
+      --image /path/to/image.png --sigma 7.0 --backend sycamore
 
   # Override solver params:
   sudo /opt/efinder/venv/bin/python3 tests/diag_solve.py \\
@@ -67,6 +69,11 @@ ap.add_argument('--skip-a',  action='store_true',
                 help='Skip path A (solve_from_image_fast) to save time')
 ap.add_argument('--extended-timeout', action='store_true',
                 help='Retry with 3× timeout when path A/B produce no match')
+ap.add_argument('--backend', default='olive', choices=['olive', 'sycamore'],
+                help='Extraction backend for paths B and C (default: olive)')
+ap.add_argument('--gate-mode', default='matched_filter',
+                choices=['matched_filter', 'cedar'],
+                help='Sycamore gate algorithm (default: matched_filter)')
 args = ap.parse_args()
 
 
@@ -84,6 +91,7 @@ try:
     sigma   = args.sigma   or cfg.detect_sigma
     min_c   = cfg.min_centroids
     W, H    = cfg.frame_width, cfg.frame_height
+    gate    = args.gate_mode or getattr(cfg, 'sycamore_gate_mode', 'matched_filter')
     tag(PASS, cfg.summary())
 except Exception as e:
     tag(WARN, f'Config unavailable ({e}); using defaults')
@@ -94,9 +102,12 @@ except Exception as e:
     sigma   = args.sigma   or 9.0
     min_c   = 8
     W, H    = 960, 760
+    gate    = args.gate_mode
 
 tag(INFO, f'db={db_path}')
 tag(INFO, f'FOV={fov:.2f}° ±{fov_err:.2f}°  timeout={timeout} ms  sigma={sigma}  min_c={min_c}')
+tag(INFO, f'backend (paths B/C)={args.backend}'
+          + (f'  gate_mode={gate}' if args.backend == 'sycamore' else ''))
 
 try:
     import numpy as np
@@ -118,6 +129,18 @@ try:
     tag(PASS, 'tetra3 (olive-solve)')
 except ImportError as e:
     tag(FAIL, f'tetra3 not installed: {e}'); sys.exit(1)
+
+sycamore_ok = False
+try:
+    import star_detect as _sd
+    _sd.set_num_threads(2)
+    sycamore_ok = True
+    tag(PASS, 'sycamore star_detect — available')
+except ImportError:
+    if args.backend == 'sycamore':
+        tag(FAIL, 'sycamore star_detect not installed — cannot use --backend sycamore')
+        sys.exit(1)
+    tag(INFO, 'sycamore star_detect not installed (not needed for olive backend)')
 
 
 # ── Stage 1: Database load ────────────────────────────────────────────────────
@@ -191,17 +214,44 @@ base_kw = dict(
     solve_timeout=timeout,
 )
 
+
+# ── Extraction helper ─────────────────────────────────────────────────────────
+
+def _extract(arr_u8):
+    """Extract centroids using the selected backend.
+
+    Returns (centroids, n_stars, extract_ms).
+    """
+    if args.backend == 'sycamore':
+        t0  = time.monotonic()
+        raw = _sd.detect_stars(arr_u8, sigma=sigma, bin=1, centroid_full_res=True,
+                               gate_mode=gate)
+        ms  = (time.monotonic() - t0) * 1000
+        n   = len(raw) if raw else 0
+        # sycamore returns (x=col, y=row); tetra3 expects (row, col)
+        cent = (np.array([[s[1], s[0]] for s in raw], dtype=np.float64)
+                if raw else None)
+        return cent, n, ms
+    else:
+        t0        = time.monotonic()
+        centroids = t3.get_centroids_from_image_fast(arr_u8, sigma=sigma)
+        ms        = (time.monotonic() - t0) * 1000
+        n         = len(centroids) if centroids is not None else 0
+        return centroids, n, ms
+
+
 summary = []
 
 for label, arr_u8 in frames:
     tag(INFO, f'\nImage: {label}  {arr_u8.shape[1]}x{arr_u8.shape[0]}  '
               f'peak={arr_u8.max()}')
 
-    # ── Path A: solve_from_image_fast (single Rust call) ─────────────────────
+    # ── Path A: solve_from_image_fast (olive, single Rust call) ──────────────
     a_wall, a_solved = [], False
     a_result = None
     if not args.skip_a:
-        sep(f'Path A: solve_from_image_fast  [{label}]  reps={args.reps}')
+        sep(f'Path A: solve_from_image_fast  [{label}]  reps={args.reps}  '
+            f'[olive — always]')
         tag(INFO, 'Single combined extraction + solve call (reference baseline)')
         for i in range(args.reps):
             t0   = time.monotonic()
@@ -232,10 +282,13 @@ for label, arr_u8 in frames:
             else:
                 tag(FAIL, 'Still no match at 3× timeout')
 
-    # ── Path B: split pipeline — matches daemon ───────────────────────────────
-    sep(f'Path B: get_centroids_from_image_fast + solve_from_centroids  '
+    # ── Path B: split pipeline — backend extraction + solve ───────────────────
+    ext_label = (f'sycamore detect_stars (gate={gate})'
+                 if args.backend == 'sycamore'
+                 else 'get_centroids_from_image_fast')
+    sep(f'Path B: {ext_label} + solve_from_centroids  '
         f'[{label}]  reps={args.reps}')
-    tag(INFO, 'This is the exact pipeline solver_proc.py uses at runtime')
+    tag(INFO, 'Split pipeline — matches what solver_proc.py uses at runtime')
 
     b_ext, b_slv, b_wall = [], [], []
     b_result = None
@@ -243,10 +296,8 @@ for label, arr_u8 in frames:
     last_q   = None
 
     for i in range(args.reps):
-        t0        = time.monotonic()
-        centroids = t3.get_centroids_from_image_fast(arr_u8, sigma=sigma)
-        ext_ms    = (time.monotonic() - t0) * 1000
-        n         = len(centroids) if centroids is not None else 0
+        centroids, n, ext_ms = _extract(arr_u8)
+        b_n = n
 
         if n < min_c:
             tag(WARN, f'[{i+1}] ext={ext_ms:.0f} ms  stars={n}  '
@@ -254,7 +305,6 @@ for label, arr_u8 in frames:
             b_ext.append(ext_ms)
             b_slv.append(0.0)
             b_wall.append(ext_ms)
-            b_n = n
             continue
 
         t1    = time.monotonic()
@@ -264,7 +314,6 @@ for label, arr_u8 in frames:
 
         b_ext.append(ext_ms); b_slv.append(slv_ms); b_wall.append(total)
         b_result = soln
-        b_n      = n
 
         ok = PASS if soln and soln.get('RA') is not None else FAIL
         tag(ok, f'[{i+1}] total={total:.0f} ms  '
@@ -287,7 +336,7 @@ for label, arr_u8 in frames:
     elif args.extended_timeout and b_n >= min_c:
         tag(WARN, f'No match; retrying at {timeout*3} ms …')
         try:
-            c2   = t3.get_centroids_from_image_fast(arr_u8, sigma=sigma)
+            c2, _, _ = _extract(arr_u8)
             soln = t3.solve_from_centroids(c2, arr_u8.shape,
                                            **{**base_kw, 'solve_timeout': timeout * 3})
             if soln and soln.get('RA') is not None:
@@ -299,7 +348,8 @@ for label, arr_u8 in frames:
             tag(FAIL, f'Extended retry raised: {e}')
 
     # ── Path C: split pipeline + attitude hint ────────────────────────────────
-    sep(f'Path C: split pipeline + attitude hint  [{label}]  reps={args.reps}')
+    sep(f'Path C: {ext_label} + solve_from_centroids + hint  '
+        f'[{label}]  reps={args.reps}')
 
     if last_q is None:
         tag(WARN, 'Path B produced no quaternion — hint path skipped')
@@ -312,10 +362,7 @@ for label, arr_u8 in frames:
         c_ext, c_slv, c_wall = [], [], []
         c_result = None
         for i in range(args.reps):
-            t0        = time.monotonic()
-            centroids = t3.get_centroids_from_image_fast(arr_u8, sigma=sigma)
-            ext_ms    = (time.monotonic() - t0) * 1000
-            n         = len(centroids) if centroids is not None else 0
+            centroids, n, ext_ms = _extract(arr_u8)
 
             if n < min_c:
                 tag(WARN, f'[{i+1}] ext={ext_ms:.0f} ms  stars={n}  < min_centroids — skip')
@@ -366,6 +413,8 @@ for label, arr_u8 in frames:
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 sep('Summary')
+print(f'  backend (B/C): {args.backend}'
+      + (f'  gate_mode: {gate}' if args.backend == 'sycamore' else ''))
 print(f'  {"Image":<28} {"Stars":>5}  '
       f'{"A:wall":>8}  {"A:ok":<5}  '
       f'{"B:wall":>8}  {"B:ok":<5}  '
