@@ -1,36 +1,41 @@
 #!/usr/bin/env python3
 """
-eFinder centroid-extraction diagnostic (olive-solve).
+eFinder centroid-extraction diagnostic.
 
-Tests olive-solve tetra3-py centroid extraction in isolation: timing, star
-count, and sigma sensitivity.  No cedar-detect, gRPC, or external server
-required.
+Tests centroid extraction in isolation: timing, star count, and sigma
+sensitivity.  No external server required.
 
-Two extraction functions are compared on request:
-  fast  — get_centroids_from_image_fast(u8)   ← what the daemon uses
-  full  — get_centroids_from_image(f32)        ← optional comparison
+Backends
+  olive    — tetra3 get_centroids_from_image_fast (uint8, default)
+  sycamore — star_detect detect_stars with matched-filter gate (optional)
 
-Stages:
+Within the olive backend, --compare-full also runs get_centroids_from_image
+(float32) for a direct fast-vs-full comparison.
+
+Stages
   0. Config + library imports
   1. Database load
   2. Frame source  (live SHM | PNG file | synthetic fallback)
-  3. Extraction timing — get_centroids_from_image_fast (N reps)
-  4. Sigma sweep  (optional --sigma-sweep)
+  3. Extraction timing  (N reps)
+  3b. Fast vs full comparison  (olive only, --compare-full)
+  4. Sigma sweep  (--sigma-sweep)
 
 Usage:
-  # Live frame from running daemon:
+  # Live frame from running daemon, olive backend (default):
   sudo /opt/efinder/venv/bin/python3 tests/diag_detect.py
 
-  # Saved capture:
-  sudo /opt/efinder/venv/bin/python3 tests/diag_detect.py --image /path/to/frame.png
+  # Sycamore backend with matched-filter gate:
+  sudo /opt/efinder/venv/bin/python3 tests/diag_detect.py --backend sycamore
 
-  # Override sigma:
-  sudo /opt/efinder/venv/bin/python3 tests/diag_detect.py --sigma 7.0
+  # Saved capture, custom sigma:
+  sudo /opt/efinder/venv/bin/python3 tests/diag_detect.py \\
+      --image /path/to/frame.png --sigma 7.0
 
-  # Sigma sweep to find best threshold:
-  sudo /opt/efinder/venv/bin/python3 tests/diag_detect.py --sigma-sweep
+  # Sigma sweep for sycamore:
+  sudo /opt/efinder/venv/bin/python3 tests/diag_detect.py \\
+      --backend sycamore --sigma-sweep
 
-  # Also compare fast (u8) vs full (f32) extraction:
+  # olive fast-vs-full comparison:
   sudo /opt/efinder/venv/bin/python3 tests/diag_detect.py --compare-full
 """
 
@@ -57,11 +62,17 @@ ap = argparse.ArgumentParser(description=__doc__,
 ap.add_argument('--image', metavar='PATH', help='PNG/JPG to use as test frame')
 ap.add_argument('--sigma', type=float,     help='Override detect_sigma from config')
 ap.add_argument('--reps',  type=int, default=6,
-                help='Extraction repetitions per call (default 6)')
+                help='Extraction repetitions (default 6)')
+ap.add_argument('--backend', default='olive', choices=['olive', 'sycamore'],
+                help='Extraction backend (default: olive)')
+ap.add_argument('--gate-mode', default='matched_filter',
+                choices=['matched_filter', 'cedar'],
+                help='Sycamore gate algorithm (default: matched_filter)')
 ap.add_argument('--sigma-sweep', action='store_true',
                 help='Sweep sigma 3–12 and show star count table')
 ap.add_argument('--compare-full', action='store_true',
-                help='Also run get_centroids_from_image (f32) for comparison')
+                help='Also run get_centroids_from_image (f32) for comparison '
+                     '[olive only]')
 args = ap.parse_args()
 
 
@@ -77,6 +88,7 @@ try:
     sigma   = args.sigma if args.sigma is not None else cfg.detect_sigma
     min_c   = cfg.min_centroids
     W, H    = cfg.frame_width, cfg.frame_height
+    gate    = args.gate_mode or getattr(cfg, 'sycamore_gate_mode', 'matched_filter')
     tag(PASS, cfg.summary())
 except Exception as e:
     tag(WARN, f'Config unavailable ({e}); using defaults')
@@ -84,8 +96,11 @@ except Exception as e:
     sigma   = args.sigma if args.sigma is not None else 9.0
     min_c   = 8
     W, H    = 960, 760
+    gate    = args.gate_mode
 
-tag(INFO, f'sigma={sigma:.1f}  frame={W}x{H}  min_centroids={min_c}')
+tag(INFO, f'backend={args.backend}  sigma={sigma:.1f}  frame={W}x{H}  '
+          f'min_centroids={min_c}'
+          + (f'  gate_mode={gate}' if args.backend == 'sycamore' else ''))
 tag(INFO, f'db={db_path}')
 
 try:
@@ -94,11 +109,25 @@ try:
 except ImportError as e:
     tag(FAIL, str(e)); sys.exit(1)
 
+# olive-solve (tetra3) — always required
 try:
     import tetra3
     tag(PASS, 'tetra3 (olive-solve)')
 except ImportError as e:
     tag(FAIL, f'tetra3 not installed: {e}'); sys.exit(1)
+
+# sycamore — optional; required only when --backend sycamore
+sycamore_ok = False
+try:
+    import star_detect as _sd
+    _sd.set_num_threads(2)
+    sycamore_ok = True
+    tag(PASS, 'sycamore star_detect — available')
+except ImportError:
+    if args.backend == 'sycamore':
+        tag(FAIL, 'sycamore star_detect not installed — cannot use --backend sycamore')
+        sys.exit(1)
+    tag(INFO, 'sycamore star_detect not installed (not needed for olive backend)')
 
 
 # ── Stage 1: Database load ────────────────────────────────────────────────────
@@ -172,17 +201,44 @@ if frame is None:
     tag(INFO, f'Synthetic: 50 Gaussian stars  peak={frame.max()}')
 
 
-# ── Stage 3: Extraction timing — fast (u8) ───────────────────────────────────
-sep(f'Stage 3: get_centroids_from_image_fast (u8)  sigma={sigma:.1f}  reps={args.reps}')
-tag(INFO, 'Same call used by the daemon (solver_proc.py split pipeline)')
+# ── Extraction helpers ────────────────────────────────────────────────────────
+
+def _extract_olive(f, sig):
+    """Return (centroids, n_stars, elapsed_ms) using olive get_centroids_from_image_fast."""
+    t0   = time.monotonic()
+    cent = t3.get_centroids_from_image_fast(f, sigma=sig)
+    ms   = (time.monotonic() - t0) * 1000
+    n    = len(cent) if cent is not None else 0
+    return cent, n, ms
+
+
+def _extract_sycamore(f, sig):
+    """Return (centroids_rowcol, n_stars, elapsed_ms) using sycamore detect_stars."""
+    t0  = time.monotonic()
+    raw = _sd.detect_stars(f, sigma=sig, bin=1, centroid_full_res=True,
+                           gate_mode=gate)
+    ms  = (time.monotonic() - t0) * 1000
+    n   = len(raw) if raw else 0
+    # sycamore returns (x=col, y=row); tetra3 expects (row, col)
+    cent = (np.array([[s[1], s[0]] for s in raw], dtype=np.float64)
+            if raw else None)
+    return cent, n, ms
+
+
+_extract = _extract_sycamore if args.backend == 'sycamore' else _extract_olive
+
+
+# ── Stage 3: Extraction timing ────────────────────────────────────────────────
+backend_label = (f'sycamore detect_stars  gate={gate}' if args.backend == 'sycamore'
+                 else 'get_centroids_from_image_fast (u8)')
+sep(f'Stage 3: {backend_label}  sigma={sigma:.1f}  reps={args.reps}')
+if args.backend == 'olive':
+    tag(INFO, 'Same call used by the daemon (solver_proc.py split pipeline)')
 
 times  = []
 last_n = 0
 for i in range(args.reps):
-    t0        = time.monotonic()
-    centroids = t3.get_centroids_from_image_fast(frame, sigma=sigma)
-    ms        = (time.monotonic() - t0) * 1000
-    n         = len(centroids) if centroids is not None else 0
+    _, n, ms = _extract(frame, sigma)
     times.append(ms)
     last_n = n
     lbl = PASS if n >= min_c else WARN
@@ -196,46 +252,52 @@ if times:
 if last_n < min_c:
     print()
     tag(WARN, f'Only {last_n} stars detected (need {min_c} to solve).')
-    tag(WARN, f'  Try --sigma lower than {sigma:.1f}, longer exposure, '
-              'or check image quality.')
+    if args.backend == 'sycamore':
+        tag(WARN, f'  Try --sigma lower than {sigma:.1f} (sycamore matched-filter '
+                  'is more conservative; sigma 7–8 is typical).')
+    else:
+        tag(WARN, f'  Try --sigma lower than {sigma:.1f}, longer exposure, '
+                  'or check image quality.')
 
 
-# ── Stage 3b: Optional comparison with full (f32) extraction ─────────────────
+# ── Stage 3b: Olive fast vs full comparison ───────────────────────────────────
 if args.compare_full:
-    sep(f'Stage 3b: get_centroids_from_image (f32)  sigma={sigma:.1f}  reps={args.reps}')
-    tag(INFO, 'Slower float32 variant — for comparison only')
-    frame_f32 = frame.astype(np.float32)
-    times_f   = []
-    n_f       = 0
-    for i in range(args.reps):
-        t0        = time.monotonic()
-        centroids = t3.get_centroids_from_image(frame_f32, sigma=sigma)
-        ms        = (time.monotonic() - t0) * 1000
-        n_f       = len(centroids) if centroids is not None else 0
-        times_f.append(ms)
-        tag(INFO, f'[{i+1:2d}] {ms:6.1f} ms  stars={n_f:3d}')
-    if times_f:
-        avg_f = sum(times_f) / len(times_f)
-        print(f'\n  Timing: avg={avg_f:.1f} ms  min={min(times_f):.1f} ms  '
-              f'max={max(times_f):.1f} ms')
-        if times:
-            diff = avg_f - sum(times) / len(times)
-            print(f'  fast={sum(times)/len(times):.1f} ms  '
-                  f'full={avg_f:.1f} ms  '
-                  f'(full is {diff:+.1f} ms slower)')
+    if args.backend == 'sycamore':
+        tag(WARN, '--compare-full is olive-only; skipped for sycamore backend')
+    else:
+        sep(f'Stage 3b: get_centroids_from_image (f32)  sigma={sigma:.1f}  reps={args.reps}')
+        tag(INFO, 'Slower float32 variant — for comparison only')
+        frame_f32 = frame.astype(np.float32)
+        times_f   = []
+        n_f       = 0
+        for i in range(args.reps):
+            t0        = time.monotonic()
+            centroids = t3.get_centroids_from_image(frame_f32, sigma=sigma)
+            ms        = (time.monotonic() - t0) * 1000
+            n_f       = len(centroids) if centroids is not None else 0
+            times_f.append(ms)
+            tag(INFO, f'[{i+1:2d}] {ms:6.1f} ms  stars={n_f:3d}')
+        if times_f:
+            avg_f = sum(times_f) / len(times_f)
+            print(f'\n  Timing: avg={avg_f:.1f} ms  min={min(times_f):.1f} ms  '
+                  f'max={max(times_f):.1f} ms')
+            if times:
+                diff = avg_f - sum(times) / len(times)
+                print(f'  fast={sum(times)/len(times):.1f} ms  '
+                      f'full={avg_f:.1f} ms  '
+                      f'(full is {diff:+.1f} ms slower)')
 
 
 # ── Stage 4: Sigma sweep ──────────────────────────────────────────────────────
 if args.sigma_sweep:
-    sep('Stage 4: Sigma sweep  (sigma 3 → 12)')
+    sep(f'Stage 4: Sigma sweep  (sigma 3 → 12)  backend={args.backend}')
+    if args.backend == 'sycamore':
+        tag(INFO, f'gate_mode={gate}')
     print(f'  {"sigma":>6}  {"stars":>6}  {"ms":>7}')
     print(f'  ' + '-' * 24)
     for sig in [3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 12.0]:
         try:
-            t0   = time.monotonic()
-            cent = t3.get_centroids_from_image_fast(frame, sigma=sig)
-            ms   = (time.monotonic() - t0) * 1000
-            n    = len(cent) if cent is not None else 0
+            _, n, ms = _extract(frame, sig)
             note = ' ← min_centroids met' if n >= min_c else ''
             cur  = ' ← current' if abs(sig - sigma) < 0.05 else ''
             print(f'  {sig:6.1f}  {n:6d}  {ms:7.1f}{note or cur}')

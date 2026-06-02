@@ -112,6 +112,9 @@ ap.add_argument('--hint-sweep', action='store_true',
                 help='Sweep hint_uncertainty_deg from 0.5° to 30° after main table')
 ap.add_argument('--sigma-sweep', action='store_true',
                 help='Sweep sigma 3–12 to show detection vs solve trade-off')
+ap.add_argument('--gate-mode', default='matched_filter',
+                choices=['matched_filter', 'cedar'],
+                help='Sycamore gate algorithm for paths 4 & 5 (default: matched_filter)')
 args = ap.parse_args()
 
 
@@ -251,7 +254,8 @@ def _extract(frame, sig):
 
 def _extract_sycamore(frame, sig):
     t0  = time.monotonic()
-    raw = _sd.detect_stars(frame, sigma=sig, bin=1, centroid_full_res=True)
+    raw = _sd.detect_stars(frame, sigma=sig, bin=1, centroid_full_res=True,
+                           gate_mode=args.gate_mode)
     ms  = (time.monotonic() - t0) * 1000
     n   = len(raw) if raw else 0
     # (x=col, y=row) → (row, col) for tetra3
@@ -585,7 +589,8 @@ for n, label in names.items():
     print(f'  {n:<2}  {label:<50}  {ext:>8}  {slv:>8}  {tot:>8}  {rat:>8}')
 hr()
 print(f'  Frame: {w}x{h}  FOV: {fov_est:.3f}°±{fov_err:.3f}°  '
-      f'timeout: {timeout_ms} ms  sigma: {sigma}  reps: {args.reps}')
+      f'timeout: {timeout_ms} ms  sigma: {sigma}  reps: {args.reps}  '
+      f'gate_mode: {args.gate_mode}')
 
 
 # ── Hint-uncertainty sweep ─────────────────────────────────────────────────────

@@ -71,6 +71,9 @@ ap.add_argument('--fov',      type=float, help='Override FOV estimate in degrees
 ap.add_argument('--fov-err',  type=float, help='Override FOV max error in degrees')
 ap.add_argument('--hint-unc', type=float, default=5.0,
                 help='Hint uncertainty cone for hint solves (default 5.0°)')
+ap.add_argument('--gate-mode', default='matched_filter',
+                choices=['matched_filter', 'cedar'],
+                help='Sycamore gate algorithm (default: matched_filter)')
 args = ap.parse_args()
 
 
@@ -322,7 +325,8 @@ def _olive_extract(frame, sig):
 
 
 def _sycamore_extract(frame, sig):
-    raw = _sd.detect_stars(frame, sigma=sig, bin=1, centroid_full_res=True)
+    raw = _sd.detect_stars(frame, sigma=sig, bin=1, centroid_full_res=True,
+                           gate_mode=args.gate_mode)
     n   = len(raw) if raw else 0
     # (x=col, y=row) → (row, col) for tetra3
     c   = (np.array([[s[1], s[0]] for s in raw], dtype=np.float32)
@@ -370,7 +374,8 @@ for r in results:
 
 hr()
 print(f'  Frame: {w}x{h}  sigma: {sigma}  FOV: {fov_est:.3f}°±{fov_err:.3f}°  '
-      f'timeout: {timeout_ms} ms  reps: {args.reps}  hint_unc: {args.hint_unc:.1f}°')
+      f'timeout: {timeout_ms} ms  reps: {args.reps}  hint_unc: {args.hint_unc:.1f}°  '
+      f'gate_mode: {args.gate_mode}')
 
 # Delta row (olive vs sycamore) if both ran
 if len(results) == 2 and all(r is not None for r in results):
