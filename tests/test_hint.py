@@ -61,9 +61,9 @@ def _solve(t3, arr, *, fov, fov_err, timeout, sigma,
         kwargs['hint_uncertainty_deg'] = hint_unc
         kwargs['strict_hint'] = False
 
-    t1 = _time.monotonic()
+    t1 = time.monotonic()
     soln = t3.solve_from_centroids(centroids, arr.shape, **kwargs)
-    solve_ms = (_time.monotonic() - t1) * 1000.0
+    solve_ms = (time.monotonic() - t1) * 1000.0
 
     return soln, n_stars, extract_ms, solve_ms
 
@@ -128,7 +128,7 @@ def main():
         fov     = args.fov     or 13.5
         fov_err = args.fov_err or 1.0
         timeout = args.timeout or 1500
-        sigma   = args.sigma   or 9.0
+        sigma   = args.sigma   or 7.0
         gate    = args.gate_mode
 
     if args.db:

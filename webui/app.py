@@ -651,11 +651,18 @@ def config_page():
 
 # ---- Live frame view --------------------------------------------------------
 
+# Boresight rarely changes (only on alignment).  Caching it avoids a
+# synchronous maint-socket round-trip on every /frame.jpg request.
+_bs_cache: dict = {"cx": None, "cy": None, "ts": 0.0}
+_BS_CACHE_TTL = 5.0  # seconds
+
+
 @app.route("/frame.jpg")
 def frame_jpg():
     """Serve the current camera frame as a histogram-stretched JPEG with boresight overlay."""
+    import time as _time
     import numpy as np
-    from multiprocessing import shared_memory
+    from multiprocessing import shared_memory, resource_tracker as _rt
     from PIL import Image, ImageDraw
 
     try:
@@ -665,16 +672,26 @@ def frame_jpg():
     except Exception:
         width, height = 960, 760
 
-    bs_r = _safe_call("status", timeout=2.0)
-    bs   = bs_r.result.get("boresight") if bs_r.ok and bs_r.result else None
-    cx   = int(round(bs["x"])) if bs else width  // 2
-    cy   = int(round(bs["y"])) if bs else height // 2
+    now = _time.monotonic()
+    if now - _bs_cache["ts"] > _BS_CACHE_TTL or _bs_cache["cx"] is None:
+        bs_r = _safe_call("status", timeout=0.5)
+        bs   = bs_r.result.get("boresight") if bs_r.ok and bs_r.result else None
+        if bs:
+            _bs_cache["cx"] = int(round(bs["x"]))
+            _bs_cache["cy"] = int(round(bs["y"]))
+            _bs_cache["ts"] = now
+    cx = _bs_cache["cx"] if _bs_cache["cx"] is not None else width  // 2
+    cy = _bs_cache["cy"] if _bs_cache["cy"] is not None else height // 2
 
     from efinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
     frame = None
     for i in range(NUM_BUFFERS):
         try:
-            shm   = shared_memory.SharedMemory(name=f"{SHM_PREFIX}_{i}")
+            shm = shared_memory.SharedMemory(name=f"{SHM_PREFIX}_{i}", create=False)
+            try:
+                _rt.unregister(shm._name, "shared_memory")
+            except Exception:
+                pass
             frame = np.ndarray(
                 (height, width), dtype=np.uint8, buffer=shm.buf,
             ).copy()
@@ -736,7 +753,7 @@ _focus_state = {
 def _read_focus_data():
     """Read one frame and compute a Laplacian-variance focus score around the brightest star."""
     import numpy as np
-    from multiprocessing import shared_memory
+    from multiprocessing import shared_memory, resource_tracker as _rt
     from scipy.ndimage import laplace as nd_laplace
     from PIL import Image
 
@@ -751,7 +768,11 @@ def _read_focus_data():
     frame = None
     for i in range(NUM_BUFFERS):
         try:
-            shm   = shared_memory.SharedMemory(name=f"{SHM_PREFIX}_{i}")
+            shm = shared_memory.SharedMemory(name=f"{SHM_PREFIX}_{i}", create=False)
+            try:
+                _rt.unregister(shm._name, "shared_memory")
+            except Exception:
+                pass
             frame = np.ndarray((height, width), dtype=np.uint8,
                                buffer=shm.buf).copy()
             shm.close()

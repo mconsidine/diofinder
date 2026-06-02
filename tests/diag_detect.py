@@ -93,7 +93,7 @@ try:
 except Exception as e:
     tag(WARN, f'Config unavailable ({e}); using defaults')
     db_path = pathlib.Path('/var/lib/efinder/default_database.npz')
-    sigma   = args.sigma if args.sigma is not None else 9.0
+    sigma   = args.sigma if args.sigma is not None else 7.0
     min_c   = 8
     W, H    = 960, 760
     gate    = args.gate_mode
