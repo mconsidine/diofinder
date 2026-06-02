@@ -167,8 +167,8 @@ The Jinja2 environment has a `log10` filter registered for log-scale sliders.
 
 | Backend | Module | Speed | Sensitivity notes |
 |---------|--------|-------|-------------------|
-| `olive` | `olive_solve.get_centroids_from_image_fast` | fastest | sigma is a hard threshold |
-| `sycamore` | `star_detect.detect_stars` | ~2× slower | matched-filter gate is more conservative at equal sigma; use sigma 7–8 instead of 9 |
+| `sycamore` | `star_detect.detect_stars` | ~2× slower | matched-filter gate; default sigma 7. **Default backend.** |
+| `olive` | `olive_solve.get_centroids_from_image_fast` | fastest | hard sigma threshold; use sigma 9 |
 
 Switch at runtime from the Status page or:
 ```bash

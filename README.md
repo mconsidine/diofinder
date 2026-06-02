@@ -8,8 +8,8 @@ boresight registration and a built-in three-point polar alignment assistant.
 **Solver: olive-solve** (Rust tetra3-py, fully in-process — no external daemon or gRPC server)
 
 **Extraction backends (runtime-switchable):**
-- **olive** (default) — `get_centroids_from_image_fast`, hard sigma threshold, fastest
-- **sycamore** (optional) — `star_detect.detect_stars` with matched-filter gate, installed from `vendor/wheels/`
+- **sycamore** (default) — `star_detect.detect_stars` with matched-filter gate, installed from `vendor/wheels/`
+- **olive** (alternative) — `get_centroids_from_image_fast`, hard sigma threshold, fastest
 
 ---
 
@@ -54,8 +54,8 @@ SkySafari in real time via the LX200 protocol.
 - **In-process solver**: olive-solve's Rust tetra3-py wheel runs entirely inside
   `solver_proc` — no external service, no gRPC, no open ports.
 - **Two extraction backends**, switchable live from the dashboard:
-  olive (default, fast hard-threshold) and sycamore (matched-filter gate,
-  better sensitivity in moderate conditions).
+  sycamore (default, matched-filter gate, better sensitivity) and olive
+  (fast hard-threshold, lowest latency).
 - **Boresight calibration** via SkySafari's Sync command: centre a star, tap
   Sync, and the eFinder stores the pixel offset. Persisted across reboots.
 - **FOV self-calibration**: after ~30 successful solves the eFinder commits
@@ -224,8 +224,8 @@ Live camera view with controls that take effect immediately (no page reload):
   (±0.05 s per click). Valid range: 0.001–10 s.
 - **Gain (1–64)**: slider + numeric box + `−`/`+` buttons (±1 per click).
 - **Detection sigma**: star extraction threshold. Slider + numeric box +
-  `−`/`+` buttons (±1.0 per click). Default 9. Lower finds fainter stars;
-  higher rejects noise. Valid range: 3–20. **This is the first thing to adjust
+  `−`/`+` buttons (±1.0 per click). Default 7 (sycamore) / 9 (olive). Lower
+  finds fainter stars; higher rejects noise. Valid range: 3–20. **This is the first thing to adjust
   if the solver is not finding enough stars** — see
   [Can't solve even though stars are visible](#cant-solve-even-though-stars-are-visible).
 - **Solve timeout (ms)**: maximum time per frame. Slider + numeric box.
@@ -430,8 +430,8 @@ sudo EFINDER_EXPOSURE_S=0.5 systemctl restart efinder
 | `fov_deg` | `13.5` | Initial FOV estimate in degrees. Self-calibrates after ~30 solves. |
 | `arcsec_per_pixel` | `51.15` | Plate scale in arcsec/px (display only; solver uses fov_deg). |
 | `distortion` | `0.0` | Barrel/pincushion coefficient. 0 = fit per-solve. |
-| `detect_sigma` | `9.0` | Olive-solve extraction threshold (σ above background). Lower finds fainter stars; raise to reject noise. |
-| `extract_backend` | `olive` | Extraction backend: `olive` (default) or `sycamore`. |
+| `detect_sigma` | `7.0` | Extraction threshold (σ above background). Lower finds fainter stars; raise to reject noise. 7 suits sycamore's matched-filter gate; raise to 9 for olive. |
+| `extract_backend` | `sycamore` | Extraction backend: `sycamore` (default) or `olive`. |
 | `sycamore_gate_mode` | `matched_filter` | Gate algorithm when `extract_backend=sycamore`: `matched_filter` (default) or `cedar` (legacy heuristic). |
 | `solver_db` | `default_database` | tetra3 `.npz` database name (relative to `/var/lib/efinder/` or absolute path). |
 | `min_centroids` | `8` | Minimum detected stars required to attempt a solve. |
@@ -619,13 +619,13 @@ comms_proc: serves RA/Dec on next :GR# / :GD# poll
 
 ### Extraction backends
 
-| | olive (default) | sycamore (optional) |
+| | sycamore (default) | olive (alternative) |
 |---|---|---|
-| Module | `olive_solve.get_centroids_from_image_fast` | `star_detect.detect_stars` |
-| Sigma | Hard threshold | Matched-filter gate (more conservative at equal sigma) |
-| Speed | ~5–30 ms | ~10–60 ms |
-| Recommended sigma | 9 | 7–8 |
-| Install | Built-in (vendor/wheels/tetra3-*.whl) | Optional (vendor/wheels/star_detect-*.whl) |
+| Module | `star_detect.detect_stars` | `olive_solve.get_centroids_from_image_fast` |
+| Sigma | Matched-filter gate (more conservative at equal sigma) | Hard threshold |
+| Speed | ~10–60 ms | ~5–30 ms |
+| Recommended sigma | 7 | 9 |
+| Install | Required (vendor/wheels/star_detect-*.whl) | Built-in (vendor/wheels/tetra3-*.whl) |
 
 ### Shared state
 
@@ -747,7 +747,7 @@ Key fields in the response:
 
 | Field | Expected |
 |---|---|
-| `solver_backend` | `"olive"` (default) or `"sycamore"` |
+| `solver_backend` | `"sycamore"` (default) or `"olive"` |
 | `test_mode` | `false` for live operation |
 | `solved` | `true` when a valid solution exists |
 | `stars` | Number of detected centroids |
@@ -895,12 +895,14 @@ This prints a table like:
 sigma=3   stars=47
 sigma=5   stars=31
 sigma=7   stars=18
-sigma=9   stars=6      ← default; below the 8-star minimum → TOO_FEW
+sigma=7   stars=18     ← default (sycamore); above the 8-star minimum
+sigma=9   stars=6      ← olive default; below the 8-star minimum → TOO_FEW
 sigma=11  stars=2
 ```
 
-If sigma=9 yields fewer than 8 stars, **lower sigma on the Camera page**.
-Try 6 or 7 as a starting point. The change takes effect immediately with no
+If the default sigma=7 (sycamore) yields fewer than 8 stars, **lower sigma
+on the Camera page**. Try 5–6. For the olive backend, start from 9 and lower
+if needed. The change takes effect immediately with no
 restart. Use **Persist → Apply & save** to keep it across reboots.
 
 #### Step 2 — understand the frame pipeline
@@ -952,7 +954,7 @@ scp efinder@efinder.local:/var/lib/efinder/YYYYMMDDHHMMSSMMM.zip .
 #### Quick-reference: sigma adjustment from the web UI
 
 1. Open `http://efinder.local/camera`
-2. Find the **Detection sigma** slider (default 9, range 3–20)
+2. Find the **Detection sigma** slider (default 7, range 3–20)
 3. Drag left or click `−` to lower it — change takes effect on the next frame
 4. Watch the dashboard for `stars` count to climb above 8
 5. When solving reliably, tick **Persist** and click **Apply & save**

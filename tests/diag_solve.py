@@ -99,7 +99,7 @@ except Exception as e:
     fov     = args.fov     or 13.5
     fov_err = args.fov_err or 1.0
     timeout = args.timeout or 1500
-    sigma   = args.sigma   or 9.0
+    sigma   = args.sigma   or 7.0
     min_c   = 8
     W, H    = 960, 760
     gate    = args.gate_mode
