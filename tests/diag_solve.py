@@ -2,33 +2,25 @@
 """
 eFinder full-pipeline diagnostic.
 
-Tests the complete extraction + solve pipeline with per-step timing.
-No external server required.
+Tests the complete sycamore extraction + olive-solve pipeline with per-step
+timing.  No external server required.
 
-Three paths are timed for each image:
-  A  solve_from_image_fast (u8)           — single combined Rust call (olive only)
-  B  <backend> extraction                 — split pipeline (matches daemon)
-     + solve_from_centroids
-  C  same as B but with attitude hint     — seeded from path B result
-
-Paths B and C use the backend selected with --backend (default: olive).
-Path A always uses olive's solve_from_image_fast regardless of --backend.
+Two paths are timed for each image:
+  1  sycamore detect_stars  +  solve_from_centroids  (blind)
+     Split pipeline — matches what solver_proc.py uses at runtime.
+  2  sycamore detect_stars  +  solve_from_centroids  (+ hint)
+     Same as path 1 but with the quaternion from path 1 as an attitude hint.
 
 Usage:
-  # Loop over installed test images, olive backend (default):
+  # Loop over installed test images:
   sudo /opt/efinder/venv/bin/python3 tests/diag_solve.py
 
-  # Live frame, sycamore backend:
-  sudo /opt/efinder/venv/bin/python3 tests/diag_solve.py \\
-      --live-shm --backend sycamore
+  # Live frame from running daemon:
+  sudo /opt/efinder/venv/bin/python3 tests/diag_solve.py --live-shm
 
   # Single image, custom sigma:
   sudo /opt/efinder/venv/bin/python3 tests/diag_solve.py \\
-      --image /path/to/image.png --sigma 7.0 --backend sycamore
-
-  # Override solver params:
-  sudo /opt/efinder/venv/bin/python3 tests/diag_solve.py \\
-      --fov 13.5 --fov-err 1.0 --timeout 2000 --sigma 7.0
+      --image /path/to/image.png --sigma 7.0
 
   # Extended timeout when normal fails:
   sudo /opt/efinder/venv/bin/python3 tests/diag_solve.py --extended-timeout
@@ -65,15 +57,8 @@ ap.add_argument('--timeout', type=int,   help='Solve timeout in ms')
 ap.add_argument('--sigma',   type=float, help='Detection sigma threshold')
 ap.add_argument('--reps',    type=int, default=3,
                 help='Repetitions per path per image (default 3)')
-ap.add_argument('--skip-a',  action='store_true',
-                help='Skip path A (solve_from_image_fast) to save time')
 ap.add_argument('--extended-timeout', action='store_true',
-                help='Retry with 3× timeout when path A/B produce no match')
-ap.add_argument('--backend', default='olive', choices=['olive', 'sycamore'],
-                help='Extraction backend for paths B and C (default: olive)')
-ap.add_argument('--gate-mode', default='matched_filter',
-                choices=['matched_filter', 'cedar'],
-                help='Sycamore gate algorithm (default: matched_filter)')
+                help='Retry with 3× timeout when path 1 produces no match')
 args = ap.parse_args()
 
 
@@ -91,7 +76,6 @@ try:
     sigma   = args.sigma   or cfg.detect_sigma
     min_c   = cfg.min_centroids
     W, H    = cfg.frame_width, cfg.frame_height
-    gate    = args.gate_mode or getattr(cfg, 'sycamore_gate_mode', 'matched_filter')
     tag(PASS, cfg.summary())
 except Exception as e:
     tag(WARN, f'Config unavailable ({e}); using defaults')
@@ -102,12 +86,9 @@ except Exception as e:
     sigma   = args.sigma   or 7.0
     min_c   = 8
     W, H    = 960, 760
-    gate    = args.gate_mode
 
 tag(INFO, f'db={db_path}')
 tag(INFO, f'FOV={fov:.2f}° ±{fov_err:.2f}°  timeout={timeout} ms  sigma={sigma}  min_c={min_c}')
-tag(INFO, f'backend (paths B/C)={args.backend}'
-          + (f'  gate_mode={gate}' if args.backend == 'sycamore' else ''))
 
 try:
     import numpy as np
@@ -123,24 +104,17 @@ except ImportError as e:
 
 try:
     import tetra3
-    if not hasattr(tetra3.Tetra3, 'solve_from_image_fast'):
-        tag(FAIL, 'solve_from_image_fast missing — wrong tetra3 installed')
-        sys.exit(1)
     tag(PASS, 'tetra3 (olive-solve)')
 except ImportError as e:
     tag(FAIL, f'tetra3 not installed: {e}'); sys.exit(1)
 
-sycamore_ok = False
 try:
     import star_detect as _sd
     _sd.set_num_threads(2)
-    sycamore_ok = True
-    tag(PASS, 'sycamore star_detect — available')
-except ImportError:
-    if args.backend == 'sycamore':
-        tag(FAIL, 'sycamore star_detect not installed — cannot use --backend sycamore')
-        sys.exit(1)
-    tag(INFO, 'sycamore star_detect not installed (not needed for olive backend)')
+    tag(PASS, 'sycamore star_detect')
+except ImportError as e:
+    tag(FAIL, f'sycamore star_detect not installed: {e}')
+    sys.exit(1)
 
 
 # ── Stage 1: Database load ────────────────────────────────────────────────────
@@ -218,26 +192,19 @@ base_kw = dict(
 # ── Extraction helper ─────────────────────────────────────────────────────────
 
 def _extract(arr_u8):
-    """Extract centroids using the selected backend.
+    """Extract centroids using sycamore detect_stars (matched_filter gate).
 
-    Returns (centroids, n_stars, extract_ms).
+    Returns (centroids_rowcol, n_stars, extract_ms).
     """
-    if args.backend == 'sycamore':
-        t0  = time.monotonic()
-        raw = _sd.detect_stars(arr_u8, sigma=sigma, bin=1, centroid_full_res=True,
-                               gate_mode=gate)
-        ms  = (time.monotonic() - t0) * 1000
-        n   = len(raw) if raw else 0
-        # sycamore returns (x=col, y=row); tetra3 expects (row, col)
-        cent = (np.array([[s[1], s[0]] for s in raw], dtype=np.float64)
-                if raw else None)
-        return cent, n, ms
-    else:
-        t0        = time.monotonic()
-        centroids = t3.get_centroids_from_image_fast(arr_u8, sigma=sigma)
-        ms        = (time.monotonic() - t0) * 1000
-        n         = len(centroids) if centroids is not None else 0
-        return centroids, n, ms
+    t0  = time.monotonic()
+    raw = _sd.detect_stars(arr_u8, sigma=sigma, bin=1, centroid_full_res=True,
+                           gate_mode="matched_filter")
+    ms  = (time.monotonic() - t0) * 1000
+    n   = len(raw) if raw else 0
+    # sycamore returns (x=col, y=row); tetra3 expects (row, col)
+    cent = (np.array([[s[1], s[0]] for s in raw], dtype=np.float64)
+            if raw else None)
+    return cent, n, ms
 
 
 summary = []
@@ -246,74 +213,34 @@ for label, arr_u8 in frames:
     tag(INFO, f'\nImage: {label}  {arr_u8.shape[1]}x{arr_u8.shape[0]}  '
               f'peak={arr_u8.max()}')
 
-    # ── Path A: solve_from_image_fast (olive, single Rust call) ──────────────
-    a_wall, a_solved = [], False
-    a_result = None
-    if not args.skip_a:
-        sep(f'Path A: solve_from_image_fast  [{label}]  reps={args.reps}  '
-            f'[olive — always]')
-        tag(INFO, 'Single combined extraction + solve call (reference baseline)')
-        for i in range(args.reps):
-            t0   = time.monotonic()
-            soln = t3.solve_from_image_fast(arr_u8, sigma=sigma, **base_kw)
-            wall = (time.monotonic() - t0) * 1000
-            ext  = soln.get('T_extract', 0.0) if soln else 0.0
-            slv  = soln.get('T_solve',   0.0) if soln else 0.0
-            a_wall.append(wall)
-            a_result = soln
-            ok = PASS if soln and soln.get('RA') is not None else FAIL
-            tag(ok, f'[{i+1}] wall={wall:.0f} ms  '
-                    f'ext={ext:.0f} ms  solve={slv:.0f} ms  '
-                    f'{soln.get("status", "?") if soln else "None"}')
-        if a_wall:
-            avg = sum(a_wall) / len(a_wall)
-            print(f'\n  avg wall={avg:.0f} ms')
-        if a_result and a_result.get('RA') is not None:
-            a_solved = True
-            tag(PASS, f'RA={a_result["RA"]:.4f}°  Dec={a_result["Dec"]:.4f}°  '
-                      f'FOV={a_result.get("FOV", 0):.4f}°  '
-                      f'matches={a_result.get("Matches", "?")}')
-        elif args.extended_timeout and not a_solved:
-            tag(WARN, f'No match; retrying at {timeout*3} ms …')
-            soln = t3.solve_from_image_fast(arr_u8, sigma=sigma,
-                                             **{**base_kw, 'solve_timeout': timeout * 3})
-            if soln and soln.get('RA') is not None:
-                tag(PASS, f'Solved at 3× timeout — consider raising solve_timeout_ms')
-            else:
-                tag(FAIL, 'Still no match at 3× timeout')
-
-    # ── Path B: split pipeline — backend extraction + solve ───────────────────
-    ext_label = (f'sycamore detect_stars (gate={gate})'
-                 if args.backend == 'sycamore'
-                 else 'get_centroids_from_image_fast')
-    sep(f'Path B: {ext_label} + solve_from_centroids  '
-        f'[{label}]  reps={args.reps}')
+    # ── Path 1: sycamore extraction + blind solve ─────────────────────────────
+    sep(f'Path 1: sycamore + solve_from_centroids (blind)  [{label}]  reps={args.reps}')
     tag(INFO, 'Split pipeline — matches what solver_proc.py uses at runtime')
 
-    b_ext, b_slv, b_wall = [], [], []
-    b_result = None
-    b_n      = 0
-    last_q   = None
+    p1_ext, p1_slv, p1_wall = [], [], []
+    p1_result = None
+    p1_n      = 0
+    last_q    = None
 
     for i in range(args.reps):
         centroids, n, ext_ms = _extract(arr_u8)
-        b_n = n
+        p1_n = n
 
         if n < min_c:
             tag(WARN, f'[{i+1}] ext={ext_ms:.0f} ms  stars={n}  '
                       f'< min_centroids={min_c} — skipping solve')
-            b_ext.append(ext_ms)
-            b_slv.append(0.0)
-            b_wall.append(ext_ms)
+            p1_ext.append(ext_ms)
+            p1_slv.append(0.0)
+            p1_wall.append(ext_ms)
             continue
 
-        t1    = time.monotonic()
-        soln  = t3.solve_from_centroids(centroids, arr_u8.shape, **base_kw)
+        t1     = time.monotonic()
+        soln   = t3.solve_from_centroids(centroids, arr_u8.shape, **base_kw)
         slv_ms = (time.monotonic() - t1) * 1000
         total  = ext_ms + slv_ms
 
-        b_ext.append(ext_ms); b_slv.append(slv_ms); b_wall.append(total)
-        b_result = soln
+        p1_ext.append(ext_ms); p1_slv.append(slv_ms); p1_wall.append(total)
+        p1_result = soln
 
         ok = PASS if soln and soln.get('RA') is not None else FAIL
         tag(ok, f'[{i+1}] total={total:.0f} ms  '
@@ -324,16 +251,16 @@ for label, arr_u8 in frames:
         if q is not None:
             last_q = tuple(q)
 
-    if b_wall:
-        print(f'\n  avg  total={sum(b_wall)/len(b_wall):.0f} ms  '
-              f'ext={sum(b_ext)/len(b_ext):.0f} ms  '
-              f'solve={sum(b_slv)/len(b_slv):.0f} ms')
+    if p1_wall:
+        print(f'\n  avg  total={sum(p1_wall)/len(p1_wall):.0f} ms  '
+              f'ext={sum(p1_ext)/len(p1_ext):.0f} ms  '
+              f'solve={sum(p1_slv)/len(p1_slv):.0f} ms')
 
-    if b_result and b_result.get('RA') is not None:
-        tag(PASS, f'RA={b_result["RA"]:.4f}°  Dec={b_result["Dec"]:.4f}°  '
-                  f'FOV={b_result.get("FOV", 0):.4f}°  '
-                  f'matches={b_result.get("Matches", "?")}')
-    elif args.extended_timeout and b_n >= min_c:
+    if p1_result and p1_result.get('RA') is not None:
+        tag(PASS, f'RA={p1_result["RA"]:.4f}°  Dec={p1_result["Dec"]:.4f}°  '
+                  f'FOV={p1_result.get("FOV", 0):.4f}°  '
+                  f'matches={p1_result.get("Matches", "?")}')
+    elif args.extended_timeout and p1_n >= min_c:
         tag(WARN, f'No match; retrying at {timeout*3} ms …')
         try:
             c2, _, _ = _extract(arr_u8)
@@ -347,26 +274,25 @@ for label, arr_u8 in frames:
         except Exception as e:
             tag(FAIL, f'Extended retry raised: {e}')
 
-    # ── Path C: split pipeline + attitude hint ────────────────────────────────
-    sep(f'Path C: {ext_label} + solve_from_centroids + hint  '
-        f'[{label}]  reps={args.reps}')
+    # ── Path 2: sycamore extraction + hint solve ──────────────────────────────
+    sep(f'Path 2: sycamore + solve_from_centroids (+ hint)  [{label}]  reps={args.reps}')
 
     if last_q is None:
-        tag(WARN, 'Path B produced no quaternion — hint path skipped')
-        tag(WARN, '  (Need at least one successful path B solve to seed the hint)')
-        c_wall = []
-        c_result = None
+        tag(WARN, 'Path 1 produced no quaternion — hint path skipped')
+        tag(WARN, '  (Need at least one successful path 1 solve to seed the hint)')
+        p2_wall = []
+        p2_result = None
     else:
         tag(INFO, f'Hint q=({last_q[0]:.4f}, {last_q[1]:.4f}, '
                   f'{last_q[2]:.4f}, {last_q[3]:.4f})  unc=5.0°')
-        c_ext, c_slv, c_wall = [], [], []
-        c_result = None
+        p2_ext, p2_slv, p2_wall = [], [], []
+        p2_result = None
         for i in range(args.reps):
             centroids, n, ext_ms = _extract(arr_u8)
 
             if n < min_c:
                 tag(WARN, f'[{i+1}] ext={ext_ms:.0f} ms  stars={n}  < min_centroids — skip')
-                c_wall.append(ext_ms)
+                p2_wall.append(ext_ms)
                 continue
 
             t1     = time.monotonic()
@@ -379,54 +305,45 @@ for label, arr_u8 in frames:
             )
             slv_ms = (time.monotonic() - t1) * 1000
             total  = ext_ms + slv_ms
-            c_ext.append(ext_ms); c_slv.append(slv_ms); c_wall.append(total)
-            c_result = soln
+            p2_ext.append(ext_ms); p2_slv.append(slv_ms); p2_wall.append(total)
+            p2_result = soln
             ok = PASS if soln and soln.get('RA') is not None else FAIL
             tag(ok, f'[{i+1}] total={total:.0f} ms  '
                     f'ext={ext_ms:.0f} ms  solve={slv_ms:.0f} ms  '
                     f'stars={n}  {soln.get("status", "?") if soln else "None"}')
 
-        if c_wall and c_ext:
-            print(f'\n  avg  total={sum(c_wall)/len(c_wall):.0f} ms  '
-                  f'ext={sum(c_ext)/len(c_ext):.0f} ms  '
-                  f'solve={sum(c_slv)/len(c_slv):.0f} ms')
+        if p2_wall and p2_ext:
+            print(f'\n  avg  total={sum(p2_wall)/len(p2_wall):.0f} ms  '
+                  f'ext={sum(p2_ext)/len(p2_ext):.0f} ms  '
+                  f'solve={sum(p2_slv)/len(p2_slv):.0f} ms')
 
-        # Compare B vs C
-        if b_wall and c_wall:
-            avg_b = sum(b_wall) / len(b_wall)
-            avg_c = sum(c_wall) / len(c_wall)
-            diff  = avg_b - avg_c
-            print(f'\n  B vs C: blind={avg_b:.0f} ms  hint={avg_c:.0f} ms  '
+        # Compare path 1 vs path 2
+        if p1_wall and p2_wall:
+            avg_1 = sum(p1_wall) / len(p1_wall)
+            avg_2 = sum(p2_wall) / len(p2_wall)
+            diff  = avg_1 - avg_2
+            print(f'\n  path1 vs path2: blind={avg_1:.0f} ms  hint={avg_2:.0f} ms  '
                   f'(hint {"saves" if diff >= 0 else "costs"} {abs(diff):.0f} ms)')
 
-    b_solved = b_result is not None and b_result.get('RA') is not None
-    c_solved = c_result is not None and c_result.get('RA') is not None
-    a_wall_avg = sum(a_wall) / len(a_wall) if a_wall else 0
-    b_wall_avg = sum(b_wall) / len(b_wall) if b_wall else 0
-    c_wall_avg = sum(c_wall) / len(c_wall) if c_wall else 0
+    p1_solved = p1_result is not None and p1_result.get('RA') is not None
+    p2_solved = p2_result is not None and p2_result.get('RA') is not None
+    p1_wall_avg = sum(p1_wall) / len(p1_wall) if p1_wall else 0
+    p2_wall_avg = sum(p2_wall) / len(p2_wall) if p2_wall else 0
 
-    summary.append((label, b_n,
-                    a_solved, a_wall_avg,
-                    b_solved, b_wall_avg,
-                    c_solved, c_wall_avg))
+    summary.append((label, p1_n, p1_solved, p1_wall_avg, p2_solved, p2_wall_avg))
 
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 sep('Summary')
-print(f'  backend (B/C): {args.backend}'
-      + (f'  gate_mode: {gate}' if args.backend == 'sycamore' else ''))
+print(f'  sigma={sigma}  FOV={fov:.2f}°  timeout={timeout} ms')
 print(f'  {"Image":<28} {"Stars":>5}  '
-      f'{"A:wall":>8}  {"A:ok":<5}  '
-      f'{"B:wall":>8}  {"B:ok":<5}  '
-      f'{"C:wall":>8}  {"C:ok":<5}')
-print('  ' + '-' * 78)
-for lbl, n, a_ok, aw, b_ok, bw, c_ok, cw in summary:
-    def yn(ok, ms): return f'{"YES" if ok else "no"} {ms:>6.0f}ms' if ms else f'{"YES" if ok else "no"} {"—":>6}'
-    a_skip = args.skip_a
+      f'{"path1:wall":>10}  {"ok":<4}  '
+      f'{"path2:wall":>10}  {"ok":<4}')
+print('  ' + '-' * 68)
+for lbl, n, p1_ok, p1w, p2_ok, p2w in summary:
+    p1s = f'{p1w:>9.0f}ms'
+    p2s = f'{p2w:>9.0f}ms' if p2w else f'{"—":>10}'
     print(f'  {lbl:<28} {n:>5}  '
-          f'{"—":>8}  {"skip":<5}  ' if a_skip else
-          f'  {lbl:<28} {n:>5}  '
-          f'{aw:>7.0f}ms  {"YES" if a_ok else "no":<5}  '
-          f'{bw:>7.0f}ms  {"YES" if b_ok else "no":<5}  '
-          f'{cw:>7.0f}ms  {"YES" if c_ok else "no":<5}')
+          f'{p1s}  {"YES" if p1_ok else "no":<4}  '
+          f'{p2s}  {"YES" if p2_ok else "no":<4}')
 print()

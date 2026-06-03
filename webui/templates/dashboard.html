@@ -125,19 +125,6 @@
                 style="{{ 'background:#ff1111;color:#fff;' if not test_mode else '' }}">Live</button>
       </form>
     </div>
-    <div style="margin-top:8px;">
-      <span class="label">Extractor:</span>
-      <form method="post" action="{{ url_for('backend_set') }}" style="display:inline;margin-left:6px;">
-        <input type="hidden" name="backend" value="olive">
-        <button type="submit" id="btn-olive" class="btn"
-                style="{{ 'background:#ff1111;color:#fff;' if solver_backend == 'olive' else '' }}">Olive</button>
-      </form>
-      <form method="post" action="{{ url_for('backend_set') }}" style="display:inline;margin-left:4px;">
-        <input type="hidden" name="backend" value="sycamore">
-        <button type="submit" id="btn-sycamore" class="btn"
-                style="{{ 'background:#ff1111;color:#fff;' if solver_backend == 'sycamore' else '' }}">Sycamore</button>
-      </form>
-    </div>
   </div>
 
   <div class="card" id="debug-card">
@@ -219,13 +206,6 @@ async function refresh() {
       if (!el) return;
       const isActive = (m === 'test') ? testMode : !testMode;
       el.style.cssText = isActive ? ACTIVE : '';
-    });
-    // Extractor backend toggle
-    const backend = (data.status.result.solver_backend || 'olive');
-    ['olive','sycamore'].forEach(b => {
-      const el = document.getElementById('btn-' + b);
-      if (!el) return;
-      el.style.cssText = (b === backend) ? ACTIVE : '';
     });
   } catch (e) {
     console.error(e);

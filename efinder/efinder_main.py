@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-eFinder main launcher — olive branch.
+eFinder main launcher.
 
 Spawns three pinned worker processes:
   * camera_proc  -> CPU cfg.cpu_camera : picamera2 or test image -> shared memory
-  * solver_proc  -> CPUs {cfg.cpu_solver, cfg.cpu_camera} : olive-solve in-process
+  * solver_proc  -> CPUs {cfg.cpu_solver, cfg.cpu_camera} : sycamore extract + olive-solve
   * comms_proc   -> CPU cfg.cpu_comms  : LX200 server + alignment + maint socket
 
 CPU 0 is left to the kernel.
@@ -80,7 +80,7 @@ def _resolve_test_image(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="eFinder star-tracker daemon (olive)")
+    parser = argparse.ArgumentParser(description="eFinder star-tracker daemon")
     test_grp = parser.add_mutually_exclusive_group()
     test_grp.add_argument(
         "--test", action="store_true",
@@ -117,12 +117,10 @@ def main():
         "epoch_monotonic": 0.0,
     })
     shared_cfg = manager.dict({
-        "boresight_y":      cfg.boresight_y,
-        "boresight_x":      cfg.boresight_x,
-        "imu_available":    False,
-        "test_mode":        default_test_mode,
-        "extract_backend":    cfg.extract_backend,
-        "sycamore_gate_mode": cfg.sycamore_gate_mode,
+        "boresight_y":   cfg.boresight_y,
+        "boresight_x":   cfg.boresight_x,
+        "imu_available": False,
+        "test_mode":     default_test_mode,
     })
     align_request_q  = mp.Queue(maxsize=4)
     align_response_q = mp.Queue(maxsize=4)

@@ -7,9 +7,7 @@ boresight registration and a built-in three-point polar alignment assistant.
 
 **Solver: olive-solve** (Rust tetra3-py, fully in-process — no external daemon or gRPC server)
 
-**Extraction backends (runtime-switchable):**
-- **sycamore** (default) — `star_detect.detect_stars` with matched-filter gate, installed from `vendor/wheels/`
-- **olive** (alternative) — `get_centroids_from_image_fast`, hard sigma threshold, fastest
+**Extraction:** sycamore `star_detect.detect_stars` with matched-filter gate + olive-solve (tetra3) solver
 
 ---
 
@@ -53,9 +51,8 @@ SkySafari in real time via the LX200 protocol.
   reports RA, Dec, field-of-view, and image orientation (roll).
 - **In-process solver**: olive-solve's Rust tetra3-py wheel runs entirely inside
   `solver_proc` — no external service, no gRPC, no open ports.
-- **Two extraction backends**, switchable live from the dashboard:
-  sycamore (default, matched-filter gate, better sensitivity) and olive
-  (fast hard-threshold, lowest latency).
+- **sycamore matched-filter extraction + olive-solve (tetra3) solver**: fixed pipeline with
+  matched-filter gate for robust star detection and in-process tetra3-py plate solving.
 - **Boresight calibration** via SkySafari's Sync command: centre a star, tap
   Sync, and the eFinder stores the pixel offset. Persisted across reboots.
 - **FOV self-calibration**: after ~30 successful solves the eFinder commits
@@ -67,8 +64,8 @@ SkySafari in real time via the LX200 protocol.
 - **IMU dead-reckoning** (optional, BNO055): smooths SkySafari position updates
   between solves to < 1 ms latency. Self-calibrating. Hot-pluggable.
 - **Live web UI** on port 80: dashboard, camera controls, solver parameters,
-  extraction backend toggle, polar alignment, Wi-Fi switching, configuration
-  viewer, live log tail, debug ZIP download.
+  polar alignment, Wi-Fi switching, configuration viewer, live log tail, debug
+  ZIP download.
 - **Dark frame fast-path**: frames below 20 ADU peak are detected in ~0.1 ms
   and skipped entirely.
 - **Dual network**: USB Ethernet gadget (`10.55.0.1`) and self-hosted Wi-Fi AP
@@ -201,8 +198,6 @@ Auto-refreshes every 1.5 s. Shows:
 
 - **Pointing**: RA/Dec, star count, match count, solve time, peak pixel, FOV,
   roll. Status badge: SOLVED / TOO_FEW / NO_MATCH / TIMEOUT / DARK.
-- **Extraction backend toggle**: switch between **olive** and **sycamore** live,
-  without restarting the daemon.
 - **Test / Live mode toggle**: switch to a static test image (if one is present
   at `/var/lib/efinder/test.png`) or back to the live camera.
 - **Focus**: Laplacian variance score at the last committed frame.
@@ -224,8 +219,8 @@ Live camera view with controls that take effect immediately (no page reload):
   (±0.05 s per click). Valid range: 0.001–10 s.
 - **Gain (1–64)**: slider + numeric box + `−`/`+` buttons (±1 per click).
 - **Detection sigma**: star extraction threshold. Slider + numeric box +
-  `−`/`+` buttons (±1.0 per click). Default 7 (sycamore) / 9 (olive). Lower
-  finds fainter stars; higher rejects noise. Valid range: 3–20. **This is the first thing to adjust
+  `−`/`+` buttons (±1.0 per click). Default 7. Lower finds fainter stars;
+  higher rejects noise. Valid range: 3–20. **This is the first thing to adjust
   if the solver is not finding enough stars** — see
   [Can't solve even though stars are visible](#cant-solve-even-though-stars-are-visible).
 - **Solve timeout (ms)**: maximum time per frame. Slider + numeric box.
@@ -334,7 +329,7 @@ A BNO055 on the I²C bus provides two complementary benefits:
 1. **Attitude hint propagation** — after every successful solve the solver
    records the IMU quaternion alongside the sky quaternion. On the next frame
    it computes the IMU rotation delta and applies it to the sky quaternion,
-   giving olive-solve an up-to-date attitude hint even when the scope has moved
+   giving the solver an up-to-date attitude hint even when the scope has moved
    between frames. The search window scales with the measured motion (1.5× the
    rotation angle, minimum 2°) so slews of any size still produce a useful hint.
    Logs show `(imu)` / `(seeded)` / `(blind)` per solve so the hint source is
@@ -430,9 +425,7 @@ sudo EFINDER_EXPOSURE_S=0.5 systemctl restart efinder
 | `fov_deg` | `13.5` | Initial FOV estimate in degrees. Self-calibrates after ~30 solves. |
 | `arcsec_per_pixel` | `51.15` | Plate scale in arcsec/px (display only; solver uses fov_deg). |
 | `distortion` | `0.0` | Barrel/pincushion coefficient. 0 = fit per-solve. |
-| `detect_sigma` | `7.0` | Extraction threshold (σ above background). Lower finds fainter stars; raise to reject noise. 7 suits sycamore's matched-filter gate; raise to 9 for olive. |
-| `extract_backend` | `sycamore` | Extraction backend: `sycamore` (default) or `olive`. |
-| `sycamore_gate_mode` | `matched_filter` | Gate algorithm when `extract_backend=sycamore`: `matched_filter` (default) or `cedar` (legacy heuristic). |
+| `detect_sigma` | `7.0` | Extraction threshold (σ above background). Lower finds fainter stars; raise to reject noise. Default: 7. |
 | `solver_db` | `default_database` | tetra3 `.npz` database name (relative to `/var/lib/efinder/` or absolute path). |
 | `min_centroids` | `8` | Minimum detected stars required to attempt a solve. |
 | `max_solve_stars` | `50` | Cap on centroids passed to the solver (performance guard). |
@@ -497,10 +490,6 @@ efinder-ctl solver-params get
 efinder-ctl solver-params set --sigma 7.0
 efinder-ctl solver-params set --timeout 2000 --persist
 
-# Extraction backend (live switch, no restart)
-efinder-ctl raw '{"cmd":"set_extract_backend","args":{"backend":"sycamore"}}'
-efinder-ctl raw '{"cmd":"set_extract_backend","args":{"backend":"olive"}}'
-
 # Test / live mode
 efinder-ctl raw '{"cmd":"set_test_mode","args":{"enabled":false}}'
 
@@ -563,10 +552,10 @@ BASE="https://raw.githubusercontent.com/mconsidine/diofinder/<branch-or-sha>"
 │   │ comms_proc   │    │ camera_proc  │    │ solver_proc                      │ │
 │   │  CPU 1       │    │  CPU 3       │    │  CPU 2 + CPU 3 (rayon)           │ │
 │   │              │    │              │    │                                  │ │
-│   │ LX200 :4060  │    │ picamera2    │    │ olive-solve (in-process)         │ │
-│   │ maint.sock   │◄──►│ → SHM bufs  │◄───│   get_centroids_from_image_fast  │ │
+│   │ LX200 :4060  │    │ picamera2    │    │ sycamore star_detect             │ │
+│   │ maint.sock   │◄──►│ → SHM bufs  │◄───│   + olive-solve (in-process)     │ │
 │   │ align queues │    │ FrameSlots   │    │   solve_from_centroids           │ │
-│   └──────┬───────┘    └──────────────┘    │ OR sycamore star_detect          │ │
+│   └──────┬───────┘    └──────────────┘    │                                  │ │
 │          │                                └──────────────────────────────────┘ │
 └──────────┼────────────────────────────────────────────────────────────────────┘
            │ maint.sock
@@ -594,8 +583,7 @@ FrameSlots.publish(idx)
 peak pixel check: buf.max() < 20? → DARK fast-path (~0.1 ms), skip
   │  otherwise:
   ▼
-get_centroids_from_image_fast(frame_u8, sigma)  [~5–30 ms, olive rayon on CPUs 2+3]
-  │  OR star_detect.detect_stars(frame_u8, sigma)  [sycamore, ~10–60 ms]
+star_detect.detect_stars(frame_u8, sigma)  [sycamore matched-filter, ~10–60 ms]
   ▼
 star_candidates[]  (centroid x/y in image coordinates)
   │  convert to centre-relative float64 coords
@@ -617,15 +605,10 @@ SolveResult → RA, Dec, roll, fov_rad
 comms_proc: serves RA/Dec on next :GR# / :GD# poll
 ```
 
-### Extraction backends
+### Extraction
 
-| | sycamore (default) | olive (alternative) |
-|---|---|---|
-| Module | `star_detect.detect_stars` | `olive_solve.get_centroids_from_image_fast` |
-| Sigma | Matched-filter gate (more conservative at equal sigma) | Hard threshold |
-| Speed | ~10–60 ms | ~5–30 ms |
-| Recommended sigma | 7 | 9 |
-| Install | Required (vendor/wheels/star_detect-*.whl) | Built-in (vendor/wheels/tetra3-*.whl) |
+Star extraction uses **sycamore** (`star_detect.detect_stars`) with a matched-filter gate.
+Default sigma: 7. Speed: ~10–60 ms. Installed from `vendor/wheels/star_detect-*.whl`.
 
 ### Shared state
 
@@ -641,7 +624,6 @@ comms_proc: serves RA/Dec on next :GR# / :GD# poll
 
 | Key | Description |
 |---|---|
-| `extract_backend` | `"olive"` or `"sycamore"` — which centroid extractor to use |
 | `test_mode` | `True` = serve static test image; `False` = live camera |
 | `detect_sigma` | Extraction threshold, overrides config at runtime |
 | `solve_timeout_ms` | Solver budget, overrides config at runtime |
@@ -720,8 +702,6 @@ Key things to look for:
 |---|---|
 | `Starting in LIVE MODE` | Correct default startup |
 | `Starting in TEST MODE` | Daemon is using a static image, not the camera |
-| `extract_backend: olive` | olive-solve extraction active |
-| `extract_backend: sycamore` | sycamore extraction active |
 | `dark frame` | Frame too dim; check exposure/gain |
 | `TOO_FEW centroids` | Not enough stars detected; lower sigma or increase exposure |
 | `NO_MATCH` | Stars detected but no solve; check database, FOV estimate |
@@ -747,7 +727,7 @@ Key fields in the response:
 
 | Field | Expected |
 |---|---|
-| `solver_backend` | `"sycamore"` (default) or `"olive"` |
+| `solver_backend` | `"sycamore"` (fixed) |
 | `test_mode` | `false` for live operation |
 | `solved` | `true` when a valid solution exists |
 | `stars` | Number of detected centroids |
@@ -771,7 +751,7 @@ sudo .../diag_detect.py --sigma 7.0
 sudo .../diag_detect.py --sigma-sweep
 ```
 
-The script runs olive-solve centroid extraction with detailed timing.
+The script runs sycamore centroid extraction with detailed timing.
 Use `--sigma-sweep` to find the optimal sigma for your sky conditions.
 
 ### 6. Test the full solve pipeline
@@ -787,9 +767,9 @@ sudo .../diag_solve.py --reps 5
 sudo .../diag_solve.py --sigma 7.0 --timeout 2000
 ```
 
-Tests paths A/B/C using olive-solve. Reports centroid count, extraction time,
-solve status (SOLVED / NO_MATCH / TIMEOUT / TOO_FEW), RA/Dec/roll/FOV, and
-timing breakdown per stage.
+Tests blind + hint paths using sycamore extraction and olive-solve. Reports centroid count,
+extraction time, solve status (SOLVED / NO_MATCH / TIMEOUT / TOO_FEW), RA/Dec/roll/FOV,
+and timing breakdown per stage.
 
 ### 7. Check test mode
 
@@ -834,21 +814,15 @@ Should be present (typically a few hundred MB). If absent:
 sudo /usr/local/bin/efinder-update   # reinstalls from the vendor wheel
 ```
 
-### 10. Force an extraction backend switch without a web browser
+### 10. Query or set runtime parameters without a web browser
 
 ```bash
-# Switch to sycamore:
+# Get current solver parameters:
 python3 -c "
 import socket
 s=socket.socket(socket.AF_UNIX); s.connect('/run/efinder/maint.sock')
-s.sendall(b'{\"cmd\":\"set_extract_backend\",\"args\":{\"backend\":\"sycamore\"}}\n')
-"
-
-# Switch back to olive:
-python3 -c "
-import socket
-s=socket.socket(socket.AF_UNIX); s.connect('/run/efinder/maint.sock')
-s.sendall(b'{\"cmd\":\"set_extract_backend\",\"args\":{\"backend\":\"olive\"}}\n')
+s.sendall(b'{\"cmd\":\"solver_params_get\",\"args\":{}}\n')
+print(s.recv(4096).decode())
 "
 ```
 
@@ -882,7 +856,7 @@ This is the most common field problem. Work through these steps in order.
 #### Step 1 — check what the solver is actually seeing
 
 The stars you see through the eyepiece or in the arcsinh-stretched live view
-are not necessarily the stars olive-solve is extracting. Run the sigma sweep
+are not necessarily the stars sycamore is extracting. Run the sigma sweep
 to see the raw star count at each threshold:
 
 ```bash
@@ -895,15 +869,14 @@ This prints a table like:
 sigma=3   stars=47
 sigma=5   stars=31
 sigma=7   stars=18
-sigma=7   stars=18     ← default (sycamore); above the 8-star minimum
-sigma=9   stars=6      ← olive default; below the 8-star minimum → TOO_FEW
+sigma=7   stars=18     ← default; above the 8-star minimum
+sigma=9   stars=6      ← below the 8-star minimum → TOO_FEW
 sigma=11  stars=2
 ```
 
-If the default sigma=7 (sycamore) yields fewer than 8 stars, **lower sigma
-on the Camera page**. Try 5–6. For the olive backend, start from 9 and lower
-if needed. The change takes effect immediately with no
-restart. Use **Persist → Apply & save** to keep it across reboots.
+If the default sigma=7 yields fewer than 8 stars, **lower sigma on the Camera
+page**. Try 5–6. The change takes effect immediately with no restart. Use
+**Persist → Apply & save** to keep it across reboots.
 
 #### Step 2 — understand the frame pipeline
 
@@ -924,7 +897,7 @@ sudo journalctl -u efinder | grep "Sensor mode"
 
 #### Step 3 — verify the FOV estimate
 
-If olive-solve reports ≥ 8 stars but you still get `NO_MATCH`, the FOV
+If the solver reports ≥ 8 stars but you still get `NO_MATCH`, the FOV
 estimate may be wrong. Check the Config page for `fov_deg` and compare it
 to your actual optics. Then reset calibration so the solver uses the full
 1° tolerance window:
@@ -975,11 +948,11 @@ sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/<script>.py
 | `diag_services.sh` | System health check — first stop when anything is broken |
 | `diag_camera.py` | Camera exposure/gain sweep, saves PNGs + ZIP |
 | `diag_bno055.py` | BNO055 IMU sensor registers and live samples |
-| `diag_detect.py` | Olive-solve centroid extraction timing and sigma sweep |
-| `diag_solve.py` | Full pipeline: extract → solve (paths A/B/C) with timing |
-| `solve_image.py` | Quick single-image solve with `solve_from_image_fast` |
-| `bench_pipeline_combos.py` | Benchmark all three olive-solve paths with optional sweeps |
-| `bench_extractor_compare.py` | Compare olive vs. sycamore extraction speed and yield |
+| `diag_detect.py` | Sycamore centroid extraction timing and sigma sweep |
+| `diag_solve.py` | Full pipeline: sycamore extract → solve (blind + hint) with timing |
+| `solve_image.py` | Quick single-image solve: sycamore extraction + olive-solve |
+| `bench_pipeline_combos.py` | Benchmark sycamore blind + hint paths with optional sweeps |
+| `bench_extractor_compare.py` | Sycamore extraction + solve timing benchmark |
 | `test_hint.py` | Attitude-hint effectiveness across a sequence of shifted images |
 
 ---
@@ -992,7 +965,6 @@ sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/<script>.py
 |---|---|
 | Camera capture (ISP hardware) | `exposure_s` + ~10 ms |
 | Frame copy to SHM | ~0.5 ms |
-| Olive-solve extraction (`get_centroids_from_image_fast`) | ~5–30 ms |
 | Sycamore extraction (`star_detect.detect_stars`) | ~10–60 ms |
 | Solve, IMU-seeded (scope stationary/moving) | ~10–100 ms |
 | Solve, blind (first frame / no IMU) | ~300–800 ms |
@@ -1031,7 +1003,7 @@ sudo EFINDER_VERSION=dev bash build/build-image.sh
 
 ### Updating vendor wheels
 
-The olive-solve (`tetra3-*.whl`) and sycamore-extract (`star_detect-*.whl`)
+The sycamore-extract (`star_detect-*.whl`) and olive-solve (`tetra3-*.whl`)
 wheels are pre-built aarch64 binaries in `vendor/wheels/`. To update:
 
 1. Run the **Vendor Binaries** or **Vendor Sycamore** GitHub Actions workflow

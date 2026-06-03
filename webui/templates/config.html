@@ -17,9 +17,6 @@
   <h3 style="margin:0 0 8px 0; font-size:1rem;">Runtime Status</h3>
   {% if daemon_ok %}
   <dl class="stats">
-    {% if runtime_backend %}
-      <dt>Solver backend</dt><dd>{{ runtime_backend }}</dd>
-    {% endif %}
     {% if runtime_test_mode is not none %}
       <dt>Camera mode</dt><dd>{{ "test image" if runtime_test_mode else "live" }}</dd>
     {% endif %}

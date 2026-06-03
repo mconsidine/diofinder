@@ -401,7 +401,7 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "quality":   round(imu_quality, 3),
                     "active":    imu_active,
                 },
-                "solver_backend": ctx.shared_cfg.get("extract_backend", "olive"),
+                "solver_backend": "sycamore",
                 "test_mode":      ctx.shared_cfg.get("test_mode", False),
             })
 
@@ -592,16 +592,6 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             if persist and updates:
                 cfg_mod.save_keys(updates)
             return MaintResponse(ok=True, result={**updates, "persisted": persist})
-
-        if cmd == "set_extract_backend":
-            backend = args.get("backend", "olive")
-            if backend not in ("olive", "sycamore"):
-                return MaintResponse(ok=False,
-                                     error=f"unknown backend: {backend!r}; "
-                                           "valid values: 'olive', 'sycamore'")
-            ctx.shared_cfg["extract_backend"] = backend
-            log.info("Extract backend -> %s", backend)
-            return MaintResponse(ok=True, result={"extract_backend": backend})
 
         if cmd == "set_test_mode":
             try:
