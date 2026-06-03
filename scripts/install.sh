@@ -1,8 +1,8 @@
 #!/bin/bash
-# eFinder install script — olive branch.
+# eFinder install script.
 #
-# Installs olive-solve's tetra3-py wheel (Rust, fully in-process plate
-# solver). No cedar-detect gRPC server or tetra3rs dependency.
+# Installs the sycamore star_detect wheel and olive-solve's tetra3-py wheel
+# (Rust, fully in-process plate solver). No external gRPC server dependency.
 #
 # Two execution modes, autodetected:
 #
@@ -243,7 +243,6 @@ install -m 644 "$EFINDER_DIR/systemd/efinder-firstboot.service"   /etc/systemd/s
 install -m 644 "$EFINDER_DIR/systemd/efinder-webui.service"       /etc/systemd/system/
 install -m 644 "$EFINDER_DIR/systemd/efinder-usb-gadget.service"  /etc/systemd/system/
 install -m 644 "$EFINDER_DIR/systemd/efinder-ensure-ap.service"   /etc/systemd/system/
-# Note: cedar-detect.service is NOT installed on the olive branch
 
 install -m 440 "$EFINDER_DIR/etc/sudoers.d/efinder-update" /etc/sudoers.d/efinder-update
 install -m 440 "$EFINDER_DIR/etc/sudoers.d/efinder-clock"  /etc/sudoers.d/efinder-clock
