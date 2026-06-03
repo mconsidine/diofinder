@@ -1,18 +1,18 @@
-name: Release (olive)
+name: Release (sycamore)
 
 # Prerequisites before triggering an image build:
-#   1. Run 'Vendor Binaries (olive)' to populate vendor/wheels/ with the
+#   1. Run 'Vendor Binaries (sycamore)' to populate vendor/wheels/ with the
 #      aarch64 tetra3-py wheel.  The pre-flight step fails fast if absent.
 #
 # Database generation:
 #   The tetra3 .npz star database is generated on the x86_64 CI runner
 #   (using esa/tetra3) BEFORE the chroot step, then copied into the image
-#   by build-image.sh.  This avoids hip_main.dat lookup failures that
-#   occur when trying to run database generation inside QEMU-emulated aarch64.
+#   by build-image.sh.  This avoids database generation failures inside
+#   QEMU-emulated aarch64, and keeps the hip_main.dat fetch on x86_64 CI.
 
 on:
   push:
-    branches: [olive]
+    branches: [sycamore-only]
     paths:
       - 'efinder/**'
       - 'webui/**'
@@ -57,7 +57,7 @@ jobs:
           WHL=$(ls vendor/wheels/tetra3-*aarch64*.whl 2>/dev/null | head -1 || true)
           if [ -z "$WHL" ]; then
             echo "::error::No aarch64 tetra3-py wheel found in vendor/wheels/."
-            echo "::error::Run the 'Vendor Binaries (olive)' workflow first, then retry."
+            echo "::error::Run the 'Vendor Binaries (sycamore)' workflow first, then retry."
             echo "::error::Note: a linux_armv6l wheel does NOT satisfy this check."
             exit 1
           fi
@@ -89,8 +89,8 @@ jobs:
 
       - name: Generate tetra3 star database
         # tetra3 is only on GitHub, not PyPI. Install the code via git,
-        # then download hip_main.dat directly from the CDS Hipparcos
-        # catalogue (I/239) - it is not bundled with the GitHub package.
+        # then fetch hip_main.dat from the mconsidine/astro_databases mirror
+        # (the upstream CDS Hipparcos archive is unreliable from CI runners).
         env:
           SOLVER_DB_PATH: ${{ github.workspace }}/build/output/solver_database
           DB_MAX_FOV: ${{ steps.dbfov.outputs.max_fov }}
@@ -100,10 +100,10 @@ jobs:
           python3 -m pip install --quiet "git+https://github.com/esa/tetra3.git"
           TETRA3_DIR=$(python3 -c 'import pathlib, tetra3; print(pathlib.Path(tetra3.__file__).parent)')
           echo "tetra3 package dir: $TETRA3_DIR"
-          echo "Downloading hip_main.dat from CDS Hipparcos archive..."
-          wget -q --show-progress \
-            https://cdsarc.cds.unistra.fr/ftp/cats/I/239/hip_main.dat \
-            -O "${TETRA3_DIR}/hip_main.dat"
+          echo "Downloading hip_main.dat from mconsidine/astro_databases mirror..."
+          curl -fsSL \
+            https://raw.githubusercontent.com/mconsidine/astro_databases/main/hip_main.dat.gz \
+            | gunzip > "${TETRA3_DIR}/hip_main.dat"
           python3 build/generate_database.py
           ls -lh build/output/solver_database.npz
 
@@ -143,9 +143,9 @@ jobs:
           xz -T0 -9 build/output/efinder.img
           BUILD_DATE=$(date -u +%Y%m%d)
           if [ "${{ github.event_name }}" = "release" ]; then
-            IMGNAME="efinder-olive-${BUILD_DATE}-${{ steps.ver.outputs.tag }}.img.xz"
+            IMGNAME="efinder-sycamore-${BUILD_DATE}-${{ steps.ver.outputs.tag }}.img.xz"
           else
-            IMGNAME="efinder-olive-${BUILD_DATE}.img.xz"
+            IMGNAME="efinder-sycamore-${BUILD_DATE}.img.xz"
           fi
           mv build/output/efinder.img.xz "build/output/${IMGNAME}"
           echo "imgname=${IMGNAME}" >> $GITHUB_OUTPUT
@@ -163,7 +163,7 @@ jobs:
         if: github.event_name != 'release'
         uses: actions/upload-artifact@v4
         with:
-          name: efinder-olive-image-${{ steps.ver.outputs.tag }}
+          name: efinder-sycamore-image-${{ steps.ver.outputs.tag }}
           path: build/output/${{ steps.compress.outputs.imgname }}
           retention-days: 14
           if-no-files-found: error
