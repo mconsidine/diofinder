@@ -1,21 +1,19 @@
-"""Solver worker process — olive branch.
+"""Solver worker process.
 
-Single backend: olive-solve tetra3-py (Rust, fully in-process).
-No external server dependency.
+Pipeline: sycamore star_detect (matched_filter gate) → olive-solve tetra3-py.
 
 Pi Zero 2W optimisations:
   * Solver process affinity is set to {cpu_solver, cpu_camera} so
-    olive-solve's rayon thread pool can spread parallel star extraction
-    across two physical cores; CPUs 2 and 3 are both available for
-    solver work.
+    olive-solve's rayon thread pool can spread solving work across two
+    physical cores (CPUs 2 and 3).
   * Frame buffer pre-allocated once with np.empty; each iteration fills
     it in-place via np.copyto, eliminating per-frame heap allocation.
   * The shared-memory slot is released immediately after np.copyto so
     camera_proc is never blocked waiting for a solve to finish.
   * target_pixel and target_sky_coord must be float64: the Rust PyO3
     binding extracts them as PyReadonlyArray2<f64>.
-  * solve_from_image_fast accepts the raw u8 frame directly; no float32
-    conversion step is required.
+  * Sycamore centroids must be float64 for the same reason; the (x, y)
+    tuple from detect_stars is swapped to (row, col) for tetra3.
 """
 
 import logging
@@ -303,16 +301,15 @@ def solver_main(slots, latest_solution, shared_cfg,
         log.error("Failed to load olive-solve: %s", e)
         raise RuntimeError(f"olive-solve unavailable: {e}") from e
 
-    # ---- Load sycamore extractor (optional) --------------------------------
-    _sycamore_ok = False
+    # ---- Load sycamore extractor -------------------------------------------
     try:
         import star_detect as _star_detect
         # One-time thread-count init; solver process owns two CPU cores.
         _star_detect.set_num_threads(2)
-        _sycamore_ok = True
-        log.info("sycamore star_detect available")
-    except ImportError:
-        log.info("sycamore star_detect not installed — sycamore backend unavailable")
+        log.info("sycamore star_detect ready")
+    except ImportError as e:
+        log.error("sycamore star_detect not installed: %s", e)
+        raise RuntimeError("sycamore star_detect unavailable") from e
 
     calibrator = FovCalibrator(cfg, shared_cfg)
     log.info("Calibrator: state=%s fov=%.4f° tolerance=%.3f°",
@@ -398,36 +395,26 @@ def solver_main(slots, latest_solution, shared_cfg,
             q_hint, hint_unc = _imu_propagate_hint(
                 last_sky_q, last_solve_imu_q, shared_cfg)
 
-            # --- Step 1: extract centroids -----------------------------------
+            # --- Step 1: extract centroids (sycamore, matched_filter) --------
             t_extract = time.monotonic()
             sigma = shared_cfg.get("detect_sigma", cfg.detect_sigma)
-            _backend = shared_cfg.get("extract_backend", cfg.extract_backend)
-            _gate    = shared_cfg.get("sycamore_gate_mode", cfg.sycamore_gate_mode)
             try:
-                if _backend == "sycamore" and _sycamore_ok:
-                    _raw = _star_detect.detect_stars(
-                        frame_buf,
-                        sigma=sigma,
-                        bin=1,
-                        centroid_full_res=True,
-                        gate_mode=_gate,
-                    )
-                    # sycamore returns (x=col, y=row, brightness, peak).
-                    # tetra3 solve_from_centroids expects (row, col) = (y, x).
-                    # Must be float64: Rust PyO3 binding rejects float32.
-                    centroids = (
-                        np.array([[s[1], s[0]] for s in _raw], dtype=np.float64)
-                        if _raw else None
-                    )
-                else:
-                    if _backend == "sycamore" and not _sycamore_ok:
-                        log.warning(
-                            "sycamore backend requested but not available; "
-                            "falling back to olive")
-                    centroids = solver_t3.get_centroids_from_image_fast(
-                        frame_buf, sigma=sigma)
+                _raw = _star_detect.detect_stars(
+                    frame_buf,
+                    sigma=sigma,
+                    bin=1,
+                    centroid_full_res=True,
+                    gate_mode="matched_filter",
+                )
+                # sycamore returns (x=col, y=row, brightness, peak).
+                # tetra3 solve_from_centroids expects (row, col) = (y, x).
+                # Must be float64: Rust PyO3 binding rejects float32.
+                centroids = (
+                    np.array([[s[1], s[0]] for s in _raw], dtype=np.float64)
+                    if _raw else None
+                )
             except Exception as e:
-                log.warning("centroid extraction raised (%s): %s", _backend, e)
+                log.warning("centroid extraction raised: %s", e)
                 latest_solution.update(_empty_solution(peak=local_peak))
                 if align_req is not None:
                     align_response_q.put(AlignResult(

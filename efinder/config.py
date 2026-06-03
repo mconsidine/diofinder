@@ -62,8 +62,8 @@ class Config:
 
     distortion: float = 0.0
 
-    # -------- Star detection --------
-    # sigma threshold passed to the active extractor.
+    # -------- Star detection (sycamore, matched_filter gate) --------
+    # sigma threshold passed to star_detect.detect_stars.
     detect_sigma: float = 7.0
 
     # -------- Solver (olive-solve tetra3-py) --------
@@ -75,16 +75,6 @@ class Config:
     solve_timeout_ms: int = 1500
     match_threshold: float = 1e-5
     match_radius: float = 0.01
-
-    # -------- Extractor backend --------
-    # "sycamore" — use sycamore-extract star_detect with matched-filter gate (default)
-    # "olive"    — use olive-solve get_centroids_from_image_fast (fallback)
-    extract_backend: str = "sycamore"
-
-    # Gate algorithm used when extract_backend = "sycamore".
-    # "matched_filter" (default) — Gaussian matched filter, v0.8.0+ default.
-    # "cedar"                    — legacy heuristic gate (pre-v0.8.0 behaviour).
-    sycamore_gate_mode: str = "matched_filter"
 
     # -------- Boresight offset --------
     boresight_y: float = 380.0   # frame_height / 2
@@ -101,7 +91,7 @@ class Config:
     #   3 = camera_proc + solver_proc secondary core
     #
     # The solver process is allowed affinity {cpu_solver, cpu_camera}
-    # so olive-solve's rayon thread pool can spread star extraction
+    # so olive-solve's rayon thread pool can spread solving work
     # across two physical cores (CPUs 2 and 3).
     cpu_camera: int = 3
     cpu_solver: int = 2
@@ -120,7 +110,7 @@ class Config:
         return (
             f"exp={self.exposure_s}s gain={self.gain} "
             f"fov={self.fov_deg}deg sigma={self.detect_sigma} "
-            f"backend={self.extract_backend} db={self.solver_db} "
+            f"db={self.solver_db} "
             f"boresight=({self.boresight_y:.1f},{self.boresight_x:.1f}) "
             f"affinity[cam={self.cpu_camera},solv={self.cpu_solver},comm={self.cpu_comms}]"
         )

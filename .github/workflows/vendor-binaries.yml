@@ -94,27 +94,26 @@ jobs:
           if-no-files-found: error
 
   # --------------------------------------------------------------------------
-  # Download the wheel, clear ALL stale tetra3/tetra3rs/cedar artifacts
-  # from vendor/, commit back to the olive branch.
+  # Download the wheel, clear ALL stale tetra3/tetra3rs artifacts
+  # from vendor/, commit back to the sycamore-only branch.
   # [skip ci] prevents re-triggering this workflow on the vendor commit.
   # --------------------------------------------------------------------------
   commit-vendor:
     needs: build-wheel
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout olive branch
+      - name: Checkout sycamore-only branch
         uses: actions/checkout@v4
         with:
-          ref: olive
+          ref: sycamore-only
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Remove stale vendor artifacts
         run: |
-          # Clear all previous tetra3 wheels (including armv6l pre-built),
-          # tetra3rs wheels, and cedar-detect binary.
+          # Clear all previous tetra3 wheels (including armv6l pre-built)
+          # and tetra3rs wheels.
           rm -f vendor/wheels/tetra3-*.whl
           rm -f vendor/wheels/tetra3rs-*.whl
-          rm -f vendor/bin/cedar-detect-server
 
       - name: Download tetra3-py wheel
         uses: actions/download-artifact@v4
@@ -130,6 +129,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "No vendor changes to commit"
           else
-            git commit -m "vendor: update tetra3-py (olive-solve) aarch64 wheel [skip ci]"
-            git push origin olive
+            git commit -m "vendor: update tetra3-py aarch64 wheel [skip ci]"
+            git push origin sycamore-only
           fi

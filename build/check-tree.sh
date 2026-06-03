@@ -19,7 +19,7 @@ FAIL() { echo "ERROR: $*" >&2; exit 1; }
 
 # 1. Required directories
 LOG "Checking required directories"
-for d in efinder webui systemd scripts etc proto build .github/workflows; do
+for d in efinder webui systemd scripts etc build .github/workflows; do
   [ -d "$d" ] || FAIL "missing dir: $d"
 done
 
@@ -33,8 +33,6 @@ for f in \
   scripts/ap.sh \
   scripts/station.sh \
   build/build-image.sh \
-  proto/cedar_detect.proto \
-  systemd/cedar-detect.service \
   systemd/efinder.service \
   systemd/efinder-firstboot.service \
   systemd/efinder-webui.service \
@@ -105,31 +103,11 @@ for f in glob.glob('.github/workflows/*.yml'):
         sys.exit(1)
 "
 
-# 7. Proto file basic validity
-LOG "Checking cedar_detect.proto"
-grep -q "^syntax = \"proto3\";" proto/cedar_detect.proto \
-  || FAIL "proto/cedar_detect.proto missing 'syntax = \"proto3\"'"
-grep -q "^service CedarDetect" proto/cedar_detect.proto \
-  || FAIL "proto/cedar_detect.proto missing CedarDetect service"
-grep -q "rpc ExtractCentroids" proto/cedar_detect.proto \
-  || FAIL "proto/cedar_detect.proto missing ExtractCentroids RPC"
-
-# 8. Cross-references: things install.sh expects to install
+# 7. Cross-references: things install.sh expects to install
 LOG "Checking install.sh references"
 for f in $(grep -oE 'install -m [0-9]+ "\$EFINDER_DIR/[^"]+"' scripts/install.sh \
            | sed 's|install -m [0-9]* "$EFINDER_DIR/||;s|"$||'); do
   [ -f "$f" ] || FAIL "install.sh references missing file: $f"
 done
-
-# 9. Cedar-detect submodule check
-LOG "Checking cedar-detect submodule"
-if [ ! -d cedar-detect ]; then
-  WARN "cedar-detect/ submodule not present locally"
-  WARN "Add it before running CI:"
-  WARN "  git submodule add https://github.com/smroid/cedar-detect cedar-detect"
-elif [ ! -f cedar-detect/Cargo.toml ]; then
-  WARN "cedar-detect/ exists but Cargo.toml is missing"
-  WARN "Run: git submodule update --init --recursive"
-fi
 
 LOG "All tree checks passed"

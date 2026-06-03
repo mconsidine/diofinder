@@ -6,14 +6,11 @@ The first image is solved blind (no hint).  Every subsequent image is solved
 twice — once blind and once with the quaternion from the previous successful
 solve — so you can directly compare solve time and success rate.
 
-Backends
-  olive    — get_centroids_from_image_fast (default)
-  sycamore — detect_stars with matched-filter gate (requires star_detect wheel)
+Pipeline: sycamore detect_stars (matched_filter gate) → olive-solve tetra3-py.
 
 Usage:
   python3 tests/test_hint.py --images img1.png img2.png img3.png
   python3 tests/test_hint.py --images *.png --db /path/to/db.npz --hint-unc 20
-  python3 tests/test_hint.py --images *.png --backend sycamore --sigma 7.0
 """
 
 import argparse
@@ -36,19 +33,25 @@ def _load_image(path: pathlib.Path):
 
 
 def _solve(t3, arr, *, fov, fov_err, timeout, sigma,
-           extractor, hint_q=None, hint_unc=15.0):
-    """Split pipeline: extract with *extractor*, then solve.
-
-    *extractor* is a callable(arr, sigma) → (centroids_rowcol, n_stars).
+           hint_q=None, hint_unc=15.0):
+    """Extract with sycamore, then solve with tetra3.
 
     Returns (soln, n_stars, extract_ms, solve_ms).
     """
-    t0 = time.monotonic()
-    centroids, n_stars = extractor(arr, sigma)
-    extract_ms = (time.monotonic() - t0) * 1000.0
+    import star_detect as _sd
+    import numpy as np
 
-    if n_stars == 0:
+    t0  = time.monotonic()
+    raw = _sd.detect_stars(arr, sigma=sigma, bin=1, centroid_full_res=True,
+                           gate_mode="matched_filter")
+    n = len(raw) if raw else 0
+    extract_ms = (time.monotonic() - t0) * 1000
+
+    if n == 0:
         return {'status': 'TooFew'}, 0, extract_ms, 0.0
+
+    # sycamore returns (x=col, y=row); tetra3 expects (row, col)
+    centroids = np.array([[s[1], s[0]] for s in raw], dtype=np.float64)
 
     kwargs = dict(
         fov_estimate=fov,
@@ -63,9 +66,9 @@ def _solve(t3, arr, *, fov, fov_err, timeout, sigma,
 
     t1 = time.monotonic()
     soln = t3.solve_from_centroids(centroids, arr.shape, **kwargs)
-    solve_ms = (time.monotonic() - t1) * 1000.0
+    solve_ms = (time.monotonic() - t1) * 1000
 
-    return soln, n_stars, extract_ms, solve_ms
+    return soln, n, extract_ms, solve_ms
 
 
 def _angular_sep_deg(ra1, dec1, ra2, dec2):
@@ -103,11 +106,6 @@ def main():
     ap.add_argument('--sigma',   type=float, help='Detection sigma threshold')
     ap.add_argument('--hint-unc', type=float, default=5.0, dest='hint_unc',
                     help='Hint uncertainty cone in degrees (default 5.0)')
-    ap.add_argument('--backend', default='olive', choices=['olive', 'sycamore'],
-                    help='Extraction backend (default: olive)')
-    ap.add_argument('--gate-mode', default='matched_filter',
-                    choices=['matched_filter', 'cedar'],
-                    help='Sycamore gate algorithm (default: matched_filter)')
     args = ap.parse_args()
 
     # Load config when available; fall back to safe defaults
@@ -122,14 +120,12 @@ def main():
         fov_err = args.fov_err or cfg.fov_max_error_deg
         timeout = args.timeout or cfg.solve_timeout_ms
         sigma   = args.sigma   or cfg.detect_sigma
-        gate    = args.gate_mode or getattr(cfg, 'sycamore_gate_mode', 'matched_filter')
     except Exception:
         db_path = pathlib.Path('/var/lib/efinder/default_database.npz')
         fov     = args.fov     or 13.5
         fov_err = args.fov_err or 1.0
         timeout = args.timeout or 1500
         sigma   = args.sigma   or 7.0
-        gate    = args.gate_mode
 
     if args.db:
         db_path = pathlib.Path(args.db)
@@ -140,26 +136,12 @@ def main():
     except ImportError as e:
         sys.exit(f'ERROR: {e} — run from the efinder venv')
 
-    # Set up extractor
-    if args.backend == 'sycamore':
-        try:
-            import star_detect as _sd
-            _sd.set_num_threads(2)
-        except ImportError:
-            sys.exit('ERROR: sycamore star_detect not installed — '
-                     'run from the efinder venv or use --backend olive')
-
-        def _extractor(arr, sig):
-            raw  = _sd.detect_stars(arr, sigma=sig, bin=1, centroid_full_res=True,
-                                    gate_mode=gate)
-            n    = len(raw) if raw else 0
-            cent = (np.array([[s[1], s[0]] for s in raw], dtype=np.float64)
-                    if raw else None)
-            return cent, n
-    else:
-        def _extractor(arr, sig):
-            c = tetra3.Tetra3.__new__(tetra3.Tetra3)  # placeholder; t3 bound below
-            raise RuntimeError('_extractor placeholder called before t3 was bound')
+    try:
+        import star_detect as _sd
+        _sd.set_num_threads(2)
+    except ImportError as e:
+        sys.exit(f'ERROR: sycamore star_detect not installed: {e} — '
+                 'run from the efinder venv')
 
     if not db_path.exists():
         sys.exit(f'ERROR: database not found: {db_path}')
@@ -175,21 +157,11 @@ def main():
     t3 = tetra3.Tetra3(str(db_path))
     print(f'Loaded   : {(time.monotonic() - t0) * 1000:.0f} ms')
 
-    # Bind t3 into the olive extractor now that t3 is available
-    if args.backend == 'olive':
-        def _extractor(arr, sig):
-            c = t3.get_centroids_from_image_fast(arr, sigma=sig)
-            n = len(c) if c is not None else 0
-            return c, n
-
-    print(f'Backend  : {args.backend}'
-          + (f'  gate_mode={gate}' if args.backend == 'sycamore' else ''))
     print(f'FOV      : {fov:.2f} ± {fov_err:.2f} deg  '
           f'timeout={timeout} ms  sigma={sigma}  hint_unc={args.hint_unc:.1f} deg')
     print()
 
-    solve_kw = dict(fov=fov, fov_err=fov_err, timeout=timeout, sigma=sigma,
-                    extractor=_extractor)
+    solve_kw = dict(fov=fov, fov_err=fov_err, timeout=timeout, sigma=sigma)
 
     # ── Image 0: blind solve ─────────────────────────────────────────────────
     arr0 = _load_image(images[0])

@@ -1,20 +1,16 @@
 #!/usr/bin/env python3
 """
-eFinder extractor comparison benchmark.
+eFinder sycamore extraction + solve timing benchmark.
 
-Runs both the olive-solve and sycamore-extract centroid extractors on the
-same sky frame and reports extraction speed, star count, and solve outcomes
-side by side.  The plate-solver (tetra3 / olive-solve) is shared — only the
-centroid extraction step differs.
+Times sycamore star_detect extraction on a sky frame, then runs a blind solve
+and a hint solve (olive-solve / tetra3) and reports extraction speed, star
+count, and solve outcomes in a summary table.
 
-Pipeline under test for each backend:
+Pipeline under test:
 
-  extract(frame)  →  [star-count gate]  →  solve_from_centroids (blind)
-                                         →  solve_from_centroids (+ hint)
-
-"Olive"    extractor: tetra3.get_centroids_from_image_fast()
-"Sycamore" extractor: star_detect.detect_stars()  (optional — skipped if
-                      the star_detect wheel is not installed)
+  sycamore detect_stars(frame)  →  [star-count gate]
+      →  solve_from_centroids (blind)
+      →  solve_from_centroids (+ hint)
 
 Coordinate note: sycamore returns (x=col, y=row); tetra3 expects (row, col),
 so columns are swapped before passing centroids to solve_from_centroids.
@@ -71,9 +67,6 @@ ap.add_argument('--fov',      type=float, help='Override FOV estimate in degrees
 ap.add_argument('--fov-err',  type=float, help='Override FOV max error in degrees')
 ap.add_argument('--hint-unc', type=float, default=5.0,
                 help='Hint uncertainty cone for hint solves (default 5.0°)')
-ap.add_argument('--gate-mode', default='matched_filter',
-                choices=['matched_filter', 'cedar'],
-                help='Sycamore gate algorithm (default: matched_filter)')
 args = ap.parse_args()
 
 
@@ -117,14 +110,13 @@ except Exception as e:
     tag(FAIL, f'tetra3 / database: {e}')
     sys.exit(1)
 
-sycamore_ok = False
 try:
     import star_detect as _sd
     _sd.set_num_threads(2)
-    sycamore_ok = True
-    tag(PASS, 'sycamore star_detect — available')
-except ImportError:
-    tag(WARN, 'sycamore star_detect not installed — sycamore rows will be skipped')
+    tag(PASS, 'sycamore star_detect')
+except ImportError as e:
+    tag(FAIL, f'sycamore star_detect not installed: {e}')
+    sys.exit(1)
 
 
 # ── Stage 1: Frame source ─────────────────────────────────────────────────────
@@ -317,43 +309,29 @@ def run_backend(name, extract_fn):
     }
 
 
-# ── Extractor functions ───────────────────────────────────────────────────────
-def _olive_extract(frame, sig):
-    c = t3.get_centroids_from_image_fast(frame, sigma=sig)
-    n = len(c) if c is not None else 0
-    return c, n
-
-
+# ── Extractor function ────────────────────────────────────────────────────────
 def _sycamore_extract(frame, sig):
     raw = _sd.detect_stars(frame, sigma=sig, bin=1, centroid_full_res=True,
-                           gate_mode=args.gate_mode)
+                           gate_mode="matched_filter")
     n   = len(raw) if raw else 0
     # (x=col, y=row) → (row, col) for tetra3
-    c   = (np.array([[s[1], s[0]] for s in raw], dtype=np.float32)
+    c   = (np.array([[s[1], s[0]] for s in raw], dtype=np.float64)
            if raw else None)
     return c, n
 
 
-# ── Run backends ──────────────────────────────────────────────────────────────
+# ── Run benchmark ─────────────────────────────────────────────────────────────
 results = []
 
 # Warm-up pass (not timed)
 sep('Warm-up (untimed)')
 try:
-    c_wu, n_wu = _olive_extract(raw_frame, sigma)
-    tag(PASS, f'olive warm-up: {n_wu} stars')
-    if sycamore_ok:
-        c_sy, n_sy = _sycamore_extract(raw_frame, sigma)
-        tag(PASS, f'sycamore warm-up: {n_sy} stars')
+    c_sy, n_sy = _sycamore_extract(raw_frame, sigma)
+    tag(PASS, f'sycamore warm-up: {n_sy} stars')
 except Exception as e:
     tag(WARN, f'Warm-up error (non-fatal): {e}')
 
-results.append(run_backend('Olive   (get_centroids_from_image_fast)', _olive_extract))
-
-if sycamore_ok:
-    results.append(run_backend('Sycamore (detect_stars)', _sycamore_extract))
-else:
-    tag(WARN, 'Sycamore skipped — star_detect wheel not installed')
+results.append(run_backend('Sycamore (detect_stars)', _sycamore_extract))
 
 
 # ── Summary table ─────────────────────────────────────────────────────────────
@@ -374,23 +352,6 @@ for r in results:
 
 hr()
 print(f'  Frame: {w}x{h}  sigma: {sigma}  FOV: {fov_est:.3f}°±{fov_err:.3f}°  '
-      f'timeout: {timeout_ms} ms  reps: {args.reps}  hint_unc: {args.hint_unc:.1f}°  '
-      f'gate_mode: {args.gate_mode}')
-
-# Delta row (olive vs sycamore) if both ran
-if len(results) == 2 and all(r is not None for r in results):
-    ro, rs = results[0], results[1]
-    delta_ext   = rs['avg_ext'] - ro['avg_ext']
-    sign_ext    = '+' if delta_ext >= 0 else ''
-    print(f'\n  Sycamore vs Olive extraction: {sign_ext}{delta_ext:.1f} ms '
-          f'({sign_ext}{delta_ext/ro["avg_ext"]*100:.1f}%)')
-    if ro['blind_ms'] and rs['blind_ms']:
-        delta_b  = rs['blind_ms'] - ro['blind_ms']
-        sign_b   = '+' if delta_b >= 0 else ''
-        print(f'  Sycamore vs Olive blind solve: {sign_b}{delta_b:.1f} ms')
-    if ro['hint_ms'] and rs['hint_ms']:
-        delta_h  = rs['hint_ms'] - ro['hint_ms']
-        sign_h   = '+' if delta_h >= 0 else ''
-        print(f'  Sycamore vs Olive hint solve:  {sign_h}{delta_h:.1f} ms')
+      f'timeout: {timeout_ms} ms  reps: {args.reps}  hint_unc: {args.hint_unc:.1f}°')
 
 print()

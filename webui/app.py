@@ -1,8 +1,7 @@
 """
-eFinder web UI — olive branch.
+eFinder web UI.
 
-Single backend (olive-solve); the /backend/set endpoint is a no-op
-redirect kept for UI compatibility.
+Pipeline: sycamore star_detect (matched_filter gate) + olive-solve (tetra3).
 """
 
 import io
@@ -125,7 +124,7 @@ def dashboard():
         cal_error=cal.error if not cal.ok else None,
         committed_focus=committed_focus,
         imu=(status.result.get("imu") if status.ok else None),
-        solver_backend=(status.result.get("solver_backend", "olive") if status.ok else "olive"),
+        solver_backend="sycamore",
         test_mode=(
             status.result.get("test_mode", True)
             if status.ok else True),
@@ -149,18 +148,6 @@ def api_status():
 def boresight_center():
     """Reset boresight to the frame center and redirect to dashboard."""
     r = _safe_call("boresight_center")
-    if not r.ok:
-        return r.error, 500
-    return redirect(url_for("dashboard"))
-
-
-# ---- Extractor backend toggle -----------------------------------------------
-
-@app.route("/backend/set", methods=["POST"])
-def backend_set():
-    """Switch the star-extraction backend (olive or sycamore) and redirect to dashboard."""
-    backend = request.form.get("backend", "olive").strip().lower()
-    r = _safe_call("set_extract_backend", {"backend": backend})
     if not r.ok:
         return r.error, 500
     return redirect(url_for("dashboard"))
@@ -552,11 +539,7 @@ _CONFIG_SECTIONS = [
     ]),
     ("Star Detection", [
         ("detect_sigma", "Detection sigma",
-         "Threshold in units of background sigma passed to olive-solve's fast extractor."),
-        ("extract_backend", "Extractor",
-         "\"olive\" (default) uses olive-solve's fast extractor. \"sycamore\" uses star_detect."),
-        ("sycamore_gate_mode", "Sycamore gate",
-         "Gate algorithm when extract_backend=sycamore. \"matched_filter\" (default, v0.8.0+) or \"cedar\"."),
+         "Threshold in units of background sigma passed to sycamore star_detect."),
     ]),
     ("Plate Solving (olive-solve)", [
         ("solver_db",        "Star database",      "Path to a tetra3 .npz database compatible with olive-solve."),
@@ -639,7 +622,6 @@ def config_page():
         cfg_ok=cfg_ok,
         cfg_error=cfg_error,
         daemon_ok=rt.ok,
-        runtime_backend="olive",
         runtime_test_mode=(runtime.get("test_mode")  if runtime else None),
         runtime_imu=(runtime.get("imu")              if runtime else None),
         runtime_fov=(runtime.get("fov_deg")          if runtime else None),

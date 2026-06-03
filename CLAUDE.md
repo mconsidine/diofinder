@@ -47,8 +47,6 @@ CPU 0 is left to the kernel. CPU affinity is set with `os.sched_setaffinity`.
 | `detect_sigma` | float | comms (via maint) | solver |
 | `solve_timeout_ms` | int | comms (via maint) | solver |
 | `test_mode` | bool | comms (via maint) | camera |
-| `extract_backend` | str | comms (via maint) | solver |
-| `sycamore_gate_mode` | str | main (startup only) | solver |
 | `imu_available` | bool | imu_thread | comms, webui |
 | `imu_q` | tuple (w,x,y,z) | imu_thread | comms |
 | `imu_t` | float | imu_thread | comms |
@@ -163,22 +161,12 @@ The Jinja2 environment has a `log10` filter registered for log-scale sliders.
 
 ---
 
-## Extractor backends
+## Extraction
 
-| Backend | Module | Speed | Sensitivity notes |
-|---------|--------|-------|-------------------|
-| `sycamore` | `star_detect.detect_stars` | ~2× slower | matched-filter gate; default sigma 7. **Default backend.** |
-| `olive` | `olive_solve.get_centroids_from_image_fast` | fastest | hard sigma threshold; use sigma 9 |
-
-Switch at runtime from the Status page or:
-```bash
-echo '{"cmd":"set_extract_backend","args":{"backend":"sycamore"}}' | \
-  socat - UNIX-CONNECT:/run/efinder/maint.sock
-```
-
-The sycamore wheel lives in `vendor/wheels/` and is installed by `release.yml`.
-To update it, run the **Vendor Sycamore** GitHub Actions workflow with the
-desired version tag, then merge the resulting commit before tagging a release.
+Star extraction uses **sycamore** `star_detect.detect_stars` with `gate_mode="matched_filter"`.
+The sycamore wheel lives in `vendor/wheels/` and is installed by `release.yml`. To update it,
+run the **Vendor Sycamore** GitHub Actions workflow with the desired version tag, then merge
+the resulting commit before tagging a release.
 
 ---
 
@@ -220,7 +208,7 @@ See `tests/README.md` for the full test catalogue. Quick smoke-test on device:
 cd /opt/efinder
 sudo bash tests/diag_services.sh                  # check all processes alive
 sudo python3 tests/diag_solve.py --live-shm       # one-shot solve with current image
-sudo python3 tests/bench_pipeline_combos.py --live-shm  # olive path timing
+sudo python3 tests/bench_pipeline_combos.py --live-shm  # pipeline timing
 ```
 
 `EFINDER_LOGLEVEL=DEBUG sudo systemctl restart efinder` enables verbose logging.

@@ -1,7 +1,7 @@
-name: Release (olive)
+name: Release (sycamore)
 
 # Prerequisites before triggering an image build:
-#   1. Run 'Vendor Binaries (olive)' to populate vendor/wheels/ with the
+#   1. Run 'Vendor Binaries (sycamore)' to populate vendor/wheels/ with the
 #      aarch64 tetra3-py wheel.  The pre-flight step fails fast if absent.
 #
 # Database generation:
@@ -12,7 +12,7 @@ name: Release (olive)
 
 on:
   push:
-    branches: [olive]
+    branches: [sycamore-only]
     paths:
       - 'efinder/**'
       - 'webui/**'
@@ -57,7 +57,7 @@ jobs:
           WHL=$(ls vendor/wheels/tetra3-*aarch64*.whl 2>/dev/null | head -1 || true)
           if [ -z "$WHL" ]; then
             echo "::error::No aarch64 tetra3-py wheel found in vendor/wheels/."
-            echo "::error::Run the 'Vendor Binaries (olive)' workflow first, then retry."
+            echo "::error::Run the 'Vendor Binaries (sycamore)' workflow first, then retry."
             echo "::error::Note: a linux_armv6l wheel does NOT satisfy this check."
             exit 1
           fi
@@ -143,9 +143,9 @@ jobs:
           xz -T0 -9 build/output/efinder.img
           BUILD_DATE=$(date -u +%Y%m%d)
           if [ "${{ github.event_name }}" = "release" ]; then
-            IMGNAME="efinder-olive-${BUILD_DATE}-${{ steps.ver.outputs.tag }}.img.xz"
+            IMGNAME="efinder-sycamore-${BUILD_DATE}-${{ steps.ver.outputs.tag }}.img.xz"
           else
-            IMGNAME="efinder-olive-${BUILD_DATE}.img.xz"
+            IMGNAME="efinder-sycamore-${BUILD_DATE}.img.xz"
           fi
           mv build/output/efinder.img.xz "build/output/${IMGNAME}"
           echo "imgname=${IMGNAME}" >> $GITHUB_OUTPUT
@@ -163,7 +163,7 @@ jobs:
         if: github.event_name != 'release'
         uses: actions/upload-artifact@v4
         with:
-          name: efinder-olive-image-${{ steps.ver.outputs.tag }}
+          name: efinder-sycamore-image-${{ steps.ver.outputs.tag }}
           path: build/output/${{ steps.compress.outputs.imgname }}
           retention-days: 14
           if-no-files-found: error

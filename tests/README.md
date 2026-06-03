@@ -7,7 +7,7 @@ sudo /opt/efinder/venv/bin/python3 tests/<script>.py [options]
 ```
 
 The solver backend is **olive-solve** (Rust, in-process tetra3-py wheel).
-No cedar-detect daemon, gRPC, or external server is involved.
+No external daemon, gRPC, or server is involved.
 
 ---
 
@@ -19,9 +19,9 @@ No cedar-detect daemon, gRPC, or external server is involved.
 | `diag_camera.py` | Camera exposure/gain sweep, saves PNGs + ZIP |
 | `diag_bno055.py` | BNO055 IMU sensor registers and live samples |
 | `diag_detect.py` | Centroid extraction timing and sigma sweep |
-| `diag_solve.py` | Full pipeline diagnostic: extract → solve (paths A/B/C) |
-| `solve_image.py` | Quick single-image solve with `solve_from_image_fast` |
-| `bench_pipeline_combos.py` | Benchmark all three solve paths with optional sweeps |
+| `diag_solve.py` | Full pipeline diagnostic: extract → solve (blind + hint) |
+| `solve_image.py` | Solve a single image: sycamore extraction + olive-solve |
+| `bench_pipeline_combos.py` | Benchmark sycamore blind + hint solve paths with optional sweeps |
 | `test_hint.py` | Attitude-hint effectiveness across a sequence of shifted images |
 
 ---
@@ -90,7 +90,7 @@ directory, making it easy to transfer off the device.
   of capture
 
 Captured PNGs are raw 8-bit grayscale Y-plane with no display stretch applied,
-identical in content to what olive-solve receives during a live solve.
+identical in content to what the solver receives during a live solve.
 
 ```bash
 # Transfer the archive to a laptop:
@@ -133,35 +133,26 @@ its quaternion is used to propagate the attitude hint between solves.
 
 ## `diag_detect.py` — centroid extraction diagnostic
 
-Tests centroid extraction in isolation with timing and star count.  Supports
-both the **olive** and **sycamore** backends.
+Tests sycamore centroid extraction in isolation with timing and star count.
 
 ```bash
-sudo .../diag_detect.py                          # live SHM, olive backend (default)
-sudo .../diag_detect.py --backend sycamore       # sycamore with matched-filter gate
+sudo .../diag_detect.py                          # live SHM
 sudo .../diag_detect.py --image /path/to/img.png # use a saved frame
 sudo .../diag_detect.py --sigma 7.0              # override sigma
 sudo .../diag_detect.py --reps 10                # more timing repetitions
 sudo .../diag_detect.py --sigma-sweep            # sweep sigma 3–12, show star count table
-sudo .../diag_detect.py --backend sycamore --sigma-sweep   # sweep with sycamore
-sudo .../diag_detect.py --compare-full           # also time f32 variant [olive only]
-sudo .../diag_detect.py --gate-mode cedar        # use legacy cedar gate with sycamore
 ```
 
 Stages:
 1. Config + library imports
 2. Database load
 3. Frame source — live SHM / provided PNG / synthetic star field fallback
-4. Extraction timing — N repetitions with the chosen backend
+4. Extraction timing — N repetitions
 5. Sigma sweep (if `--sigma-sweep`)
 
-`--compare-full` additionally times `get_centroids_from_image` (f32), the
-slower float32 variant — olive only.
-
-`--sigma-sweep` is the quickest way to confirm whether `detect_sigma=9` is
+`--sigma-sweep` is the quickest way to confirm whether `detect_sigma` is
 appropriate for your setup. With sycamore's matched-filter gate, sigma 7–8 is
-typical since the filter is more conservative than olive's hard threshold.
-The solver needs at least `min_centroids` stars (default 8) to attempt a solve.
+typical. The solver needs at least `min_centroids` stars (default 8) to attempt a solve.
 
 ---
 
@@ -173,29 +164,21 @@ Tests the complete extraction + solve pipeline with per-step timing.
 sudo .../diag_solve.py                           # test images in /opt/efinder/test-images
 sudo .../diag_solve.py --image /path/to/img.png  # single image
 sudo .../diag_solve.py --live-shm                # live daemon frame
-sudo .../diag_solve.py --backend sycamore        # sycamore extraction for paths B & C
-sudo .../diag_solve.py --backend sycamore --sigma 7.0   # sycamore with lower sigma
-sudo .../diag_solve.py --gate-mode cedar         # legacy gate with sycamore
 sudo .../diag_solve.py --reps 5
 sudo .../diag_solve.py --sigma 7.0 --timeout 2000
 sudo .../diag_solve.py --extended-timeout        # retry at 3× when normal fails
-sudo .../diag_solve.py --skip-a                  # skip path A to save time
 ```
 
-Three paths are timed per image:
+Two paths are timed per image:
 
 | Path | Call | Description |
 |------|------|-------------|
-| A | `solve_from_image_fast` | Combined reference baseline — **always olive** |
-| B | `<backend>` extraction + `solve_from_centroids` | **Daemon pipeline (blind)** |
-| C | same as B + `attitude_hint` | **Daemon pipeline (seeded)** |
+| blind | `detect_stars` + `solve_from_centroids` | **Daemon pipeline (blind)** |
+| hint  | same + `attitude_hint` | **Daemon pipeline (seeded)** |
 
-`--backend` selects the extraction function for paths B and C (default: `olive`).
-Path A always uses olive's `solve_from_image_fast` regardless of `--backend`.
-
-**Path B is what `solver_proc.py` runs on every frame.**
-Path C is what it runs after the first successful solve (quaternion is chained
-from path B's result). Path A is kept for reference timing comparison.
+**The blind path is what `solver_proc.py` runs on every frame.**
+The hint path is what it runs after the first successful solve (quaternion is
+chained from the blind result).
 
 Reports per-step timing (`ext_ms`, `slv_ms`, `total_ms`), solve status,
 RA/Dec/roll/FOV/matches, and a summary table across all tested images.
@@ -209,14 +192,13 @@ correct before a session.
 
 ```bash
 sudo .../solve_image.py --image /path/to/image.png
-sudo .../solve_image.py --image img.png --backend sycamore --sigma 7.0
+sudo .../solve_image.py --image img.png --sigma 7.0
 sudo .../solve_image.py --image img.png --db /var/lib/efinder/mydb.npz
 sudo .../solve_image.py --image img.png --fov 13.5 --fov-err 1.0 --timeout 3000
 sudo .../solve_image.py --image img.png --reps 5   # timing over multiple reps
 ```
 
-`--backend olive` (default) uses `solve_from_image_fast` (combined Rust call).
-`--backend sycamore` uses `detect_stars` + `solve_from_centroids` split pipeline.
+Uses `detect_stars` + `solve_from_centroids` (sycamore extraction + olive-solve tetra3-py).
 
 Prints RA, Dec, Roll, FOV, and match count on success; suggests corrective
 flags on failure.
@@ -233,18 +215,12 @@ sudo .../bench_pipeline_combos.py --live-shm
 sudo .../bench_pipeline_combos.py --image img.png --reps 10
 sudo .../bench_pipeline_combos.py --image img.png --hint-sweep
 sudo .../bench_pipeline_combos.py --image img.png --sigma-sweep
-sudo .../bench_pipeline_combos.py --image img.png --gate-mode matched_filter
 ```
 
 | Path | Pipeline | Notes |
 |------|----------|-------|
-| 1 | `solve_from_image_fast` (combined) | Reference baseline |
-| 2 | `get_centroids_from_image_fast` + `solve_from_centroids`, blind | Olive daemon pipeline |
-| 3 | Same as 2 + `attitude_hint` | Olive daemon pipeline + hint |
-| 4 | `detect_stars` + `solve_from_centroids`, blind | Sycamore (optional) |
-| 5 | Same as 4 + `attitude_hint` | Sycamore + hint (optional) |
-
-`--gate-mode` controls the sycamore gate for paths 4 and 5 (default: `matched_filter`).
+| 1 | `detect_stars` + `solve_from_centroids`, blind | Sycamore daemon pipeline |
+| 2 | Same as 1 + `attitude_hint` | Sycamore daemon pipeline + hint |
 
 **`--hint-sweep`** varies `hint_uncertainty_deg` from 0.5° to 30° with both
 `strict_hint=False` and `True`. Use this to find the best cone size for your
@@ -265,7 +241,7 @@ solved twice (blind + hint) so the speedup is directly visible.
 ```bash
 sudo .../test_hint.py --images img1.png img2.png img3.png
 sudo .../test_hint.py --images *.png --hint-unc 10
-sudo .../test_hint.py --images *.png --backend sycamore --sigma 7.0
+sudo .../test_hint.py --images *.png --sigma 7.0
 sudo .../test_hint.py --images img1.png img2.png --db /path/to/db.npz \
                        --fov 13.5 --timeout 2000
 ```
