@@ -7,8 +7,8 @@ name: Release (olive)
 # Database generation:
 #   The tetra3 .npz star database is generated on the x86_64 CI runner
 #   (using esa/tetra3) BEFORE the chroot step, then copied into the image
-#   by build-image.sh.  This avoids hip_main.dat lookup failures that
-#   occur when trying to run database generation inside QEMU-emulated aarch64.
+#   by build-image.sh.  This avoids database generation failures inside
+#   QEMU-emulated aarch64, and keeps the hip_main.dat fetch on x86_64 CI.
 
 on:
   push:
@@ -89,8 +89,8 @@ jobs:
 
       - name: Generate tetra3 star database
         # tetra3 is only on GitHub, not PyPI. Install the code via git,
-        # then download hip_main.dat directly from the CDS Hipparcos
-        # catalogue (I/239) - it is not bundled with the GitHub package.
+        # then fetch hip_main.dat from the mconsidine/astro_databases mirror
+        # (the upstream CDS Hipparcos archive is unreliable from CI runners).
         env:
           SOLVER_DB_PATH: ${{ github.workspace }}/build/output/solver_database
           DB_MAX_FOV: ${{ steps.dbfov.outputs.max_fov }}
@@ -100,10 +100,10 @@ jobs:
           python3 -m pip install --quiet "git+https://github.com/esa/tetra3.git"
           TETRA3_DIR=$(python3 -c 'import pathlib, tetra3; print(pathlib.Path(tetra3.__file__).parent)')
           echo "tetra3 package dir: $TETRA3_DIR"
-          echo "Downloading hip_main.dat from CDS Hipparcos archive..."
-          wget -q --show-progress \
-            https://cdsarc.cds.unistra.fr/ftp/cats/I/239/hip_main.dat \
-            -O "${TETRA3_DIR}/hip_main.dat"
+          echo "Downloading hip_main.dat from mconsidine/astro_databases mirror..."
+          curl -fsSL \
+            https://raw.githubusercontent.com/mconsidine/astro_databases/main/hip_main.dat.gz \
+            | gunzip > "${TETRA3_DIR}/hip_main.dat"
           python3 build/generate_database.py
           ls -lh build/output/solver_database.npz
 
