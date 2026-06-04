@@ -1,0 +1,187 @@
+#!/usr/bin/env python3
+"""
+efinder-bg-test: A/B background compensation test on saved frames.
+
+Loads PNG frames from a directory (or uses live shared memory), runs
+detection under each background mode, and prints a comparison table of
+star counts, timing, and centroid spread.
+
+Usage:
+  efinder-bg-test --dir /var/lib/efinder/captures   # test on saved frames
+  efinder-bg-test --live                            # grab one frame via shared memory
+  efinder-bg-test --inject-gradient 40             # add a 40-DN vertical gradient
+  efinder-bg-test --sigma 8 --bin 2                # override detection params
+  efinder-bg-test --modes row_percentile,top_hat   # test specific modes only
+
+The star counts listed in the 'base_only' column (stars detected in the mode
+under test but not in row_percentile) warn about false positives. A large
+'base_only' count for top_hat usually means the tophat radius is too small
+(the opening ate star flux, inflating residual-background noise).
+"""
+
+import argparse
+import glob
+import sys
+import time
+
+import numpy as np
+
+sys.path.insert(0, "/opt/efinder")
+try:
+    import star_detect
+except ImportError:
+    print("ERROR: star_detect not found. Install the sycamore wheel first.",
+          file=sys.stderr)
+    sys.exit(1)
+
+
+ALL_MODES = ["row_percentile", "line_median", "top_hat"]
+
+
+def _detect(image, mode, sigma, bin_, tophat_radius):
+    """Run detection and return (stars, elapsed_ms)."""
+    kw = dict(sigma=sigma, bin=bin_, centroid_full_res=True, max_axis_ratio=4.0)
+    t0 = time.perf_counter()
+    if mode == "top_hat":
+        kw["bg_mode"] = "top_hat"
+        kw["tophat_radius"] = tophat_radius
+    else:
+        kw["bg_mode"] = mode
+    stars = star_detect.detect_stars(image, **kw)
+    elapsed = (time.perf_counter() - t0) * 1000
+    return stars, elapsed
+
+
+def _inject_gradient(image, magnitude):
+    """Add a vertical brightness ramp of `magnitude` DN to an image."""
+    h, w = image.shape
+    ramp = np.linspace(0, magnitude, h, dtype=np.float32)[:, None]
+    out = np.clip(image.astype(np.float32) + ramp, 0, 255).astype(np.uint8)
+    return np.ascontiguousarray(out)
+
+
+def _centroid_spread(stars):
+    """Return (mean_x, mean_y) for a list of (x, y, b, p) tuples."""
+    if not stars:
+        return 0.0, 0.0
+    xs = [s[0] for s in stars]
+    ys = [s[1] for s in stars]
+    return float(np.std(xs)), float(np.std(ys))
+
+
+def _run_image(image, modes, sigma, bin_, tophat_radius, gradient):
+    if gradient > 0:
+        image = _inject_gradient(image, gradient)
+
+    results = {}
+    for mode in modes:
+        if mode == "top_hat":
+            import inspect
+            sig = inspect.signature(star_detect.detect_stars)
+            if "tophat_radius" not in sig.parameters:
+                print(f"  [top_hat] SKIP: installed wheel lacks tophat_radius "
+                      f"(need sycamore >= 0.9.0)")
+                continue
+        stars, elapsed = _detect(image, mode, sigma, bin_, tophat_radius)
+        results[mode] = (stars, elapsed)
+
+    if not results:
+        return
+
+    ref_stars = set()
+    if "row_percentile" in results:
+        ref_coords = {(round(s[0], 1), round(s[1], 1))
+                      for s in results["row_percentile"][0]}
+        ref_stars = ref_coords
+
+    print(f"  {'mode':<16} {'n_stars':>7} {'time_ms':>8} {'base_only':>9}")
+    print(f"  {'-'*16} {'-'*7} {'-'*8} {'-'*9}")
+    for mode, (stars, elapsed) in results.items():
+        coords = {(round(s[0], 1), round(s[1], 1)) for s in stars}
+        base_only = len(coords - ref_stars)
+        print(f"  {mode:<16} {len(stars):>7} {elapsed:>8.1f} {base_only:>9}")
+
+
+def load_frames_from_dir(directory):
+    paths = sorted(glob.glob(f"{directory}/*.png") + glob.glob(f"{directory}/*.jpg"))
+    if not paths:
+        print(f"No PNG/JPG files found in {directory}", file=sys.stderr)
+        sys.exit(1)
+    frames = []
+    try:
+        from PIL import Image as PILImage
+        for p in paths:
+            img = PILImage.open(p).convert("L")
+            arr = np.ascontiguousarray(np.array(img, dtype=np.uint8))
+            frames.append((p, arr))
+    except ImportError:
+        print("ERROR: Pillow not found (pip install pillow)", file=sys.stderr)
+        sys.exit(1)
+    return frames
+
+
+def load_frame_live():
+    try:
+        from multiprocessing import shared_memory
+    except ImportError:
+        print("ERROR: shared_memory requires Python 3.8+", file=sys.stderr)
+        sys.exit(1)
+
+    for slot in range(3):
+        name = f"efinder_frame_{slot}"
+        try:
+            shm = shared_memory.SharedMemory(name=name)
+            # Assume 960x760 (standard eFinder frame size)
+            arr = np.frombuffer(shm.buf, dtype=np.uint8).reshape(760, 960).copy()
+            shm.close()
+            return [(name, np.ascontiguousarray(arr))]
+        except FileNotFoundError:
+            continue
+    print("ERROR: no efinder shared-memory frames found. Is efinder running?",
+          file=sys.stderr)
+    sys.exit(1)
+
+
+def main():
+    p = argparse.ArgumentParser(
+        description="A/B background compensation test on eFinder frames.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    src = p.add_mutually_exclusive_group()
+    src.add_argument("--dir", default="/var/lib/efinder/captures",
+                     help="Directory of PNG/JPG frames (default: %(default)s)")
+    src.add_argument("--live", action="store_true",
+                     help="Grab one frame from live shared memory")
+    p.add_argument("--inject-gradient", type=int, default=0, metavar="DN",
+                   help="Add a vertical gradient of this many DN to each frame")
+    p.add_argument("--sigma", type=float, default=8.0)
+    p.add_argument("--bin", type=int, default=2, choices=[1, 2])
+    p.add_argument("--tophat-radius", type=int, default=12,
+                   help="Structuring-element radius for top_hat (default 12)")
+    p.add_argument("--modes", default=",".join(ALL_MODES),
+                   help="Comma-separated modes to test (default: all)")
+    args = p.parse_args()
+
+    modes = [m.strip() for m in args.modes.split(",") if m.strip()]
+    unknown = [m for m in modes if m not in ALL_MODES]
+    if unknown:
+        print(f"ERROR: unknown mode(s): {unknown}", file=sys.stderr)
+        return 1
+
+    frames = load_frame_live() if args.live else load_frames_from_dir(args.dir)
+    print(f"Testing {len(frames)} frame(s), modes={modes}, "
+          f"sigma={args.sigma}, bin={args.bin}, "
+          f"tophat_radius={args.tophat_radius}, "
+          f"gradient={args.inject_gradient}")
+
+    for name, image in frames:
+        print(f"\n{name}  ({image.shape[1]}x{image.shape[0]})")
+        _run_image(image, modes, args.sigma, args.bin,
+                   args.tophat_radius, args.inject_gradient)
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)

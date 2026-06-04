@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}eFinder Background Test{% endblock %}
+{% block content %}
+<h2>Background Compensation</h2>
+
+{% if error %}
+<div class="alert alert-error">{{ error }}</div>
+{% endif %}
+
+<div class="card" style="margin-bottom:1rem;">
+  <h3 style="margin:0 0 10px 0; font-size:1rem;">Current Settings</h3>
+  {% if params %}
+  <dl class="stats">
+    <dt>detect_bg_mode</dt>
+    <dd><code>{{ params.detect_bg_mode }}</code></dd>
+    <dt>detect_tophat_radius</dt>
+    <dd>{{ params.detect_tophat_radius }} px</dd>
+    <dt>detect_sigma</dt>
+    <dd>{{ params.detect_sigma }}</dd>
+  </dl>
+  {% else %}
+  <p class="muted">Could not read settings &mdash; is the daemon running?</p>
+  {% endif %}
+</div>
+
+<div class="card" style="margin-bottom:1rem;">
+  <h3 style="margin:0 0 10px 0; font-size:1rem;">Change Background Mode</h3>
+  <form method="post" action="{{ url_for('bgtest_set') }}">
+    <table style="border-spacing:6px 10px;">
+      <tr>
+        <td><label for="bg_mode">Mode</label></td>
+        <td>
+          <select name="bg_mode" id="bg_mode" onchange="toggleTophat(this)">
+            <option value="row_percentile"
+              {% if params and params.detect_bg_mode == 'row_percentile' %}selected{% endif %}>
+              row_percentile (default)
+            </option>
+            <option value="line_median"
+              {% if params and params.detect_bg_mode == 'line_median' %}selected{% endif %}>
+              line_median
+            </option>
+            <option value="top_hat"
+              {% if params and params.detect_bg_mode == 'top_hat' %}selected{% endif %}>
+              top_hat (morphological, sycamore &ge; 0.9.0)
+            </option>
+          </select>
+        </td>
+      </tr>
+      <tr id="tophat-row"
+          style="{% if not params or params.detect_bg_mode != 'top_hat' %}display:none{% endif %}">
+        <td><label for="tophat_radius">Top-hat radius (px)</label></td>
+        <td>
+          <input type="number" name="tophat_radius" id="tophat_radius"
+                 min="1" max="100"
+                 value="{{ params.detect_tophat_radius if params else 12 }}"
+                 style="width:5rem;">
+          <span class="hint">Must exceed star PSF radius</span>
+        </td>
+      </tr>
+      <tr>
+        <td></td>
+        <td>
+          <label>
+            <input type="checkbox" name="persist" value="1">
+            Save to efinder.conf
+          </label>
+        </td>
+      </tr>
+      <tr>
+        <td></td>
+        <td><button type="submit" class="btn">Apply</button></td>
+      </tr>
+    </table>
+  </form>
+</div>
+
+<div class="card" style="margin-bottom:1rem;">
+  <h3 style="margin:0 0 6px 0; font-size:1rem;">Notes</h3>
+  <ul style="font-size:0.85rem; line-height:1.6; margin:0; padding-left:1.4em;">
+    <li><strong>row_percentile</strong>: cheapest; 25th-percentile of cache-line
+        samples per row. Good for clean dark-sky frames.</li>
+    <li><strong>line_median</strong>: true per-row median; more robust to sensor
+        row-noise, vignetting, and light-pollution gradients.</li>
+    <li><strong>top_hat</strong>: morphological white top-hat (image &minus; opening);
+        removes 2-D gradients that per-row modes can&rsquo;t see.
+        Requires sycamore &ge; 0.9.0 &mdash; older wheels silently degrade to
+        <em>line_median</em>. Tune the radius so it exceeds your largest star PSF
+        (typically 12&ndash;16&thinsp;px for the HQ Camera + 25&thinsp;mm lens at bin=2).
+        Run <code>efinder-bg-test --inject-gradient 40</code> on the Pi to
+        verify that star counts rise under a synthetic gradient.</li>
+    <li>The <strong>temporal cache</strong> (<code>bg_cache_enabled</code>) is
+        orthogonal and stays active regardless of mode; it stacks frames over
+        time for noise reduction and hot-pixel rejection.</li>
+  </ul>
+</div>
+
+<script>
+function toggleTophat(sel) {
+  var row = document.getElementById('tophat-row');
+  row.style.display = (sel.value === 'top_hat') ? '' : 'none';
+}
+</script>
+{% endblock %}
