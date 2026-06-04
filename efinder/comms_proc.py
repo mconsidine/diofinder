@@ -16,7 +16,7 @@ Available maintenance commands:
   set_test_mode {"enabled": true | false}
   status, boresight_show/set/center, calibration_status/reset,
   polar_start/status/cancel/set_latitude, exposure_get/set, gain_set,
-  solver_params_get/set
+  solver_params_get/set, solve_centroids
 """
 
 import datetime
@@ -40,6 +40,7 @@ from efinder.worker_cmds import (
     SOLVER_OP_CALIBRATION_STATUS, SOLVER_OP_CALIBRATION_RESET,
     SOLVER_OP_POLAR_START, SOLVER_OP_POLAR_STATUS,
     SOLVER_OP_POLAR_CANCEL, SOLVER_OP_POLAR_SET_LATITUDE,
+    SOLVER_OP_SOLVE_CENTROIDS,
     CAMERA_OP_GET_EXPOSURE, CAMERA_OP_SET_EXPOSURE, CAMERA_OP_SET_GAIN,
 )
 
@@ -616,6 +617,28 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             if persist and updates:
                 cfg_mod.save_keys(updates)
             return MaintResponse(ok=True, result={**updates, "persisted": persist})
+
+        if cmd == "solve_centroids":
+            # Solve a caller-supplied centroid list using the solver's
+            # already-loaded database (no second DB instance — memory-safe).
+            # Used by tests/diag_background.py --solve. Centroids are
+            # [[row, col], ...] in full-resolution pixel coordinates.
+            cents = args.get("centroids")
+            if not isinstance(cents, list) or not cents:
+                return MaintResponse(
+                    ok=False, error="solve_centroids requires non-empty 'centroids'")
+            try:
+                timeout_s = float(args.get("timeout_s", 20.0))
+            except (ValueError, TypeError):
+                timeout_s = 20.0
+            reply = _call_solver(SOLVER_OP_SOLVE_CENTROIDS, {"centroids": cents},
+                                 ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
+                                 timeout_s=timeout_s)
+            if reply is None:
+                return MaintResponse(ok=False, error="solver did not respond")
+            if not reply.ok:
+                return MaintResponse(ok=False, error=reply.error)
+            return MaintResponse(ok=True, result=reply.result)
 
         if cmd == "set_test_mode":
             try:
