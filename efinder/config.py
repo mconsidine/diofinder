@@ -66,6 +66,30 @@ class Config:
     # sigma threshold passed to star_detect.detect_stars.
     detect_sigma: float = 7.0
 
+    # Detection binning passed to star_detect (1=full-res, 2=2x2-binned).
+    detect_bin: int = 1
+
+    # Per-frame background mode: "row_percentile" (default, cheapest),
+    # "line_median" (robust to per-row offset/vignetting), or "top_hat"
+    # (opt-in morphological 2-D gradient removal — needs sycamore >= 0.9.0).
+    detect_bg_mode: str = "row_percentile"
+    # Structuring-element radius (px) used only when detect_bg_mode == "top_hat".
+    # Must be comfortably larger than the largest star radius.
+    detect_tophat_radius: int = 12
+
+    # -------- Temporal "analytic-threading" background cache --------
+    # When enabled, a worker thread in solver_proc maintains a temporally
+    # median-stacked per-row background + noise model; steady-state detection
+    # consumes it via detect_stars_with_cache (√N noise reduction, free
+    # hot-pixel rejection). Falls back to per-frame detection during slew /
+    # warm-up. Set false to disable entirely if the per-frame submit/stack
+    # bookkeeping proves too costly.
+    bg_cache_enabled: bool = True
+    bg_cache_stack: int = 8            # frames median-stacked per rebuild
+    bg_cache_refresh_s: float = 5.0    # min interval between rebuilds
+    bg_cache_slew_deg: float = 0.5     # IMU angle that invalidates the cache
+    bg_cache_max_age_s: float = 60.0   # rebuild if model older than this
+
     # -------- Solver (olive-solve tetra3-py) --------
     # Path to a tetra3 .npz star database compatible with olive-solve.
     solver_db: str = "default_database"

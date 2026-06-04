@@ -306,10 +306,23 @@ def solver_main(slots, latest_solution, shared_cfg,
         import star_detect as _star_detect
         # One-time thread-count init; solver process owns two CPU cores.
         _star_detect.set_num_threads(2)
-        log.info("sycamore star_detect ready")
+        log.info("sycamore star_detect ready (top_hat support: %s)", HAS_TOPHAT)
     except ImportError as e:
         log.error("sycamore star_detect not installed: %s", e)
         raise RuntimeError("sycamore star_detect unavailable") from e
+
+    # Temporal background cache (decision #5). Routes steady-state detection
+    # through detect_stars_with_cache; falls back to per-frame on slew/warmup.
+    # Disable via bg_cache_enabled if its bookkeeping proves too costly.
+    # Imported here (not at module top) so star_detect stays a runtime, not
+    # import-time, dependency — the check above owns the "missing wheel" error.
+    from efinder.bg_cache import BackgroundCache, HAS_TOPHAT
+    bg_cache = BackgroundCache(cfg)
+    bg_cache.start()
+    log.info(
+        "background: cache=%s bg_mode=%s tophat_radius=%d bin=%d",
+        bg_cache.enabled, cfg.detect_bg_mode, cfg.detect_tophat_radius,
+        cfg.detect_bin)
 
     calibrator = FovCalibrator(cfg, shared_cfg)
     log.info("Calibrator: state=%s fov=%.4f° tolerance=%.3f°",
@@ -385,6 +398,12 @@ def solver_main(slots, latest_solution, shared_cfg,
             np.copyto(frame_buf, bufs[idx])
             slots.release_read_slot()
 
+            # Feed the temporal background worker (copies internally) and let it
+            # track slew via the IMU. No-ops when the cache is disabled.
+            bg_cache.submit_frame(frame_buf)
+            if shared_cfg.get("imu_available", False):
+                bg_cache.note_motion(shared_cfg.get("imu_q"))
+
             # float64: Rust extracts target_sky_coord as PyReadonlyArray2<f64>
             target_sky = None
             if align_req is not None:
@@ -396,15 +415,21 @@ def solver_main(slots, latest_solution, shared_cfg,
                 last_sky_q, last_solve_imu_q, shared_cfg)
 
             # --- Step 1: extract centroids (sycamore, matched_filter) --------
+            # Background handling (per-row floor, top-hat, or temporal cache) is
+            # routed by BackgroundCache.detect; all knobs are live-overridable
+            # via shared_cfg, falling back to the config defaults.
             t_extract = time.monotonic()
             sigma = shared_cfg.get("detect_sigma", cfg.detect_sigma)
+            bg_mode = shared_cfg.get("detect_bg_mode", cfg.detect_bg_mode)
+            tophat_radius = int(
+                shared_cfg.get("detect_tophat_radius", cfg.detect_tophat_radius))
             try:
-                _raw = _star_detect.detect_stars(
+                _raw = bg_cache.detect(
                     frame_buf,
                     sigma=sigma,
-                    bin=1,
-                    centroid_full_res=True,
-                    gate_mode="matched_filter",
+                    bg_mode=bg_mode,
+                    tophat_radius=tophat_radius,
+                    max_axis_ratio=float("inf"),
                 )
                 # sycamore returns (x=col, y=row, brightness, peak).
                 # tetra3 solve_from_centroids expects (row, col) = (y, x).
@@ -595,5 +620,6 @@ def solver_main(slots, latest_solution, shared_cfg,
                     elapsed_ms, extract_ms, solve_only_ms)
 
     finally:
+        bg_cache.stop()
         for s in shms:
             s.close()
