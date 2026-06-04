@@ -27,6 +27,9 @@ Usage:
   # Saved capture, custom sigma, stress the gradient case:
   sudo /opt/efinder/venv/bin/python3 tests/diag_background.py \\
       --image /var/lib/efinder/captures/frame.png --inject-gradient 40
+
+  # Also solve each mode on the live daemon (memory-safe; daemon must be up):
+  sudo /opt/efinder/venv/bin/python3 tests/diag_background.py --solve
 """
 
 import argparse
@@ -56,16 +59,23 @@ ap.add_argument('--tophat-radius', type=int, default=None,
 ap.add_argument('--inject-gradient', type=float, default=0.0, metavar='ADU',
                 help='Add a synthetic ramp+vignette of this peak ADU before '
                      'detection (stress-tests top_hat).')
+ap.add_argument('--solve', action='store_true',
+                help="Also plate-solve each mode's centroids on the LIVE daemon "
+                     "(requires the service running). Reuses the solver's "
+                     "resident database — no second copy is loaded, so it is "
+                     "memory-safe on the Pi. Shows whether a mode actually "
+                     "SOLVES, not just how many stars it detects.")
 args = ap.parse_args()
 
 
-# ── Stage 0: Config & imports ──────────────────────────────────────────────
+# ── Stage 0: Config & imports ────────────────────────────────────────────
 sep('Stage 0: Config & library imports')
 try:
     from efinder.config import load_config
     cfg = load_config()
     sigma = args.sigma if args.sigma is not None else cfg.detect_sigma
     min_c = cfg.min_centroids
+    max_c = cfg.max_solve_stars
     W, H = cfg.frame_width, cfg.frame_height
     th_radius = args.tophat_radius if args.tophat_radius is not None \
         else cfg.detect_tophat_radius
@@ -75,6 +85,7 @@ except Exception as e:
     tag(WARN, f'Config unavailable ({e}); using defaults')
     sigma = args.sigma if args.sigma is not None else 7.0
     min_c, W, H, th_radius, det_bin = 8, 960, 760, 12, 1
+    max_c = 50
 
 tag(INFO, f'sigma={sigma:.1f}  frame={W}x{H}  bin={det_bin}  '
           f'tophat_radius={th_radius}  min_centroids={min_c}')
@@ -102,7 +113,7 @@ else:
               'comparing the per-row modes only.')
 
 
-# ── Stage 1: Frame source ──────────────────────────────────────────────────
+# ── Stage 1: Frame source ────────────────────────────────────────────
 sep('Stage 1: Frame source')
 frame = None
 if args.image:
@@ -161,10 +172,10 @@ if args.inject_gradient > 0:
 frame = np.ascontiguousarray(frame)
 
 
-# ── Extraction + comparison ────────────────────────────────────────────────
+# ── Extraction + comparison ─────────────────────────────────────────────────
 def extract(mode):
     kw = dict(sigma=sigma, bin=det_bin, centroid_full_res=True,
-              gate_mode='matched_filter', bg_mode=mode)
+              bg_mode=mode)
     if mode == 'top_hat':
         kw['tophat_radius'] = th_radius
     times = []
@@ -204,19 +215,64 @@ sep(f'Background mode A/B  sigma={sigma:.1f}  reps={args.reps}')
 results = {m: extract(m) for m in MODES}
 base_pts = results['row_percentile'][0]
 
-print(f'  {"mode":>14}  {"stars":>5}  {"p50ms":>6}  {"p95ms":>6}  '
-      f'{"match":>5}  {"base_only":>9}  {"mode_only":>9}  {"dx_px":>6}')
-print('  ' + '-'*78)
+
+# ── Optional: solve each mode on the live daemon (memory-safe) ──────────────
+# Hands each mode's centroids to the running solver via the maint socket; the
+# solver reuses its resident database, so no second copy is loaded. This shows
+# which background mode actually SOLVES, which star-count alone cannot.
+solve_results = {}
+if args.solve:
+    try:
+        from efinder.maint import call as _maint_call
+    except Exception as e:
+        tag(FAIL, f'--solve needs efinder.maint ({e})'); _maint_call = None
+
+    def solve_mode(pts):
+        if _maint_call is None:
+            return ('no-maint', False, 0)
+        if len(pts) < min_c:
+            return ('TooFew', False, 0)
+        # star_detect points are (x, y); the solver expects (row, col) = (y, x).
+        cents = [[float(y), float(x)] for (x, y) in pts[:max_c]]
+        try:
+            r = _maint_call('solve_centroids', {'centroids': cents}, timeout=25.0)
+        except Exception as e:
+            return (f'err:{type(e).__name__}', False, 0)
+        if not r.ok:
+            return (f'err:{r.error}', False, 0)
+        res = r.result or {}
+        return (res.get('status', '?'), bool(res.get('solved')),
+                int(res.get('matches', 0) or 0))
+
+    for m in MODES:
+        solve_results[m] = solve_mode(results[m][0])
+
+hdr = (f'  {"mode":>14}  {"stars":>5}  {"p50ms":>6}  {"p95ms":>6}  '
+       f'{"match":>5}  {"base_only":>9}  {"mode_only":>9}  {"dx_px":>6}')
+if args.solve:
+    hdr += f'  {"solved":>6}  {"Nmatch":>6}'
+print(hdr)
+print('  ' + '-' * (len(hdr) - 2))
 for m in MODES:
     pts, p50, p95 = results[m]
     mt, bo, mo, dx = agreement(base_pts, pts)
     dxs = 'n/a' if dx != dx else f'{dx:.3f}'
     flag = '' if len(pts) >= min_c else '  ← below min_centroids'
-    print(f'  {m:>14}  {len(pts):5d}  {p50:6.1f}  {p95:6.1f}  '
-          f'{mt:5d}  {bo:9d}  {mo:9d}  {dxs:>6}{flag}')
+    line = (f'  {m:>14}  {len(pts):5d}  {p50:6.1f}  {p95:6.1f}  '
+            f'{mt:5d}  {bo:9d}  {mo:9d}  {dxs:>6}')
+    if args.solve:
+        status, ok, nm = solve_results[m]
+        line += f'  {("YES" if ok else "no"):>6}  {nm:6d}'
+        if not ok and status not in ('NoMatch', 'TooFew'):
+            flag += f'  ({status})'
+    print(line + flag)
 
 print(f'\n  agreement columns are vs the row_percentile baseline; '
       f'min_centroids={min_c}')
+if args.solve:
+    print('  solved/Nmatch are from the LIVE daemon solver (resident DB, no '
+          'second copy loaded);\n  it briefly competes with live solving while '
+          'this runs.')
 if HAS_TOPHAT and args.inject_gradient > 0:
     th_n = len(results['top_hat'][0])
     rp_n = len(results['row_percentile'][0])

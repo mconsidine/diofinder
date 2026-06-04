@@ -5,8 +5,9 @@
 # No cedar-detect binary or gRPC stubs are involved.
 #
 # Usage:
-#   sudo /usr/local/bin/efinder-update                 # latest release
-#   sudo /usr/local/bin/efinder-update v0.8.1          # specific version
+#   sudo /usr/local/bin/efinder-update                 # latest release tag
+#   sudo /usr/local/bin/efinder-update v0.8.1          # specific tag
+#   sudo /usr/local/bin/efinder-update --ref BRANCH    # track a branch (testing)
 #
 # Refuses to update if the working tree has local modifications.
 
@@ -14,7 +15,16 @@ set -euo pipefail
 
 EFINDER_DIR=/opt/efinder
 REPO=mconsidine/diofinder
-TARGET_VERSION="${1:-latest}"
+
+TARGET_VERSION="latest"
+REF=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --ref)   REF="${2:-}"; shift 2 || { echo "--ref needs an argument" >&2; exit 1; } ;;
+    --ref=*) REF="${1#*=}"; shift ;;
+    *)       TARGET_VERSION="$1"; shift ;;
+  esac
+done
 
 LOG() { echo "[update] $*"; }
 FAIL() { echo "[update] ERROR: $*" >&2; exit 1; }
@@ -33,15 +43,28 @@ fi
 LOG "Fetching latest code"
 sudo -u efinder git fetch --tags origin
 
-if [ "$TARGET_VERSION" = "latest" ]; then
-  TAG=$(sudo -u efinder git tag --sort=-v:refname | head -n1)
-  [ -n "$TAG" ] || FAIL "No tags found in repo"
+if [ -n "$REF" ]; then
+  # Explicit ref: a branch (tracked + fast-forwarded) or a tag/commit (detached).
+  sudo -u efinder git fetch origin "$REF" || FAIL "Could not fetch ref '$REF'"
+  if sudo -u efinder git ls-remote --heads origin "$REF" | grep -q .; then
+    LOG "Checking out branch $REF"
+    sudo -u efinder git checkout -B "$REF" "origin/$REF" || FAIL "branch checkout failed"
+    sudo -u efinder git pull --ff-only origin "$REF"     || FAIL "branch fast-forward failed"
+  else
+    LOG "Checking out ref $REF (tag/commit)"
+    sudo -u efinder git checkout --quiet "$REF" || FAIL "checkout of '$REF' failed"
+  fi
+  TAG="$REF"
 else
-  TAG="$TARGET_VERSION"
+  if [ "$TARGET_VERSION" = "latest" ]; then
+    TAG=$(sudo -u efinder git tag --sort=-v:refname | head -n1)
+    [ -n "$TAG" ] || FAIL "No tags found in repo"
+  else
+    TAG="$TARGET_VERSION"
+  fi
+  LOG "Updating to $TAG"
+  sudo -u efinder git checkout --quiet "$TAG"
 fi
-
-LOG "Updating to $TAG"
-sudo -u efinder git checkout --quiet "$TAG"
 
 # --- Refresh Python dependencies ----------------------------------------------
 

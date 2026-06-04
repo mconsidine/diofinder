@@ -53,6 +53,10 @@ SOLVER_OP_POLAR_START = "polar_start"
 SOLVER_OP_POLAR_STATUS = "polar_status"
 SOLVER_OP_POLAR_CANCEL = "polar_cancel"
 SOLVER_OP_POLAR_SET_LATITUDE = "polar_set_latitude"
+# Solve a caller-supplied centroid list with the solver's already-loaded
+# database (used by the diag_background --solve A/B, so it never loads a second
+# copy of the star DB). args: {"centroids": [[row, col], ...]}.
+SOLVER_OP_SOLVE_CENTROIDS = "solve_centroids"
 
 
 # ----- Camera commands -----
