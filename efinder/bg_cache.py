@@ -183,7 +183,6 @@ class BackgroundCache:
         if steady:
             kw = dict(
                 sigma=sigma, bin=self.bin, max_axis_ratio=max_axis_ratio,
-                gate_mode="matched_filter",
             )
             if want_tophat and CACHE_HAS_TOPHAT:
                 kw["tophat_radius"] = int(tophat_radius)
@@ -194,7 +193,7 @@ class BackgroundCache:
         # old cached wheel).
         kw = dict(
             sigma=sigma, bin=self.bin, centroid_full_res=True,
-            gate_mode="matched_filter", max_axis_ratio=max_axis_ratio,
+            max_axis_ratio=max_axis_ratio,
         )
         if want_tophat:
             kw["bg_mode"] = "top_hat"

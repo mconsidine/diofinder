@@ -213,6 +213,34 @@ def polar_set_latitude():
     return redirect(url_for("polar_page"))
 
 
+@app.route("/bgtest")
+def bgtest_page():
+    """Background compensation settings page."""
+    r = _safe_call("solver_params_get")
+    return render_template(
+        "bgtest.html",
+        params=(r.result if r.ok else None),
+        error=(r.error if not r.ok else None),
+    )
+
+
+@app.route("/bgtest/set", methods=["POST"])
+def bgtest_set():
+    """Apply background mode from the bgtest form and redirect back."""
+    mode = request.form.get("bg_mode", "row_percentile").strip().lower()
+    persist = request.form.get("persist") == "1"
+    params = {"detect_bg_mode": mode, "persist": persist}
+    if mode == "top_hat":
+        try:
+            params["detect_tophat_radius"] = int(request.form.get("tophat_radius", 12))
+        except (ValueError, TypeError):
+            params["detect_tophat_radius"] = 12
+    r = _safe_call("solver_params_set", params)
+    if not r.ok:
+        return r.error, 500
+    return redirect(url_for("bgtest_page"))
+
+
 @app.route("/calibration/reset", methods=["POST"])
 def calibration_reset():
     """Reset the FOV rolling-window calibration and redirect to the dashboard."""

@@ -43,8 +43,34 @@ distortion: 0.0
 latitude_deg: 0.0
 longitude_deg: 0.0
 
-# ---- Star detection (olive-solve extractor) ----
+# ---- Star detection (sycamore star_detect extractor) ----
 detect_sigma: 9.0
+
+# Per-frame background compensation mode:
+#   row_percentile  — cheapest; 25th-percentile of cache-line-sampled pixels
+#                     per row. Good for clean dark-sky frames.
+#   line_median     — true per-row median; more robust to sensor row-noise,
+#                     vignetting, and light-pollution gradients along rows.
+#   top_hat         — morphological white top-hat (image − opening); removes
+#                     2-D vignetting / sky-glow / gradients that per-row modes
+#                     can't see. Requires sycamore >= 0.9.0; degrades to
+#                     line_median on older wheels. Opt-in; tune
+#                     detect_tophat_radius to your rig before enabling.
+detect_bg_mode: row_percentile
+
+# Structuring-element radius (pixels) for the top_hat mode.
+# Must exceed the largest star radius or the opening will eat star flux.
+# Typical value: 12 (≈2× a well-focused PSF on the HQ Camera + 25 mm lens).
+detect_tophat_radius: 12
+
+# Temporal background cache: median-stack recent frames into a per-row model.
+# Gives sqrt(N) noise reduction and free hot-pixel rejection. Set false if
+# the per-frame bookkeeping proves too costly on a very low-power setup.
+bg_cache_enabled: true
+bg_cache_stack: 8
+bg_cache_refresh_s: 5.0
+bg_cache_slew_deg: 0.5
+bg_cache_max_age_s: 60.0
 
 # ---- Solver (olive-solve tetra3-py) ----
 # solver_db: bare name -> /var/lib/efinder/<name>.npz

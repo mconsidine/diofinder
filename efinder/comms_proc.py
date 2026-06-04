@@ -558,10 +558,14 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
 
         if cmd == "solver_params_get":
             return MaintResponse(ok=True, result={
-                "detect_sigma":     ctx.shared_cfg.get(
-                    "detect_sigma",     ctx.cfg.detect_sigma),
-                "solve_timeout_ms": ctx.shared_cfg.get(
-                    "solve_timeout_ms", ctx.cfg.solve_timeout_ms),
+                "detect_sigma":        ctx.shared_cfg.get(
+                    "detect_sigma",        ctx.cfg.detect_sigma),
+                "detect_bg_mode":      ctx.shared_cfg.get(
+                    "detect_bg_mode",      ctx.cfg.detect_bg_mode),
+                "detect_tophat_radius": ctx.shared_cfg.get(
+                    "detect_tophat_radius", ctx.cfg.detect_tophat_radius),
+                "solve_timeout_ms":    ctx.shared_cfg.get(
+                    "solve_timeout_ms",    ctx.cfg.solve_timeout_ms),
             })
 
         if cmd == "solver_params_set":
@@ -578,6 +582,26 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                                         error="detect_sigma out of range [1, 50]")
                 ctx.shared_cfg["detect_sigma"] = sigma
                 updates["detect_sigma"] = sigma
+            if "detect_bg_mode" in args:
+                mode = str(args["detect_bg_mode"]).strip().lower()
+                valid_modes = ("row_percentile", "line_median", "top_hat")
+                if mode not in valid_modes:
+                    return MaintResponse(ok=False,
+                                        error=f"detect_bg_mode must be one of "
+                                              f"{valid_modes}, got {mode!r}")
+                ctx.shared_cfg["detect_bg_mode"] = mode
+                updates["detect_bg_mode"] = mode
+            if "detect_tophat_radius" in args:
+                try:
+                    r = int(args["detect_tophat_radius"])
+                except (ValueError, TypeError) as e:
+                    return MaintResponse(ok=False,
+                                        error=f"detect_tophat_radius must be int: {e}")
+                if not (1 <= r <= 100):
+                    return MaintResponse(ok=False,
+                                        error="detect_tophat_radius out of range [1, 100]")
+                ctx.shared_cfg["detect_tophat_radius"] = r
+                updates["detect_tophat_radius"] = r
             if "solve_timeout_ms" in args:
                 try:
                     ms = int(args["solve_timeout_ms"])
