@@ -45,6 +45,8 @@ CPU 0 is left to the kernel. CPU affinity is set with `os.sched_setaffinity`.
 |-----|------|-----------|--------|
 | `boresight_y`, `boresight_x` | float | comms (via :CM# or maint) | solver, comms, webui |
 | `detect_sigma` | float | comms (via maint) | solver |
+| `detect_bg_mode` | str | comms (via maint) | solver |
+| `detect_tophat_radius` | int | comms (via maint) | solver |
 | `solve_timeout_ms` | int | comms (via maint) | solver |
 | `test_mode` | bool | comms (via maint) | camera |
 | `imu_available` | bool | imu_thread | comms, webui |
@@ -163,10 +165,34 @@ The Jinja2 environment has a `log10` filter registered for log-scale sliders.
 
 ## Extraction
 
-Star extraction uses **sycamore** `star_detect.detect_stars` with `gate_mode="matched_filter"`.
+Star extraction uses **sycamore** `star_detect` with `gate_mode="matched_filter"`.
 The sycamore wheel lives in `vendor/wheels/` and is installed by `release.yml`. To update it,
 run the **Vendor Sycamore** GitHub Actions workflow with the desired version tag, then merge
 the resulting commit before tagging a release.
+
+Detection is routed through `efinder/bg_cache.py::BackgroundCache`, not by calling
+`detect_stars` directly. This gives three composable background strategies, all
+toggleable from config (and live-overridable via `shared_cfg`):
+
+- **Per-frame background mode** (`detect_bg_mode`): `row_percentile` (default,
+  cheapest), `line_median` (robust to per-row offset / vignetting), or `top_hat`
+  (opt-in morphological white top-hat that removes 2-D vignetting / sky-glow /
+  light-pollution gradients the per-row floors can't see, leaving stars intact).
+  `top_hat` needs **sycamore >= 0.9.0**; on older wheels `BackgroundCache` detects
+  the missing capability and silently degrades to `line_median`. The
+  structuring-element radius is `detect_tophat_radius` (default 12).
+- **Temporal "analytic-threading" cache** (`bg_cache_enabled`, default true): a
+  worker thread in `solver_proc` median-stacks recent frames into a per-row
+  background + noise model; steady-state detection consumes it via
+  `detect_stars_with_cache` (√N noise reduction + free hot-pixel rejection),
+  falling back to per-frame detection during slew (IMU-driven) and warm-up. Set
+  `bg_cache_enabled: false` to disable if its per-frame submit/stack bookkeeping
+  proves too costly. The temporal model is orthogonal to the per-frame mode and
+  composes with `top_hat` (steady cached detection passes `tophat_radius`).
+
+A/B these on-device with `tests/diag_background.py` (e.g. `--inject-gradient 40`
+to stress the glow case); the upstream extractor harness is
+`sycamore-extract/tests/ab_background.py`.
 
 ---
 
