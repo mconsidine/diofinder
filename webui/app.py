@@ -518,11 +518,22 @@ def logs():
 
 @app.route("/update", methods=["GET", "POST"])
 def update_page():
-    """OTA update page: GET shows current version; POST fires efinder-update in the background."""
+    """OTA update page: GET shows current version; POST fires efinder-update in the background.
+
+    An optional 'ref' form field updates to a specific branch/tag instead of the
+    latest release (runs `efinder-update --ref <ref>`)."""
     if request.method == "POST":
+        cmd = ["sudo", "/usr/local/bin/efinder-update"]
+        ref = (request.form.get("ref") or "").strip()
+        if ref:
+            # Branch/tag names: letters, digits, and ./_/-, with slashes for
+            # namespaced branches (e.g. claude/my-branch). Reject anything else.
+            if not _re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,200}", ref):
+                return "invalid branch/tag name", 400
+            cmd += ["--ref", ref]
         try:
             subprocess.Popen(
-                ["sudo", "/usr/local/bin/efinder-update"],
+                cmd,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )

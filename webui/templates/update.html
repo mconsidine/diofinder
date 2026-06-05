@@ -3,11 +3,32 @@
 {% block content %}
 <h2>Update</h2>
 <p>Current version: <strong>{{ version }}</strong></p>
-<p>This will pull the latest tagged release from GitHub, refresh
-   Python dependencies (including the sycamore wheel), and restart
-   the service. Total downtime is usually under a minute.</p>
-<form method="post" action="{{ url_for('update_page') }}"
-      onsubmit="return confirm('Update eFinder to latest release? The service will be briefly unavailable.');">
-  <button type="submit" class="btn btn-primary">Update to latest</button>
-</form>
+<p>This pulls code from GitHub, refreshes Python dependencies (including the
+   sycamore wheel), and restarts the service. Downtime is usually under a
+   minute.</p>
+
+<div class="card" style="margin-bottom:1rem;">
+  <h3 style="margin:0 0 10px 0; font-size:1rem;">Latest release</h3>
+  <form method="post" action="{{ url_for('update_page') }}"
+        onsubmit="return confirm('Update eFinder to the latest release? The service will be briefly unavailable.');">
+    <button type="submit" class="btn btn-primary">Update to latest</button>
+  </form>
+</div>
+
+<div class="card">
+  <h3 style="margin:0 0 10px 0; font-size:1rem;">Branch or tag (advanced)</h3>
+  <p style="font-size:0.85rem; margin:0 0 10px 0;">
+    Track a development branch or a specific tag instead of the latest release
+    &mdash; e.g. <code>claude/olive-bg-solve-rate</code> or <code>v0.0.15-dev</code>.
+    Runs <code>efinder-update --ref &lt;name&gt;</code>.
+  </p>
+  <form method="post" action="{{ url_for('update_page') }}"
+        onsubmit="return confirm('Update eFinder to ' + (this.ref.value || '(empty!)') + '? The service will be briefly unavailable.');">
+    <input type="text" name="ref" placeholder="branch or tag name"
+           pattern="[A-Za-z0-9][A-Za-z0-9._/-]*" required
+           style="width:16rem; max-width:80%;">
+    <button type="submit" class="btn">Update to this ref</button>
+  </form>
+</div>
 {% endblock %}
+{# 'ref' is validated server-side too (webui/app.py): [A-Za-z0-9][A-Za-z0-9._/-]* #}
