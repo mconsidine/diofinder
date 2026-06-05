@@ -168,10 +168,16 @@ class BackgroundCache:
             return CacheState.SLEWING
         return CacheState.STEADY
 
-    def detect(self, image_u8, sigma, bg_mode, tophat_radius, max_axis_ratio):
+    def detect(self, image_u8, sigma, bg_mode, tophat_radius, max_axis_ratio,
+               bg_block_size=0):
         """Single detection entry point. Returns the raw star_detect list
         [(x, y, brightness, peak), ...]. Never raises for capability gaps —
         it degrades to the best supported mode."""
+        # Modes that require full spatial preprocessing are per-frame only —
+        # the cached path uses pre-computed per-row offsets and can't apply
+        # column or block corrections after the fact.
+        CACHE_COMPATIBLE_MODES = frozenset(
+            {"row_percentile", "line_median", "top_hat"})
         want_tophat = (bg_mode == "top_hat")
         if want_tophat and not HAS_TOPHAT:
             # Old wheel: silently fall back to the robust per-row median.
@@ -179,8 +185,12 @@ class BackgroundCache:
             bg_mode = "line_median"
 
         m = self._model
+        # Spatial modes that need a full background image are not composable
+        # with the per-row cached model; force per-frame path for them.
+        force_perframe = bg_mode not in CACHE_COMPATIBLE_MODES
         steady = (
-            self.enabled and self.state() is CacheState.STEADY and m is not None
+            not force_perframe
+            and self.enabled and self.state() is CacheState.STEADY and m is not None
             and m.h == image_u8.shape[0] and m.w == image_u8.shape[1]
             and m.bin == self.bin
         )
@@ -195,18 +205,22 @@ class BackgroundCache:
             return star_detect.detect_stars_with_cache(
                 image_u8, m.row_offsets, m.noise, **kw)
 
-        # Per-frame path (cache disabled, warming up, slewing, or top-hat on an
-        # old cached wheel).
+        # Per-frame path (cache disabled, warming up, slewing, spatial mode
+        # incompatible with cache, or top-hat on an old cached wheel).
         kw = dict(
             sigma=sigma, bin=self.bin, centroid_full_res=True,
             max_axis_ratio=max_axis_ratio,
         )
-        if want_tophat:
-            kw["bg_mode"] = "top_hat"
-            kw["tophat_radius"] = int(tophat_radius)
+        if bg_mode in CACHE_COMPATIBLE_MODES:
+            if want_tophat:
+                kw["bg_mode"] = "top_hat"
+                kw["tophat_radius"] = int(tophat_radius)
+            else:
+                kw["bg_mode"] = bg_mode
         else:
-            kw["bg_mode"] = bg_mode if bg_mode in (
-                "row_percentile", "line_median") else "line_median"
+            kw["bg_mode"] = bg_mode
+            if bg_mode == "block_percentile" and bg_block_size:
+                kw["bg_block_size"] = int(bg_block_size)
         self._n_fallback += 1
         return star_detect.detect_stars(image_u8, **kw)
 

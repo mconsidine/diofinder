@@ -76,6 +76,9 @@ class Config:
     # Structuring-element radius (px) used only when detect_bg_mode == "top_hat".
     # Must be comfortably larger than the largest star radius.
     detect_tophat_radius: int = 12
+    # Tile side length (px) for block_percentile mode. 0 = use sycamore's
+    # default (32 for bin=2). Must exceed the largest star radius.
+    detect_bg_block_size: int = 0
 
     # -------- Temporal "analytic-threading" background cache --------
     # When enabled, a worker thread in solver_proc maintains a temporally

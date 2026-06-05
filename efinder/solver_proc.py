@@ -466,6 +466,8 @@ def solver_main(slots, latest_solution, shared_cfg,
             bg_mode = shared_cfg.get("detect_bg_mode", cfg.detect_bg_mode)
             tophat_radius = int(
                 shared_cfg.get("detect_tophat_radius", cfg.detect_tophat_radius))
+            bg_block_size = int(
+                shared_cfg.get("detect_bg_block_size", cfg.detect_bg_block_size))
             try:
                 _raw = bg_cache.detect(
                     frame_buf,
@@ -473,6 +475,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                     bg_mode=bg_mode,
                     tophat_radius=tophat_radius,
                     max_axis_ratio=float("inf"),
+                    bg_block_size=bg_block_size,
                 )
                 # sycamore returns (x=col, y=row, brightness, peak).
                 # tetra3 solve_from_centroids expects (row, col) = (y, x).

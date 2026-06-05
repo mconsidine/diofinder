@@ -15,6 +15,8 @@
     <dd><code>{{ params.detect_bg_mode }}</code></dd>
     <dt>detect_tophat_radius</dt>
     <dd>{{ params.detect_tophat_radius }} px</dd>
+    <dt>detect_bg_block_size</dt>
+    <dd>{{ params.detect_bg_block_size if params.detect_bg_block_size else '0 (default 32)' }}</dd>
     <dt>detect_sigma</dt>
     <dd>{{ params.detect_sigma }}</dd>
   </dl>
@@ -40,18 +42,30 @@
       <tr>
         <td><label for="bg_mode">Mode</label></td>
         <td>
-          <select name="bg_mode" id="bg_mode" onchange="toggleTophat(this)">
+          <select name="bg_mode" id="bg_mode" onchange="toggleBgExtra(this)">
             <option value="row_percentile"
               {% if params and params.detect_bg_mode == 'row_percentile' %}selected{% endif %}>
-              row_percentile (default)
+              row_percentile (default, fastest)
             </option>
             <option value="line_median"
               {% if params and params.detect_bg_mode == 'line_median' %}selected{% endif %}>
-              line_median
+              line_median (robust row correction)
+            </option>
+            <option value="column_percentile"
+              {% if params and params.detect_bg_mode == 'column_percentile' %}selected{% endif %}>
+              column_percentile (vertical gradient removal)
+            </option>
+            <option value="row_column_percentile"
+              {% if params and params.detect_bg_mode == 'row_column_percentile' %}selected{% endif %}>
+              row_column_percentile (separable 2-D)
+            </option>
+            <option value="block_percentile"
+              {% if params and params.detect_bg_mode == 'block_percentile' %}selected{% endif %}>
+              block_percentile (bilinear tile median, fast 2-D)
             </option>
             <option value="top_hat"
               {% if params and params.detect_bg_mode == 'top_hat' %}selected{% endif %}>
-              top_hat (morphological, sycamore &ge; 0.9.0)
+              top_hat (morphological, slowest)
             </option>
           </select>
         </td>
@@ -65,6 +79,17 @@
                  value="{{ params.detect_tophat_radius if params else 12 }}"
                  style="width:5rem;">
           <span class="hint">Must exceed star PSF radius</span>
+        </td>
+      </tr>
+      <tr id="block-row"
+          style="{% if not params or params.detect_bg_mode != 'block_percentile' %}display:none{% endif %}">
+        <td><label for="bg_block_size">Block size (px)</label></td>
+        <td>
+          <input type="number" name="bg_block_size" id="bg_block_size"
+                 min="4" max="256"
+                 value="{{ params.detect_bg_block_size if params and params.detect_bg_block_size else 32 }}"
+                 style="width:5rem;">
+          <span class="hint">Tile side length; 0 = default 32 (bin=2)</span>
         </td>
       </tr>
       <tr>
@@ -88,26 +113,39 @@
   <h3 style="margin:0 0 6px 0; font-size:1rem;">Notes</h3>
   <ul style="font-size:0.85rem; line-height:1.6; margin:0; padding-left:1.4em;">
     <li><strong>row_percentile</strong>: cheapest; 25th-percentile of cache-line
-        samples per row. Good for clean dark-sky frames.</li>
+        samples per row. Good for clean dark-sky frames with no gradient.</li>
     <li><strong>line_median</strong>: true per-row median; more robust to sensor
-        row-noise, vignetting, and light-pollution gradients.</li>
+        row-noise and vertical brightness gradients.</li>
+    <li><strong>column_percentile</strong>: subtracts per-column median before
+        detection; removes vertical gradients (lens falloff top-to-bottom,
+        sky-glow). Row variation still handled by scan-band RowPercentile.
+        Per-frame only (cache fallback).</li>
+    <li><strong>row_column_percentile</strong>: row-then-column separable
+        background removal; covers most real gradients at ~2&times; line_median
+        cost without morphological overhead. Per-frame only.</li>
+    <li><strong>block_percentile</strong>: bilinear interpolation of per-tile
+        medians; handles non-separable 2-D gradients (vignetting, nebulosity,
+        light pollution) in a fraction of top_hat&rsquo;s time. Tune the block
+        size so it safely exceeds your largest star radius (default 32 for
+        bin=2). Per-frame only.</li>
     <li><strong>top_hat</strong>: morphological white top-hat (image &minus; opening);
-        removes 2-D gradients that per-row modes can&rsquo;t see.
-        Requires sycamore &ge; 0.9.0 &mdash; older wheels silently degrade to
-        <em>line_median</em>. Tune the radius so it exceeds your largest star PSF
-        (typically 12&ndash;16&thinsp;px for the HQ Camera + 25&thinsp;mm lens at bin=2).
-        Run <code>efinder-bg-test --inject-gradient 40</code> on the Pi to
-        verify that star counts rise under a synthetic gradient.</li>
+        slowest but most thorough 2-D gradient removal. Requires sycamore &ge; 0.9.0
+        &mdash; older wheels silently degrade to <em>line_median</em>. Try
+        <em>block_percentile</em> first; only switch to top_hat if block_percentile
+        misses structure smaller than the block size.</li>
     <li>The <strong>temporal cache</strong> (<code>bg_cache_enabled</code>) is
-        orthogonal and stays active regardless of mode; it stacks frames over
-        time for noise reduction and hot-pixel rejection.</li>
+        orthogonal and stays active for <em>row_percentile</em>, <em>line_median</em>,
+        and <em>top_hat</em>; the three spatial modes fall back to per-frame when
+        the cache is steady.</li>
   </ul>
 </div>
 
 <script>
-function toggleTophat(sel) {
-  var row = document.getElementById('tophat-row');
-  row.style.display = (sel.value === 'top_hat') ? '' : 'none';
+function toggleBgExtra(sel) {
+  document.getElementById('tophat-row').style.display =
+    (sel.value === 'top_hat') ? '' : 'none';
+  document.getElementById('block-row').style.display =
+    (sel.value === 'block_percentile') ? '' : 'none';
 }
 
 async function bgCacheRefresh() {

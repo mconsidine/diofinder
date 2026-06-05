@@ -565,6 +565,8 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "detect_bg_mode",      ctx.cfg.detect_bg_mode),
                 "detect_tophat_radius": ctx.shared_cfg.get(
                     "detect_tophat_radius", ctx.cfg.detect_tophat_radius),
+                "detect_bg_block_size": ctx.shared_cfg.get(
+                    "detect_bg_block_size", ctx.cfg.detect_bg_block_size),
                 "solve_timeout_ms":    ctx.shared_cfg.get(
                     "solve_timeout_ms",    ctx.cfg.solve_timeout_ms),
             })
@@ -585,7 +587,9 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 updates["detect_sigma"] = sigma
             if "detect_bg_mode" in args:
                 mode = str(args["detect_bg_mode"]).strip().lower()
-                valid_modes = ("row_percentile", "line_median", "top_hat")
+                valid_modes = ("row_percentile", "line_median", "top_hat",
+                               "column_percentile", "row_column_percentile",
+                               "block_percentile")
                 if mode not in valid_modes:
                     return MaintResponse(ok=False,
                                         error=f"detect_bg_mode must be one of "
@@ -603,6 +607,17 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                                         error="detect_tophat_radius out of range [1, 100]")
                 ctx.shared_cfg["detect_tophat_radius"] = r
                 updates["detect_tophat_radius"] = r
+            if "detect_bg_block_size" in args:
+                try:
+                    bs = int(args["detect_bg_block_size"])
+                except (ValueError, TypeError) as e:
+                    return MaintResponse(ok=False,
+                                        error=f"detect_bg_block_size must be int: {e}")
+                if not (4 <= bs <= 256):
+                    return MaintResponse(ok=False,
+                                        error="detect_bg_block_size out of range [4, 256]")
+                ctx.shared_cfg["detect_bg_block_size"] = bs
+                updates["detect_bg_block_size"] = bs
             if "solve_timeout_ms" in args:
                 try:
                     ms = int(args["solve_timeout_ms"])
