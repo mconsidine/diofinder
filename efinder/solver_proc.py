@@ -306,6 +306,10 @@ def solver_main(slots, latest_solution, shared_cfg,
         import star_detect as _star_detect
         # One-time thread-count init; solver process owns two CPU cores.
         _star_detect.set_num_threads(2)
+        # Imported here (not at module top) so star_detect stays a runtime, not
+        # import-time, dependency — this try owns the "missing wheel" error.
+        # Must be bound before the log line below uses HAS_TOPHAT.
+        from efinder.bg_cache import BackgroundCache, HAS_TOPHAT
         log.info("sycamore star_detect ready (top_hat support: %s)", HAS_TOPHAT)
     except ImportError as e:
         log.error("sycamore star_detect not installed: %s", e)
@@ -314,9 +318,6 @@ def solver_main(slots, latest_solution, shared_cfg,
     # Temporal background cache (decision #5). Routes steady-state detection
     # through detect_stars_with_cache; falls back to per-frame on slew/warmup.
     # Disable via bg_cache_enabled if its bookkeeping proves too costly.
-    # Imported here (not at module top) so star_detect stays a runtime, not
-    # import-time, dependency — the check above owns the "missing wheel" error.
-    from efinder.bg_cache import BackgroundCache, HAS_TOPHAT
     bg_cache = BackgroundCache(cfg)
     bg_cache.start()
     log.info(
