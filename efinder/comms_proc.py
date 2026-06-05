@@ -40,7 +40,7 @@ from efinder.worker_cmds import (
     SOLVER_OP_CALIBRATION_STATUS, SOLVER_OP_CALIBRATION_RESET,
     SOLVER_OP_POLAR_START, SOLVER_OP_POLAR_STATUS,
     SOLVER_OP_POLAR_CANCEL, SOLVER_OP_POLAR_SET_LATITUDE,
-    SOLVER_OP_SOLVE_CENTROIDS,
+    SOLVER_OP_SOLVE_CENTROIDS, SOLVER_OP_BG_CACHE_STATUS,
     CAMERA_OP_GET_EXPOSURE, CAMERA_OP_SET_EXPOSURE, CAMERA_OP_SET_GAIN,
 )
 
@@ -617,6 +617,18 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             if persist and updates:
                 cfg_mod.save_keys(updates)
             return MaintResponse(ok=True, result={**updates, "persisted": persist})
+
+        if cmd == "bg_cache_status":
+            # Live temporal-background-cache snapshot (state, model age,
+            # cached-vs-fallback counters). Cheap; no DB or solve involved.
+            reply = _cached_call_solver(SOLVER_OP_BG_CACHE_STATUS,
+                                        ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
+                                        ttl_s=0.5)
+            if reply is None:
+                return MaintResponse(ok=False, error="solver did not respond")
+            if not reply.ok:
+                return MaintResponse(ok=False, error=reply.error)
+            return MaintResponse(ok=True, result=reply.result)
 
         if cmd == "solve_centroids":
             # Solve a caller-supplied centroid list using the solver's

@@ -241,6 +241,13 @@ def bgtest_set():
     return redirect(url_for("bgtest_page"))
 
 
+@app.route("/api/bgcache")
+def api_bgcache():
+    """Live temporal-background-cache status for the Background page."""
+    r = _safe_call("bg_cache_status")
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
 @app.route("/calibration/reset", methods=["POST"])
 def calibration_reset():
     """Reset the FOV rolling-window calibration and redirect to the dashboard."""

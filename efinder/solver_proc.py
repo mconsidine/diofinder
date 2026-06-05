@@ -131,14 +131,54 @@ def _drain_cmd_queue(q):
     return cmds
 
 
-def _handle_solver_cmd(cmd, calibrator, polar):
+def _handle_solver_cmd(cmd, calibrator, polar,
+                       solver_t3=None, cfg=None, shared_cfg=None, bg_cache=None):
     from efinder.worker_cmds import (
         SolverCmdReply,
         SOLVER_OP_CALIBRATION_STATUS, SOLVER_OP_CALIBRATION_RESET,
         SOLVER_OP_POLAR_START, SOLVER_OP_POLAR_STATUS,
         SOLVER_OP_POLAR_CANCEL, SOLVER_OP_POLAR_SET_LATITUDE,
+        SOLVER_OP_SOLVE_CENTROIDS, SOLVER_OP_BG_CACHE_STATUS,
     )
     try:
+        if cmd.op == SOLVER_OP_BG_CACHE_STATUS:
+            if bg_cache is None:
+                return SolverCmdReply(request_id=cmd.request_id, ok=True,
+                                      result={"enabled": False, "state": "NONE"})
+            return SolverCmdReply(request_id=cmd.request_id, ok=True,
+                                  result=bg_cache.stats())
+        if cmd.op == SOLVER_OP_SOLVE_CENTROIDS:
+            if solver_t3 is None or cfg is None:
+                return SolverCmdReply(request_id=cmd.request_id, ok=False,
+                                      error="solver not available")
+            raw = cmd.args.get("centroids") or []
+            if len(raw) < cfg.min_centroids:
+                return SolverCmdReply(request_id=cmd.request_id, ok=True, result={
+                    "solved": False, "status": "TooFew",
+                    "matches": 0, "stars": len(raw)})
+            cents = np.array(raw, dtype=np.float64)
+            timeout_ms = (shared_cfg.get("solve_timeout_ms", cfg.solve_timeout_ms)
+                          if shared_cfg is not None else cfg.solve_timeout_ms)
+            soln = solver_t3.solve_from_centroids(
+                cents, (cfg.frame_height, cfg.frame_width),
+                fov_estimate=calibrator.get_fov_estimate(),
+                fov_max_error=calibrator.get_fov_max_error(),
+                solve_timeout=timeout_ms,
+                match_threshold=cfg.match_threshold,
+                match_radius=cfg.match_radius,
+                distortion=calibrator.get_distortion_estimate(),
+                return_matches=False,
+            )
+            solved = bool(soln is not None and soln.get("RA") is not None)
+            return SolverCmdReply(request_id=cmd.request_id, ok=True, result={
+                "solved":  solved,
+                "status":  (soln.get("status", "NoMatch") if soln else "None"),
+                "matches": int(soln.get("Matches", 0) or 0) if soln else 0,
+                "stars":   len(raw),
+                "ra":      (soln.get("RA") if soln else None),
+                "dec":     (soln.get("Dec") if soln else None),
+                "fov":     (soln.get("FOV") if soln else None),
+            })
         if cmd.op == SOLVER_OP_CALIBRATION_STATUS:
             return SolverCmdReply(request_id=cmd.request_id, ok=True,
                                   result=calibrator.get_status())
@@ -362,7 +402,9 @@ def solver_main(slots, latest_solution, shared_cfg,
         while True:
             # Drain out-of-band solver commands (calibration, polar, etc.)
             for cmd in _drain_cmd_queue(solver_cmd_q):
-                reply = _handle_solver_cmd(cmd, calibrator, polar)
+                reply = _handle_solver_cmd(cmd, calibrator, polar,
+                                           solver_t3=solver_t3, cfg=cfg,
+                                           shared_cfg=shared_cfg, bg_cache=bg_cache)
                 try:
                     solver_cmd_reply_q.put_nowait(reply)
                 except Exception as e:

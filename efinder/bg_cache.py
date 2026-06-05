@@ -103,6 +103,11 @@ class BackgroundCache:
         self._last_imu_quat: Optional[Tuple[float, float, float, float]] = None
         self._slewing = False
 
+        # Lightweight counters for the bg_cache_status diagnostic.
+        self._n_builds = 0      # temporal models built by the worker
+        self._n_cached = 0      # detections served from the cached model
+        self._n_fallback = 0    # detections served by per-frame fallback
+
         if self.enabled and not HAS_CACHE:
             log.warning(
                 "bg_cache_enabled but installed star_detect lacks the cached "
@@ -186,6 +191,7 @@ class BackgroundCache:
             )
             if want_tophat and CACHE_HAS_TOPHAT:
                 kw["tophat_radius"] = int(tophat_radius)
+            self._n_cached += 1
             return star_detect.detect_stars_with_cache(
                 image_u8, m.row_offsets, m.noise, **kw)
 
@@ -201,7 +207,28 @@ class BackgroundCache:
         else:
             kw["bg_mode"] = bg_mode if bg_mode in (
                 "row_percentile", "line_median") else "line_median"
+        self._n_fallback += 1
         return star_detect.detect_stars(image_u8, **kw)
+
+    def stats(self) -> dict:
+        """Live snapshot for the bg_cache_status diagnostic."""
+        m = self._model
+        return {
+            "enabled":     self.enabled,
+            "state":       self.state().name,
+            "has_model":   m is not None,
+            "n_frames":    (m.n_frames if m else 0),
+            "noise":       (round(m.noise, 3) if m else None),
+            "model_age_s": (round(time.monotonic() - m.epoch, 1) if m else None),
+            "bin":         self.bin,
+            "stack_size":  self.stack_size,
+            "refresh_s":   self.refresh_interval_s,
+            "builds":      self._n_builds,
+            "served_cached":   self._n_cached,
+            "served_fallback": self._n_fallback,
+            "frames_buffered": self._frame_count(),
+            "slewing":     self._slewing,
+        }
 
     # ----- worker ----------------------------------------------------------
     def _worker_loop(self):
@@ -225,7 +252,10 @@ class BackgroundCache:
             try:
                 self._model = self._build_model(stack)  # atomic publish
                 last_build = now
+                self._n_builds += 1
                 self._needs_rebuild.clear()
+                log.info("bg-cache model rebuilt (#%d): %d frames, noise=%.2f",
+                         self._n_builds, self._model.n_frames, self._model.noise)
             except Exception as e:
                 log.warning("bg-cache build failed: %s", e)
                 self._stop.wait(0.5)

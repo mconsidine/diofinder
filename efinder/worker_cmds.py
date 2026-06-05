@@ -57,6 +57,8 @@ SOLVER_OP_POLAR_SET_LATITUDE = "polar_set_latitude"
 # database (used by the diag_background --solve A/B, so it never loads a second
 # copy of the star DB). args: {"centroids": [[row, col], ...]}.
 SOLVER_OP_SOLVE_CENTROIDS = "solve_centroids"
+# Live snapshot of the temporal background cache (state, model age, counters).
+SOLVER_OP_BG_CACHE_STATUS = "bg_cache_status"
 
 
 # ----- Camera commands -----

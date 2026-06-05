@@ -24,6 +24,16 @@
 </div>
 
 <div class="card" style="margin-bottom:1rem;">
+  <h3 style="margin:0 0 10px 0; font-size:1rem;">Temporal cache (live)</h3>
+  <div id="bgcache" style="font-size:0.9rem;">checking&hellip;</div>
+  <p class="hint" style="margin:8px 0 0 0;">
+    On a stationary mount this should reach <strong>STEADY</strong> within a few
+    seconds and "served from cache" should climb. SLEWING/WARMING_UP means it's
+    using per-frame detection until a model is (re)built.
+  </p>
+</div>
+
+<div class="card" style="margin-bottom:1rem;">
   <h3 style="margin:0 0 10px 0; font-size:1rem;">Change Background Mode</h3>
   <form method="post" action="{{ url_for('bgtest_set') }}">
     <table style="border-spacing:6px 10px;">
@@ -99,5 +109,26 @@ function toggleTophat(sel) {
   var row = document.getElementById('tophat-row');
   row.style.display = (sel.value === 'top_hat') ? '' : 'none';
 }
+
+async function bgCacheRefresh() {
+  var el = document.getElementById('bgcache');
+  if (!el) return;
+  try {
+    var j = await (await fetch('{{ url_for("api_bgcache") }}')).json();
+    if (!j.ok || !j.result) { el.textContent = 'unavailable: ' + (j.error || '?'); return; }
+    var s = j.result;
+    if (!s.enabled) { el.innerHTML = '<strong>disabled</strong> (set bg_cache_enabled: true)'; return; }
+    var age = (s.model_age_s == null) ? '—' : s.model_age_s + 's';
+    el.innerHTML =
+      'state: <strong>' + s.state + '</strong>' +
+      ' &nbsp;|&nbsp; model: ' + (s.has_model ? (s.n_frames + ' frames, noise ' + s.noise + ', age ' + age) : 'none') +
+      ' &nbsp;|&nbsp; builds: ' + s.builds +
+      '<br>served from cache: <strong>' + s.served_cached + '</strong>' +
+      ' &nbsp;|&nbsp; per-frame fallback: ' + s.served_fallback +
+      ' &nbsp;|&nbsp; bin ' + s.bin + ', stack ' + s.stack_size + ', refresh ' + s.refresh_s + 's';
+  } catch (e) { el.textContent = 'error: ' + e; }
+}
+setInterval(bgCacheRefresh, 2000);
+bgCacheRefresh();
 </script>
 {% endblock %}
