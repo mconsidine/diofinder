@@ -79,6 +79,13 @@ class Config:
     # Tile side length (px) for block_percentile mode. 0 = use sycamore's
     # default (32 for bin=2). Must exceed the largest star radius.
     detect_bg_block_size: int = 0
+    # Sliding-window side length (px) for uniform_mean mode. 0 = use sycamore's
+    # default (25, matching tetra3/olive-solve filtsize=25).
+    detect_uniform_filter_size: int = 0
+    # Noise estimation mode: "mad" (default, robust) or "global_rms" (faster,
+    # matches tetra3/olive-solve GlobalRootSquare). Set "global_rms" when using
+    # uniform_mean to replicate the tetra3 pipeline exactly.
+    detect_noise_mode: str = "mad"
 
     # -------- Temporal "analytic-threading" background cache --------
     # When enabled, a worker thread in solver_proc maintains a temporally

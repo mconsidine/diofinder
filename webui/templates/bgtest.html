@@ -63,6 +63,10 @@
               {% if params and params.detect_bg_mode == 'block_percentile' %}selected{% endif %}>
               block_percentile (bilinear tile median, fast 2-D)
             </option>
+            <option value="uniform_mean"
+              {% if params and params.detect_bg_mode == 'uniform_mean' %}selected{% endif %}>
+              uniform_mean (sliding-window mean, tetra3-compatible)
+            </option>
             <option value="top_hat"
               {% if params and params.detect_bg_mode == 'top_hat' %}selected{% endif %}>
               top_hat (morphological, slowest)
@@ -90,6 +94,33 @@
                  value="{{ params.detect_bg_block_size if params and params.detect_bg_block_size else 32 }}"
                  style="width:5rem;">
           <span class="hint">Tile side length; 0 = default 32 (bin=2)</span>
+        </td>
+      </tr>
+      <tr id="uniform-row"
+          style="{% if not params or params.detect_bg_mode != 'uniform_mean' %}display:none{% endif %}">
+        <td><label for="uniform_filter_size">Filter size (px)</label></td>
+        <td>
+          <input type="number" name="uniform_filter_size" id="uniform_filter_size"
+                 min="3" max="255"
+                 value="{{ params.detect_uniform_filter_size if params and params.detect_uniform_filter_size else 25 }}"
+                 style="width:5rem;">
+          <span class="hint">Sliding-window side; 0 = default 25 (tetra3 default)</span>
+        </td>
+      </tr>
+      <tr id="noise-row"
+          style="{% if not params or params.detect_bg_mode not in ('uniform_mean', 'block_percentile') %}display:none{% endif %}">
+        <td><label for="noise_mode">Noise mode</label></td>
+        <td>
+          <select name="noise_mode" id="noise_mode">
+            <option value="mad"
+              {% if not params or params.detect_noise_mode == 'mad' %}selected{% endif %}>
+              mad (robust, default)
+            </option>
+            <option value="global_rms"
+              {% if params and params.detect_noise_mode == 'global_rms' %}selected{% endif %}>
+              global_rms (tetra3-compatible)
+            </option>
+          </select>
         </td>
       </tr>
       <tr>
@@ -146,6 +177,10 @@ function toggleBgExtra(sel) {
     (sel.value === 'top_hat') ? '' : 'none';
   document.getElementById('block-row').style.display =
     (sel.value === 'block_percentile') ? '' : 'none';
+  document.getElementById('uniform-row').style.display =
+    (sel.value === 'uniform_mean') ? '' : 'none';
+  document.getElementById('noise-row').style.display =
+    (sel.value === 'uniform_mean' || sel.value === 'block_percentile') ? '' : 'none';
 }
 
 async function bgCacheRefresh() {

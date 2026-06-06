@@ -169,7 +169,7 @@ class BackgroundCache:
         return CacheState.STEADY
 
     def detect(self, image_u8, sigma, bg_mode, tophat_radius, max_axis_ratio,
-               bg_block_size=0):
+               bg_block_size=0, uniform_filter_size=0, noise_mode="mad"):
         """Single detection entry point. Returns the raw star_detect list
         [(x, y, brightness, peak), ...]. Never raises for capability gaps —
         it degrades to the best supported mode."""
@@ -178,6 +178,7 @@ class BackgroundCache:
         # column or block corrections after the fact.
         CACHE_COMPATIBLE_MODES = frozenset(
             {"row_percentile", "line_median", "top_hat"})
+        # uniform_mean needs the full image for its SAT; not composable with cache.
         want_tophat = (bg_mode == "top_hat")
         if want_tophat and not HAS_TOPHAT:
             # Old wheel: silently fall back to the robust per-row median.
@@ -221,6 +222,10 @@ class BackgroundCache:
             kw["bg_mode"] = bg_mode
             if bg_mode == "block_percentile" and bg_block_size:
                 kw["bg_block_size"] = int(bg_block_size)
+            if bg_mode == "uniform_mean" and uniform_filter_size:
+                kw["uniform_filter_size"] = int(uniform_filter_size)
+        if noise_mode and noise_mode != "mad":
+            kw["noise_mode"] = noise_mode
         self._n_fallback += 1
         return star_detect.detect_stars(image_u8, **kw)
 

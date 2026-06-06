@@ -567,6 +567,10 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "detect_tophat_radius", ctx.cfg.detect_tophat_radius),
                 "detect_bg_block_size": ctx.shared_cfg.get(
                     "detect_bg_block_size", ctx.cfg.detect_bg_block_size),
+                "detect_uniform_filter_size": ctx.shared_cfg.get(
+                    "detect_uniform_filter_size", ctx.cfg.detect_uniform_filter_size),
+                "detect_noise_mode":    ctx.shared_cfg.get(
+                    "detect_noise_mode",    ctx.cfg.detect_noise_mode),
                 "solve_timeout_ms":    ctx.shared_cfg.get(
                     "solve_timeout_ms",    ctx.cfg.solve_timeout_ms),
             })
@@ -589,7 +593,7 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 mode = str(args["detect_bg_mode"]).strip().lower()
                 valid_modes = ("row_percentile", "line_median", "top_hat",
                                "column_percentile", "row_column_percentile",
-                               "block_percentile")
+                               "block_percentile", "uniform_mean")
                 if mode not in valid_modes:
                     return MaintResponse(ok=False,
                                         error=f"detect_bg_mode must be one of "
@@ -618,6 +622,24 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                                         error="detect_bg_block_size out of range [4, 256]")
                 ctx.shared_cfg["detect_bg_block_size"] = bs
                 updates["detect_bg_block_size"] = bs
+            if "detect_uniform_filter_size" in args:
+                try:
+                    fs = int(args["detect_uniform_filter_size"])
+                except (ValueError, TypeError) as e:
+                    return MaintResponse(ok=False,
+                                        error=f"detect_uniform_filter_size must be int: {e}")
+                if not (3 <= fs <= 255):
+                    return MaintResponse(ok=False,
+                                        error="detect_uniform_filter_size out of range [3, 255]")
+                ctx.shared_cfg["detect_uniform_filter_size"] = fs
+                updates["detect_uniform_filter_size"] = fs
+            if "detect_noise_mode" in args:
+                nm = str(args["detect_noise_mode"]).strip().lower()
+                if nm not in ("mad", "global_rms"):
+                    return MaintResponse(ok=False,
+                                        error="detect_noise_mode must be 'mad' or 'global_rms'")
+                ctx.shared_cfg["detect_noise_mode"] = nm
+                updates["detect_noise_mode"] = nm
             if "solve_timeout_ms" in args:
                 try:
                     ms = int(args["solve_timeout_ms"])
