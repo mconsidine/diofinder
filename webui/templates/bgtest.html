@@ -145,6 +145,83 @@
 </div>
 
 <div class="card" style="margin-bottom:1rem;">
+  <h3 style="margin:0 0 10px 0; font-size:1rem;">Capture &amp; A/B test (with solve)</h3>
+  <p style="font-size:0.85rem; margin:0 0 10px 0;">
+    Aim at the problem sky (light pollution / glare / sky-glow) and
+    <strong>leave the mount parked</strong>, then capture a short burst and
+    compare the background modes — including whether each one actually
+    <em>plate-solves</em>. Solving runs on the live solver (its database is
+    already in memory, so nothing extra is loaded) and briefly competes with
+    live solving. Frames + results are bundled into a downloadable zip.
+  </p>
+  <p style="margin:0 0 10px 0;">
+    <label>Frames
+      <input type="number" id="bg_n_frames" value="12" min="4" max="40" style="width:4rem;">
+    </label>
+    &nbsp;&nbsp;
+    <label>Max&nbsp;sec
+      <input type="number" id="bg_seconds" value="30" min="5" max="180" style="width:4rem;">
+    </label>
+    &nbsp;&nbsp;
+    <label>Solve&nbsp;frames
+      <input type="number" id="bg_solve_frames" value="5" min="1" max="20" style="width:4rem;">
+    </label>
+    &nbsp;&nbsp;
+    <button type="button" class="btn" id="bg_run_btn" onclick="bgRunStart()">Capture &amp; run</button>
+  </p>
+  <div id="bg_run_status" style="font-size:0.85rem;"></div>
+  <progress id="bg_run_bar" value="0" max="100" style="width:100%; max-width:520px; display:none;"></progress>
+  <div id="bg_run_result" style="display:none; margin-top:10px;">
+    <table id="bg_run_table" border="1" cellpadding="5" cellspacing="0"
+           style="font-size:0.85rem;"></table>
+    <p style="margin-top:10px;">
+      <a id="bg_run_dl" href="#"><button type="button" class="btn">Download results zip</button></a>
+      <span class="hint">&nbsp; send this file for the full off-device analysis</span>
+    </p>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:1rem;">
+  <h3 style="margin:0 0 10px 0; font-size:1rem;">Background preview (live frame)</h3>
+  <p style="font-size:0.85rem; margin:0 0 10px 0;">
+    See what each method computes as the background, or the
+    background-<em>subtracted</em> frame (what detection effectively sees), from
+    the current live frame. Compare methods and tune the size. (Webui-side
+    approximation of the detector's internals.)
+  </p>
+  <p style="margin:0 0 10px 0;">
+    <label>Method
+      <select id="prev_mode">
+        <option value="row_percentile">row_percentile</option>
+        <option value="column_percentile">column_percentile</option>
+        <option value="row_column_percentile">row_column_percentile</option>
+        <option value="line_median" selected>line_median</option>
+        <option value="block_percentile">block_percentile</option>
+        <option value="uniform_mean">uniform_mean</option>
+        <option value="top_hat">top_hat</option>
+      </select>
+    </label>
+    &nbsp;&nbsp;
+    <label>Show
+      <select id="prev_kind">
+        <option value="sub" selected>subtracted</option>
+        <option value="bg">background</option>
+      </select>
+    </label>
+    &nbsp;&nbsp;
+    <label>Size
+      <input type="number" id="prev_size" value="25" min="1" max="200" style="width:4rem;">
+      <span class="hint">radius (top_hat) / tile (block) / window (uniform)</span>
+    </label>
+    &nbsp;&nbsp;
+    <button type="button" class="btn" onclick="bgPreview()">Refresh</button>
+  </p>
+  <img id="prev_img" alt="background preview"
+       style="max-width:100%; border:1px solid #400; display:none;">
+  <div id="prev_msg" class="hint"></div>
+</div>
+
+<div class="card" style="margin-bottom:1rem;">
   <h3 style="margin:0 0 6px 0; font-size:1rem;">Notes</h3>
   <ul style="font-size:0.85rem; line-height:1.6; margin:0; padding-left:1.4em;">
     <li><strong>row_percentile</strong>: cheapest; 25th-percentile of cache-line
@@ -207,5 +284,69 @@ async function bgCacheRefresh() {
 }
 setInterval(bgCacheRefresh, 2000);
 bgCacheRefresh();
+
+function bgPreview() {
+  var mode = document.getElementById('prev_mode').value;
+  var kind = document.getElementById('prev_kind').value;
+  var size = document.getElementById('prev_size').value;
+  var img = document.getElementById('prev_img');
+  var msg = document.getElementById('prev_msg');
+  msg.textContent = 'rendering…';
+  img.onload = function () { img.style.display = ''; msg.textContent = ''; };
+  img.onerror = function () { img.style.display = 'none'; msg.textContent = 'camera not running?'; };
+  img.src = '{{ url_for("bg_jpg") }}?mode=' + encodeURIComponent(mode) +
+            '&kind=' + encodeURIComponent(kind) +
+            '&radius=' + encodeURIComponent(size) +
+            '&block=' + encodeURIComponent(size) +
+            '&window=' + encodeURIComponent(size) + '&t=' + Date.now();
+}
+var bgRunPoll = null;
+async function bgRunStart() {
+  var btn = document.getElementById('bg_run_btn');
+  btn.disabled = true;
+  var fd = new FormData();
+  fd.set('n_frames', document.getElementById('bg_n_frames').value);
+  fd.set('seconds', document.getElementById('bg_seconds').value);
+  fd.set('solve_frames', document.getElementById('bg_solve_frames').value);
+  var r = await fetch('{{ url_for("bgtest_run") }}', {method: 'POST', body: fd});
+  if (r.status === 409) { alert('A run is already in progress.'); }
+  document.getElementById('bg_run_bar').style.display = '';
+  if (!bgRunPoll) bgRunPoll = setInterval(bgRunRefresh, 1500);
+  bgRunRefresh();
+}
+
+function bgRunTable(rows) {
+  var h = '<tr><th>mode</th><th>stars</th><th>p50&nbsp;ms</th>'
+        + '<th>base_only</th><th>mode_only</th><th>solved</th><th>Nmatch</th></tr>';
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    h += '<tr><td>' + r.mode + '</td><td>' + r.stars + '</td><td>' + r.p50_ms
+       + '</td><td>' + r.base_only + '</td><td>' + r.mode_only + '</td><td>'
+       + r.solved + '</td><td>' + r.nmatch + '</td></tr>';
+  }
+  return h;
+}
+
+async function bgRunRefresh() {
+  var s;
+  try { s = await (await fetch('{{ url_for("bgtest_run_status") }}')).json(); }
+  catch (e) { return; }
+  document.getElementById('bg_run_status').textContent =
+    (s.phase || 'idle') + ' — ' + (s.message || '');
+  document.getElementById('bg_run_bar').value = s.progress || 0;
+  document.getElementById('bg_run_btn').disabled = !!s.running;
+  if (s.table && s.table.length) {
+    document.getElementById('bg_run_table').innerHTML = bgRunTable(s.table);
+    document.getElementById('bg_run_result').style.display = 'block';
+  }
+  if (s.zip_name) {
+    document.getElementById('bg_run_dl').href =
+      '{{ url_for("bgtest_run_download") }}?name=' + encodeURIComponent(s.zip_name);
+    document.getElementById('bg_run_result').style.display = 'block';
+  }
+  if (s.phase === 'done' || s.phase === 'error') {
+    if (bgRunPoll) { clearInterval(bgRunPoll); bgRunPoll = null; }
+  }
+}
 </script>
 {% endblock %}

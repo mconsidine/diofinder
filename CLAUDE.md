@@ -46,10 +46,11 @@ CPU 0 is left to the kernel. CPU affinity is set with `os.sched_setaffinity`.
 | `boresight_y`, `boresight_x` | float | comms (via :CM# or maint) | solver, comms, webui |
 | `detect_sigma` | float | comms (via maint) | solver |
 | `detect_bg_mode` | str | comms (via maint) | solver |
+| `detect_bin` | int (1/2) | comms (via maint) | solver |
 | `detect_tophat_radius` | int | comms (via maint) | solver |
 | `detect_bg_block_size` | int | comms (via maint) | solver |
 | `detect_uniform_filter_size` | int | comms (via maint) | solver |
-| `detect_noise_mode` | str | comms (via maint) | solver |
+| `detect_noise_mode` | str (`mad`/`global_rms`) | comms (via maint) | solver |
 | `solve_timeout_ms` | int | comms (via maint) | solver |
 | `test_mode` | bool | comms (via maint) | camera |
 | `imu_available` | bool | imu_thread | comms, webui |
@@ -123,6 +124,13 @@ There is no registration table — the function is a plain if/elif chain.
 The maintenance socket is the internal RPC bus used by the web UI and
 `efinder-ctl`. All commands are handled in
 `efinder/comms_proc.py::_handle_maint_command`.
+
+Notable commands beyond the basics: `solver_params_get`/`solver_params_set`
+(sigma, bg mode/sizes, noise mode, bin), `bg_cache_status` (live temporal-cache
+snapshot — state, model age, served-cached vs fallback counters), and
+`solve_centroids` (plate-solve a caller-supplied centroid list on the live
+solver's resident database — no second DB, used by `diag_background --solve`
+and the web-UI background A/B).
 
 1. Add an `if cmd == "my_command":` branch anywhere in the function.
 2. Read arguments from the `args` dict (always a plain dict, may be empty).
@@ -234,7 +242,9 @@ config file at runtime.
 | `/var/lib/efinder/captures/` | PNG captures when `save_failed_frames=true` |
 | `/run/efinder/maint.sock` | Maintenance Unix socket |
 | `/usr/local/bin/efinder-ctl` | CLI wrapper for the maint socket |
-| `/usr/local/bin/efinder-update` | OTA update script |
+| `/usr/local/bin/efinder-update` | OTA update script (`--ref BRANCH` to track a branch; `webui Update` page wraps it). Images are git-provisioned by `install.sh` so OTA works on imaged devices. |
+| `/usr/local/bin/efinder-bg-setup` | Show/set background mode + sizes via the maint socket |
+| `/usr/local/bin/efinder-bg-test` | On-device background-mode A/B on saved/live frames; `--solve` adds live-solver match rates |
 | `/usr/local/bin/ap.sh` | Switch wlan0 to access-point mode |
 | `/usr/local/bin/station.sh` | Connect wlan0 to a station network |
 

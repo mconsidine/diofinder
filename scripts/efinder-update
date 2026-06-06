@@ -31,10 +31,18 @@ FAIL() { echo "[update] ERROR: $*" >&2; exit 1; }
 
 [ "$EUID" -eq 0 ] || FAIL "must run as root"
 
-# --- Refuse to clobber local changes -----------------------------------------
+# --- Sanity + refuse to clobber local changes --------------------------------
 
 cd "$EFINDER_DIR"
-if ! git diff --quiet HEAD 2>/dev/null; then
+# Must be a git checkout (image builds that copied the tree without grafting
+# git can't self-update — re-image with a build that provisions git).
+if ! sudo -u efinder git -C "$EFINDER_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+  FAIL "$EFINDER_DIR is not a git repository; OTA update is unavailable. Re-image with a build that provisions git."
+fi
+# Run the dirty-check as the repo OWNER (efinder), not root: root touching an
+# efinder-owned repo trips git's safe.directory protection and would be
+# misreported as 'local modifications'.
+if ! sudo -u efinder git -C "$EFINDER_DIR" diff --quiet HEAD; then
   FAIL "Local modifications in $EFINDER_DIR. Refusing to update. Resolve manually."
 fi
 

@@ -111,6 +111,10 @@ jobs:
         env:
           EFINDER_VERSION: ${{ steps.ver.outputs.tag }}
           REPO: ${{ github.repository }}
+          # Make the image's /opt/efinder a real git clone of THIS repo + ref so
+          # OTA (efinder-update / webui Update) works on imaged devices.
+          EFINDER_REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
+          EFINDER_GIT_REF: ${{ github.ref_name }}
           EFINDER_SOLVER_DB: ${{ github.workspace }}/build/output/solver_database.npz
         run: |
           sudo -E bash build/build-image.sh
