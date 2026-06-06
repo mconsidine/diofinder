@@ -37,6 +37,13 @@ REPO="${REPO:-mconsidine/eFinder_cli}"
 EFINDER_VERSION="${EFINDER_VERSION:-main}"
 DRY_RUN="${EFINDER_BUILD_DRY_RUN:-0}"
 
+# OTA provisioning: the clone URL + ref the image's /opt/efinder will track so
+# efinder-update (and the web UI Update button) work on imaged devices. In CI
+# these come from the workflow (github repo + ref); for local builds they
+# default to the canonical repo, and EFINDER_GIT_REF defaults to the version.
+EFINDER_REPO_URL="${EFINDER_REPO_URL:-https://github.com/${REPO}.git}"
+EFINDER_GIT_REF="${EFINDER_GIT_REF:-}"
+
 # Pin to "_latest" -- the user has accepted this trade-off (image
 # always uses the most recent published Trixie Lite at build time).
 BASE_IMAGE_URL="https://downloads.raspberrypi.com/raspios_lite_arm64_latest"
@@ -292,6 +299,8 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 export EFINDER_CHROOT=1
 export EFINDER_VERSION="${EFINDER_VERSION}"
+export EFINDER_REPO_URL="${EFINDER_REPO_URL}"
+export EFINDER_GIT_REF="${EFINDER_GIT_REF}"
 ${CHROOT_DB_PATH:+export EFINDER_SOLVER_DB="${CHROOT_DB_PATH}"}
 
 cd /tmp/efinder-src

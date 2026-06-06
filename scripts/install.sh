@@ -24,8 +24,14 @@ set -euo pipefail
 EFINDER_USER="efinder"
 EFINDER_HOME="/home/${EFINDER_USER}"
 EFINDER_DIR="/opt/efinder"
-REPO_URL="https://github.com/mconsidine/eFinder_cli_new.git"
+# OTA clone URL: overridable via EFINDER_REPO_URL (the image build passes the
+# real repo from GitHub's context). The default is the canonical repo and only
+# applies to a bare `bash install.sh` fresh install.
+REPO_URL="${EFINDER_REPO_URL:-https://github.com/mconsidine/diofinder.git}"
 TARGET_VERSION="${EFINDER_VERSION:-latest}"
+# Branch/tag the image's /opt/efinder should track for OTA (empty = skip git
+# provisioning of a copied tree). Set by the image build from github.ref_name.
+GIT_REF="${EFINDER_GIT_REF:-}"
 IN_CHROOT="${EFINDER_CHROOT:-0}"
 SRC_STAGED="/tmp/efinder-src"
 
@@ -132,11 +138,43 @@ if [ "$IN_CHROOT" = "1" ]; then
   else
     WARN "$EFINDER_DIR already exists; reusing"
   fi
+  # Graft git metadata onto the copied tree so OTA (efinder-update / webui
+  # Update) works on the imaged device. Best-effort: a copy without this still
+  # runs, it just can't self-update. Skipped silently if no ref/network.
+  if [ -n "$GIT_REF" ] && [ ! -d "$EFINDER_DIR/.git" ] && command -v git >/dev/null 2>&1; then
+    LOG "Provisioning git clone at $EFINDER_DIR (origin=$REPO_URL ref=$GIT_REF)"
+    cd "$EFINDER_DIR"
+    sudo -u "$EFINDER_USER" git init -q
+    sudo -u "$EFINDER_USER" git remote add origin "$REPO_URL"
+    sudo -u "$EFINDER_USER" git config remote.origin.fetch \
+      "+refs/heads/*:refs/remotes/origin/*"
+    if sudo -u "$EFINDER_USER" git fetch --depth 1 --tags origin "$GIT_REF" 2>/dev/null \
+       && sudo -u "$EFINDER_USER" git fetch --depth 1 origin 2>/dev/null; then
+      # Reset the working tree to the fetched ref (identical to the copy for a
+      # CI build) so `git status` is clean and efinder-update's guard passes.
+      if sudo -u "$EFINDER_USER" git checkout -f -B "$GIT_REF" "origin/$GIT_REF" 2>/dev/null \
+         || sudo -u "$EFINDER_USER" git checkout -f "$GIT_REF" 2>/dev/null \
+         || sudo -u "$EFINDER_USER" git checkout -f FETCH_HEAD 2>/dev/null; then
+        # Trust the efinder-owned repo for root (efinder-update's guard).
+        git config --system --add safe.directory "$EFINDER_DIR" 2>/dev/null || true
+        LOG "git: $EFINDER_DIR tracks $GIT_REF — OTA enabled"
+      else
+        WARN "git: checkout of $GIT_REF failed; OTA disabled on this image"
+        rm -rf "$EFINDER_DIR/.git"
+      fi
+    else
+      WARN "git: could not fetch $GIT_REF from $REPO_URL; OTA disabled (offline build?)"
+      rm -rf "$EFINDER_DIR/.git"
+    fi
+  fi
 else
   if [ ! -d "$EFINDER_DIR/.git" ]; then
     LOG "Cloning eFinder code to $EFINDER_DIR"
-    git clone --depth 1 "$REPO_URL" "$EFINDER_DIR"
+    # --no-single-branch so the clone can later fetch ANY branch for OTA
+    # (efinder-update --ref BRANCH), not just the default.
+    git clone --depth 1 --no-single-branch "$REPO_URL" "$EFINDER_DIR"
     chown -R "$EFINDER_USER:$EFINDER_USER" "$EFINDER_DIR"
+    git config --system --add safe.directory "$EFINDER_DIR" 2>/dev/null || true
   fi
   cd "$EFINDER_DIR"
   if [ "$TARGET_VERSION" != "latest" ]; then
