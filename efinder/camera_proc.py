@@ -135,27 +135,41 @@ def _find_test_image(cfg):
 
 def _init_camera(cfg, current_state):
     """Initialise and start picamera2 using current_state for exposure/gain."""
+    import os
     from picamera2 import Picamera2
-    cam = Picamera2()
+
+    # Load the IMX477 scientific tuning profile so the ISP does not apply noise
+    # reduction, sharpening, AWB, or colour correction — all of which corrupt
+    # photometry.  The path is configurable via cfg.camera_tuning_file; set it
+    # to "" to fall back to the default libcamera tuning.
+    tuning_file = getattr(cfg, "camera_tuning_file", "")
+    if tuning_file and not os.path.exists(tuning_file):
+        log.warning(
+            "IMX477 scientific tuning file not found at %s — "
+            "falling back to default tuning", tuning_file)
+        tuning_file = ""
+    cam = Picamera2(tuning_file=tuning_file) if tuning_file else Picamera2()
+
     # Request the full sensor readout (4056×3040) so the ISP downscales from
     # the complete pixel array rather than the default 1332×990 sub-mode.
     # Without this hint libcamera picks the smallest viable sensor mode, which
     # crops ~35% of the sensor and reduces the horizontal FOV from ~13.5° to
     # ~8.8° for a 25mm lens on the IMX477.
     full_sensor = (cfg.sensor_full_width, cfg.sensor_full_height)
+    exp_us = int(current_state["exposure_s"] * 1_000_000)
     config = cam.create_still_configuration(
         main={"format": "YUV420",
               "size": (cfg.frame_width, cfg.frame_height)},
         sensor={"output_size": full_sensor},
         controls={
-            "ExposureTime": int(current_state["exposure_s"] * 1_000_000),
-            "AnalogueGain": float(current_state["gain"]),
-            "AeEnable": False,
-            "AwbEnable": False,
-            "FrameDurationLimits": (
-                int(current_state["exposure_s"] * 1_000_000),
-                1_000_000_000,
-            ),
+            "ExposureTime":        exp_us,
+            "AnalogueGain":        float(current_state["gain"]),
+            "AeEnable":            False,
+            "AwbEnable":           False,
+            "NoiseReductionMode":  0,
+            "Sharpness":           0.0,
+            "Saturation":          0.0,
+            "FrameDurationLimits": (exp_us, 1_000_000_000),
         },
     )
     cam.configure(config)

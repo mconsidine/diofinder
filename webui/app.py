@@ -235,6 +235,21 @@ def bgtest_set():
             params["detect_tophat_radius"] = int(request.form.get("tophat_radius", 12))
         except (ValueError, TypeError):
             params["detect_tophat_radius"] = 12
+    if mode == "block_percentile":
+        try:
+            params["detect_bg_block_size"] = int(request.form.get("bg_block_size", 32))
+        except (ValueError, TypeError):
+            params["detect_bg_block_size"] = 32
+    if mode == "uniform_mean":
+        try:
+            params["detect_uniform_filter_size"] = int(
+                request.form.get("uniform_filter_size", 25))
+        except (ValueError, TypeError):
+            params["detect_uniform_filter_size"] = 25
+    if mode in ("uniform_mean", "block_percentile"):
+        nm = request.form.get("noise_mode", "mad").strip().lower()
+        if nm in ("mad", "global_rms"):
+            params["detect_noise_mode"] = nm
     r = _safe_call("solver_params_set", params)
     if not r.ok:
         return r.error, 500
