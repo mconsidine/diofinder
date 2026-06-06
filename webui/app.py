@@ -1223,6 +1223,304 @@ def debug_collect():
     )
 
 
+_BGRUN_DIR = pathlib.Path("/var/lib/efinder/bg_runs")
+_bgrun_lock = threading.Lock()
+_bgrun = {
+    "running": False, "phase": "idle", "progress": 0, "message": "",
+    "n_frames": 0, "table": None, "zip_name": None, "error": None,
+    "started": None, "finished": None,
+}
+
+
+def _bgrun_set(**kw):
+    with _bgrun_lock:
+        _bgrun.update(kw)
+
+
+def _bgrun_snapshot():
+    with _bgrun_lock:
+        return dict(_bgrun)
+
+
+def _bgrun_capture(frames_dir, n_target, max_seconds):
+    """Grab up to n_target distinct SHM frames, saving each as a PNG.
+    Returns (list_of_frames, peak). Skips frames identical to the previous one
+    so the per-mode comparison isn't run on duplicates."""
+    import time as _t
+    import numpy as np
+    from multiprocessing import shared_memory, resource_tracker as _rt
+    from PIL import Image
+    from efinder.config import load_config
+    from efinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
+
+    ecfg = load_config()
+    W, H = ecfg.frame_width, ecfg.frame_height
+
+    def read_latest():
+        for i in range(NUM_BUFFERS):
+            try:
+                shm = shared_memory.SharedMemory(name=f"{SHM_PREFIX}_{i}", create=False)
+                try:
+                    _rt.unregister(shm._name, "shared_memory")
+                except Exception:
+                    pass
+                fr = np.ndarray((H, W), dtype=np.uint8, buffer=shm.buf).copy()
+                shm.close()
+                return fr
+            except Exception:
+                continue
+        return None
+
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    frames, peak, last = [], 0, None
+    t0 = _t.monotonic()
+    while len(frames) < n_target and (_t.monotonic() - t0) < max_seconds:
+        fr = read_latest()
+        if fr is None:
+            _t.sleep(0.3)
+            continue
+        if last is not None and np.array_equal(fr, last):
+            _t.sleep(0.12)
+            continue
+        last = fr
+        peak = max(peak, int(fr.max()))
+        Image.fromarray(fr, mode="L").save(str(frames_dir / f"frame_{len(frames):02d}.png"))
+        frames.append(fr)
+        _bgrun_set(n_frames=len(frames),
+                   progress=int(5 + 35 * len(frames) / max(1, n_target)),
+                   message=f"captured {len(frames)}/{n_target} frames (peak={peak})")
+        _t.sleep(0.25)
+    return frames, peak
+
+
+def _bgrun_agreement(base, other, tol=1.5):
+    """(base_only, mode_only) star counts vs the row_percentile baseline."""
+    import numpy as np
+    B = np.array([(x, y) for (x, y, *_) in (base or [])]) if base else np.zeros((0, 2))
+    O = np.array([(x, y) for (x, y, *_) in (other or [])]) if other else np.zeros((0, 2))
+    used = set()
+    matched = 0
+    for bx, by in B:
+        if len(O) == 0:
+            break
+        d2 = (O[:, 0] - bx) ** 2 + (O[:, 1] - by) ** 2
+        for j in np.argsort(d2):
+            j = int(j)
+            if j in used:
+                continue
+            if d2[j] <= tol * tol:
+                used.add(j)
+                matched += 1
+            break
+    return len(B) - matched, len(O) - matched
+
+
+def _bgrun_solve(raw, max_c, min_c):
+    """Solve one frame's centroids on the live daemon. raw is star_detect's
+    [(x, y, ...), ...]; the solver wants [[row, col], ...] = [[y, x], ...]."""
+    if not raw or len(raw) < min_c:
+        return False, 0
+    cents = [[float(s[1]), float(s[0])] for s in raw[:max_c]]
+    r = _safe_call("solve_centroids", {"centroids": cents}, timeout=25.0)
+    if r.ok and r.result and r.result.get("solved"):
+        return True, int(r.result.get("matches", 0) or 0)
+    return False, 0
+
+
+def _bgrun_worker(n_frames, max_seconds, solve_frames):
+    import time as _t
+    import inspect as _inspect
+    try:
+        import numpy as np
+        import star_detect as sd
+        from efinder.config import load_config
+        cfg = load_config()
+        sigma = cfg.detect_sigma
+        det_bin = cfg.detect_bin
+        th_radius = cfg.detect_tophat_radius
+        block_size = getattr(cfg, 'detect_bg_block_size', 0) or 32
+        uniform_size = getattr(cfg, 'detect_uniform_filter_size', 0) or 25
+        max_c = cfg.max_solve_stars
+        min_c = cfg.min_centroids
+        try:
+            sd.set_num_threads(2)
+        except Exception:
+            pass
+        _params = _inspect.signature(sd.detect_stars).parameters
+        has_tophat = "tophat_radius" in _params
+        modes = ["row_percentile", "column_percentile", "row_column_percentile",
+                 "line_median", "block_percentile", "uniform_mean"]
+        if has_tophat:
+            modes.append("top_hat")
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_dir = _BGRUN_DIR / ts
+        frames_dir = run_dir / "frames"
+
+        _bgrun_set(phase="capturing", progress=5, message="capturing frames…")
+        frames, peak = _bgrun_capture(frames_dir, n_frames, max_seconds)
+        if not frames:
+            raise RuntimeError("no frames captured — is the camera running?")
+        if peak < 20:
+            _bgrun_set(message=f"warning: dim frames (peak={peak}); results may be poor")
+
+        def extract(frame, mode):
+            kw = dict(sigma=sigma, bin=det_bin, centroid_full_res=True, bg_mode=mode)
+            if mode == "top_hat":
+                kw["tophat_radius"] = th_radius
+            elif mode == "block_percentile" and block_size:
+                kw["bg_block_size"] = block_size
+            elif mode == "uniform_mean" and uniform_size:
+                kw["uniform_filter_size"] = uniform_size
+            return sd.detect_stars(frame, **kw)
+
+        table, base_last = [], None
+        for mi, mode in enumerate(modes):
+            _bgrun_set(phase="analyzing",
+                       progress=45 + int(45 * mi / max(1, len(modes))),
+                       message=f"mode {mode} ({mi + 1}/{len(modes)})…")
+            counts, times, last = [], [], None
+            for fr in frames:
+                t0 = _t.perf_counter()
+                raw = extract(fr, mode)
+                times.append((_t.perf_counter() - t0) * 1000.0)
+                counts.append(len(raw) if raw else 0)
+                last = raw
+            times.sort()
+            if mode == "row_percentile":
+                base_last = last
+            bo, mo = _bgrun_agreement(base_last, last)
+            solved_n = solved_att = nmatch = 0
+            for fr in frames[:solve_frames]:
+                solved_att += 1
+                ok, nm = _bgrun_solve(extract(fr, mode), max_c, min_c)
+                if ok:
+                    solved_n += 1
+                    nmatch = max(nmatch, nm)
+            table.append({
+                "mode": mode,
+                "stars": round(sum(counts) / len(counts), 1) if counts else 0,
+                "p50_ms": round(times[len(times) // 2], 1) if times else 0,
+                "base_only": bo, "mode_only": mo,
+                "solved": f"{solved_n}/{solved_att}",
+                "nmatch": nmatch,
+            })
+
+        report = _bgrun_report(table, len(frames), peak, sigma, det_bin, th_radius)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        (run_dir / "report.txt").write_text(report)
+
+        _bgrun_set(phase="zipping", progress=92, message="packaging results…")
+        zip_name = f"bg_ab_{ts}.zip"
+        _bgrun_make_zip(_BGRUN_DIR / zip_name, frames_dir, report, len(frames), peak)
+
+        _bgrun_set(phase="done", progress=100, running=False, finished=ts,
+                   table=table, zip_name=zip_name,
+                   message=f"done — {len(frames)} frames (peak={peak})")
+    except Exception as e:
+        log.exception("bgrun worker failed")
+        _bgrun_set(phase="error", running=False, error=str(e), message=f"error: {e}")
+
+
+def _bgrun_report(table, n_frames, peak, sigma, det_bin, th_radius):
+    lines = [
+        "diofinder background-mode A/B with solve (on-device)",
+        f"created : {datetime.now().isoformat(timespec='seconds')}",
+        f"frames  : {n_frames} (peak={peak})   sigma={sigma}   bin={det_bin}   "
+        f"tophat_radius={th_radius}",
+        "=" * 74,
+        f"  {'mode':>14}  {'stars':>6}  {'p50ms':>6}  {'base_only':>9}  "
+        f"{'mode_only':>9}  {'solved':>7}  {'Nmatch':>6}",
+        "  " + "-" * 70,
+    ]
+    for r in table:
+        lines.append(
+            f"  {r['mode']:>14}  {r['stars']:>6}  {r['p50_ms']:>6}  "
+            f"{r['base_only']:>9}  {r['mode_only']:>9}  {r['solved']:>7}  "
+            f"{r['nmatch']:>6}")
+    lines += [
+        "",
+        "solved/Nmatch are from the LIVE daemon solver (resident database, no",
+        "second copy loaded). base_only/mode_only are star counts vs the",
+        "row_percentile baseline. The raw frames are in frames/ for off-device",
+        "re-analysis: python3 tests/diag_background.py --solve --image frames/...",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _bgrun_make_zip(zip_path, frames_dir, report, n_frames, peak):
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(str(zip_path), "w", zipfile.ZIP_DEFLATED) as zf:
+        for png in sorted(frames_dir.glob("*.png")):
+            zf.write(str(png), f"frames/{png.name}")
+        zf.writestr("report.txt", report)
+        conf = os.environ.get("EFINDER_CONFIG", "/etc/efinder/efinder.conf")
+        try:
+            zf.write(conf, "efinder.conf")
+        except Exception as e:
+            zf.writestr("efinder.conf", f"# could not read: {e}\n")
+        st = _safe_call("status")
+        cal = _safe_call("calibration_status")
+        zf.writestr("status.json", json.dumps({
+            "status": {"ok": st.ok, "result": st.result, "error": st.error},
+            "calibration": {"ok": cal.ok, "result": cal.result, "error": cal.error},
+        }, indent=2, default=str))
+        try:
+            j = subprocess.run(["journalctl", "-u", "efinder", "-n", "200", "--no-pager"],
+                               capture_output=True, text=True, timeout=10)
+            zf.writestr("journal.txt", (j.stdout or "") + (j.stderr or ""))
+        except Exception as e:
+            zf.writestr("journal.txt", f"error: {e}\n")
+        zf.writestr("NOTES.txt",
+            "diofinder background A/B (capture + solve) bundle\n"
+            f"created: {datetime.now().isoformat(timespec='seconds')}\n"
+            f"frames : {n_frames} (peak={peak})\n\n"
+            "frames/      raw parked-mount burst PNGs\n"
+            "report.txt   per-mode A/B table (detection + solve rate)\n"
+            "efinder.conf device config at capture time\n"
+            "status.json  daemon status + calibration\n"
+            "journal.txt  recent service log\n")
+
+
+@app.route("/bgtest/run", methods=["POST"])
+def bgtest_run():
+    """Start a capture + per-mode A/B (with live-solver solve) in the background."""
+    with _bgrun_lock:
+        if _bgrun["running"]:
+            return jsonify({"ok": False, "error": "a run is already in progress"}), 409
+        _bgrun.update(running=True, phase="starting", progress=0, message="starting…",
+                      table=None, zip_name=None, error=None, n_frames=0, finished=None,
+                      started=datetime.now().strftime("%Y%m%d_%H%M%S"))
+    try:
+        n = max(4, min(40, int(request.values.get("n_frames", 12))))
+        secs = max(5.0, min(180.0, float(request.values.get("seconds", 30))))
+        solve_frames = max(1, min(20, int(request.values.get("solve_frames", 5))))
+    except (ValueError, TypeError):
+        n, secs, solve_frames = 12, 30.0, 5
+    threading.Thread(target=_bgrun_worker, args=(n, secs, solve_frames),
+                     daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/bgtest/run")
+def bgtest_run_status():
+    return jsonify(_bgrun_snapshot())
+
+
+@app.route("/bgtest/run/download")
+def bgtest_run_download():
+    s = _bgrun_snapshot()
+    name = os.path.basename(request.args.get("name") or s.get("zip_name") or "")
+    if not name:
+        return "no run available yet", 404
+    path = _BGRUN_DIR / name
+    if not path.exists():
+        return "results file not found", 404
+    return send_file(str(path), mimetype="application/zip",
+                     as_attachment=True, download_name=name)
+
+
+
 @app.route("/healthz")
 def healthz():
     """200 ok if the daemon socket responds to ping, else 503."""
