@@ -143,12 +143,11 @@ def _init_camera(cfg, current_state):
     # photometry.  The path is configurable via cfg.camera_tuning_file; set it
     # to "" to fall back to the default libcamera tuning.
     tuning_file = getattr(cfg, "camera_tuning_file", "")
-    if tuning_file:
-        if not os.path.exists(tuning_file):
-            log.warning(
-                "IMX477 scientific tuning file not found at %s — "
-                "falling back to default tuning", tuning_file)
-            tuning_file = ""
+    if tuning_file and not os.path.exists(tuning_file):
+        log.warning(
+            "IMX477 scientific tuning file not found at %s — "
+            "falling back to default tuning", tuning_file)
+        tuning_file = ""
     cam = Picamera2(tuning_file=tuning_file) if tuning_file else Picamera2()
 
     # Request the full sensor readout (4056×3040) so the ISP downscales from

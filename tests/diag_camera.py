@@ -296,9 +296,8 @@ def main():
     if not os.path.exists(tuning_path):
         log.warning("IMX477 scientific tuning file not found at %s — "
                     "falling back to default tuning", tuning_path)
-        cam = Picamera2()
-    else:
-        cam = Picamera2(tuning_file=tuning_path)
+        tuning_path = ""
+    cam = Picamera2(tuning_file=tuning_path) if tuning_path else Picamera2()
 
     init_exp   = exposures[0]
     init_gain  = gains[0]
