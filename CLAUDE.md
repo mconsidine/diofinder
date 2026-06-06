@@ -26,7 +26,7 @@ CPU 0 is left to the kernel. CPU affinity is set with `os.sched_setaffinity`.
 ### Inter-process communication
 
 | Channel | Type | Direction | Purpose |
-|---------|------|-----------|---------|
+|---------|------|-----------|-------|
 | `efinder_frame_{0,1,2}` | POSIX shared memory | camera → solver, webui | Raw 8-bit frames |
 | `FrameSlots` | `multiprocessing.Value` + lock | camera → solver | Ring-buffer slot index |
 | `latest_solution` | `Manager().dict()` | solver → comms | Most recent plate-solve result |
@@ -176,7 +176,9 @@ The Jinja2 environment has a `log10` filter registered for log-scale sliders.
 
 ## Extraction
 
-Star extraction uses **sycamore** `star_detect` with `gate_mode="matched_filter"`.
+Star extraction uses **sycamore** `star_detect` (matched-filter gate, hardcoded
+since v0.9.0 — the `gate_mode` parameter was removed; passing it raises
+`TypeError`).
 The sycamore wheel lives in `vendor/wheels/` and is installed by `release.yml`. To update it,
 run the **Vendor Sycamore** GitHub Actions workflow with the desired version tag, then merge
 the resulting commit before tagging a release.
