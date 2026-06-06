@@ -185,13 +185,24 @@ Detection is routed through `efinder/bg_cache.py::BackgroundCache`, not by calli
 `detect_stars` directly. This gives three composable background strategies, all
 toggleable from config (and live-overridable via `shared_cfg`):
 
-- **Per-frame background mode** (`detect_bg_mode`): `row_percentile` (default,
-  cheapest), `line_median` (robust to per-row offset / vignetting), or `top_hat`
-  (opt-in morphological white top-hat that removes 2-D vignetting / sky-glow /
-  light-pollution gradients the per-row floors can't see, leaving stars intact).
-  `top_hat` needs **sycamore >= 0.9.0**; on older wheels `BackgroundCache` detects
-  the missing capability and silently degrades to `line_median`. The
-  structuring-element radius is `detect_tophat_radius` (default 12).
+- **Per-frame background mode** (`detect_bg_mode`): seven modes available:
+  - `row_percentile` — default, cheapest; per-row percentile floor
+  - `line_median` — robust to per-row offset / vignetting
+  - `column_percentile` — per-column percentile floor (sycamore >= 0.10.0)
+  - `row_column_percentile` — separable 2-D: row then column (sycamore >= 0.10.0)
+  - `block_percentile` — bilinear interpolation of per-tile medians, tile size `detect_bg_block_size` (default 0 → sycamore uses 32); removes 2-D spatial gradients cheaply (sycamore >= 0.10.0)
+  - `uniform_mean` — 25×25 sliding-window mean via summed-area table; exact tetra3/olive-solve default pipeline; filter size `detect_uniform_filter_size` (default 0 → sycamore uses 25) (sycamore >= 0.11.0)
+  - `top_hat` — morphological white top-hat; removes large-scale vignetting / sky-glow that per-row floors can't see; slow (~100 ms); structuring-element radius `detect_tophat_radius` (default 12); needs **sycamore >= 0.9.0** (degrades to `line_median` on older wheels)
+
+  The **noise estimator** is also selectable via `detect_noise_mode`:
+  - `mad` — median absolute deviation (default, robust)
+  - `global_rms` — `sqrt(mean(pixel²))` global root square; matches the tetra3/olive-solve default; use with `uniform_mean` to replicate that pipeline exactly
+
+  Modes `column_percentile`, `row_column_percentile`, `block_percentile`, and
+  `uniform_mean` require full-image spatial preprocessing and are **not compatible
+  with the temporal cache** — they force per-frame detection. Only `row_percentile`,
+  `line_median`, and `top_hat` compose with the cache.
+
 - **Temporal "analytic-threading" cache** (`bg_cache_enabled`, default true): a
   worker thread in `solver_proc` median-stacks recent frames into a per-row
   background + noise model; steady-state detection consumes it via
@@ -199,7 +210,7 @@ toggleable from config (and live-overridable via `shared_cfg`):
   falling back to per-frame detection during slew (IMU-driven) and warm-up. Set
   `bg_cache_enabled: false` to disable if its per-frame submit/stack bookkeeping
   proves too costly. The temporal model is orthogonal to the per-frame mode and
-  composes with `top_hat` (steady cached detection passes `tophat_radius`).
+  composes with `row_percentile`, `line_median`, and `top_hat`.
 
 A/B these on-device with `tests/diag_background.py` (e.g. `--inject-gradient 40`
 to stress the glow case); the upstream extractor harness is

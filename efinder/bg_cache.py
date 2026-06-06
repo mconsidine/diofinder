@@ -176,9 +176,12 @@ class BackgroundCache:
         # Modes that require full spatial preprocessing are per-frame only —
         # the cached path uses pre-computed per-row offsets and can't apply
         # column or block corrections after the fact.
+        # Only these three modes compose with the per-row cached model.
+        # column_percentile, row_column_percentile, block_percentile, and
+        # uniform_mean all require full-image spatial preprocessing and are
+        # intentionally excluded — they force the per-frame path below.
         CACHE_COMPATIBLE_MODES = frozenset(
             {"row_percentile", "line_median", "top_hat"})
-        # uniform_mean needs the full image for its SAT; not composable with cache.
         want_tophat = (bg_mode == "top_hat")
         if want_tophat and not HAS_TOPHAT:
             # Old wheel: silently fall back to the robust per-row median.

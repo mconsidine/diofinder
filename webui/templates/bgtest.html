@@ -16,7 +16,11 @@
     <dt>detect_tophat_radius</dt>
     <dd>{{ params.detect_tophat_radius }} px</dd>
     <dt>detect_bg_block_size</dt>
-    <dd>{{ params.detect_bg_block_size if params.detect_bg_block_size else '0 (default 32)' }}</dd>
+    <dd>{{ params.detect_bg_block_size if params.detect_bg_block_size else '0 (sycamore default 32)' }}</dd>
+    <dt>detect_uniform_filter_size</dt>
+    <dd>{{ params.detect_uniform_filter_size if params.detect_uniform_filter_size else '0 (sycamore default 25)' }}</dd>
+    <dt>detect_noise_mode</dt>
+    <dd><code>{{ params.detect_noise_mode }}</code></dd>
     <dt>detect_sigma</dt>
     <dd>{{ params.detect_sigma }}</dd>
   </dl>
