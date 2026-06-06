@@ -23,7 +23,7 @@
 #
 # Environment:
 #   EFINDER_VERSION        Tag string for logging (default "main").
-#   REPO                   owner/repo (default "mconsidine/eFinder_cli").
+#   REPO                   owner/repo (default "mconsidine/diofinder").
 #   EFINDER_SOLVER_DB      Path to a pre-generated tetra3 .npz database.
 #                          If absent, the database is generated here.
 #   EFINDER_BUILD_DRY_RUN  If "1", skip the actual chroot install
@@ -33,7 +33,7 @@
 
 set -euo pipefail
 
-REPO="${REPO:-mconsidine/eFinder_cli}"
+REPO="${REPO:-mconsidine/diofinder}"
 EFINDER_VERSION="${EFINDER_VERSION:-main}"
 DRY_RUN="${EFINDER_BUILD_DRY_RUN:-0}"
 

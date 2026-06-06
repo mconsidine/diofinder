@@ -20,6 +20,7 @@ No external daemon, gRPC, or server is involved.
 | `diag_bno055.py` | BNO055 IMU sensor registers and live samples |
 | `diag_detect.py` | Centroid extraction timing and sigma sweep |
 | `diag_solve.py` | Full pipeline diagnostic: extract → solve (blind + hint) |
+| `diag_background.py` | Background-mode A/B (row/line/top_hat…); `--solve` adds live-solver match rates per mode (memory-safe) |
 | `solve_image.py` | Solve a single image: sycamore extraction + olive-solve |
 | `bench_pipeline_combos.py` | Benchmark sycamore blind + hint solve paths with optional sweeps |
 | `test_hint.py` | Attitude-hint effectiveness across a sequence of shifted images |

@@ -288,6 +288,8 @@ install -m 440 "$EFINDER_DIR/etc/sudoers.d/efinder-wifi"   /etc/sudoers.d/efinde
 
 install -m 755 "$EFINDER_DIR/scripts/efinder-update"          /usr/local/bin/
 install -m 755 "$EFINDER_DIR/scripts/efinder-ctl"             /usr/local/bin/
+install -m 755 "$EFINDER_DIR/scripts/efinder-bg-setup"        /usr/local/bin/efinder-bg-setup
+install -m 755 "$EFINDER_DIR/scripts/efinder-bg-test"         /usr/local/bin/efinder-bg-test
 install -m 755 "$EFINDER_DIR/scripts/ap.sh"                   /usr/local/bin/ap.sh
 install -m 755 "$EFINDER_DIR/scripts/station.sh"              /usr/local/bin/station.sh
 install -m 755 "$EFINDER_DIR/scripts/efinder-gadget-connect"  /usr/local/bin/efinder-gadget-connect
