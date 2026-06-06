@@ -52,6 +52,7 @@ import argparse
 import datetime
 import json
 import logging
+import os
 import platform
 import socket
 import sys
@@ -288,9 +289,20 @@ def main():
         sys.exit(1)
 
     # ---- Initialise camera ---------------------------------------------------
-    cam        = Picamera2()
+    # Use the IMX477 scientific tuning profile to suppress ISP noise reduction,
+    # sharpening, AWB and colour correction, all of which distort photometry.
+    # Change 'vc4' to 'pisp' on Pi 5 hardware.
+    tuning_path = "/usr/share/libcamera/ipa/rpi/vc4/imx477_scientific.json"
+    if not os.path.exists(tuning_path):
+        log.warning("IMX477 scientific tuning file not found at %s — "
+                    "falling back to default tuning", tuning_path)
+        cam = Picamera2()
+    else:
+        cam = Picamera2(tuning_file=tuning_path)
+
     init_exp   = exposures[0]
     init_gain  = gains[0]
+    init_exp_us = int(init_exp * 1_000_000)
 
     config = cam.create_still_configuration(
         main={
@@ -298,11 +310,14 @@ def main():
             "size":   (width, height),
         },
         controls={
-            "ExposureTime":        int(init_exp * 1_000_000),
+            "ExposureTime":        init_exp_us,
             "AnalogueGain":        float(init_gain),
             "AeEnable":            False,
             "AwbEnable":           False,
-            "FrameDurationLimits": (int(init_exp * 1_000_000), 1_000_000_000),
+            "NoiseReductionMode":  0,
+            "Sharpness":           0.0,
+            "Saturation":          0.0,
+            "FrameDurationLimits": (init_exp_us, 1_000_000_000),
         },
     )
     cam.configure(config)

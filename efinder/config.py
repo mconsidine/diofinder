@@ -41,6 +41,12 @@ class Config:
     sensor_full_width: int = 4056
     sensor_full_height: int = 3040
 
+    # Path to the libcamera IMX477 scientific tuning profile.  The scientific
+    # profile disables all ISP processing (AGC, AWB, noise reduction, sharpening,
+    # colour correction) that would corrupt photometry.  Change 'vc4' to 'pisp'
+    # if running on a Pi 5.  Set to "" to use the default tuning file.
+    camera_tuning_file: str = "/usr/share/libcamera/ipa/rpi/vc4/imx477_scientific.json"
+
     exposure_s: float = 0.2
     gain: float = 20.0
 
