@@ -141,6 +141,46 @@
 </div>
 
 <div class="card" style="margin-bottom:1rem;">
+  <h3 style="margin:0 0 10px 0; font-size:1rem;">Background preview (live frame)</h3>
+  <p style="font-size:0.85rem; margin:0 0 10px 0;">
+    See what each method computes as the background, or the
+    background-<em>subtracted</em> frame (what detection effectively sees), from
+    the current live frame. Compare methods and tune the size. (Webui-side
+    approximation of the detector's internals.)
+  </p>
+  <p style="margin:0 0 10px 0;">
+    <label>Method
+      <select id="prev_mode">
+        <option value="row_percentile">row_percentile</option>
+        <option value="column_percentile">column_percentile</option>
+        <option value="row_column_percentile">row_column_percentile</option>
+        <option value="line_median" selected>line_median</option>
+        <option value="block_percentile">block_percentile</option>
+        <option value="uniform_mean">uniform_mean</option>
+        <option value="top_hat">top_hat</option>
+      </select>
+    </label>
+    &nbsp;&nbsp;
+    <label>Show
+      <select id="prev_kind">
+        <option value="sub" selected>subtracted</option>
+        <option value="bg">background</option>
+      </select>
+    </label>
+    &nbsp;&nbsp;
+    <label>Size
+      <input type="number" id="prev_size" value="25" min="1" max="200" style="width:4rem;">
+      <span class="hint">radius (top_hat) / tile (block) / window (uniform)</span>
+    </label>
+    &nbsp;&nbsp;
+    <button type="button" class="btn" onclick="bgPreview()">Refresh</button>
+  </p>
+  <img id="prev_img" alt="background preview"
+       style="max-width:100%; border:1px solid #400; display:none;">
+  <div id="prev_msg" class="hint"></div>
+</div>
+
+<div class="card" style="margin-bottom:1rem;">
   <h3 style="margin:0 0 6px 0; font-size:1rem;">Notes</h3>
   <ul style="font-size:0.85rem; line-height:1.6; margin:0; padding-left:1.4em;">
     <li><strong>row_percentile</strong>: cheapest; 25th-percentile of cache-line
@@ -203,5 +243,21 @@ async function bgCacheRefresh() {
 }
 setInterval(bgCacheRefresh, 2000);
 bgCacheRefresh();
+
+function bgPreview() {
+  var mode = document.getElementById('prev_mode').value;
+  var kind = document.getElementById('prev_kind').value;
+  var size = document.getElementById('prev_size').value;
+  var img = document.getElementById('prev_img');
+  var msg = document.getElementById('prev_msg');
+  msg.textContent = 'rendering…';
+  img.onload = function () { img.style.display = ''; msg.textContent = ''; };
+  img.onerror = function () { img.style.display = 'none'; msg.textContent = 'camera not running?'; };
+  img.src = '{{ url_for("bg_jpg") }}?mode=' + encodeURIComponent(mode) +
+            '&kind=' + encodeURIComponent(kind) +
+            '&radius=' + encodeURIComponent(size) +
+            '&block=' + encodeURIComponent(size) +
+            '&window=' + encodeURIComponent(size) + '&t=' + Date.now();
+}
 </script>
 {% endblock %}

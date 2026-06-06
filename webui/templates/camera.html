@@ -9,6 +9,13 @@
       Red circle marks the boresight. Centre the target star inside it,
       then tap <strong>Align</strong> in SkySafari to sync.
     </p>
+    <p style="margin:4px 0;">
+      <label>
+        <input type="checkbox" id="sub-toggle">
+        Detection view (background subtracted)
+      </label>
+      <span class="hint">&nbsp;shows what star detection sees, using the active bg mode</span>
+    </p>
     <div class="live-view">
       <img id="live-frame" src="/frame.jpg" alt="Camera frame"
            style="max-width:100%; height:auto; display:block; background:#111;">
@@ -128,7 +135,8 @@ async function refreshFrame() {
       const el = document.getElementById('live-ts');
       if (el) { el.textContent = 'Frame unavailable — camera not running?'; el.style.color = '#ff7700'; }
     };
-    next.src = '/frame.jpg?' + Date.now();
+    var st = document.getElementById('sub-toggle');
+    next.src = '/frame.jpg?' + Date.now() + ((st && st.checked) ? '&sub=1' : '');
   }
   try {
     const r = await fetch('/api/status');
