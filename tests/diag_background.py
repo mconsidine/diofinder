@@ -56,6 +56,13 @@ ap.add_argument('--sigma', type=float, help='Override detect_sigma from config')
 ap.add_argument('--reps', type=int, default=10, help='Timing repetitions')
 ap.add_argument('--tophat-radius', type=int, default=None,
                 help='Override detect_tophat_radius from config')
+ap.add_argument('--block-size', type=int, default=None,
+                help='Override detect_bg_block_size (block_percentile tile, px)')
+ap.add_argument('--uniform-size', type=int, default=None,
+                help='Override detect_uniform_filter_size (uniform_mean window, px)')
+ap.add_argument('--modes', default=None,
+                help='Comma-separated subset of modes to test (default: all '
+                     'supported). e.g. --modes row_percentile,uniform_mean,top_hat')
 ap.add_argument('--inject-gradient', type=float, default=0.0, metavar='ADU',
                 help='Add a synthetic ramp+vignette of this peak ADU before '
                      'detection (stress-tests top_hat).')
@@ -79,13 +86,21 @@ try:
     W, H = cfg.frame_width, cfg.frame_height
     th_radius = args.tophat_radius if args.tophat_radius is not None \
         else cfg.detect_tophat_radius
+    block_size = args.block_size if args.block_size is not None \
+        else getattr(cfg, 'detect_bg_block_size', 0)
+    uniform_size = args.uniform_size if args.uniform_size is not None \
+        else getattr(cfg, 'detect_uniform_filter_size', 0)
+    noise_mode = getattr(cfg, 'detect_noise_mode', 'mad')
     det_bin = cfg.detect_bin
     tag(PASS, cfg.summary())
 except Exception as e:
     tag(WARN, f'Config unavailable ({e}); using defaults')
-    sigma = args.sigma if args.sigma is not None else 7.0
+    sigma = args.sigma if args.sigma is not None else 9.0
     min_c, W, H, th_radius, det_bin = 8, 960, 760, 12, 1
     max_c = 50
+    block_size = args.block_size or 0
+    uniform_size = args.uniform_size or 0
+    noise_mode = 'mad'
 
 tag(INFO, f'sigma={sigma:.1f}  frame={W}x{H}  bin={det_bin}  '
           f'tophat_radius={th_radius}  min_centroids={min_c}')
@@ -105,12 +120,30 @@ try:
 except ImportError as e:
     tag(FAIL, f'sycamore star_detect not installed: {e}'); sys.exit(1)
 
-MODES = ['row_percentile', 'line_median']
+# All bg modes shipped by sycamore >= 0.11.0. Older wheels reject some of
+# these; extract() skips any mode the installed wheel raises on.
+ALL_MODES = ['row_percentile', 'column_percentile', 'row_column_percentile',
+             'line_median', 'block_percentile', 'uniform_mean']
 if HAS_TOPHAT:
-    MODES.append('top_hat')
+    ALL_MODES.append('top_hat')
 else:
-    tag(WARN, 'Installed wheel lacks top_hat (needs sycamore >= 0.9.0); '
-              'comparing the per-row modes only.')
+    tag(WARN, 'Installed wheel lacks top_hat (needs sycamore >= 0.9.0).')
+
+if args.modes:
+    want = [m.strip() for m in args.modes.split(',') if m.strip()]
+    bad = [m for m in want if m not in ALL_MODES]
+    if bad:
+        tag(WARN, f'unknown modes ignored: {bad}')
+    MODES = [m for m in want if m in ALL_MODES] or list(ALL_MODES)
+else:
+    MODES = list(ALL_MODES)
+# row_percentile is the agreement baseline — keep it present and first.
+if 'row_percentile' not in MODES:
+    MODES.insert(0, 'row_percentile')
+
+tag(INFO, f'modes: {", ".join(MODES)}  '
+          f'(block_size={block_size or "default"} '
+          f'uniform_size={uniform_size or "default"} noise={noise_mode})')
 
 
 # ── Stage 1: Frame source ────────────────────────────────────────────
@@ -174,10 +207,15 @@ frame = np.ascontiguousarray(frame)
 
 # ── Extraction + comparison ─────────────────────────────────────────────────
 def extract(mode):
-    kw = dict(sigma=sigma, bin=det_bin, centroid_full_res=True,
-              bg_mode=mode)
+    kw = dict(sigma=sigma, bin=det_bin, centroid_full_res=True, bg_mode=mode)
     if mode == 'top_hat':
         kw['tophat_radius'] = th_radius
+    elif mode == 'block_percentile' and block_size:
+        kw['bg_block_size'] = block_size
+    elif mode == 'uniform_mean' and uniform_size:
+        kw['uniform_filter_size'] = uniform_size
+    if mode in ('uniform_mean', 'block_percentile') and noise_mode and noise_mode != 'mad':
+        kw['noise_mode'] = noise_mode
     times = []
     raw = []
     for _ in range(args.reps):
@@ -212,7 +250,16 @@ def agreement(base, other, tol=1.5):
 
 
 sep(f'Background mode A/B  sigma={sigma:.1f}  reps={args.reps}')
-results = {m: extract(m) for m in MODES}
+results = {}
+for m in list(MODES):
+    try:
+        results[m] = extract(m)
+    except Exception as e:
+        tag(WARN, f'mode {m!r} not supported by this wheel — skipping ({e})')
+        MODES.remove(m)
+if 'row_percentile' not in results:
+    tag(FAIL, 'baseline mode row_percentile failed; cannot compare')
+    sys.exit(1)
 base_pts = results['row_percentile'][0]
 
 
@@ -273,7 +320,7 @@ if args.solve:
     print('  solved/Nmatch are from the LIVE daemon solver (resident DB, no '
           'second copy loaded);\n  it briefly competes with live solving while '
           'this runs.')
-if HAS_TOPHAT and args.inject_gradient > 0:
+if 'top_hat' in results and args.inject_gradient > 0:
     th_n = len(results['top_hat'][0])
     rp_n = len(results['row_percentile'][0])
     if th_n > rp_n:
