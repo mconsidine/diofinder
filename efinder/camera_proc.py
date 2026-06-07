@@ -148,7 +148,26 @@ def _init_camera(cfg, current_state):
             "IMX477 scientific tuning file not found at %s — "
             "falling back to default tuning", tuning_file)
         tuning_file = ""
-    cam = Picamera2(tuning_file=tuning_file) if tuning_file else Picamera2()
+    # cam = Picamera2(tuning_file=tuning_file) if tuning_file else Picamera2()
+    # added MattC per Claude Cowork
+    # tuning_file= kwarg was added in picamera2 ≥ 0.3.17; older releases only
+    # expose load_tuning_file() + tuning= (a pre-loaded dict).  Try the newer
+    # API first; catch TypeError and fall back so older installs still work.
+    if tuning_file:
+        try:
+            cam = Picamera2(tuning_file=tuning_file)
+        except TypeError:
+            log.info("tuning_file= kwarg not supported by this picamera2 version; "
+                     "using load_tuning_file() fallback")
+            try:
+                tuning = Picamera2.load_tuning_file(tuning_file)
+                cam = Picamera2(tuning=tuning)
+            except Exception as e2:
+                log.warning("Could not load tuning file via old API either: %s; "
+                            "using default tuning", e2)
+                cam = Picamera2()
+    else:
+        cam = Picamera2()
 
     # Request the full sensor readout (4056×3040) so the ISP downscales from
     # the complete pixel array rather than the default 1332×990 sub-mode.
