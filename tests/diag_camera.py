@@ -192,6 +192,47 @@ def _build_info_txt(args, exposures, gains, width, height,
     return "\n".join(lines)
 
 
+def _camera_settings_text(cam, tuning_used, applied_controls) -> str:
+    """Dump the picamera2 tuning, sensor properties, control defaults/ranges,
+    and the controls this sweep applies."""
+    lines = ["Camera (picamera2)", "=" * 52,
+             f"Tuning file : {tuning_used}", ""]
+
+    lines += ["Sensor properties", "-" * 52]
+    try:
+        props = dict(cam.camera_properties)
+        for k in sorted(props):
+            lines.append(f"  {k:26} {props[k]}")
+    except Exception as e:
+        lines.append(f"  (camera_properties unavailable: {e})")
+    lines.append("")
+
+    lines += ["Available controls  (min / max / default)", "-" * 52]
+    try:
+        cc = cam.camera_controls  # {name: (min, max, default)}
+        for name in sorted(cc):
+            lo, hi, dflt = cc[name]
+            lines.append(f"  {name:26} {lo} / {hi} / {dflt}")
+    except Exception as e:
+        lines.append(f"  (camera_controls unavailable: {e})")
+    lines.append("")
+
+    lines += ["Sensor modes", "-" * 52]
+    try:
+        for i, m in enumerate(cam.sensor_modes):
+            lines.append(
+                f"  [{i}] size={m.get('size')} bit_depth={m.get('bit_depth')} "
+                f"fps={m.get('fps')} format={m.get('format')}")
+    except Exception as e:
+        lines.append(f"  (sensor_modes unavailable: {e})")
+    lines.append("")
+
+    lines += ["Controls applied by this sweep", "-" * 52]
+    for k, v in applied_controls.items():
+        lines.append(f"  {k:26} {v}")
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -222,6 +263,13 @@ def main():
     ap.add_argument("--output-dir", type=Path, default=None,
                     metavar="PATH",
                     help="Save directory (default: where test.png lives)")
+    ap.add_argument("--tuning-file", default=None, metavar="PATH",
+                    help="libcamera tuning JSON (default: the IMX477 scientific "
+                         "profile; pass '' or a missing path to use libcamera's "
+                         "built-in tuning)")
+    ap.add_argument("--info-only", action="store_true",
+                    help="Print camera tuning/properties/controls and exit "
+                         "(no capture sweep)")
     args = ap.parse_args()
 
     # ---- Resolve frame dimensions from config --------------------------------
@@ -289,37 +337,58 @@ def main():
         sys.exit(1)
 
     # ---- Initialise camera ---------------------------------------------------
-    # Use the IMX477 scientific tuning profile to suppress ISP noise reduction,
-    # sharpening, AWB and colour correction, all of which distort photometry.
-    # Change 'vc4' to 'pisp' on Pi 5 hardware.
-    tuning_path = "/usr/share/libcamera/ipa/rpi/vc4/imx477_scientific.json"
-    if not os.path.exists(tuning_path):
-        log.warning("IMX477 scientific tuning file not found at %s — "
-                    "falling back to default tuning", tuning_path)
-        tuning_path = ""
-    cam = Picamera2(tuning_file=tuning_path) if tuning_path else Picamera2()
+    # Use the IMX477 scientific tuning profile (suppresses ISP noise reduction,
+    # sharpening, AWB, colour correction — all distort photometry). The correct
+    # picamera2 API is load_tuning_file() -> Picamera2(tuning=...); there is no
+    # `tuning_file=` constructor kwarg. Change 'vc4' to 'pisp' on Pi 5.
+    default_tuning = "/usr/share/libcamera/ipa/rpi/vc4/imx477_scientific.json"
+    tuning_path = default_tuning if args.tuning_file is None else args.tuning_file
+    tuning_used = "default (libcamera built-in)"
+    cam = None
+    if tuning_path and os.path.exists(tuning_path):
+        try:
+            _d, _fn = os.path.split(tuning_path)
+            _tuning = Picamera2.load_tuning_file(_fn, dir=(_d or None))
+            cam = Picamera2(tuning=_tuning)
+            tuning_used = tuning_path
+        except Exception as e:
+            log.warning("Could not load tuning %s (%s) — using default tuning",
+                        tuning_path, e)
+    elif tuning_path:
+        log.warning("Tuning file not found at %s — using default tuning", tuning_path)
+    if cam is None:
+        cam = Picamera2()
 
     init_exp   = exposures[0]
     init_gain  = gains[0]
     init_exp_us = int(init_exp * 1_000_000)
 
+    applied_controls = {
+        "ExposureTime":        init_exp_us,
+        "AnalogueGain":        float(init_gain),
+        "AeEnable":            False,
+        "AwbEnable":           False,
+        "NoiseReductionMode":  0,
+        "Sharpness":           0.0,
+        "Saturation":          0.0,
+        "FrameDurationLimits": (init_exp_us, 1_000_000_000),
+    }
     config = cam.create_still_configuration(
-        main={
-            "format": "YUV420",
-            "size":   (width, height),
-        },
-        controls={
-            "ExposureTime":        init_exp_us,
-            "AnalogueGain":        float(init_gain),
-            "AeEnable":            False,
-            "AwbEnable":           False,
-            "NoiseReductionMode":  0,
-            "Sharpness":           0.0,
-            "Saturation":          0.0,
-            "FrameDurationLimits": (init_exp_us, 1_000_000_000),
-        },
+        main={"format": "YUV420", "size": (width, height)},
+        controls=applied_controls,
     )
     cam.configure(config)
+
+    # Dump tuning / sensor properties / control defaults-and-ranges before the
+    # sweep. camera_controls/properties are populated after configure().
+    cam_settings = _camera_settings_text(cam, tuning_used, applied_controls)
+    print()
+    print(cam_settings)
+    print()
+    if args.info_only:
+        cam.close()
+        return
+
     cam.start()
 
     # Let the first settings settle before the loop begins.
@@ -391,6 +460,7 @@ def main():
             for p in saved_paths:
                 zf.write(p, arcname=p.name)
             zf.writestr("capture_info.txt", info_txt)
+            zf.writestr("camera_settings.txt", cam_settings)
             if conf_path.exists():
                 zf.write(conf_path, arcname="efinder.conf")
 

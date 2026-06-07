@@ -221,8 +221,7 @@ def _stats(vals):
 
 def _extract(frame, sig):
     t0  = time.monotonic()
-    raw = _sd.detect_stars(frame, sigma=sig, bin=1, centroid_full_res=True,
-                           gate_mode="matched_filter")
+    raw = _sd.detect_stars(frame, sigma=sig, bin=1, centroid_full_res=True)
     ms  = (time.monotonic() - t0) * 1000
     n   = len(raw) if raw else 0
     # (x=col, y=row) → (row, col) for tetra3

@@ -171,8 +171,7 @@ if frame is None:
 def _extract(f, sig):
     """Return (centroids_rowcol, n_stars, elapsed_ms) using sycamore detect_stars."""
     t0  = time.monotonic()
-    raw = _sd.detect_stars(f, sigma=sig, bin=1, centroid_full_res=True,
-                           gate_mode="matched_filter")
+    raw = _sd.detect_stars(f, sigma=sig, bin=1, centroid_full_res=True)
     ms  = (time.monotonic() - t0) * 1000
     n   = len(raw) if raw else 0
     # sycamore returns (x=col, y=row); tetra3 expects (row, col)

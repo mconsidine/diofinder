@@ -104,8 +104,7 @@ def main():
 
     for i in range(args.reps):
         t0  = time.monotonic()
-        raw = _sd.detect_stars(arr, sigma=sigma, bin=1, centroid_full_res=True,
-                               gate_mode="matched_filter")
+        raw = _sd.detect_stars(arr, sigma=sigma, bin=1, centroid_full_res=True)
         n   = len(raw) if raw else 0
         cent = (np.array([[s[1], s[0]] for s in raw], dtype=np.float64)
                 if raw else None)

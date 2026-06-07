@@ -42,8 +42,7 @@ def _solve(t3, arr, *, fov, fov_err, timeout, sigma,
     import numpy as np
 
     t0  = time.monotonic()
-    raw = _sd.detect_stars(arr, sigma=sigma, bin=1, centroid_full_res=True,
-                           gate_mode="matched_filter")
+    raw = _sd.detect_stars(arr, sigma=sigma, bin=1, centroid_full_res=True)
     n = len(raw) if raw else 0
     extract_ms = (time.monotonic() - t0) * 1000
 

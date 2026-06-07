@@ -311,8 +311,7 @@ def run_backend(name, extract_fn):
 
 # ── Extractor function ────────────────────────────────────────────────────────
 def _sycamore_extract(frame, sig):
-    raw = _sd.detect_stars(frame, sigma=sig, bin=1, centroid_full_res=True,
-                           gate_mode="matched_filter")
+    raw = _sd.detect_stars(frame, sigma=sig, bin=1, centroid_full_res=True)
     n   = len(raw) if raw else 0
     # (x=col, y=row) → (row, col) for tetra3
     c   = (np.array([[s[1], s[0]] for s in raw], dtype=np.float64)

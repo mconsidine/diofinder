@@ -197,8 +197,7 @@ def _extract(arr_u8):
     Returns (centroids_rowcol, n_stars, extract_ms).
     """
     t0  = time.monotonic()
-    raw = _sd.detect_stars(arr_u8, sigma=sigma, bin=1, centroid_full_res=True,
-                           gate_mode="matched_filter")
+    raw = _sd.detect_stars(arr_u8, sigma=sigma, bin=1, centroid_full_res=True)
     ms  = (time.monotonic() - t0) * 1000
     n   = len(raw) if raw else 0
     # sycamore returns (x=col, y=row); tetra3 expects (row, col)
