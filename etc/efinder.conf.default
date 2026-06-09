@@ -7,7 +7,16 @@
 frame_width: 960
 frame_height: 760
 exposure_s: 0.2
-gain: 20.0
+gain: 5.0
+
+# Full sensor readout (forces full-FOV ISP downscale; see CLAUDE.md).
+sensor_full_width: 4056
+sensor_full_height: 3040
+
+# libcamera tuning profile. The IMX477 scientific profile disables ISP
+# noise reduction / sharpening / AWB that corrupt photometry. Use 'pisp'
+# instead of 'vc4' on a Pi 5; set empty to use the default tuning.
+camera_tuning_file: /usr/share/libcamera/ipa/rpi/vc4/imx477_scientific.json
 
 # Adaptive exposure (off by default until tuned per setup)
 auto_exposure_enabled: false
@@ -44,7 +53,11 @@ latitude_deg: 0.0
 longitude_deg: 0.0
 
 # ---- Star detection (sycamore star_detect extractor) ----
-detect_sigma: 9.0
+detect_sigma: 5.0
+
+# Detection binning: 1 = full-res, 2 = 2x2-binned (faster). Restart to apply
+# (the temporal cache is built at one binning).
+detect_bin: 1
 
 # Per-frame background compensation mode:
 #   row_percentile  — cheapest; 25th-percentile of cache-line-sampled pixels
@@ -63,6 +76,13 @@ detect_bg_mode: row_percentile
 # Typical value: 12 (≈2× a well-focused PSF on the HQ Camera + 25 mm lens).
 detect_tophat_radius: 12
 
+# Tile side (px) for block_percentile; 0 = sycamore default (32).
+detect_bg_block_size: 0
+# Sliding-window side (px) for uniform_mean; 0 = sycamore default (25).
+detect_uniform_filter_size: 0
+# Noise estimator: mad (robust default) or global_rms (tetra3-compatible).
+detect_noise_mode: mad
+
 # Temporal background cache: median-stack recent frames into a per-row model.
 # Gives sqrt(N) noise reduction and free hot-pixel rejection. Set false if
 # the per-frame bookkeeping proves too costly on a very low-power setup.
@@ -78,6 +98,7 @@ bg_cache_max_age_s: 60.0
 solver_db: default_database
 fov_max_error_deg: 1.0
 min_centroids: 8
+max_solve_stars: 50
 solve_timeout_ms: 1500
 match_threshold: 0.00001
 match_radius: 0.01

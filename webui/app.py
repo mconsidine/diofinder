@@ -228,8 +228,8 @@ def bgtest_page():
 def bgtest_set():
     """Apply background mode from the bgtest form and redirect back."""
     mode = request.form.get("bg_mode", "row_percentile").strip().lower()
-    persist = request.form.get("persist") == "1"
-    params = {"detect_bg_mode": mode, "persist": persist}
+    # The single "Apply & save" button always applies live AND persists.
+    params = {"detect_bg_mode": mode, "persist": True}
     if mode == "top_hat":
         try:
             params["detect_tophat_radius"] = int(request.form.get("tophat_radius", 12))
@@ -392,7 +392,8 @@ def camera_page():
 @app.route("/exposure/set", methods=["POST"])
 def exposure_set():
     """Apply exposure and optional gain from the camera-settings form."""
-    persist = request.form.get("persist") == "on"
+    # The single "Apply & save" button always applies live AND persists.
+    persist = True
     try:
         s = float(request.form.get("exposure_s", ""))
         r = _safe_call("exposure_set", {"exposure_s": s, "persist": persist})
@@ -463,7 +464,8 @@ def api_camera_set():
 @app.route("/solver/params/set", methods=["POST"])
 def solver_params_set():
     """Apply detect_sigma and solve_timeout_ms from the solver-settings form."""
-    persist = request.form.get("persist") == "on"
+    # The single "Apply & save" button always applies live AND persists.
+    persist = True
     pargs   = {"persist": persist}
     if request.form.get("detect_sigma"):
         try:
@@ -683,9 +685,10 @@ _CONFIG_SECTIONS = [
     ("Camera", [
         ("frame_width",               "Frame width",          "Sensor ROI width in pixels."),
         ("frame_height",              "Frame height",         "Sensor ROI height in pixels."),
-        ("exposure_s",                "Exposure (s)",         "Initial exposure; auto-exposure adjusts this at runtime."),
+        ("camera_tuning_file",        "Tuning file",          "libcamera tuning profile; the IMX477 scientific profile disables ISP processing that corrupts photometry."),
+        ("exposure_s",                "Exposure (s)",         "Exposure time per frame."),
         ("gain",                      "Gain",                 "Analog gain. Higher = more sensitive but noisier."),
-        ("auto_exposure_enabled",     "Auto-exposure",        "Adaptively adjust exposure to reach the target star count."),
+        ("auto_exposure_enabled",     "Auto-exposure",        "NOT YET IMPLEMENTED — reserved; the camera ignores this."),
         ("auto_exposure_target_stars","Target stars",         "Desired star count when auto-exposure is on."),
         ("auto_exposure_min_s",       "Auto-exp min (s)",     "Minimum exposure floor."),
         ("auto_exposure_max_s",       "Auto-exp max (s)",     "Maximum exposure ceiling."),

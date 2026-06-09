@@ -46,7 +46,7 @@ CPU 0 is left to the kernel. CPU affinity is set with `os.sched_setaffinity`.
 | `boresight_y`, `boresight_x` | float | comms (via :CM# or maint) | solver, comms, webui |
 | `detect_sigma` | float | comms (via maint) | solver |
 | `detect_bg_mode` | str | comms (via maint) | solver |
-| `detect_bin` | int (1/2) | comms (via maint) | solver |
+| `detect_bin` | int (1/2) | config file only (restart; cache is built at one binning) | solver |
 | `detect_tophat_radius` | int | comms (via maint) | solver |
 | `detect_bg_block_size` | int | comms (via maint) | solver |
 | `detect_uniform_filter_size` | int | comms (via maint) | solver |

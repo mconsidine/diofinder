@@ -48,7 +48,7 @@ class Config:
     camera_tuning_file: str = "/usr/share/libcamera/ipa/rpi/vc4/imx477_scientific.json"
 
     exposure_s: float = 0.2
-    gain: float = 20.0
+    gain: float = 5.0
 
     auto_exposure_enabled: bool = False
     auto_exposure_target_stars: int = 20
@@ -72,7 +72,7 @@ class Config:
     # sigma threshold passed to star_detect.detect_stars.
     # Matches the shipped efinder.conf.default so the fallback (no conf file)
     # agrees with what devices actually run.
-    detect_sigma: float = 9.0
+    detect_sigma: float = 5.0
 
     # Detection binning passed to star_detect (1=full-res, 2=2x2-binned).
     detect_bin: int = 1

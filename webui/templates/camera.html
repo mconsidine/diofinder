@@ -60,9 +60,6 @@
           </div>
         </label>
         <p id="exp-status" class="hint" style="min-height:1.2em;">&nbsp;</p>
-        <label class="checkbox">
-          <input type="checkbox" name="persist"> Save to config
-        </label>
         <button type="submit" class="btn">Apply &amp; save</button>
       </form>
     {% else %}
@@ -78,7 +75,7 @@
           Detection sigma
           <p class="hint" style="margin:0 0 4px">
             Star detection threshold in noise units. Lower finds fainter stars
-            but increases false positives. Default: 9.
+            but increases false positives. Default: 5.
           </p>
           <div class="stepper-row">
             <button type="button" class="step-btn" onclick="stepSigma(-1)">&#8722;</button>
@@ -106,9 +103,6 @@
           </div>
         </label>
         <p id="solver-status" class="hint" style="min-height:1.2em;">&nbsp;</p>
-        <label class="checkbox">
-          <input type="checkbox" name="persist"> Save to config
-        </label>
         <button type="submit" class="btn">Apply &amp; save</button>
       </form>
     {% else %}
