@@ -14,11 +14,16 @@ sensor_full_width: 4056
 sensor_full_height: 3040
 
 # libcamera tuning profile. The IMX477 scientific profile disables ISP
-# noise reduction / sharpening / AWB that corrupt photometry. Use 'pisp'
-# instead of 'vc4' on a Pi 5; set empty to use the default tuning.
+# noise reduction / sharpening / AWB that corrupt photometry. Toggle between
+# imx477_scientific.json and the standard imx477.json from the Camera page
+# (restart required). Use 'pisp' instead of 'vc4' on a Pi 5; set empty to use
+# the default tuning.
 camera_tuning_file: /usr/share/libcamera/ipa/rpi/vc4/imx477_scientific.json
 
-# Adaptive exposure (off by default until tuned per setup)
+# Auto-exposure: a controller in comms_proc nudges exposure toward
+# auto_exposure_target_stars (within min/max) every ~5 s, backing off when
+# the frame saturates. Toggle live from the Camera page or:
+#   efinder-ctl raw '{"cmd":"auto_exposure_set","args":{"enabled":true}}'
 auto_exposure_enabled: false
 auto_exposure_target_stars: 20
 auto_exposure_min_s: 0.05

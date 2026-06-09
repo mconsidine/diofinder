@@ -16,7 +16,8 @@ Available maintenance commands:
   set_test_mode {"enabled": true | false}
   status, boresight_show/set/center, calibration_status/reset,
   polar_start/status/cancel/set_latitude, exposure_get/set, gain_set,
-  solver_params_get/set, solve_centroids
+  auto_exposure_set, tuning_set, solver_params_get/set, solve_centroids,
+  bg_cache_status
 """
 
 import datetime
@@ -138,6 +139,67 @@ def _call_camera(op, args, camera_cmd_q, camera_cmd_reply_q, timeout_s=2.0):
     with _camera_call_lock:
         camera_cmd_q.put(CameraCmd(op=op, args=args or {}, request_id=rid))
         return _wait_for_reply(camera_cmd_reply_q, rid, timeout_s=timeout_s)
+
+
+def _auto_exposure_decision(stars, peak, target, cur_s, min_s, max_s):
+    """Pure decision step for the auto-exposure controller.
+
+    Returns the new exposure in seconds, or None to leave it alone.
+    Saturation always wins (a blown frame yields few usable centroids no
+    matter the count); otherwise nudge toward the target star count with a
+    deadband so it settles instead of oscillating.
+    """
+    if peak >= 250:
+        factor = 0.7                      # saturated — back off
+    elif stars < 0.8 * target:
+        factor = 1.3                      # too few stars — expose longer
+    elif stars > 1.5 * target:
+        factor = 0.8                      # plenty of stars — speed up
+    else:
+        return None                       # within deadband
+    new_s = max(min_s, min(max_s, cur_s * factor))
+    if abs(new_s - cur_s) < 0.005:        # clamped / no meaningful change
+        return None
+    return new_s
+
+
+def _auto_exposure_loop(ctx, interval_s=5.0):
+    """Background controller: adjust exposure toward the target star count.
+
+    Enabled live via shared_cfg['auto_exposure_enabled'] (auto_exposure_set
+    maint command / Camera page toggle). Skips stale solutions so it never
+    reacts to frames from before its own last adjustment.
+    """
+    cfg = ctx.cfg
+    while True:
+        time.sleep(interval_s)
+        try:
+            if not ctx.shared_cfg.get("auto_exposure_enabled",
+                                      cfg.auto_exposure_enabled):
+                continue
+            sol = dict(ctx.latest_solution)
+            age = time.monotonic() - sol.get("epoch_monotonic", 0.0)
+            if age > interval_s * 2:
+                continue                  # no fresh detection data
+            reply = _call_camera(CAMERA_OP_GET_EXPOSURE, {},
+                                 ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+            if reply is None or not reply.ok:
+                continue
+            cur_s = float(reply.result.get("exposure_s", cfg.exposure_s))
+            new_s = _auto_exposure_decision(
+                sol.get("stars", 0), sol.get("peak", 0),
+                cfg.auto_exposure_target_stars, cur_s,
+                cfg.auto_exposure_min_s, cfg.auto_exposure_max_s)
+            if new_s is None:
+                continue
+            reply = _call_camera(CAMERA_OP_SET_EXPOSURE,
+                                 {"exposure_s": round(new_s, 4)},
+                                 ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+            if reply is not None and reply.ok:
+                log.info("auto-exposure: %.3fs -> %.3fs (stars=%s peak=%s)",
+                         cur_s, new_s, sol.get("stars"), sol.get("peak"))
+        except Exception as e:
+            log.warning("auto-exposure step failed: %s", e)
 
 
 def _do_alignment(align_state, cfg, shared_cfg,
@@ -519,7 +581,43 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 return MaintResponse(ok=False, error="camera did not respond")
             if not reply.ok:
                 return MaintResponse(ok=False, error=reply.error)
-            return MaintResponse(ok=True, result=reply.result)
+            result = dict(reply.result)
+            result["auto_exposure_enabled"] = bool(ctx.shared_cfg.get(
+                "auto_exposure_enabled", ctx.cfg.auto_exposure_enabled))
+            return MaintResponse(ok=True, result=result)
+
+        if cmd == "auto_exposure_set":
+            try:
+                enabled = bool(args["enabled"])
+            except (KeyError, TypeError):
+                return MaintResponse(
+                    ok=False, error="auto_exposure_set requires boolean 'enabled'")
+            persist = bool(args.get("persist", False))
+            ctx.shared_cfg["auto_exposure_enabled"] = enabled
+            if persist:
+                cfg_mod.save_keys({"auto_exposure_enabled": enabled})
+            log.info("Auto-exposure -> %s", enabled)
+            return MaintResponse(ok=True, result={
+                "auto_exposure_enabled": enabled, "persisted": persist})
+
+        if cmd == "tuning_set":
+            # Toggle the libcamera tuning profile. Takes effect on the NEXT
+            # service restart (the camera is initialised once at startup).
+            profile = str(args.get("profile", "")).strip().lower()
+            paths = {
+                "scientific": "/usr/share/libcamera/ipa/rpi/vc4/imx477_scientific.json",
+                "standard":   "/usr/share/libcamera/ipa/rpi/vc4/imx477.json",
+            }
+            if profile not in paths:
+                return MaintResponse(
+                    ok=False,
+                    error="tuning_set requires profile 'scientific' or 'standard'")
+            cfg_mod.save_keys({"camera_tuning_file": paths[profile]})
+            log.info("Camera tuning -> %s (%s); restart required", profile,
+                     paths[profile])
+            return MaintResponse(ok=True, result={
+                "profile": profile, "camera_tuning_file": paths[profile],
+                "restart_required": True})
 
         if cmd == "exposure_set":
             try:
@@ -584,9 +682,9 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 except (ValueError, TypeError) as e:
                     return MaintResponse(ok=False,
                                         error=f"detect_sigma must be numeric: {e}")
-                if not (1.0 <= sigma <= 50.0):
+                if not (0.0 <= sigma <= 20.0):
                     return MaintResponse(ok=False,
-                                        error="detect_sigma out of range [1, 50]")
+                                        error="detect_sigma out of range [0, 20]")
                 ctx.shared_cfg["detect_sigma"] = sigma
                 updates["detect_sigma"] = sigma
             if "detect_bg_mode" in args:
@@ -854,6 +952,9 @@ def comms_main(latest_solution, shared_cfg,
         target=_serve_maint_socket, args=(ctx,),
         name="efinder-maint", daemon=True)
     maint_thread.start()
+
+    threading.Thread(target=_auto_exposure_loop, args=(ctx,),
+                     name="efinder-autoexp", daemon=True).start()
 
     while True:
         try:

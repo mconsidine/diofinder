@@ -23,6 +23,7 @@ No external daemon, gRPC, or server is involved.
 | `diag_background.py` | Background-mode A/B (row/line/top_hat…); `--solve` adds live-solver match rates per mode (memory-safe) |
 | `solve_image.py` | Solve a single image: sycamore extraction + olive-solve |
 | `bench_pipeline_combos.py` | Benchmark sycamore blind + hint solve paths with optional sweeps |
+| `bench_extractor_compare.py` | Time sycamore extraction in isolation; star counts + solve outcomes |
 | `test_hint.py` | Attitude-hint effectiveness across a sequence of shifted images |
 
 ---
@@ -65,9 +66,9 @@ sudo .../diag_camera.py --exp-min 0.1 --exp-max 0.5 --exp-step 0.1 \
                          --gain-min 10 --gain-max 30 --gain-step 5 \
                          --binning
 
-# Single exposure/gain pair — matches solver defaults (exp=0.2s, gain=20)
+# Single exposure/gain pair — matches solver defaults (exp=0.2s, gain=5)
 sudo .../diag_camera.py --exp-min 0.2 --exp-max 0.2 \
-                         --gain-min 20 --gain-max 20
+                         --gain-min 5 --gain-max 5
 
 # Save to a specific directory
 sudo .../diag_camera.py --output-dir /tmp/frames
@@ -83,10 +84,12 @@ After all frames are captured they are bundled into a ZIP archive named
 integrity check. The archive is the only artifact left in the output
 directory, making it easy to transfer off the device.
 
-**The ZIP always contains two extra diagnostic files:**
+**The ZIP always contains three extra diagnostic files:**
 - `capture_info.txt` — sweep parameters, frame pipeline explanation, hostname,
   Pi model, OS version, live daemon status (backend, test mode, FOV,
   star count, last solve time)
+- `camera_settings.txt` — tuning file in use, sensor properties, every
+  control's min/max/default, sensor modes, and the controls the sweep applied
 - `efinder.conf` — verbatim copy of `/etc/efinder/efinder.conf` at the time
   of capture
 
@@ -152,8 +155,8 @@ Stages:
 5. Sigma sweep (if `--sigma-sweep`)
 
 `--sigma-sweep` is the quickest way to confirm whether `detect_sigma` is
-appropriate for your setup. With sycamore's matched-filter gate, sigma 7–8 is
-typical. The solver needs at least `min_centroids` stars (default 8) to attempt a solve.
+appropriate for your setup. With sycamore's matched-filter gate the shipped
+default is 5 (valid range 0–20); raise it if false positives appear. The solver needs at least `min_centroids` stars (default 8) to attempt a solve.
 
 ---
 

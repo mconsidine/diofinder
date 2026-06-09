@@ -41,18 +41,23 @@ except ImportError:
     sys.exit(1)
 
 
-ALL_MODES = ["row_percentile", "line_median", "top_hat"]
+ALL_MODES = ["row_percentile", "line_median", "column_percentile",
+             "row_column_percentile", "block_percentile", "uniform_mean",
+             "top_hat"]
 
 
-def _detect(image, mode, sigma, bin_, tophat_radius):
+def _detect(image, mode, sigma, bin_, tophat_radius, block_size=0,
+            uniform_size=0):
     """Run detection and return (stars, elapsed_ms)."""
-    kw = dict(sigma=sigma, bin=bin_, centroid_full_res=True, max_axis_ratio=4.0)
-    t0 = time.perf_counter()
+    kw = dict(sigma=sigma, bin=bin_, centroid_full_res=True, max_axis_ratio=4.0,
+              bg_mode=mode)
     if mode == "top_hat":
-        kw["bg_mode"] = "top_hat"
         kw["tophat_radius"] = tophat_radius
-    else:
-        kw["bg_mode"] = mode
+    elif mode == "block_percentile" and block_size:
+        kw["bg_block_size"] = block_size
+    elif mode == "uniform_mean" and uniform_size:
+        kw["uniform_filter_size"] = uniform_size
+    t0 = time.perf_counter()
     stars = star_detect.detect_stars(image, **kw)
     elapsed = (time.perf_counter() - t0) * 1000
     return stars, elapsed
@@ -93,7 +98,7 @@ def _solve_stars(stars, max_stars, maint_call):
 
 
 def _run_image(image, modes, sigma, bin_, tophat_radius, gradient,
-               solve_fn=None):
+               solve_fn=None, block_size=0, uniform_size=0):
     if gradient > 0:
         image = _inject_gradient(image, gradient)
 
@@ -106,7 +111,12 @@ def _run_image(image, modes, sigma, bin_, tophat_radius, gradient,
                 print(f"  [top_hat] SKIP: installed wheel lacks tophat_radius "
                       f"(need sycamore >= 0.9.0)")
                 continue
-        stars, elapsed = _detect(image, mode, sigma, bin_, tophat_radius)
+        try:
+            stars, elapsed = _detect(image, mode, sigma, bin_, tophat_radius,
+                                     block_size, uniform_size)
+        except Exception as e:
+            print(f"  [{mode}] SKIP: not supported by this wheel ({e})")
+            continue
         results[mode] = (stars, elapsed)
 
     if not results:
@@ -186,10 +196,14 @@ def main():
                      help="Grab one frame from live shared memory")
     p.add_argument("--inject-gradient", type=int, default=0, metavar="DN",
                    help="Add a vertical gradient of this many DN to each frame")
-    p.add_argument("--sigma", type=float, default=8.0)
+    p.add_argument("--sigma", type=float, default=5.0)
     p.add_argument("--bin", type=int, default=2, choices=[1, 2])
     p.add_argument("--tophat-radius", type=int, default=12,
                    help="Structuring-element radius for top_hat (default 12)")
+    p.add_argument("--block-size", type=int, default=0,
+                   help="Tile side for block_percentile; 0 = sycamore default")
+    p.add_argument("--uniform-size", type=int, default=0,
+                   help="Window side for uniform_mean; 0 = sycamore default")
     p.add_argument("--modes", default=",".join(ALL_MODES),
                    help="Comma-separated modes to test (default: all)")
     p.add_argument("--solve", action="store_true",
@@ -224,7 +238,8 @@ def main():
     for name, image in frames:
         print(f"\n{name}  ({image.shape[1]}x{image.shape[0]})")
         _run_image(image, modes, args.sigma, args.bin,
-                   args.tophat_radius, args.inject_gradient, solve_fn)
+                   args.tophat_radius, args.inject_gradient, solve_fn,
+                   args.block_size, args.uniform_size)
 
     return 0
 

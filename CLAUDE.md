@@ -53,6 +53,7 @@ CPU 0 is left to the kernel. CPU affinity is set with `os.sched_setaffinity`.
 | `detect_noise_mode` | str (`mad`/`global_rms`) | comms (via maint) | solver |
 | `solve_timeout_ms` | int | comms (via maint) | solver |
 | `test_mode` | bool | comms (via maint) | camera |
+| `auto_exposure_enabled` | bool | comms (via maint `auto_exposure_set`) | comms auto-exposure thread |
 | `imu_available` | bool | imu_thread | comms, webui |
 | `imu_q` | tuple (w,x,y,z) | imu_thread | comms |
 | `imu_t` | float | imu_thread | comms |
@@ -126,7 +127,10 @@ The maintenance socket is the internal RPC bus used by the web UI and
 `efinder/comms_proc.py::_handle_maint_command`.
 
 Notable commands beyond the basics: `solver_params_get`/`solver_params_set`
-(sigma, bg mode/sizes, noise mode, bin), `bg_cache_status` (live temporal-cache
+(sigma 0–20, bg mode/sizes, noise mode), `auto_exposure_set` (toggle the
+comms-side auto-exposure controller), `tuning_set` (switch the libcamera
+tuning between `imx477_scientific.json` and `imx477.json`; restart required),
+`bg_cache_status` (live temporal-cache
 snapshot — state, model age, served-cached vs fallback counters), and
 `solve_centroids` (plate-solve a caller-supplied centroid list on the live
 solver's resident database — no second DB, used by `diag_background --solve`

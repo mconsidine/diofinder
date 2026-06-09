@@ -382,11 +382,38 @@ def camera_page():
     """Camera and solver settings page."""
     exposure      = _safe_call("exposure_get")
     solver_params = _safe_call("solver_params_get")
+    try:
+        from efinder.config import load_config
+        tuning_path = load_config().camera_tuning_file
+    except Exception:
+        tuning_path = ""
+    tuning_profile = "scientific" if "scientific" in tuning_path else "standard"
     return render_template(
         "camera.html",
         exposure=(exposure.result if exposure.ok else None),
         solver_params=(solver_params.result if solver_params.ok else None),
+        tuning_profile=tuning_profile,
     )
+
+
+@app.route("/autoexposure/set", methods=["POST"])
+def autoexposure_set():
+    """Toggle the auto-exposure controller (applies live and persists)."""
+    enabled = request.form.get("enabled", "false").strip().lower() in ("true", "1", "on")
+    r = _safe_call("auto_exposure_set", {"enabled": enabled, "persist": True})
+    if not r.ok:
+        return r.error, 500
+    return redirect(url_for("camera_page"))
+
+
+@app.route("/tuning/set", methods=["POST"])
+def tuning_set():
+    """Switch the libcamera tuning profile (persists; needs a service restart)."""
+    profile = request.form.get("profile", "scientific").strip().lower()
+    r = _safe_call("tuning_set", {"profile": profile})
+    if not r.ok:
+        return r.error, 500
+    return redirect(url_for("camera_page"))
 
 
 @app.route("/exposure/set", methods=["POST"])
@@ -688,10 +715,12 @@ _CONFIG_SECTIONS = [
         ("camera_tuning_file",        "Tuning file",          "libcamera tuning profile; the IMX477 scientific profile disables ISP processing that corrupts photometry."),
         ("exposure_s",                "Exposure (s)",         "Exposure time per frame."),
         ("gain",                      "Gain",                 "Analog gain. Higher = more sensitive but noisier."),
-        ("auto_exposure_enabled",     "Auto-exposure",        "NOT YET IMPLEMENTED — reserved; the camera ignores this."),
+        ("auto_exposure_enabled",     "Auto-exposure",        "Adjust exposure toward the target star count (toggle on Camera page)."),
         ("auto_exposure_target_stars","Target stars",         "Desired star count when auto-exposure is on."),
         ("auto_exposure_min_s",       "Auto-exp min (s)",     "Minimum exposure floor."),
         ("auto_exposure_max_s",       "Auto-exp max (s)",     "Maximum exposure ceiling."),
+        ("sensor_full_width",         "Sensor full width",    "Full sensor readout width (forces full-FOV ISP downscale)."),
+        ("sensor_full_height",        "Sensor full height",   "Full sensor readout height."),
     ]),
     ("Optics / FOV", [
         ("fov_deg",                      "Field of view (°)",   "Horizontal FOV. Self-calibrates from solved frames."),
@@ -709,10 +738,22 @@ _CONFIG_SECTIONS = [
     ("Star Detection", [
         ("detect_sigma", "Detection sigma",
          "Threshold in units of background sigma passed to sycamore star_detect."),
+        ("detect_bin",                "Detection binning",    "1 = full-res, 2 = 2x2-binned (restart to apply)."),
+        ("detect_bg_mode",            "Background mode",      "Per-frame background compensation (see Background page)."),
+        ("detect_tophat_radius",      "Top-hat radius",       "Structuring-element radius for top_hat mode."),
+        ("detect_bg_block_size",      "Block size",           "Tile side for block_percentile; 0 = sycamore default."),
+        ("detect_uniform_filter_size","Uniform window",       "Window side for uniform_mean; 0 = sycamore default."),
+        ("detect_noise_mode",         "Noise estimator",      "mad (robust) or global_rms (tetra3-compatible)."),
+        ("bg_cache_enabled",          "Temporal cache",       "Median-stack recent frames into a background model."),
+        ("bg_cache_stack",            "Cache stack",          "Frames median-stacked per rebuild."),
+        ("bg_cache_refresh_s",        "Cache refresh (s)",    "Minimum interval between rebuilds."),
+        ("bg_cache_slew_deg",         "Cache slew (deg)",     "IMU angle that invalidates the cache."),
+        ("bg_cache_max_age_s",        "Cache max age (s)",    "Rebuild if the model is older than this."),
     ]),
     ("Plate Solving (olive-solve)", [
         ("solver_db",        "Star database",      "Path to a tetra3 .npz database compatible with olive-solve."),
         ("min_centroids",    "Min stars",          "Minimum detected stars required to attempt a solve."),
+        ("max_solve_stars",           "Max solve stars",      "Cap on centroids passed to the solver."),
         ("solve_timeout_ms", "Solve timeout (ms)", "Hard timeout per solve attempt."),
         ("match_threshold",  "Match threshold",    "Max false-positive probability (1e-5 default)."),
         ("match_radius",     "Match radius",       "Max centroid-catalog distance as fraction of FOV."),

@@ -4,15 +4,19 @@ efinder-bg-setup: check and configure background compensation on a running eFind
 
 Usage:
   efinder-bg-setup                          # show current background settings
-  efinder-bg-setup set <mode>               # set bg mode (row_percentile | line_median | top_hat)
+  efinder-bg-setup set <mode>               # set bg mode (see Modes below)
   efinder-bg-setup set <mode> --radius N    # set top_hat mode with radius N (default 12)
   efinder-bg-setup set <mode> --persist     # also write to efinder.conf
 
 Modes:
-  row_percentile   Cheapest; works well on dark-sky frames with mild vignetting.
-  line_median      Per-row median; more robust to row-noise and brightness gradients.
-  top_hat          Morphological white top-hat; removes 2-D vignetting / sky-glow.
-                   Requires sycamore >= 0.9.0; degrades to line_median on older wheels.
+  row_percentile         Cheapest; clean dark-sky frames with mild vignetting.
+  line_median            Per-row median; robust to row-noise and row gradients.
+  column_percentile      Per-column floor; vertical gradient removal.
+  row_column_percentile  Separable 2-D (row then column).
+  block_percentile       Bilinear tile median; fast 2-D gradients.
+  uniform_mean           Sliding-window mean (tetra3-compatible).
+  top_hat                Morphological white top-hat; strongest 2-D, slowest.
+                         Requires sycamore >= 0.9.0.
 
 Examples:
   efinder-bg-setup                          # show current mode
@@ -33,7 +37,9 @@ except ImportError:
     from efinder.maint import call as maint_call
 
 
-VALID_MODES = ("row_percentile", "line_median", "top_hat")
+VALID_MODES = ("row_percentile", "line_median", "column_percentile",
+               "row_column_percentile", "block_percentile", "uniform_mean",
+               "top_hat")
 
 
 def show(args):
@@ -42,10 +48,9 @@ def show(args):
         print(f"ERROR: {r.error}", file=sys.stderr)
         return 1
     res = r.result or {}
-    mode = res.get("detect_bg_mode", "(unknown)")
-    radius = res.get("detect_tophat_radius", "(unknown)")
-    print(f"detect_bg_mode:       {mode}")
-    print(f"detect_tophat_radius: {radius}")
+    for k in ("detect_bg_mode", "detect_tophat_radius", "detect_bg_block_size",
+              "detect_uniform_filter_size", "detect_noise_mode", "detect_sigma"):
+        print(f"{k + ':':29} {res.get(k, '(unknown)')}")
     return 0
 
 
