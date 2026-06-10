@@ -105,8 +105,11 @@ jobs:
       - name: Checkout sycamore main branch
         uses: actions/checkout@v4
         with:
-          ref: sycamore-extract
-          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: mconsidine/sycamore-extract
+          ref: main
+        # with:
+        #   ref: mconsidine/sycamore-extract
+        #   token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Remove stale vendor artifacts
         run: |
@@ -130,5 +133,5 @@ jobs:
             echo "No vendor changes to commit"
           else
             git commit -m "vendor: update tetra3-py aarch64 wheel [skip ci]"
-            git push origin sycamore-extract
+            git push origin main
           fi
