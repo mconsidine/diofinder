@@ -142,6 +142,18 @@ else
   LOG "wlan0 already has an active connection — leaving it"
 fi
 
+# --- CPU governor ---------------------------------------------------------------
+# Pi OS defaults to ondemand; the frequency ramp adds latency jitter to solve
+# times. Pin to performance — the Zero 2W draws little extra at idle and the
+# finder workload is bursty-periodic anyway. Idempotent; runs every boot.
+
+LOG "Setting CPU governor to performance"
+for _gov in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+  [ -w "$_gov" ] && echo performance > "$_gov" 2>/dev/null \
+    || WARN "Could not set governor on $_gov (non-fatal)"
+done
+unset _gov
+
 # --- Filesystem setup ---------------------------------------------------------
 
 mkdir -p /var/lib/efinder/captures

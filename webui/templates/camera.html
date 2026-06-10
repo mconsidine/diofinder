@@ -181,7 +181,7 @@ async function refreshFrame() {
     }
   } catch(e) {}
 }
-setInterval(refreshFrame, 750);
+setInterval(refreshFrame, 1250);  // was 750; /frame.jpg is the heaviest CPU-0 webui load
 
 // --- Auto-apply helpers -------------------------------------------------------
 function debounce(fn, ms) {

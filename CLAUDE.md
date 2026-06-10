@@ -13,15 +13,16 @@
 ## Process architecture
 
 ```
-efinder_main.py (launcher, CPU 1)
+efinder_main.py (launcher, CPU 0)
   │
   ├── camera_proc   (CPU 3)          — captures frames → shared memory
-  ├── solver_proc   (CPUs 2 + 3)     — extracts stars, plate-solves
-  └── comms_proc    (CPU 1)          — LX200 TCP server + maintenance socket
+  ├── solver_proc   (CPUs 1+2+3)     — extracts stars, plate-solves
+  └── comms_proc    (CPU 0)          — LX200 TCP server + maintenance socket
         └── imu_thread (daemon)      — BNO055 quaternion reader at 20 Hz
 ```
 
-CPU 0 is left to the kernel. CPU affinity is set with `os.sched_setaffinity`.
+comms/webui share CPU 0 with the kernel (both are I/O-bound; kernel+IRQ load
+is far below one core), freeing CPU 1 as a third solver core. CPU affinity is set with `os.sched_setaffinity`.
 
 ### Inter-process communication
 
@@ -171,7 +172,7 @@ def my_endpoint():
 - API endpoints that return JSON follow the pattern
   `return jsonify({"ok": r.ok, "result": r.result, "error": r.error})`.
 - Form-submit routes redirect back to a page; AJAX routes return JSON.
-- The webui process runs on CPU 1 alongside `comms_proc` and the IMU thread.
+- The webui process runs on CPU 0 alongside `comms_proc` and the IMU thread.
 
 Templates live in `webui/templates/`. Static assets in `webui/static/`.
 The Jinja2 environment has a `log10` filter registered for log-scale sliders.

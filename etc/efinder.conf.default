@@ -60,9 +60,10 @@ longitude_deg: 0.0
 # ---- Star detection (sycamore star_detect extractor) ----
 detect_sigma: 5.0
 
-# Detection binning: 1 = full-res, 2 = 2x2-binned (faster). Restart to apply
-# (the temporal cache is built at one binning).
-detect_bin: 1
+# Detection binning: 2 = 2x2-binned (~2-3x faster, lower noise; centroids stay
+# full-res), 1 = full-res. Restart to apply (the temporal cache is built at one
+# binning).
+detect_bin: 2
 
 # Per-frame background compensation mode:
 #   row_percentile  — cheapest; 25th-percentile of cache-line-sampled pixels
@@ -119,11 +120,12 @@ lx200_port: 4060
 lx200_client_timeout_s: 10.0
 
 # ---- CPU affinity (Pi Zero 2W: 4 cores) ----
-# 0=kernel/IRQs   1=comms+webui+IMU thread (I/O bound)
-# 2=solver (primary)   3=camera + solver secondary (rayon workers)
+# 0=comms+webui+IMU (I/O bound, shares with kernel/IRQs)
+# 1=solver auxiliary   2=solver primary   3=camera + solver secondary
 cpu_camera: 3
 cpu_solver: 2
-cpu_comms: 1
+cpu_solver_aux: 1
+cpu_comms: 0
 
 # ---- Diagnostics ----
 # Set save_solved_frames or save_failed_frames to true to write PNG captures

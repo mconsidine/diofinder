@@ -135,8 +135,17 @@ class BackgroundCache:
     # ----- producer side ---------------------------------------------------
     def submit_frame(self, frame_u8: np.ndarray):
         """Called by the solver loop each frame. Copies, since the caller
-        reuses its frame buffer in place."""
+        reuses its frame buffer in place.
+
+        In steady state the worker only rebuilds every refresh_interval_s, so
+        copying every frame (~0.7 MB each) is wasted bandwidth; accept every
+        4th frame then. While there is no model yet (warm-up) or a rebuild is
+        pending, accept every frame so the stack fills quickly."""
         if not self.enabled:
+            return
+        self._submit_seq = getattr(self, "_submit_seq", 0) + 1
+        steady = self._model is not None and not self._needs_rebuild.is_set()
+        if steady and self._submit_seq % 4 != 0:
             return
         with self._frame_buf_lock:
             self._frame_buf.append(np.array(frame_u8, dtype=np.uint8, copy=True))

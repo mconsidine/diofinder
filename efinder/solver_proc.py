@@ -3,9 +3,9 @@
 Pipeline: sycamore star_detect (matched_filter gate) → olive-solve tetra3-py.
 
 Pi Zero 2W optimisations:
-  * Solver process affinity is set to {cpu_solver, cpu_camera} so
-    olive-solve's rayon thread pool can spread solving work across two
-    physical cores (CPUs 2 and 3).
+  * Solver process affinity is {cpu_solver, cpu_camera, cpu_solver_aux} so
+    the sycamore/olive-solve rayon pools can spread work across three
+    physical cores (CPUs 1, 2, 3); comms/webui live on CPU 0.
   * Frame buffer pre-allocated once with np.empty; each iteration fills
     it in-place via np.copyto, eliminating per-frame heap allocation.
   * The shared-memory slot is released immediately after np.copyto so
@@ -322,12 +322,15 @@ def solver_main(slots, latest_solution, shared_cfg,
         format="solver %(levelname)s %(message)s",
     )
 
-    # Allow solver threads (including rayon worker pool) to use two cores.
-    # CPUs {cpu_solver, cpu_camera}: cpu_camera is available because
-    # camera_proc is I/O-bound and mostly sleeping between captures.
+    # Allow solver threads (including rayon worker pools) to use three cores:
+    # cpu_solver (primary), cpu_camera (camera_proc is I/O-bound and mostly
+    # sleeping between captures), and cpu_solver_aux (freed by moving the
+    # I/O-bound comms/webui onto CPU 0 with the kernel).
+    solver_cpus = {cfg.cpu_solver, cfg.cpu_camera,
+                   getattr(cfg, "cpu_solver_aux", 1)}
     try:
-        os.sched_setaffinity(0, {cfg.cpu_solver, cfg.cpu_camera})
-        log.info("Solver pinned to CPUs {%d, %d}", cfg.cpu_solver, cfg.cpu_camera)
+        os.sched_setaffinity(0, solver_cpus)
+        log.info("Solver pinned to CPUs %s", sorted(solver_cpus))
     except Exception as e:
         log.warning("Could not set solver CPU affinity: %s", e)
 
@@ -344,8 +347,10 @@ def solver_main(slots, latest_solution, shared_cfg,
     # ---- Load sycamore extractor -------------------------------------------
     try:
         import star_detect as _star_detect
-        # One-time thread-count init; solver process owns two CPU cores.
-        _star_detect.set_num_threads(2)
+        # One-time thread-count init, matched to the solver's affinity set.
+        # Three cores are dedicated to this process, so a 3-thread pool does
+        # not contend with comms/webui (which live on CPU 0).
+        _star_detect.set_num_threads(len(solver_cpus))
         # Imported here (not at module top) so star_detect stays a runtime, not
         # import-time, dependency — this try owns the "missing wheel" error.
         # Must be bound before the log line below uses HAS_TOPHAT.
@@ -414,7 +419,11 @@ def solver_main(slots, latest_solution, shared_cfg,
             t0  = time.monotonic()
 
             align_req  = _drain_align_queue(align_request_q, align_response_q)
-            local_peak = int(bufs[idx].max())
+            # Subsampled peak: the <20 gate is about overall illumination and
+            # the >=250 saturation check (auto-exposure) is about regions, not
+            # single pixels; a 2x2 stride scans 1/4 the data and still sees any
+            # feature 2 px wide.
+            local_peak = int(bufs[idx][::2, ::2].max())
 
             if local_peak < 20:
                 slots.release_read_slot()

@@ -51,6 +51,28 @@ def _safe_call(cmd, args=None, timeout=15.0):
         return MaintResponse(ok=False, error=f"{type(e).__name__}: {e}")
 
 
+_cfg_cache = {"cfg": None, "mtime": None, "path": None}
+
+
+def _load_cfg_cached():
+    """load_config(), re-parsed only when the conf file's mtime changes.
+
+    /frame.jpg is polled continuously; reading+parsing the file per request
+    was measurable CPU-1 load for a value that almost never changes."""
+    from efinder.config import load_config, DEFAULT_CONFIG_PATH
+    path = os.environ.get("EFINDER_CONFIG", DEFAULT_CONFIG_PATH)
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime = None
+    if (_cfg_cache["cfg"] is None or _cfg_cache["mtime"] != mtime
+            or _cfg_cache["path"] != path):
+        _cfg_cache["cfg"] = load_config()
+        _cfg_cache["mtime"] = mtime
+        _cfg_cache["path"] = path
+    return _cfg_cache["cfg"]
+
+
 def _format_solution(sol):
     """Reshape a raw latest_solution dict into a template-friendly form."""
     if not sol:
@@ -316,8 +338,7 @@ def bg_jpg():
     from multiprocessing import shared_memory, resource_tracker as _rt
     from PIL import Image
     try:
-        from efinder.config import load_config
-        ecfg = load_config()
+        ecfg = _load_cfg_cached()
         W, H = ecfg.frame_width, ecfg.frame_height
     except Exception:
         ecfg, W, H = None, 960, 760
@@ -769,7 +790,8 @@ _CONFIG_SECTIONS = [
     ("CPU Affinity", [
         ("cpu_camera", "Camera CPU",  "Core for camera_proc. Also shared with solver rayon threads."),
         ("cpu_solver", "Solver CPU",  "Primary core for solver_proc; rayon also uses cpu_camera."),
-        ("cpu_comms",  "Comms CPU",   "Core for comms_proc and web UI."),
+        ("cpu_solver_aux", "Solver aux CPU", "Third solver core (freed by comms moving to CPU 0)."),
+        ("cpu_comms",  "Comms CPU",   "Core for comms_proc, web UI, and IMU thread (shares CPU 0 with the kernel)."),
     ]),
     ("Diagnostics", [
         ("save_solved_frames",     "Save solved frames", "Write PNG for every successful solve."),
@@ -858,8 +880,7 @@ def frame_jpg():
     from PIL import Image, ImageDraw
 
     try:
-        from efinder.config import load_config
-        ecfg = load_config()
+        ecfg = _load_cfg_cached()
         width, height = ecfg.frame_width, ecfg.frame_height
     except Exception:
         ecfg, width, height = None, 960, 760
@@ -895,25 +916,36 @@ def frame_jpg():
     if frame is None:
         return "camera not running", 503, {"Content-Type": "text/plain"}
 
+    # Render at half resolution by default: the stretch (percentile passes)
+    # and JPEG encode are ~4x cheaper and the result is indistinguishable on
+    # a phone/laptop view. ?full=1 returns native resolution. This format may
+    # evolve (e.g. quality/scale knobs) as the UI grows.
+    ds = 1 if request.args.get("full") in ("1", "true", "yes", "on") else 2
+    work = frame[::ds, ::ds] if ds > 1 else frame
+
     if request.args.get("sub") in ("1", "true", "yes", "on"):
         # Detection view: subtract the active background mode so the live image
         # shows what star detection effectively sees (stars on a flat field).
+        # Size parameters are scaled to the downsampled grid.
         bgmode = request.args.get("bgmode") or getattr(ecfg, "detect_bg_mode", "line_median")
         bg = _compute_background(
-            frame, bgmode,
-            tophat_radius=getattr(ecfg, "detect_tophat_radius", 12) or 12,
-            block_size=getattr(ecfg, "detect_bg_block_size", 0) or 32,
-            uniform_size=getattr(ecfg, "detect_uniform_filter_size", 0) or 25)
-        signal = np.clip(frame.astype(np.float32) - bg, 0.0, None)
+            work, bgmode,
+            tophat_radius=max(1, (getattr(ecfg, "detect_tophat_radius", 12) or 12) // ds),
+            block_size=max(4, (getattr(ecfg, "detect_bg_block_size", 0) or 32) // ds),
+            uniform_size=max(3, (getattr(ecfg, "detect_uniform_filter_size", 0) or 25) // ds))
+        signal = np.clip(work.astype(np.float32) - bg, 0.0, None)
     else:
-        sky     = float(np.percentile(frame, 50))
-        signal  = np.clip(frame.astype(np.float32) - sky, 0.0, None)
+        sky     = float(np.percentile(work, 50))
+        signal  = np.clip(work.astype(np.float32) - sky, 0.0, None)
     white   = max(float(np.percentile(signal, 99.9)), 20.0)
     stretched = np.clip(signal / white * 255.0, 0, 255).astype(np.uint8)
 
+    # Overlay geometry in downsampled coordinates.
+    cx //= ds
+    cy //= ds
     img  = Image.fromarray(stretched, mode="L").convert("RGB")
     draw = ImageDraw.Draw(img)
-    r    = 28
+    r    = 28 // ds
     draw.ellipse([cx - r, cy - r, cx + r, cy + r],
                  outline=(255, 80, 80), width=2)
     gap = 6
@@ -923,10 +955,10 @@ def frame_jpg():
     draw.line([cx, cy + r + 1,   cx, cy + r + gap],  fill=(255, 120, 120), width=1)
 
     try:
-        r_half = round(1800.0 / ecfg.arcsec_per_pixel)
-        r_one  = round(3600.0 / ecfg.arcsec_per_pixel)
+        r_half = round(1800.0 / ecfg.arcsec_per_pixel) // ds
+        r_one  = round(3600.0 / ecfg.arcsec_per_pixel) // ds
     except Exception:
-        r_half, r_one = 35, 71
+        r_half, r_one = 35 // ds, 71 // ds
     draw.ellipse([cx - r_half, cy - r_half, cx + r_half, cy + r_half],
                  outline=(255, 120, 120), width=1)
     draw.ellipse([cx - r_one,  cy - r_one,  cx + r_one,  cy + r_one],
@@ -1575,4 +1607,8 @@ def healthz():
 
 
 if __name__ == "__main__":
+    try:
+        os.sched_setaffinity(0, {_load_cfg_cached().cpu_comms})
+    except Exception as e:
+        log.warning("Could not pin webui CPU affinity: %s", e)
     app.run(host="0.0.0.0", port=80, debug=False, threaded=True)

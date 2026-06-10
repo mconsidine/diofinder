@@ -74,8 +74,11 @@ class Config:
     # agrees with what devices actually run.
     detect_sigma: float = 5.0
 
-    # Detection binning passed to star_detect (1=full-res, 2=2x2-binned).
-    detect_bin: int = 1
+    # Detection binning passed to star_detect. 2 = 2x2-binned detection:
+    # ~2-3x faster extraction and lower noise; centroids remain full-res via
+    # centroid_full_res. Set 1 only if faint-star recall measurably suffers
+    # (validate with the Background page Capture & A/B). Restart to apply.
+    detect_bin: int = 2
 
     # Per-frame background mode: "row_percentile" (default, cheapest),
     # "line_median" (robust to per-row offset/vignetting), or "top_hat"
@@ -127,17 +130,20 @@ class Config:
     lx200_client_timeout_s: float = 30.0
 
     # -------- CPU affinity --------
-    # Pi Zero 2W: 4 cores (0 = kernel/IRQs, never pinned).
-    #   1 = comms_proc + efinder-webui  (I/O bound)
+    # Pi Zero 2W: 4 cores.
+    #   0 = comms_proc + efinder-webui + IMU thread (I/O bound) + kernel/IRQs
+    #   1 = solver_proc auxiliary core
     #   2 = solver_proc primary core
     #   3 = camera_proc + solver_proc secondary core
     #
-    # The solver process is allowed affinity {cpu_solver, cpu_camera}
-    # so olive-solve's rayon thread pool can spread solving work
-    # across two physical cores (CPUs 2 and 3).
+    # The solver process is allowed affinity {cpu_solver, cpu_camera,
+    # cpu_solver_aux} so the sycamore/olive-solve rayon pools can spread
+    # work across three physical cores. Kernel+IRQ load is far below one
+    # core, so sharing CPU 0 with the I/O-bound comms/webui is cheap.
     cpu_camera: int = 3
     cpu_solver: int = 2
-    cpu_comms: int = 1
+    cpu_solver_aux: int = 1
+    cpu_comms: int = 0
 
     # -------- Diagnostics --------
     save_failed_frames: bool = False
@@ -154,7 +160,7 @@ class Config:
             f"fov={self.fov_deg}deg sigma={self.detect_sigma} "
             f"db={self.solver_db} "
             f"boresight=({self.boresight_y:.1f},{self.boresight_x:.1f}) "
-            f"affinity[cam={self.cpu_camera},solv={self.cpu_solver},comm={self.cpu_comms}]"
+            f"affinity[cam={self.cpu_camera},solv={self.cpu_solver}+{self.cpu_solver_aux},comm={self.cpu_comms}]"
         )
 
 

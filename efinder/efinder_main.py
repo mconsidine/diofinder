@@ -4,7 +4,7 @@ eFinder main launcher.
 
 Spawns three pinned worker processes:
   * camera_proc  -> CPU cfg.cpu_camera : picamera2 or test image -> shared memory
-  * solver_proc  -> CPUs {cfg.cpu_solver, cfg.cpu_camera} : sycamore extract + olive-solve
+  * solver_proc  -> CPUs {cfg.cpu_solver, cfg.cpu_camera, cfg.cpu_solver_aux} : sycamore extract + olive-solve
   * comms_proc   -> CPU cfg.cpu_comms  : LX200 server + alignment + maint socket
 
 CPU 0 is left to the kernel.
