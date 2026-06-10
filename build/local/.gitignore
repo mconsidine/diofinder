@@ -2,3 +2,4 @@ out/
 src/
 .tetra3-venv/
 hip_main.dat
+bin/

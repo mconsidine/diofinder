@@ -11,6 +11,7 @@ review and push the vendor commit yourself.
 | `build-olive-wheel.sh [ref]` | `vendor-binaries.yml` build-wheel job | `tetra3-*-abi3-*linux_aarch64.whl` |
 | `vendor-wheels.sh [--commit]` | the vendor/commit steps of both vendor workflows | staged/committed `vendor/wheels/` update |
 | `build-database.sh` | the database step of `release.yml` | `solver_database.npz` |
+| `check-workflows.sh [repo ...]` | pushing to CI just to find YAML errors | actionlint report |
 
 ## One-time prerequisites
 
@@ -41,6 +42,11 @@ git push origin olive
 # Regenerate the solver database when FOV parameters change:
 DB_MAX_FOV=14.0 build/local/build-database.sh
 scp build/local/out/solver_database.npz pi:/var/lib/efinder/
+
+# Validate workflow YAML before pushing (this repo + siblings).
+# Anything after -- is passed to actionlint, e.g. to mute style-level
+# shellcheck notes:
+build/local/check-workflows.sh . ../sycamore-extract -- -ignore SC2012 -ignore SC2086
 ```
 
 Sources are found in this order: `$SYCAMORE_SRC` / `$OLIVE_SRC` env vars, a
