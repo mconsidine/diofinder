@@ -95,7 +95,7 @@ jobs:
 
   # --------------------------------------------------------------------------
   # Download the wheel, clear ALL stale tetra3/tetra3rs artifacts
-  # from vendor/, commit back to the sycamore-only branch.
+  # from vendor/, commit back to the sycamore-extract main branch.
   # [skip ci] prevents re-triggering this workflow on the vendor commit.
   # --------------------------------------------------------------------------
   commit-vendor:
@@ -105,7 +105,7 @@ jobs:
       - name: Checkout sycamore main branch
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: sycamore-extract
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Remove stale vendor artifacts
@@ -130,5 +130,5 @@ jobs:
             echo "No vendor changes to commit"
           else
             git commit -m "vendor: update tetra3-py aarch64 wheel [skip ci]"
-            git push origin sycamore-only
+            git push origin sycamore-extract
           fi
