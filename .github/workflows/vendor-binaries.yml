@@ -102,10 +102,10 @@ jobs:
     needs: build-wheel
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout sycamore-only branch
+      - name: Checkout sycamore main branch
         uses: actions/checkout@v4
         with:
-          ref: sycamore-only
+          ref: main
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Remove stale vendor artifacts
