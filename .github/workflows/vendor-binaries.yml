@@ -42,7 +42,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: mconsidine/olive-solve
-          ref: ${{ vars.OLIVE_SOLVE_REF || 'main' }}
+          ref: ${{ vars.OLIVE_SOLVE_REF || 'olive-solve-noext' }}
 
       - name: Install aarch64 cross-compiler
         run: |
