@@ -102,7 +102,7 @@ jobs:
           echo "tetra3 package dir: $TETRA3_DIR"
           echo "Downloading hip_main.dat from mconsidine/astro_databases mirror..."
           curl -fsSL \
-            https://raw.githubusercontent.com/mconsidine/astro_databases/main/hip_main.dat.gz \
+            https://raw.githubusercontent.com/mconsidine/astro_databases/main/data/hip_main.dat.gz \
             | gunzip > "${TETRA3_DIR}/hip_main.dat"
           python3 build/generate_database.py
           ls -lh build/output/solver_database.npz
