@@ -1,26 +1,20 @@
-name: Release (sycamore)
+name: Release image
 
-# Prerequisites before triggering an image build:
-#   1. Run 'Vendor Binaries (sycamore)' to populate vendor/wheels/ with the
-#      aarch64 tetra3-py wheel.  The pre-flight step fails fast if absent.
+# Wheels and the star database are pulled from the source repos' GitHub
+# releases at build time — nothing is vendored in git:
+#   tetra3 (olive-solve)      -> mconsidine/olive-solve releases
+#   star_detect (sycamore)    -> mconsidine/sycamore-extract releases
+#   cedar_solve_13deg.npz     -> mconsidine/astro_databases releases
+# Pin versions with the OLIVE_SOLVE_TAG / SYCAMORE_TAG / DB_TAG repo
+# variables; unset means the latest release of each.
 #
 # Database generation:
-#   The tetra3 .npz star database is generated on the x86_64 CI runner
-#   (using esa/tetra3) BEFORE the chroot step, then copied into the image
-#   by build-image.sh.  This avoids database generation failures inside
-#   QEMU-emulated aarch64, and keeps the hip_main.dat fetch on x86_64 CI.
+#   Only when a custom FOV is requested (db_max_fov / db_min_fov inputs or
+#   DB_MAX_FOV / DB_MIN_FOV vars) is the .npz generated here with esa/tetra3
+#   from the Gaia-derived catalog; otherwise the prebuilt release asset is
+#   used as-is.
 
 on:
-  push:
-    branches: [sycamore-only]
-    paths:
-      - 'efinder/**'
-      - 'webui/**'
-      - 'scripts/**'
-      - 'systemd/**'
-      - 'build/**'
-      - 'requirements.txt'
-      - '.github/workflows/release.yml'
   release:
     types: [published]
   workflow_dispatch:
@@ -35,6 +29,18 @@ on:
         default: ''
       db_min_fov:
         description: "Database min FOV in degrees (default auto)"
+        required: false
+        default: ''
+      olive_solve_tag:
+        description: "olive-solve release tag for the tetra3 wheel (blank = OLIVE_SOLVE_TAG var or latest)"
+        required: false
+        default: ''
+      sycamore_tag:
+        description: "sycamore-extract release tag for the star_detect wheel (blank = SYCAMORE_TAG var or latest)"
+        required: false
+        default: ''
+      db_tag:
+        description: "astro_databases release tag for the .npz (blank = DB_TAG var or latest)"
         required: false
         default: ''
 
@@ -52,17 +58,31 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify aarch64 vendor wheel is present
+      - name: Fetch wheels from source-repo releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OLIVE_TAG: ${{ inputs.olive_solve_tag || vars.OLIVE_SOLVE_TAG || '' }}
+          SYCAMORE_TAG: ${{ inputs.sycamore_tag || vars.SYCAMORE_TAG || '' }}
         run: |
+          mkdir -p vendor/wheels
+          rm -f vendor/wheels/*.whl
+          fetch() { # repo tag pattern
+            if [ -n "$2" ]; then
+              gh release download "$2" --repo "$1" --pattern "$3" --dir vendor/wheels
+            else
+              gh release download --repo "$1" --pattern "$3" --dir vendor/wheels
+            fi
+          }
+          fetch mconsidine/olive-solve      "$OLIVE_TAG"    "tetra3-*aarch64*.whl"
+          # Image venv is Pi OS Trixie Python 3.13
+          fetch mconsidine/sycamore-extract "$SYCAMORE_TAG" "star_detect-*cp313*aarch64*.whl" \
+            || echo "::warning::No sycamore wheel fetched (optional; olive backend will be used)"
+          ls -lh vendor/wheels/
           WHL=$(ls vendor/wheels/tetra3-*aarch64*.whl 2>/dev/null | head -1 || true)
           if [ -z "$WHL" ]; then
-            echo "::error::No aarch64 tetra3-py wheel found in vendor/wheels/."
-            echo "::error::Run the 'Vendor Binaries (sycamore)' workflow first, then retry."
-            echo "::error::Note: a linux_armv6l wheel does NOT satisfy this check."
+            echo "::error::No aarch64 tetra3-py wheel could be downloaded from olive-solve releases."
             exit 1
           fi
-          echo "Vendor wheel: $WHL"
-          ls -lh "$WHL"
 
       - name: Determine version tag
         id: ver
@@ -87,12 +107,34 @@ jobs:
           echo "max_fov=${{ github.event.inputs.db_max_fov || vars.DB_MAX_FOV || '14.0' }}" >> $GITHUB_OUTPUT
           echo "min_fov=${{ github.event.inputs.db_min_fov || vars.DB_MIN_FOV || '' }}"     >> $GITHUB_OUTPUT
 
-      - name: Generate tetra3 star database
-        # tetra3 is only on GitHub, not PyPI. Install the code via git,
-        # then fetch the star catalog from mconsidine/astro_databases:
-        # gaia_hip_main.dat.gz is the merged Gaia DR3 + Hipparcos star list
-        # (63k stars to G=8) reformatted to hip_main layout, so stock
-        # esa/tetra3 parses it unmodified.
+      - name: Fetch star database from astro_databases release
+        # Default path: download the prebuilt cedar_solve_13deg.npz
+        # (10.5-14 deg FOV, Gaia-derived, olive-solve loads it directly)
+        # and verify it against the release manifest.
+        if: steps.dbfov.outputs.max_fov == '14.0' && steps.dbfov.outputs.min_fov == ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DB_TAG: ${{ inputs.db_tag || vars.DB_TAG || '' }}
+        run: |
+          mkdir -p build/output db-download
+          if [ -n "$DB_TAG" ]; then
+            gh release download "$DB_TAG" --repo mconsidine/astro_databases \
+              --pattern 'cedar_solve_13deg.npz' --pattern 'manifest.json' --dir db-download
+          else
+            gh release download --repo mconsidine/astro_databases \
+              --pattern 'cedar_solve_13deg.npz' --pattern 'manifest.json' --dir db-download
+          fi
+          WANT=$(python3 -c "import json; print(json.load(open('db-download/manifest.json'))['outputs']['cedar_solve']['sha256'])")
+          GOT=$(sha256sum db-download/cedar_solve_13deg.npz | cut -d' ' -f1)
+          [ "$GOT" = "$WANT" ] || { echo "::error::database SHA-256 mismatch"; exit 1; }
+          mv db-download/cedar_solve_13deg.npz build/output/solver_database.npz
+          ls -lh build/output/solver_database.npz
+
+      - name: Generate tetra3 star database (custom FOV)
+        # Fallback for non-default FOV: generate with stock esa/tetra3 from
+        # the Gaia-derived hip_main-format catalog (63k stars to G=8) in
+        # mconsidine/astro_databases.
+        if: steps.dbfov.outputs.max_fov != '14.0' || steps.dbfov.outputs.min_fov != ''
         env:
           SOLVER_DB_PATH: ${{ github.workspace }}/build/output/solver_database
           DB_MAX_FOV: ${{ steps.dbfov.outputs.max_fov }}
