@@ -104,32 +104,42 @@ for a in rel.get('assets', []):
 " "$2" 2>/dev/null
 }
 
-install_wheel() { # label repo pattern
-  local whl url
-  whl=$(ls "$VENDOR_WHEELS"/${3} 2>/dev/null | sort -V | tail -n1 || true)
+install_wheel() { # label repo pattern [pattern...]
+  local label=$1 repo=$2 whl url pat
+  shift 2
+  for pat in "$@"; do
+    whl=$(ls "$VENDOR_WHEELS"/$pat 2>/dev/null | sort -V | tail -n1 || true)
+    [ -n "$whl" ] && break
+  done
   if [ -z "$whl" ]; then
-    url=$(release_wheel_url "$2" "$3" || true)
+    for pat in "$@"; do
+      url=$(release_wheel_url "$repo" "$pat" || true)
+      [ -n "$url" ] && break
+    done
     if [ -z "$url" ]; then
-      LOG "WARN: no $1 wheel in vendor/wheels/ or $2 releases (keeping installed version)"
+      LOG "WARN: no $label wheel in vendor/wheels/ or $repo releases (keeping installed version)"
       return 0
     fi
     whl="$WHEEL_TMP/$(basename "$url")"
     if ! curl -fsSL "$url" -o "$whl"; then
-      LOG "WARN: $1 wheel download failed (keeping installed version)"
+      LOG "WARN: $label wheel download failed (keeping installed version)"
       return 0
     fi
   fi
-  LOG "Installing $1: $(basename "$whl")"
+  LOG "Installing $label: $(basename "$whl")"
   sudo -u efinder "$EFINDER_DIR/venv/bin/pip" install --quiet \
     --force-reinstall --no-deps "$whl" \
-    || LOG "WARN: $1 wheel install failed (keeping installed version)"
+    || LOG "WARN: $label wheel install failed (keeping installed version)"
 }
 
 PYTAG=$(sudo -u efinder "$EFINDER_DIR/venv/bin/python" \
   -c 'import sys; print(f"cp{sys.version_info[0]}{sys.version_info[1]}")')
 
 install_wheel "olive-solve"      mconsidine/olive-solve      "tetra3-*aarch64*.whl"
-install_wheel "sycamore-extract" mconsidine/sycamore-extract "star_detect-*${PYTAG}*aarch64*.whl"
+# Prefer a wheel for this interpreter; fall back to abi3 (sycamore >= 0.11.2
+# ships a single abi3 wheel covering all Python >= 3.8)
+install_wheel "sycamore-extract" mconsidine/sycamore-extract \
+  "star_detect-*${PYTAG}*aarch64*.whl" "star_detect-*abi3*aarch64*.whl"
 
 # --- Record version & restart -------------------------------------------------
 

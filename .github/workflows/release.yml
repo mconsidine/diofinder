@@ -74,9 +74,14 @@ jobs:
             fi
           }
           fetch mconsidine/olive-solve      "$OLIVE_TAG"    "tetra3-*aarch64*.whl"
-          # Image venv is Pi OS Trixie Python 3.13
-          fetch mconsidine/sycamore-extract "$SYCAMORE_TAG" "star_detect-*cp313*aarch64*.whl" \
-            || echo "::warning::No sycamore wheel fetched (optional; olive backend will be used)"
+          # Matches both abi3 wheels (sycamore >= 0.11.2) and per-Python
+          # cp31x wheels from older releases
+          fetch mconsidine/sycamore-extract "$SYCAMORE_TAG" "star_detect-*aarch64*.whl" \
+            || echo "::warning::No sycamore wheel fetched (optional)"
+          # If a release carried several per-Python wheels, keep only the
+          # newest-sorted one so install.sh picks a single wheel
+          EXTRA=$(ls vendor/wheels/star_detect-*aarch64*.whl 2>/dev/null | sort -V | head -n -1 || true)
+          [ -n "$EXTRA" ] && rm -f $EXTRA
           ls -lh vendor/wheels/
           WHL=$(ls vendor/wheels/tetra3-*aarch64*.whl 2>/dev/null | head -1 || true)
           if [ -z "$WHL" ]; then
