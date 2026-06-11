@@ -1001,15 +1001,22 @@ sudo EFINDER_VERSION=dev bash build/build-image.sh
 # Output: build/output/efinder.img
 ```
 
-### Updating vendor wheels
+### Wheel sourcing
 
 The sycamore-extract (`star_detect-*.whl`) and olive-solve (`tetra3-*.whl`)
-wheels are pre-built aarch64 binaries in `vendor/wheels/`. To update:
+wheels are **not** committed to git. They are downloaded from the source
+repos' GitHub releases:
 
-1. Run the **Vendor Binaries** or **Vendor Sycamore** GitHub Actions workflow
-   with the desired version tag.
-2. Merge the resulting commit (it updates the wheel file) before tagging a
-   release.
+- **Image builds**: `release.yml` fetches them into `vendor/wheels/` before
+  `build-image.sh` runs. Pin versions with the `SYCAMORE_TAG` /
+  `OLIVE_SOLVE_TAG` repository variables (unset = latest release).
+- **Existing devices**: `efinder-update` refreshes both wheels from the
+  latest releases during an OTA update.
+- **Local override**: a wheel placed in `vendor/wheels/` (e.g. via
+  `build/local/vendor-wheels.sh`) takes precedence over the download.
+
+To publish new wheels, tag a release in `sycamore-extract` or `olive-solve` —
+each repo's release workflow builds and attaches the aarch64 wheels.
 
 ### Running the web UI in development
 

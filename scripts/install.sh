@@ -200,15 +200,16 @@ sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install --upgrade \
   || FAIL "pip install setuptools wheel failed"
 
 # --- Install olive-solve tetra3-py -------------------------------------------
-# Only aarch64 wheels are accepted. The armv6l pre-built wheel shipped in
-# olive-solve/tetra3-py/dist/ will NOT work on Pi Zero 2W (aarch64).
-# Run 'Vendor Binaries (olive)' to produce and commit the aarch64 wheel.
+# Only aarch64 wheels are accepted (armv6l wheels will NOT work on the
+# Pi Zero 2W). vendor/wheels/ is populated at image-build time by
+# release.yml (downloaded from the olive-solve GitHub release) or locally
+# by build/local/vendor-wheels.sh.
 
 VENDOR_WHEELS_DIR="$EFINDER_DIR/vendor/wheels"
 OLIVE_WHL=$(ls "$VENDOR_WHEELS_DIR"/tetra3-*aarch64*.whl 2>/dev/null | head -1 || true)
 if [ -z "$OLIVE_WHL" ]; then
   FAIL "No aarch64 tetra3-py wheel found in $VENDOR_WHEELS_DIR." \
-  "Run the 'Vendor Binaries (olive)' workflow first."
+  "Download one from the mconsidine/olive-solve GitHub release into vendor/wheels/ first."
 fi
 LOG "Installing olive-solve: $OLIVE_WHL"
 sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install "$OLIVE_WHL" \

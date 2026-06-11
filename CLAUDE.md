@@ -184,9 +184,11 @@ The Jinja2 environment has a `log10` filter registered for log-scale sliders.
 Star extraction uses **sycamore** `star_detect` (matched-filter gate, hardcoded
 since v0.9.0 — the `gate_mode` parameter was removed; passing it raises
 `TypeError`).
-The sycamore wheel lives in `vendor/wheels/` and is installed by `release.yml`. To update it,
-run the **Vendor Sycamore** GitHub Actions workflow with the desired version tag, then merge
-the resulting commit before tagging a release.
+Wheels are not committed to git: `release.yml` downloads the sycamore and
+olive-solve wheels from their repos' GitHub releases at image-build time (pin
+with the `SYCAMORE_TAG` / `OLIVE_SOLVE_TAG` repo variables; unset = latest),
+and on-device `efinder-update` refreshes them from the latest releases. A
+wheel placed manually in `vendor/wheels/` overrides the download.
 
 Detection is routed through `efinder/bg_cache.py::BackgroundCache`, not by calling
 `detect_stars` directly. This gives three composable background strategies, all

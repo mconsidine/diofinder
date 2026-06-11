@@ -275,7 +275,7 @@ if [ -d "$SRC_DIR/vendor" ]; then
   LOG "Staging vendor/ (pre-built tetra3-py wheel)"
   cp -r "$SRC_DIR/vendor" "$ROOT/tmp/efinder-src/"
 else
-  WARN "vendor/ not found; install.sh will fail (run Vendor Binaries workflow first)"
+  WARN "vendor/ not found; install.sh will fail (populate vendor/wheels/ from the source repos' releases first)"
 fi
 
 # Optional documentation
