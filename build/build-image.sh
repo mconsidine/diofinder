@@ -92,11 +92,13 @@ else
   TETRA3_DIR=$(python3 -c \
     'import pathlib, tetra3; print(pathlib.Path(tetra3.__file__).parent)')
   LOG "tetra3 package dir: $TETRA3_DIR"
-  LOG "Downloading hip_main.dat from CDS Hipparcos archive..."
+  LOG "Downloading Gaia-derived star catalog from mconsidine/astro_databases..."
   wget -q --show-progress \
-    https://cdsarc.cds.unistra.fr/ftp/cats/I/239/hip_main.dat \
-    -O "${TETRA3_DIR}/hip_main.dat" \
-    || FAIL "hip_main.dat download failed"
+    https://raw.githubusercontent.com/mconsidine/astro_databases/main/data/gaia_hip_main.dat.gz \
+    -O "${TETRA3_DIR}/hip_main.dat.gz" \
+    || FAIL "gaia_hip_main.dat.gz download failed"
+  gunzip -f "${TETRA3_DIR}/hip_main.dat.gz" \
+    || FAIL "gaia_hip_main.dat.gz decompression failed"
   export SOLVER_DB_PATH="$WORK/solver_database"
   python3 build/generate_database.py \
     || FAIL "Database generation failed"

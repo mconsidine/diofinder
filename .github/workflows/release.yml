@@ -89,8 +89,10 @@ jobs:
 
       - name: Generate tetra3 star database
         # tetra3 is only on GitHub, not PyPI. Install the code via git,
-        # then fetch hip_main.dat from the mconsidine/astro_databases mirror
-        # (the upstream CDS Hipparcos archive is unreliable from CI runners).
+        # then fetch the star catalog from mconsidine/astro_databases:
+        # gaia_hip_main.dat.gz is the merged Gaia DR3 + Hipparcos star list
+        # (63k stars to G=8) reformatted to hip_main layout, so stock
+        # esa/tetra3 parses it unmodified.
         env:
           SOLVER_DB_PATH: ${{ github.workspace }}/build/output/solver_database
           DB_MAX_FOV: ${{ steps.dbfov.outputs.max_fov }}
@@ -100,9 +102,9 @@ jobs:
           python3 -m pip install --quiet "git+https://github.com/esa/tetra3.git"
           TETRA3_DIR=$(python3 -c 'import pathlib, tetra3; print(pathlib.Path(tetra3.__file__).parent)')
           echo "tetra3 package dir: $TETRA3_DIR"
-          echo "Downloading hip_main.dat from mconsidine/astro_databases mirror..."
+          echo "Downloading Gaia-derived star catalog from mconsidine/astro_databases..."
           curl -fsSL \
-            https://raw.githubusercontent.com/mconsidine/astro_databases/main/data/hip_main.dat.gz \
+            https://raw.githubusercontent.com/mconsidine/astro_databases/main/data/gaia_hip_main.dat.gz \
             | gunzip > "${TETRA3_DIR}/hip_main.dat"
           python3 build/generate_database.py
           ls -lh build/output/solver_database.npz
