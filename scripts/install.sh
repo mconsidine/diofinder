@@ -287,6 +287,7 @@ install -m 440 "$EFINDER_DIR/etc/sudoers.d/efinder-clock"  /etc/sudoers.d/efinde
 install -m 440 "$EFINDER_DIR/etc/sudoers.d/efinder-wifi"   /etc/sudoers.d/efinder-wifi
 
 install -m 755 "$EFINDER_DIR/scripts/efinder-update"          /usr/local/bin/
+install -m 755 "$EFINDER_DIR/scripts/efinder-db-update"       /usr/local/bin/
 install -m 755 "$EFINDER_DIR/scripts/efinder-ctl"             /usr/local/bin/
 install -m 755 "$EFINDER_DIR/scripts/efinder-bg-setup"        /usr/local/bin/efinder-bg-setup
 install -m 755 "$EFINDER_DIR/scripts/efinder-bg-test"         /usr/local/bin/efinder-bg-test
