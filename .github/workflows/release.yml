@@ -1,4 +1,4 @@
-name: Release (sycamore)
+name: Release image
 
 # Wheels and the star database are pulled from the source repos' GitHub
 # releases at build time — nothing is vendored in git:
