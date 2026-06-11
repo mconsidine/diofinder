@@ -15,16 +15,6 @@ name: Release image
 #   used as-is.
 
 on:
-  push:
-    branches: [sycamore-only]
-    paths:
-      - 'efinder/**'
-      - 'webui/**'
-      - 'scripts/**'
-      - 'systemd/**'
-      - 'build/**'
-      - 'requirements.txt'
-      - '.github/workflows/release.yml'
   release:
     types: [published]
   workflow_dispatch:
