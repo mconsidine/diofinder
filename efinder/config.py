@@ -50,7 +50,13 @@ class Config:
     exposure_s: float = 0.2
     gain: float = 5.0
 
-    auto_exposure_enabled: bool = False
+    # Auto-exposure defaults ON: a finder usually wants the exposure tracking
+    # the target star count without a manual nudge. Toggle off on the Camera
+    # page if you prefer a fixed exposure.
+    auto_exposure_enabled: bool = True
+    # auto_exposure_target_stars and auto_exposure_max_s are live-mutable via
+    # shared_cfg (the controller reads them each cycle; seeing presets write
+    # them). The min floor stays config-only.
     auto_exposure_target_stars: int = 20
     auto_exposure_min_s: float = 0.05
     auto_exposure_max_s: float = 1.0
@@ -84,6 +90,16 @@ class Config:
     # "line_median" (robust to per-row offset/vignetting), or "top_hat"
     # (opt-in morphological 2-D gradient removal — needs sycamore >= 0.9.0).
     detect_bg_mode: str = "row_percentile"
+    # Matched-filter kernel sigma (px) passed to star_detect (sycamore >= 0.12).
+    # 1.5 ≈ a well-focused HQ Camera PSF; widen toward 2.5 for bad seeing /
+    # bloated stars. Capability-probed: ignored on older wheels.
+    detect_kernel_sigma: float = 1.5
+    # Trail / elongation rejection (max axis ratio) passed to star_detect.
+    # 0.0 disables it (treated as float("inf")); otherwise 1.5–10.0.
+    detect_max_axis_ratio: float = 0.0
+    # Per-window local noise estimate in the matched filter (sycamore >= 0.12).
+    # Capability-probed: ignored on older wheels.
+    detect_local_noise: bool = True
     # Structuring-element radius (px) used only when detect_bg_mode == "top_hat".
     # Must be comfortably larger than the largest star radius.
     detect_tophat_radius: int = 12
@@ -111,9 +127,20 @@ class Config:
     bg_cache_slew_deg: float = 0.5     # IMU angle that invalidates the cache
     bg_cache_max_age_s: float = 60.0   # rebuild if model older than this
 
+    # -------- Seeing presets --------
+    # One-tap Good/Bad night tuning (see efinder/seeing.py). "good" is the
+    # default; "bad" widens the matched filter, switches to a 2-D block
+    # background, loosens trail rejection, and lengthens exposure / solve
+    # budgets. Applying a preset overwrites the individual keys it controls.
+    seeing_mode: str = "good"
+
     # -------- Solver (olive-solve tetra3-py) --------
     # Path to a tetra3 .npz star database compatible with olive-solve.
     solver_db: str = "default_database"
+    # Optional deeper-magnitude database used by the "bad" seeing preset
+    # (star_db="deep"). Empty = unset → presets stay on the standard db.
+    # Applied only when this names a file that exists on disk.
+    star_db_deep: str = ""
     fov_max_error_deg: float = 1.0
     min_centroids: int = 8
     max_solve_stars: int = 50
@@ -144,6 +171,14 @@ class Config:
     cpu_solver: int = 2
     cpu_solver_aux: int = 1
     cpu_comms: int = 0
+
+    # -------- Solver-hang watchdog --------
+    # A daemon thread in comms_proc checks that the solver keeps publishing
+    # solutions (it publishes every frame, including dark ones). If the latest
+    # solution's epoch goes stale for longer than watchdog_timeout_s the
+    # process is hung; comms logs CRITICAL and exits so systemd restarts it.
+    watchdog_enabled: bool = True
+    watchdog_timeout_s: float = 30.0
 
     # -------- Diagnostics --------
     save_failed_frames: bool = False

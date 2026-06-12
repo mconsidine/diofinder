@@ -65,6 +65,19 @@ HAS_CACHE = hasattr(star_detect, "detect_stars_with_cache") and hasattr(
 )
 CACHE_HAS_TOPHAT = _supports("detect_stars_with_cache", "tophat_radius")
 
+# sycamore >= 0.12 capabilities (all capability-probed so older wheels degrade
+# gracefully — passing an unsupported kwarg raises TypeError in the hot path).
+HAS_KERNEL_SIGMA = _supports("detect_stars", "kernel_sigma")
+HAS_LOCAL_NOISE = _supports("detect_stars", "local_noise")
+CACHE_HAS_KERNEL_SIGMA = _supports("detect_stars_with_cache", "kernel_sigma")
+CACHE_HAS_LOCAL_NOISE = _supports("detect_stars_with_cache", "local_noise")
+# block_percentile becomes cache-compatible only when the wheel can both build
+# a block-median grid (compute_block_medians_py) and consume it via the cached
+# path's block_offsets kwarg.
+HAS_BLOCK_MEDIANS = hasattr(star_detect, "compute_block_medians_py")
+CACHE_HAS_BLOCK_OFFSETS = _supports("detect_stars_with_cache", "block_offsets")
+HAS_BLOCK_CACHE = HAS_BLOCK_MEDIANS and CACHE_HAS_BLOCK_OFFSETS
+
 
 class CacheState(Enum):
     WARMING_UP = auto()  # not enough frames collected yet
@@ -74,14 +87,22 @@ class CacheState(Enum):
 
 @dataclass(frozen=True)
 class BgModel:
-    """Immutable snapshot of the cached background (atomic swap)."""
-    row_offsets: np.ndarray   # uint8, shape (h // bin,)
+    """Immutable snapshot of the cached background (atomic swap).
+
+    Exactly one of row_offsets / block_offsets is populated depending on the
+    background mode the model was built for:
+      * row_offsets   — per-row floor (row_percentile / line_median / top_hat)
+      * block_offsets — 2-D block-median grid (block_percentile, sycamore>=0.12)
+    """
     noise: float
     h: int
     w: int
     bin: int
     epoch: float
     n_frames: int
+    row_offsets: Optional[np.ndarray] = None     # uint8, (h_det,)
+    block_offsets: Optional[np.ndarray] = None   # uint8 2-D grid
+    block_size: int = 0
     pose_quat: Optional[Tuple[float, float, float, float]] = None
 
 
@@ -93,6 +114,11 @@ class BackgroundCache:
         self.refresh_interval_s = float(cfg.bg_cache_refresh_s)
         self.slew_threshold_rad = math.radians(float(cfg.bg_cache_slew_deg))
         self.max_age_s = float(cfg.bg_cache_max_age_s)
+
+        # Active per-frame mode + block size, updated by detect() each call so
+        # the worker knows which kind of model to build (row vs. block grid).
+        self._active_bg_mode = str(cfg.detect_bg_mode)
+        self._active_block_size = int(getattr(cfg, "detect_bg_block_size", 0))
 
         self._model: Optional[BgModel] = None
         self._frame_buf: "deque[np.ndarray]" = deque(maxlen=self.stack_size)
@@ -178,17 +204,19 @@ class BackgroundCache:
         return CacheState.STEADY
 
     def detect(self, image_u8, sigma, bg_mode, tophat_radius, max_axis_ratio,
-               bg_block_size=0, uniform_filter_size=0, noise_mode="mad"):
+               bg_block_size=0, uniform_filter_size=0, noise_mode="mad",
+               kernel_sigma=None, local_noise=None):
         """Single detection entry point. Returns the raw star_detect list
         [(x, y, brightness, peak), ...]. Never raises for capability gaps —
-        it degrades to the best supported mode."""
-        # Modes that require full spatial preprocessing are per-frame only —
-        # the cached path uses pre-computed per-row offsets and can't apply
-        # column or block corrections after the fact.
-        # Only these three modes compose with the per-row cached model.
-        # column_percentile, row_column_percentile, block_percentile, and
-        # uniform_mean all require full-image spatial preprocessing and are
-        # intentionally excluded — they force the per-frame path below.
+        it degrades to the best supported mode.
+
+        kernel_sigma / local_noise are sycamore>=0.12 knobs; they are passed
+        only when the installed wheel supports them (capability-probed)."""
+        # Modes composable with the per-row cached model. block_percentile is
+        # additionally cache-compatible on sycamore>=0.12 via a block-median
+        # grid (handled separately below). column_percentile,
+        # row_column_percentile, and uniform_mean need full-image spatial
+        # preprocessing and always force the per-frame path.
         CACHE_COMPATIBLE_MODES = frozenset(
             {"row_percentile", "line_median", "top_hat"})
         want_tophat = (bg_mode == "top_hat")
@@ -197,21 +225,45 @@ class BackgroundCache:
             want_tophat = False
             bg_mode = "line_median"
 
+        # Tell the worker which model shape to build for the current mode. If
+        # the mode's model-kind changed (e.g. a seeing preset switched
+        # row_percentile -> block_percentile), trigger a rebuild so the next
+        # steady detection uses a matching model.
+        prev_mode = self._active_bg_mode
+        self._active_bg_mode = bg_mode
+        if bg_block_size:
+            self._active_block_size = int(bg_block_size)
+        if self.enabled and _model_kind(prev_mode) != _model_kind(bg_mode):
+            self._needs_rebuild.set()
+
+        is_block_cache = (bg_mode == "block_percentile" and HAS_BLOCK_CACHE
+                          and self.enabled)
+
         m = self._model
-        # Spatial modes that need a full background image are not composable
-        # with the per-row cached model; force per-frame path for them.
-        force_perframe = bg_mode not in CACHE_COMPATIBLE_MODES
+        force_perframe = (bg_mode not in CACHE_COMPATIBLE_MODES
+                          and not is_block_cache)
         steady = (
             not force_perframe
             and self.enabled and self.state() is CacheState.STEADY and m is not None
             and m.h == image_u8.shape[0] and m.w == image_u8.shape[1]
             and m.bin == self.bin
         )
+        # The steady cached path needs a model of the matching kind.
+        if steady and is_block_cache and m.block_offsets is None:
+            steady = False
+        if steady and not is_block_cache and m.row_offsets is None:
+            steady = False
 
         if steady:
-            kw = dict(
-                sigma=sigma, bin=self.bin, max_axis_ratio=max_axis_ratio,
-            )
+            kw = dict(sigma=sigma, bin=self.bin, max_axis_ratio=max_axis_ratio)
+            self._maybe_add_v12(kw, kernel_sigma, local_noise, cached=True)
+            if is_block_cache:
+                kw["block_offsets"] = m.block_offsets
+                if m.block_size:
+                    kw["block_size"] = int(m.block_size)
+                self._n_cached += 1
+                return star_detect.detect_stars_with_cache(
+                    image_u8, noise=m.noise, **kw)
             if want_tophat and CACHE_HAS_TOPHAT:
                 kw["tophat_radius"] = int(tophat_radius)
             self._n_cached += 1
@@ -224,6 +276,7 @@ class BackgroundCache:
             sigma=sigma, bin=self.bin, centroid_full_res=True,
             max_axis_ratio=max_axis_ratio,
         )
+        self._maybe_add_v12(kw, kernel_sigma, local_noise, cached=False)
         if bg_mode in CACHE_COMPATIBLE_MODES:
             if want_tophat:
                 kw["bg_mode"] = "top_hat"
@@ -240,6 +293,17 @@ class BackgroundCache:
             kw["noise_mode"] = noise_mode
         self._n_fallback += 1
         return star_detect.detect_stars(image_u8, **kw)
+
+    @staticmethod
+    def _maybe_add_v12(kw, kernel_sigma, local_noise, *, cached):
+        """Add sycamore>=0.12 kwargs only when the installed wheel supports
+        them on the chosen call path. No-op on older wheels."""
+        has_ks = CACHE_HAS_KERNEL_SIGMA if cached else HAS_KERNEL_SIGMA
+        has_ln = CACHE_HAS_LOCAL_NOISE if cached else HAS_LOCAL_NOISE
+        if kernel_sigma is not None and has_ks:
+            kw["kernel_sigma"] = float(kernel_sigma)
+        if local_noise is not None and has_ln:
+            kw["local_noise"] = bool(local_noise)
 
     def stats(self) -> dict:
         """Live snapshot for the bg_cache_status diagnostic."""
@@ -259,6 +323,10 @@ class BackgroundCache:
             "served_fallback": self._n_fallback,
             "frames_buffered": self._frame_count(),
             "slewing":     self._slewing,
+            "model_kind":  (("block" if m.block_offsets is not None else "row")
+                            if m else None),
+            "active_bg_mode": self._active_bg_mode,
+            "block_cache_supported": HAS_BLOCK_CACHE,
         }
 
     # ----- worker ----------------------------------------------------------
@@ -308,15 +376,35 @@ class BackgroundCache:
                 axis=(1, 3)).astype(np.uint8)
         time_med = np.ascontiguousarray(time_med)
         h_det, w_det = time_med.shape
-        row_offsets = star_detect.compute_row_medians_py(time_med)
         patch = time_med[h_det // 3: 2 * h_det // 3, w_det // 3: 2 * w_det // 3]
         flat = patch.astype(np.float32).ravel()
         mad = np.median(np.abs(flat - np.median(flat)))
         noise = max(0.5, 1.4826 * float(mad))
-        return BgModel(
-            row_offsets=row_offsets, noise=noise, h=h, w=w, bin=self.bin,
+
+        common = dict(
+            noise=noise, h=h, w=w, bin=self.bin,
             epoch=time.monotonic(), n_frames=len(frames),
             pose_quat=self._last_imu_quat)
+
+        # Build a block-median grid when block_percentile is active and the
+        # wheel supports the cached block path; otherwise the per-row model.
+        if self._active_bg_mode == "block_percentile" and HAS_BLOCK_CACHE:
+            bs = int(self._active_block_size) or 32
+            block_offsets = star_detect.compute_block_medians_py(
+                time_med, block_size=bs)
+            return BgModel(block_offsets=block_offsets, block_size=bs, **common)
+
+        row_offsets = star_detect.compute_row_medians_py(time_med)
+        return BgModel(row_offsets=row_offsets, **common)
+
+
+def _model_kind(bg_mode: str) -> str:
+    """Which cached-model kind a given bg_mode wants: 'block' (block_percentile
+    on a capable wheel) or 'row' (everything else that composes with the
+    cache)."""
+    if bg_mode == "block_percentile" and HAS_BLOCK_CACHE:
+        return "block"
+    return "row"
 
 
 def _angular_distance(q1, q2) -> float:

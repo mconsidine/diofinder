@@ -128,6 +128,7 @@ def dashboard():
     """Main dashboard: current solution, boresight, calibration, and IMU status."""
     status = _safe_call("status")
     cal    = _safe_call("calibration_status")
+    seeing = _safe_call("seeing_get")
 
     sol = (_format_solution(status.result["solution"])
            if status.ok and status.result else None)
@@ -146,6 +147,7 @@ def dashboard():
         cal_error=cal.error if not cal.ok else None,
         committed_focus=committed_focus,
         imu=(status.result.get("imu") if status.ok else None),
+        seeing=(seeing.result if seeing.ok else None),
         solver_backend="sycamore",
         test_mode=(
             status.result.get("test_mode", True)
@@ -389,6 +391,59 @@ def bg_jpg():
     return send_file(buf, mimetype="image/jpeg")
 
 
+# ---- Seeing presets ---------------------------------------------------------
+
+@app.route("/seeing", methods=["POST"])
+def seeing_set():
+    """Apply a Good/Bad seeing preset (form 'mode') and redirect back."""
+    mode = request.form.get("mode", "good").strip().lower()
+    r = _safe_call("seeing_set", {"mode": mode})
+    if not r.ok:
+        return r.error, 500
+    nxt = request.form.get("next") or "dashboard"
+    if nxt not in ("dashboard", "config_page", "camera_page"):
+        nxt = "dashboard"
+    return redirect(url_for(nxt))
+
+
+@app.route("/api/seeing")
+def api_seeing():
+    """JSON seeing mode + preset table + drift for live UI updates."""
+    r = _safe_call("seeing_get")
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
+# ---- Hot-pixel mask ---------------------------------------------------------
+
+@app.route("/hotpixel/capture", methods=["POST"])
+def hotpixel_capture():
+    """Capture a dark frame and build the hot-pixel mask (cap the lens first)."""
+    try:
+        frames = int(request.form.get("frames", 16))
+    except (ValueError, TypeError):
+        frames = 16
+    r = _safe_call("dark_capture", {"frames": frames}, timeout=60.0)
+    if not r.ok:
+        return r.error, 500
+    return redirect(url_for("camera_page"))
+
+
+@app.route("/hotpixel/clear", methods=["POST"])
+def hotpixel_clear():
+    """Clear the hot-pixel mask and redirect to the Camera page."""
+    r = _safe_call("hot_pixel_clear")
+    if not r.ok:
+        return r.error, 500
+    return redirect(url_for("camera_page"))
+
+
+@app.route("/api/hotpixel")
+def api_hotpixel():
+    """JSON hot-pixel mask status (count, mtime)."""
+    r = _safe_call("hot_pixel_status")
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
 @app.route("/calibration/reset", methods=["POST"])
 def calibration_reset():
     """Reset the FOV rolling-window calibration and redirect to the dashboard."""
@@ -403,6 +458,8 @@ def camera_page():
     """Camera and solver settings page."""
     exposure      = _safe_call("exposure_get")
     solver_params = _safe_call("solver_params_get")
+    hotpix        = _safe_call("hot_pixel_status")
+    seeing        = _safe_call("seeing_get")
     try:
         from efinder.config import load_config
         tuning_path = load_config().camera_tuning_file
@@ -414,6 +471,8 @@ def camera_page():
         exposure=(exposure.result if exposure.ok else None),
         solver_params=(solver_params.result if solver_params.ok else None),
         tuning_profile=tuning_profile,
+        hotpix=(hotpix.result if hotpix.ok else None),
+        seeing=(seeing.result if seeing.ok else None),
     )
 
 
@@ -486,24 +545,45 @@ def api_camera_set():
                 errors.append(f"gain: {r.error}")
         except (ValueError, TypeError) as e:
             errors.append(f"gain invalid: {e}")
-    if "detect_sigma" in data or "solve_timeout_ms" in data:
+    _solver_float_keys = ("detect_sigma", "detect_kernel_sigma",
+                          "detect_max_axis_ratio")
+    _solver_int_keys = ("solve_timeout_ms", "min_centroids")
+    if any(k in data for k in _solver_float_keys + _solver_int_keys + ("detect_local_noise",)):
         pargs = {"persist": False}
-        if "detect_sigma" in data:
-            try:
-                pargs["detect_sigma"] = float(data["detect_sigma"])
-            except (ValueError, TypeError) as e:
-                errors.append(f"detect_sigma invalid: {e}")
-        if "solve_timeout_ms" in data:
-            try:
-                pargs["solve_timeout_ms"] = int(data["solve_timeout_ms"])
-            except (ValueError, TypeError) as e:
-                errors.append(f"solve_timeout_ms invalid: {e}")
+        for k in _solver_float_keys:
+            if k in data:
+                try:
+                    pargs[k] = float(data[k])
+                except (ValueError, TypeError) as e:
+                    errors.append(f"{k} invalid: {e}")
+        for k in _solver_int_keys:
+            if k in data:
+                try:
+                    pargs[k] = int(data[k])
+                except (ValueError, TypeError) as e:
+                    errors.append(f"{k} invalid: {e}")
+        if "detect_local_noise" in data:
+            pargs["detect_local_noise"] = bool(data["detect_local_noise"])
         if len(pargs) > 1:
             r = _safe_call("solver_params_set", pargs)
             if r.ok:
                 applied.update({k: v for k, v in pargs.items() if k != "persist"})
             else:
                 errors.append(f"solver_params: {r.error}")
+    if "match_radius" in data or "match_threshold" in data:
+        margs = {"persist": False}
+        for k in ("match_radius", "match_threshold"):
+            if k in data:
+                try:
+                    margs[k] = float(data[k])
+                except (ValueError, TypeError) as e:
+                    errors.append(f"{k} invalid: {e}")
+        if len(margs) > 1:
+            r = _safe_call("match_params_set", margs)
+            if r.ok:
+                applied.update({k: v for k, v in margs.items() if k != "persist"})
+            else:
+                errors.append(f"match_params: {r.error}")
     if errors:
         return jsonify({"ok": False, "errors": errors, "applied": applied}), 400
     return jsonify({"ok": True, "applied": applied})
@@ -520,6 +600,25 @@ def solver_params_set():
             pargs["detect_sigma"] = float(request.form["detect_sigma"])
         except ValueError:
             return "detect_sigma must be numeric", 400
+    if request.form.get("detect_kernel_sigma"):
+        try:
+            pargs["detect_kernel_sigma"] = float(request.form["detect_kernel_sigma"])
+        except ValueError:
+            return "detect_kernel_sigma must be numeric", 400
+    if request.form.get("detect_max_axis_ratio") is not None and \
+            request.form.get("detect_max_axis_ratio") != "":
+        try:
+            pargs["detect_max_axis_ratio"] = float(request.form["detect_max_axis_ratio"])
+        except ValueError:
+            return "detect_max_axis_ratio must be numeric", 400
+    if "detect_local_noise" in request.form:
+        pargs["detect_local_noise"] = request.form.get(
+            "detect_local_noise", "false").strip().lower() in ("true", "1", "on")
+    if request.form.get("min_centroids"):
+        try:
+            pargs["min_centroids"] = int(request.form["min_centroids"])
+        except ValueError:
+            return "min_centroids must be integer", 400
     if request.form.get("solve_timeout_ms"):
         try:
             pargs["solve_timeout_ms"] = int(request.form["solve_timeout_ms"])
@@ -528,6 +627,22 @@ def solver_params_set():
     r = _safe_call("solver_params_set", pargs)
     if not r.ok:
         return r.error, 400
+    # Optional match params on the same form.
+    margs = {"persist": persist}
+    if request.form.get("match_radius"):
+        try:
+            margs["match_radius"] = float(request.form["match_radius"])
+        except ValueError:
+            return "match_radius must be numeric", 400
+    if request.form.get("match_threshold"):
+        try:
+            margs["match_threshold"] = float(request.form["match_threshold"])
+        except ValueError:
+            return "match_threshold must be numeric", 400
+    if len(margs) > 1:
+        r = _safe_call("match_params_set", margs)
+        if not r.ok:
+            return r.error, 400
     return redirect(url_for("camera_page"))
 
 
@@ -760,6 +875,9 @@ _CONFIG_SECTIONS = [
         ("detect_sigma", "Detection sigma",
          "Threshold in units of background sigma passed to sycamore star_detect."),
         ("detect_bin",                "Detection binning",    "1 = full-res, 2 = 2x2-binned (restart to apply)."),
+        ("detect_kernel_sigma",       "Kernel sigma",         "Matched-filter PSF width (sycamore >= 0.12); wider for bad seeing."),
+        ("detect_max_axis_ratio",     "Max axis ratio",       "Trail rejection; 0 = off, else 1.5–10.0."),
+        ("detect_local_noise",        "Local noise",          "Per-window noise estimate in the matched filter (sycamore >= 0.12)."),
         ("detect_bg_mode",            "Background mode",      "Per-frame background compensation (see Background page)."),
         ("detect_tophat_radius",      "Top-hat radius",       "Structuring-element radius for top_hat mode."),
         ("detect_bg_block_size",      "Block size",           "Tile side for block_percentile; 0 = sycamore default."),
@@ -770,6 +888,10 @@ _CONFIG_SECTIONS = [
         ("bg_cache_refresh_s",        "Cache refresh (s)",    "Minimum interval between rebuilds."),
         ("bg_cache_slew_deg",         "Cache slew (deg)",     "IMU angle that invalidates the cache."),
         ("bg_cache_max_age_s",        "Cache max age (s)",    "Rebuild if the model is older than this."),
+    ]),
+    ("Seeing", [
+        ("seeing_mode",  "Seeing mode",  "Good/Bad night preset (toggle above)."),
+        ("star_db_deep", "Deep database", "Optional deeper-magnitude database for the Bad preset; empty = unset."),
     ]),
     ("Plate Solving (olive-solve)", [
         ("solver_db",        "Star database",      "Path to a tetra3 .npz database compatible with olive-solve."),
@@ -792,6 +914,10 @@ _CONFIG_SECTIONS = [
         ("cpu_solver", "Solver CPU",  "Primary core for solver_proc; rayon also uses cpu_camera."),
         ("cpu_solver_aux", "Solver aux CPU", "Third solver core (freed by comms moving to CPU 0)."),
         ("cpu_comms",  "Comms CPU",   "Core for comms_proc, web UI, and IMU thread (shares CPU 0 with the kernel)."),
+    ]),
+    ("Watchdog", [
+        ("watchdog_enabled",   "Watchdog",          "Restart the service if the solver stops publishing."),
+        ("watchdog_timeout_s", "Watchdog timeout (s)", "Staleness before the solver is considered hung."),
     ]),
     ("Diagnostics", [
         ("save_solved_frames",     "Save solved frames", "Write PNG for every successful solve."),
@@ -846,11 +972,17 @@ def config_page():
 
     rt = _safe_call("status")
     runtime = rt.result if rt.ok else None
+    seeing = _safe_call("seeing_get")
+    sp = _safe_call("solver_params_get")
+    mp = _safe_call("match_params_get")
 
     return render_template(
         "config.html",
         path=CONFIG_PATH,
         sections=sections,
+        seeing=(seeing.result if seeing.ok else None),
+        solver_params=(sp.result if sp.ok else None),
+        match_params=(mp.result if mp.ok else None),
         cfg_ok=cfg_ok,
         cfg_error=cfg_error,
         daemon_ok=rt.ok,

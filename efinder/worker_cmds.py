@@ -59,6 +59,16 @@ SOLVER_OP_POLAR_SET_LATITUDE = "polar_set_latitude"
 SOLVER_OP_SOLVE_CENTROIDS = "solve_centroids"
 # Live snapshot of the temporal background cache (state, model age, counters).
 SOLVER_OP_BG_CACHE_STATUS = "bg_cache_status"
+# Switch the resident plate-solver database. args: {"db": "<name-or-path>"}.
+# Reloads tetra3.Tetra3 in-place; no second copy held.
+SOLVER_OP_SET_DB = "set_db"
+# Capture N frames from SHM, median-stack, build a hot-pixel mask, save + load
+# it. args: {"frames": int}.
+SOLVER_OP_DARK_CAPTURE = "dark_capture"
+# Hot-pixel mask status: {"count", "mtime", "loaded"}.
+SOLVER_OP_HOT_PIXEL_STATUS = "hot_pixel_status"
+# Clear the hot-pixel mask (delete file + unload). args: {}.
+SOLVER_OP_HOT_PIXEL_CLEAR = "hot_pixel_clear"
 
 
 # ----- Camera commands -----
@@ -91,4 +101,3 @@ class CameraCmdReply:
 CAMERA_OP_GET_EXPOSURE = "get_exposure"
 CAMERA_OP_SET_EXPOSURE = "set_exposure"
 CAMERA_OP_SET_GAIN = "set_gain"
-# Future: capture_dark_frame, capture_hot_pixel_map

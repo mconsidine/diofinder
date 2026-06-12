@@ -46,15 +46,24 @@ is far below one core), freeing CPU 1 as a third solver core. CPU affinity is se
 |-----|------|-----------|--------|
 | `boresight_y`, `boresight_x` | float | comms (via :CM# or maint) | solver, comms, webui |
 | `detect_sigma` | float | comms (via maint) | solver |
-| `detect_bg_mode` | str | comms (via maint) | solver |
-| `detect_bin` | int (1/2) | config file only (restart; cache is built at one binning) | solver |
+| `detect_bg_mode` | str | comms (via maint, incl. `seeing_set`) | solver |
+| `detect_bin` | int (1/2/4) | config file only (restart; cache is built at one binning) | solver |
+| `detect_kernel_sigma` | float (1.0–4.0) | comms (via maint / `seeing_set`) | solver (sycamore≥0.12) |
+| `detect_max_axis_ratio` | float (0=off, else 1.5–10.0) | comms (via maint / `seeing_set`) | solver |
+| `detect_local_noise` | bool | comms (via maint) | solver (sycamore≥0.12) |
 | `detect_tophat_radius` | int | comms (via maint) | solver |
-| `detect_bg_block_size` | int | comms (via maint) | solver |
+| `detect_bg_block_size` | int | comms (via maint) | solver, bg_cache |
 | `detect_uniform_filter_size` | int | comms (via maint) | solver |
 | `detect_noise_mode` | str (`mad`/`global_rms`) | comms (via maint) | solver |
-| `solve_timeout_ms` | int | comms (via maint) | solver |
+| `min_centroids` | int | comms (via maint / `seeing_set`) | solver |
+| `solve_timeout_ms` | int | comms (via maint / `seeing_set`) | solver |
+| `match_radius` | float (0.005–0.05) | comms (via maint / `seeing_set`) | solver |
+| `match_threshold` | float (1e-9–1e-3) | comms (via maint / `seeing_set`) | solver |
+| `seeing_mode` | str (`good`/`bad`) | comms (via `seeing_set`) | comms, webui |
 | `test_mode` | bool | comms (via maint) | camera |
 | `auto_exposure_enabled` | bool | comms (via maint `auto_exposure_set`) | comms auto-exposure thread |
+| `auto_exposure_target_stars` | int | comms (via `seeing_set`) | comms auto-exposure thread |
+| `auto_exposure_max_s` | float | comms (via `seeing_set`) | comms auto-exposure thread |
 | `imu_available` | bool | imu_thread | comms, webui |
 | `imu_q` | tuple (w,x,y,z) | imu_thread | comms |
 | `imu_t` | float | imu_thread | comms |
@@ -128,14 +137,25 @@ The maintenance socket is the internal RPC bus used by the web UI and
 `efinder/comms_proc.py::_handle_maint_command`.
 
 Notable commands beyond the basics: `solver_params_get`/`solver_params_set`
-(sigma 0–20, bg mode/sizes, noise mode), `auto_exposure_set` (toggle the
-comms-side auto-exposure controller), `tuning_set` (switch the libcamera
-tuning between `imx477_scientific.json` and `imx477.json`; restart required),
-`bg_cache_status` (live temporal-cache
-snapshot — state, model age, served-cached vs fallback counters), and
-`solve_centroids` (plate-solve a caller-supplied centroid list on the live
-solver's resident database — no second DB, used by `diag_background --solve`
-and the web-UI background A/B).
+(sigma 0–20, kernel_sigma 1.0–4.0, max_axis_ratio 0=off/1.5–10.0, local_noise,
+bg mode/sizes, noise mode, min_centroids, solve_timeout_ms),
+`match_params_get`/`match_params_set` (match_radius 0.005–0.05, match_threshold
+1e-9–1e-3), `seeing_get`/`seeing_set` (apply the Good/Bad presets in
+`efinder/seeing.py`; `seeing_set {"mode":"good"|"bad"}` routes every preset key
+through the right channel — shared_cfg for live solver keys, a solver `set_db`
+command for the database switch — persists via `config.save_keys`, and
+invalidates the solver cache; `seeing_get` returns the mode, the preset table,
+the effective per-key values, and a `drift` map of keys the user has overridden
+since), `auto_exposure_set` (toggle the comms-side auto-exposure controller),
+`tuning_set` (switch the libcamera tuning between `imx477_scientific.json` and
+`imx477.json`; restart required), `bg_cache_status` (live temporal-cache
+snapshot — state, model age, model kind row/block, served-cached vs fallback
+counters), `solve_centroids` (plate-solve a caller-supplied centroid list on
+the live solver's resident database — no second DB, used by
+`diag_background --solve` and the web-UI background A/B), and the hot-pixel
+trio: `dark_capture {"frames":N}` (cap the lens; median-stacks N frames into a
+mask saved at `/var/lib/efinder/hot_pixel_mask.npz`), `hot_pixel_status`, and
+`hot_pixel_clear`.
 
 1. Add an `if cmd == "my_command":` branch anywhere in the function.
 2. Read arguments from the `args` dict (always a plain dict, may be empty).
@@ -207,10 +227,20 @@ toggleable from config (and live-overridable via `shared_cfg`):
   - `mad` — median absolute deviation (default, robust)
   - `global_rms` — `sqrt(mean(pixel²))` global root square; matches the tetra3/olive-solve default; use with `uniform_mean` to replicate that pipeline exactly
 
-  Modes `column_percentile`, `row_column_percentile`, `block_percentile`, and
-  `uniform_mean` require full-image spatial preprocessing and are **not compatible
-  with the temporal cache** — they force per-frame detection. Only `row_percentile`,
-  `line_median`, and `top_hat` compose with the cache.
+  Modes `column_percentile`, `row_column_percentile`, and `uniform_mean`
+  require full-image spatial preprocessing and are **not compatible with the
+  temporal cache** — they force per-frame detection. `row_percentile`,
+  `line_median`, and `top_hat` compose with the per-row cached model.
+
+  As of **sycamore ≥ 0.12**, `block_percentile` is **also cache-compatible**:
+  `bg_cache._build_model` builds a block-median grid (via
+  `compute_block_medians_py`, tile size from `detect_bg_block_size`, 0→32) of
+  the temporal median stack instead of per-row offsets, and steady-state
+  detection calls `detect_stars_with_cache(..., block_offsets=...)`. On older
+  wheels (no `compute_block_medians_py` / no `block_offsets` kwarg)
+  `block_percentile` falls back to the per-frame path exactly as before. The
+  cache tracks which model kind (row vs. block) the active mode wants and
+  rebuilds when the mode switches (e.g. a Good→Bad seeing toggle).
 
 - **Temporal "analytic-threading" cache** (`bg_cache_enabled`, default true): a
   worker thread in `solver_proc` median-stacks recent frames into a per-row
@@ -239,6 +269,79 @@ logged and ignored. Missing file uses all defaults.
 comments and unrecognised lines. It is the only function that writes to the
 config file at runtime.
 
+New keys (this release):
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `seeing_mode` | `good` | Active Good/Bad preset (see below). |
+| `detect_kernel_sigma` | `1.5` | Matched-filter PSF width (sycamore≥0.12; capability-probed). |
+| `detect_max_axis_ratio` | `0.0` | Trail rejection; 0→`float("inf")` (off), else 1.5–10.0. |
+| `detect_local_noise` | `true` | Per-window noise in the matched filter (sycamore≥0.12). |
+| `star_db_deep` | `""` | Optional deeper-magnitude db for the Bad preset; applied only if the file exists. |
+| `auto_exposure_enabled` | `true` | **Flipped to ON** this release. |
+| `watchdog_enabled` | `true` | Solver-hang watchdog (comms thread). |
+| `watchdog_timeout_s` | `30.0` | Staleness before the solver is declared hung. |
+
+---
+
+## Seeing presets
+
+`efinder/seeing.py` holds two flat preset tables, `SEEING_PRESETS["good"]` and
+`["bad"]`. Each key in a preset is *also* an individually adjustable config
+key, so applying a preset is exactly equivalent to setting each by hand.
+
+* `seeing_set {"mode": "good"|"bad"}` (comms maint): writes every preset key to
+  `shared_cfg` (live solver/auto-exposure keys), switches the solver database
+  in-process via the `set_db` solver command when `star_db` differs, persists
+  all of it with `config.save_keys`, and calls `_invalidate_solver_cache`.
+* `seeing_get` returns the mode, both preset tables, the **effective** value of
+  every preset-controlled key (shared_cfg over cfg), and a `drift` map of keys
+  the user has individually overridden since applying a preset.
+* `star_db="deep"` resolves to `star_db_deep` only when that names a file that
+  exists; otherwise it stays on the standard `solver_db`.
+* The toggle appears on the Status page and the Config page; `efinder-ctl
+  seeing {get|set good|set bad}` is the CLI equivalent.
+
+Every preset key is independently tunable through `solver_params_set`
+(detection/solve keys) and `match_params_set` (match radius/threshold); the
+Camera page exposes sliders for all of them.
+
+---
+
+## Hot-pixel mask
+
+`efinder/hot_pixel.py` builds a static hot-pixel mask from a capped-lens dark
+capture and repairs masked pixels (8-neighbor mean, precomputed neighbor index
+arrays, pure vectorized numpy, <1 ms) before each detection. This gives
+hot-pixel rejection during slews, when the temporal cache is offline.
+
+* `dark_capture {"frames": N}` → solver grabs N SHM frames ~0.3 s apart,
+  median-stacks, flags pixels exceeding `median + 5·(1.4826·MAD)`, saves
+  `/var/lib/efinder/hot_pixel_mask.npz` (indices + shape + count), loads it.
+* The solver loads the mask at startup if present.
+* `hot_pixel_status` (count, mtime, loaded) and `hot_pixel_clear`.
+* Camera page: "Capture dark frame" button (warns to cap the lens) + status.
+
+---
+
+## Solver-hang watchdog & IPC cleanup
+
+`comms_proc._watchdog_loop` (daemon thread, gated by `watchdog_enabled`)
+watches `latest_solution["epoch_monotonic"]`. The solver publishes every frame
+including dark ones, so if the epoch stops advancing for `watchdog_timeout_s`
+(default 30) the solver is hung: it logs CRITICAL and `os._exit(1)` so systemd
+restarts the unit. The watchdog **arms only after the first non-zero epoch**, so
+a slow boot / first DB load never trips it.
+
+`systemd/efinder.service` has `ExecStartPre=-/bin/sh -c 'rm -f …'` lines (the
+`-` prefix makes failure non-fatal) that remove stale
+`/dev/shm/efinder_frame_*` and `/run/efinder/maint.sock` before each start.
+
+`scripts/calibrate_lens.py` is an **off-device** helper (not installed on the
+Pi): point it at a directory of solved-frame PNGs and it runs `tetra3rs`
+`calibrate_camera` to fit SIP distortion and prints the `distortion:` value to
+set in `efinder.conf`.
+
 ---
 
 ## Key file locations (on device)
@@ -248,7 +351,8 @@ config file at runtime.
 | `/opt/efinder/` | Installed Python package |
 | `/etc/efinder/efinder.conf` | Runtime configuration |
 | `/var/lib/efinder/` | Star databases (`.npz`), debug ZIPs, saved frames |
-| `/var/lib/efinder/captures/` | PNG captures when `save_failed_frames=true` |
+| `/var/lib/efinder/hot_pixel_mask.npz` | Hot-pixel mask (from `dark_capture`) |
+| `/var/lib/efinder/captures/` | PNG captures when `save_failed_frames=true` (100 MB cap, oldest evicted) |
 | `/run/efinder/maint.sock` | Maintenance Unix socket |
 | `/usr/local/bin/efinder-ctl` | CLI wrapper for the maint socket |
 | `/usr/local/bin/efinder-update` | OTA update script (`--ref BRANCH` to track a branch; `webui Update` page wraps it). Images are git-provisioned by `install.sh` so OTA works on imaged devices. |

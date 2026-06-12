@@ -93,6 +93,59 @@
   </div>
 
   <div class="card">
+    <h2>Seeing preset</h2>
+    {% set smode = seeing.mode if seeing else 'good' %}
+    <p class="hint" style="margin:0 0 8px">
+      One-tap night tuning. Applying a preset overwrites the detection / solve /
+      exposure values below; you can still fine-tune any of them afterward.
+    </p>
+    <form method="post" action="{{ url_for('seeing_set') }}" style="display:inline;">
+      <input type="hidden" name="mode" value="good">
+      <input type="hidden" name="next" value="camera_page">
+      <button type="submit" class="btn"
+              style="{{ 'background:#1166ff;color:#fff;' if smode == 'good' else '' }}">Good</button>
+    </form>
+    <form method="post" action="{{ url_for('seeing_set') }}" style="display:inline;margin-left:4px;">
+      <input type="hidden" name="mode" value="bad">
+      <input type="hidden" name="next" value="camera_page">
+      <button type="submit" class="btn"
+              style="{{ 'background:#cc6600;color:#fff;' if smode == 'bad' else '' }}">Bad</button>
+    </form>
+    {% if seeing and not seeing.deep_db_configured %}
+      <p class="hint" style="margin-top:6px;">
+        No deep database configured (<code>star_db_deep</code>); the Bad preset
+        stays on the standard database.
+      </p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Hot-pixel mask</h2>
+    <p class="hint" style="margin:0 0 8px">
+      <strong>Cap the lens first.</strong> Captures dark frames, finds hot
+      pixels, and repairs them before each detection — rejects fake stars
+      during slews when the temporal cache is offline.
+    </p>
+    {% if hotpix %}
+      <p>Mask: <strong>{{ hotpix.count }}</strong> pixels
+        {% if hotpix.loaded %}(loaded){% else %}(none){% endif %}</p>
+    {% endif %}
+    <form method="post" action="{{ url_for('hotpixel_capture') }}"
+          onsubmit="return confirm('Lens capped? This captures dark frames.');">
+      <label>Frames
+        <input type="number" name="frames" value="16" min="2" max="64" step="1"
+               style="width:5em;">
+      </label>
+      <button type="submit" class="btn">Capture dark frame</button>
+    </form>
+    {% if hotpix and hotpix.count %}
+    <form method="post" action="{{ url_for('hotpixel_clear') }}" style="margin-top:6px;">
+      <button type="submit" class="btn btn-warning">Clear mask</button>
+    </form>
+    {% endif %}
+  </div>
+
+  <div class="card">
     <h2>Solver Parameters</h2>
     {% if solver_params %}
       <form method="post" action="{{ url_for('solver_params_set') }}">
@@ -113,6 +166,82 @@
             <button type="button" class="step-btn" onclick="stepSigma(1)">&#43;</button>
           </div>
         </label>
+        <label>
+          Matched-filter kernel sigma
+          <p class="hint" style="margin:0 0 4px">
+            PSF width for the matched filter. Wider catches bloated stars in bad
+            seeing. Range 1.0–4.0 (sycamore &ge; 0.12). Default: 1.5.
+          </p>
+          <div class="slider-row">
+            <input type="range" id="kernel_slider" min="1.0" max="4.0" step="0.1"
+                   value="{{ solver_params.detect_kernel_sigma }}"
+                   oninput="kernelSliderChange(this.value)">
+            <input type="number" step="0.1" min="1.0" max="4.0"
+                   name="detect_kernel_sigma" id="kernel_num"
+                   value="{{ solver_params.detect_kernel_sigma }}">
+          </div>
+        </label>
+        <label>
+          Max axis ratio (trail rejection)
+          <p class="hint" style="margin:0 0 4px">
+            Reject elongated detections (satellites / aircraft). 0 = off,
+            otherwise 1.5–10.0. Loosen in bad seeing. Default: 0 (off).
+          </p>
+          <div class="slider-row">
+            <input type="range" id="mar_slider" min="0" max="10" step="0.5"
+                   value="{{ solver_params.detect_max_axis_ratio }}"
+                   oninput="marSliderChange(this.value)">
+            <input type="number" step="0.5" min="0" max="10"
+                   name="detect_max_axis_ratio" id="mar_num"
+                   value="{{ solver_params.detect_max_axis_ratio }}">
+          </div>
+        </label>
+        <label>
+          Min stars to solve
+          <p class="hint" style="margin:0 0 4px">
+            Minimum detected stars before attempting a solve. Default: 8.
+          </p>
+          <div class="slider-row">
+            <input type="range" id="minc_slider" min="4" max="20" step="1"
+                   value="{{ solver_params.min_centroids }}"
+                   oninput="mincSliderChange(this.value)">
+            <input type="number" step="1" min="4" max="50"
+                   name="min_centroids" id="minc_num"
+                   value="{{ solver_params.min_centroids }}">
+          </div>
+        </label>
+        {% if match_params %}
+        <label>
+          Match radius (fraction of FOV)
+          <p class="hint" style="margin:0 0 4px">
+            Catalog-match tolerance. Larger = more permissive. Range
+            0.005–0.05. Default: 0.01.
+          </p>
+          <div class="slider-row">
+            <input type="range" id="mradius_slider" min="0.005" max="0.05" step="0.001"
+                   value="{{ match_params.match_radius }}"
+                   oninput="mradiusSliderChange(this.value)">
+            <input type="number" step="0.001" min="0.005" max="0.05"
+                   name="match_radius" id="mradius_num"
+                   value="{{ match_params.match_radius }}">
+          </div>
+        </label>
+        <label>
+          Match threshold (log scale)
+          <p class="hint" style="margin:0 0 4px">
+            Max false-positive probability accepted. Lower = stricter. Range
+            1e-9–1e-3. Default: 1e-5.
+          </p>
+          <div class="slider-row">
+            <input type="range" id="mthresh_slider" min="-9" max="-3" step="0.1"
+                   value="{{ match_params.match_threshold | log10 }}"
+                   oninput="mthreshSliderChange(this.value)">
+            <input type="number" step="any" min="1e-9" max="1e-3"
+                   name="match_threshold" id="mthresh_num"
+                   value="{{ match_params.match_threshold }}">
+          </div>
+        </label>
+        {% endif %}
         <label>
           Solve timeout (ms)
           <p class="hint" style="margin:0 0 4px">
@@ -217,6 +346,33 @@ const applyExp     = debounce(s => applyParams({exposure_s: s},       'exp-statu
 const applyGain    = debounce(g => applyParams({gain: g},              'exp-status'),    400);
 const applySigma   = debounce(v => applyParams({detect_sigma: v},      'solver-status'), 400);
 const applyTimeout = debounce(v => applyParams({solve_timeout_ms: v},  'solver-status'), 400);
+const applyKernel  = debounce(v => applyParams({detect_kernel_sigma: v},   'solver-status'), 400);
+const applyMar     = debounce(v => applyParams({detect_max_axis_ratio: v}, 'solver-status'), 400);
+const applyMinc    = debounce(v => applyParams({min_centroids: v},         'solver-status'), 400);
+const applyMradius = debounce(v => applyParams({match_radius: v},          'solver-status'), 400);
+const applyMthresh = debounce(v => applyParams({match_threshold: v},       'solver-status'), 400);
+
+function kernelSliderChange(v) {
+  document.getElementById('kernel_num').value = parseFloat(v).toFixed(1);
+  applyKernel(parseFloat(v));
+}
+function marSliderChange(v) {
+  document.getElementById('mar_num').value = parseFloat(v).toFixed(1);
+  applyMar(parseFloat(v));
+}
+function mincSliderChange(v) {
+  document.getElementById('minc_num').value = parseInt(v);
+  applyMinc(parseInt(v));
+}
+function mradiusSliderChange(v) {
+  document.getElementById('mradius_num').value = parseFloat(v).toFixed(3);
+  applyMradius(parseFloat(v));
+}
+function mthreshSliderChange(v) {
+  const t = Math.pow(10, parseFloat(v));
+  document.getElementById('mthresh_num').value = t.toExponential(1);
+  applyMthresh(t);
+}
 
 // --- Slider <-> number sync + auto-apply -------------------------------------
 function expSliderChange(v) {
@@ -288,6 +444,22 @@ if (expNum)     expNum.addEventListener('input',     e => expNumChange(e.target.
 if (gainNum)    gainNum.addEventListener('input',    e => gainNumChange(e.target.value));
 if (sigmaNum)   sigmaNum.addEventListener('input',   e => sigmaNumChange(e.target.value));
 if (timeoutNum) timeoutNum.addEventListener('input', e => timeoutNumChange(e.target.value));
+
+function _bindNum(id, slider, apply, parse) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.addEventListener('input', e => {
+    const v = parse(e.target.value);
+    const sl = document.getElementById(slider);
+    if (sl && !isNaN(v)) sl.value = (id === 'mthresh_num') ? Math.log10(v) : v;
+    if (!isNaN(v)) apply(v);
+  });
+}
+_bindNum('kernel_num',  'kernel_slider',  applyKernel,  parseFloat);
+_bindNum('mar_num',     'mar_slider',     applyMar,     parseFloat);
+_bindNum('minc_num',    'minc_slider',    applyMinc,    v => parseInt(v));
+_bindNum('mradius_num', 'mradius_slider', applyMradius, parseFloat);
+_bindNum('mthresh_num', 'mthresh_slider', applyMthresh, parseFloat);
 </script>
 
 {% endblock %}

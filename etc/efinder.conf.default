@@ -24,7 +24,10 @@ camera_tuning_file: /usr/share/libcamera/ipa/rpi/vc4/imx477_scientific.json
 # auto_exposure_target_stars (within min/max) every ~5 s, backing off when
 # the frame saturates. Toggle live from the Camera page or:
 #   efinder-ctl raw '{"cmd":"auto_exposure_set","args":{"enabled":true}}'
-auto_exposure_enabled: false
+# auto_exposure_enabled defaults ON. auto_exposure_target_stars and
+# auto_exposure_max_s are live-mutable (changed by seeing presets / Camera page
+# without a restart); auto_exposure_min_s is the fixed floor.
+auto_exposure_enabled: true
 auto_exposure_target_stars: 20
 auto_exposure_min_s: 0.05
 auto_exposure_max_s: 1.0
@@ -77,6 +80,17 @@ detect_bin: 2
 #                     detect_tophat_radius to your rig before enabling.
 detect_bg_mode: row_percentile
 
+# Matched-filter kernel sigma (px); 1.5 ≈ a focused HQ Camera PSF. Widen toward
+# 2.5 for poor seeing / bloated stars. Requires sycamore >= 0.12 (capability-
+# probed; silently ignored on older wheels). Range 1.0–4.0.
+detect_kernel_sigma: 1.5
+# Trail / elongation rejection: 0 disables (treated as infinite axis ratio),
+# otherwise 1.5–10.0. Rejects satellite/aircraft streaks; loosen in bad seeing.
+detect_max_axis_ratio: 0.0
+# Per-window local noise estimate in the matched filter (sycamore >= 0.12;
+# capability-probed). true = more robust to spatially varying noise.
+detect_local_noise: true
+
 # Structuring-element radius (pixels) for the top_hat mode.
 # Must exceed the largest star radius or the opening will eat star flux.
 # Typical value: 12 (≈2× a well-focused PSF on the HQ Camera + 25 mm lens).
@@ -98,10 +112,23 @@ bg_cache_refresh_s: 5.0
 bg_cache_slew_deg: 0.5
 bg_cache_max_age_s: 60.0
 
+# ---- Seeing presets ----
+# One-tap Good/Bad night tuning (toggle on the Status or Config page). "good"
+# = steady dark skies (tight kernel, low sigma, fast). "bad" = poor seeing /
+# light pollution (wider kernel, block background, looser trail rejection,
+# longer exposure + solve budget, optional deeper database). Applying a preset
+# overwrites the individual detection/solve/exposure keys it controls; you can
+# still fine-tune any of them afterward.
+seeing_mode: good
+
 # ---- Solver (olive-solve tetra3-py) ----
 # solver_db: bare name -> /var/lib/efinder/<name>.npz
 #            absolute path -> used as-is
 solver_db: default_database
+# Optional deeper-magnitude database for the "bad" seeing preset. Leave empty
+# to keep presets on the standard db. Set to a bare name or absolute path that
+# exists on disk (see the astro_databases release pattern in the README).
+star_db_deep:
 fov_max_error_deg: 1.0
 min_centroids: 8
 max_solve_stars: 50
@@ -126,6 +153,13 @@ cpu_camera: 3
 cpu_solver: 2
 cpu_solver_aux: 1
 cpu_comms: 0
+
+# ---- Solver-hang watchdog ----
+# A comms_proc thread restarts the service if the solver stops publishing
+# solutions (it publishes every frame, including dark ones) for longer than
+# watchdog_timeout_s. Set watchdog_enabled false to disable.
+watchdog_enabled: true
+watchdog_timeout_s: 30.0
 
 # ---- Diagnostics ----
 # Set save_solved_frames or save_failed_frames to true to write PNG captures

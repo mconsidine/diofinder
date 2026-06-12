@@ -135,19 +135,24 @@ build date is embedded at build time.
 ## Tactical TODOs
 
 ### Dark frame and hot pixel calibration
-Infrastructure is in place (maintenance socket ready for new commands).
-Still TODO in `camera_proc.py`:
-- **Dark frame**: open shutter long, capture N frames, take median per
-  pixel, store as a numpy array. Subtract from each subsequent frame
-  before publishing to FrameSlots.
-- **Hot pixel map**: capture a long exposure, threshold, store (y,x)
-  list. Cedar-detect already detects hot pixels per-frame; baking it in
-  makes per-frame work faster and masks in the camera before the solver.
+**DONE (hot-pixel half):** `efinder/hot_pixel.py` + `dark_capture` /
+`hot_pixel_status` / `hot_pixel_clear` maint commands + Camera-page button.
+The solver median-stacks a capped-lens dark capture, builds a mask
+(`median + 5·1.4826·MAD`), saves `/var/lib/efinder/hot_pixel_mask.npz`, and
+repairs masked pixels (8-neighbor mean) before each detection. Loaded at
+startup. This rejects hot pixels during slews when the temporal cache is off.
 
-New maintenance commands needed: `efinder-ctl darkframe capture`,
-`efinder-ctl hotpixels capture`.
+Still open (optional): full **dark-frame subtraction** in `camera_proc.py`
+(subtract a per-pixel dark from every frame before publishing). The hot-pixel
+repair above covers the dominant fake-star case for a finder.
 
 ### Auto-exposure
+**Partly done:** the comms-side controller (`_auto_exposure_loop`) is live and
+now **defaults ON** (`auto_exposure_enabled: true`); `auto_exposure_target_stars`
+and `auto_exposure_max_s` are live-mutable via `shared_cfg` (read each cycle,
+written by seeing presets). The notes below describe a richer hysteresis design
+not yet adopted.
+
 Solver already knows detected star count per frame. Adaptive exposure
 algorithm:
 - `n < target * 0.5`: increase exposure 1.5× (clamped to max_s)
@@ -161,16 +166,17 @@ commands only from comms_proc; extend `CameraCmd` with
 — solver just needs to be wired to send it).
 
 ### Frame save for diagnostics
-`save_failed_frames: true` is wired in config but the write logic in
-`solver_proc.py` is not implemented. When done:
-- On `status=NO_MATCH` or `TOO_FEW`, write frame with centroid overlays
-  to `/var/lib/efinder/captures/YYYYMMDD-HHMMSS.png`.
-- Cap disk usage at 100 MB; rotate oldest first.
+**DONE:** `solver_proc._save_frame` writes `{utc-timestamp}_{status}.png` to
+`failed_frames_dir`, enforces a 100 MB cap (oldest `*.png` deleted first), and
+swallows IO errors so a full disk never kills the solver loop. Centroid
+overlays are still not drawn (raw grayscale only).
 
 ### Watchdog for solver hang
-systemd restarts the service on crash but not on hang. Add a heartbeat
-monitor: if `latest_solution.epoch_monotonic` hasn't updated for 60 s,
-the launcher kills the solver to force a systemd restart.
+**DONE:** `comms_proc._watchdog_loop` (daemon thread, `watchdog_enabled` /
+`watchdog_timeout_s`) checks `latest_solution["epoch_monotonic"]`; on staleness
+> timeout it logs CRITICAL and `os._exit(1)` so systemd restarts the unit. Arms
+only after the first publication. (Implemented in comms, not the launcher, so
+it sees the same Manager dict the solver writes.)
 
 ### Auto-solve history ring buffer
 Expose the last 60 solve results (timing, star count, status) as a
@@ -200,8 +206,10 @@ Target: v0.8.
 
 - **SHM cleanup on crash**: if the launcher dies between `create=True`
   and the `finally` unlink, stale SHM blocks remain in `/dev/shm`.
-  Re-running clears them via the unlink-before-create dance. A
-  `ExecStartPre` cleanup in `efinder.service` would be more robust.
+  Re-running clears them via the unlink-before-create dance.
+  **DONE:** `efinder.service` now has `ExecStartPre=-/bin/sh -c 'rm -f …'`
+  lines removing stale `/dev/shm/efinder_frame_*` and the maint socket
+  (non-fatal `-` prefix) before each start.
 
 - **Vendor wheel freshness**: the olive-solve and sycamore-extract wheels
   in `vendor/wheels/` are pre-built aarch64 binaries. If a new version is
