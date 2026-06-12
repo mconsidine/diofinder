@@ -37,14 +37,13 @@ during the 0.12.0 transition and it now serves no wheel.
    fetch only the standard `.npz`. Until the `_mag85.npz` is on the device **and**
    `star_db_deep` is set in `efinder.conf`, the Bad preset's database switch is a
    silent no-op. (Deferred by owner; Claude can wire it on request.)
-4. **Branch cleanup** — `origin/hybrid` (30+ unmerged commits of the superseded
-   cedar-detect-gRPC architecture; archive-tag first if the history should stay
-   findable) and `origin/sycamore-only` (fully merged) still exist. Verified
-   present at last check.
-5. **Watch the first post-Node-24 workflow runs** in each repo. None have run
+4. **Watch the first post-Node-24 workflow runs** in each repo. None have run
    yet (v0.0.25 was built before the bump merged). Artifact actions crossed
    multiple majors (v7/v8 in the four libraries, v5 in diofinder); if v7 upload
    semantics surprise, the fallback is a one-line downgrade to v5/v6.
+5. *(Optional housekeeping)* The merged session branches `claude/funny-noether-…`,
+   `claude/pensive-allen-…`, `claude/vigilant-brahmagupta-…` still exist on
+   origin; all are fully merged and safe to delete whenever convenient.
 
 ## 3. Next-cycle improvements (deliberately deferred)
 
@@ -77,7 +76,7 @@ during the 0.12.0 transition and it now serves no wheel.
 
 1. **`hybrid`** (cedar-detect gRPC + olive-solve) — superseded by `olive`
    (sycamore + olive-solve); all cedar-detect references were removed from the
-   shipped line. Pending deletion (item 2.4).
+   shipped line. Branch deleted from origin 2026-06-12 (with `sycamore-only`).
 2. **testrepo aggregator CI** — dismantled in favor of per-repo release workflows;
    decision records referencing testrepo describe a dead pipeline.
 3. **cedar-solve / cedar-detect as runtime components** — reference
