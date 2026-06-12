@@ -141,3 +141,25 @@ scope — unverifiable here.
 5. **D1 + S2** — the on-device verification batch (one observing session covers most of it).
 6. **O2, D3, D6** — branch/process reconciliation and housekeeping.
 7. **A2/A3, O3, O4, T1** — next-cycle improvements.
+
+---
+
+## Addendum — 15:45 UTC, post noext→main merge
+
+olive-solve noext is now fully merged to main (PRs #7–#9, incl. the 0.1.2 version
+bump); `release-wheels.yml` is on main, so the Actions button works. Two release
+hygiene issues remain from the interim runs:
+
+1. **olive-solve v0.1.2 release**: wheel is named `tetra3-0.1.0-…` (built from a
+   pre-bump ref) and the tag still points at stale `765300a` (source zipball ≠
+   wheel). Fix: delete release + tag, re-run release-wheels on main (now 0.1.2).
+2. **sycamore-extract**: the v0.11.2 release now carries a `star_detect-0.12.0-…`
+   wheel (its original asset was replaced) and no v0.12.0 tag exists. Fix: run the
+   build workflow on main with version `v0.12.0`; optionally clean the mislabeled
+   asset out of v0.11.2 afterwards.
+
+The browser runbook for the next image (v0.0.25) is in the session log; in short:
+re-cut olive-solve v0.1.2 from main → cut sycamore v0.12.0 from main → merge the
+diofinder docs branch → publish diofinder release v0.0.25 (Release image workflow
+attaches the SD image; blank inputs resolve to latest = the two fresh releases +
+astro_databases v2026.06).
