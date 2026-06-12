@@ -141,6 +141,10 @@ class Config:
     # (star_db="deep"). Empty = unset → presets stay on the standard db.
     # Applied only when this names a file that exists on disk.
     star_db_deep: str = ""
+    # Remembered standard database. Captured automatically by seeing_set the
+    # first time it switches away to the deep db, so the "standard" token never
+    # resolves circularly to the (persisted, mutated) solver_db.
+    star_db_standard: str = ""
     fov_max_error_deg: float = 1.0
     min_centroids: int = 8
     max_solve_stars: int = 50

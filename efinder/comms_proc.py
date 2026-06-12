@@ -932,6 +932,16 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 persisted[key] = val
 
             # Switch the solver database if the preset selected a different one.
+            # First, remember the standard db the first time we leave it —
+            # "standard" resolves via star_db_standard with a fallback to
+            # cfg.solver_db, which this very switch mutates and persists.
+            # Without this snapshot, one Bad toggle would make "standard"
+            # resolve to the deep path forever.
+            if (db_token and db_token != ctx.cfg.solver_db
+                    and not getattr(ctx.cfg, "star_db_standard", "")
+                    and ctx.cfg.solver_db != getattr(ctx.cfg, "star_db_deep", "")):
+                ctx.cfg.star_db_standard = ctx.cfg.solver_db
+                persisted["star_db_standard"] = ctx.cfg.solver_db
             db_result = None
             if db_token and db_token != ctx.cfg.solver_db:
                 reply = _call_solver(SOLVER_OP_SET_DB, {"db": db_token},
