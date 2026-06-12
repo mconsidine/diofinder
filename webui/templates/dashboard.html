@@ -109,6 +109,47 @@
     {% endif %}
   </div>
 
+  {# ---- Seeing preset toggle ---- #}
+  <div class="card" id="seeing-card">
+    <h2>Seeing</h2>
+    {% set smode = seeing.mode if seeing else 'good' %}
+    <div>
+      <form method="post" action="{{ url_for('seeing_set') }}" style="display:inline;">
+        <input type="hidden" name="mode" value="good">
+        <input type="hidden" name="next" value="dashboard">
+        <button type="submit" id="btn-seeing-good" class="btn"
+                style="{{ 'background:#1166ff;color:#fff;' if smode == 'good' else '' }}">Good</button>
+      </form>
+      <form method="post" action="{{ url_for('seeing_set') }}" style="display:inline;margin-left:4px;">
+        <input type="hidden" name="mode" value="bad">
+        <input type="hidden" name="next" value="dashboard">
+        <button type="submit" id="btn-seeing-bad" class="btn"
+                style="{{ 'background:#cc6600;color:#fff;' if smode == 'bad' else '' }}">Bad</button>
+      </form>
+      <span id="seeing-drift" class="hint" style="margin-left:8px;"></span>
+    </div>
+    <p class="hint" style="margin-top:6px;">
+      <strong>Good</strong>: steady dark skies (tight kernel, fast). <strong>Bad</strong>:
+      poor seeing / light pollution (wider kernel, block background, longer
+      exposure + solve budget). Fine-tune individual values on the
+      <a href="{{ url_for('config_page') }}">Config</a> page.
+    </p>
+    {% if seeing and seeing.presets %}
+    <table class="config-table" style="margin-top:6px; font-size:0.82rem;">
+      <thead><tr><th>key</th><th>good</th><th>bad</th></tr></thead>
+      <tbody>
+        {% for key in seeing.presets.good.keys() %}
+        <tr>
+          <td><code>{{ key }}</code></td>
+          <td>{{ seeing.presets.good[key] }}</td>
+          <td>{{ seeing.presets.bad[key] }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+
   {# ---- Camera mode toggle ---- #}
   <div class="card" id="combo-card">
     <h2>Mode</h2>
@@ -211,6 +252,24 @@ async function refresh() {
     console.error(e);
   }
 }
+async function refreshSeeing() {
+  try {
+    const r = await fetch('/api/seeing');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d.ok || !d.result) return;
+    const mode = d.result.mode;
+    const good = document.getElementById('btn-seeing-good');
+    const bad  = document.getElementById('btn-seeing-bad');
+    if (good) good.style.cssText = (mode === 'good') ? 'background:#1166ff;color:#fff;' : '';
+    if (bad)  bad.style.cssText  = (mode === 'bad')  ? 'background:#cc6600;color:#fff;' : '';
+    const drift = d.result.drift || {};
+    const n = Object.keys(drift).length;
+    const el = document.getElementById('seeing-drift');
+    if (el) el.textContent = n ? (n + ' value' + (n>1?'s':'') + ' overridden') : '';
+  } catch (e) {}
+}
+setInterval(refreshSeeing, 3000);
 function formatHMS(h) {
   h = ((h % 24) + 24) % 24;
   const H = Math.floor(h);

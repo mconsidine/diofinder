@@ -25,6 +25,7 @@ No external daemon, gRPC, or server is involved.
 | `bench_pipeline_combos.py` | Benchmark sycamore blind + hint solve paths with optional sweeps |
 | `bench_extractor_compare.py` | Time sycamore extraction in isolation; star counts + solve outcomes |
 | `test_hint.py` | Attitude-hint effectiveness across a sequence of shifted images |
+| `test_seeing_hotpixel.py` | **Pure-logic unit tests** (no hardware, no sycamore): seeing preset application/drift + hot-pixel neighbor-median repair. Run with `python3 -m unittest tests.test_seeing_hotpixel` |
 
 ---
 

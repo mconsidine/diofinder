@@ -57,6 +57,50 @@
   {% endif %}
 </div>
 
+<div class="card" style="margin-bottom:1rem;">
+  <h3 style="margin:0 0 8px 0; font-size:1rem;">Seeing preset</h3>
+  {% set smode = seeing.mode if seeing else 'good' %}
+  <form method="post" action="{{ url_for('seeing_set') }}" style="display:inline;">
+    <input type="hidden" name="mode" value="good">
+    <input type="hidden" name="next" value="config_page">
+    <button type="submit" class="btn"
+            style="{{ 'background:#1166ff;color:#fff;' if smode == 'good' else '' }}">Good</button>
+  </form>
+  <form method="post" action="{{ url_for('seeing_set') }}" style="display:inline;margin-left:4px;">
+    <input type="hidden" name="mode" value="bad">
+    <input type="hidden" name="next" value="config_page">
+    <button type="submit" class="btn"
+            style="{{ 'background:#cc6600;color:#fff;' if smode == 'bad' else '' }}">Bad</button>
+  </form>
+  <p class="hint" style="margin-top:6px;">
+    Applying a preset overwrites the individual detection / solve / exposure
+    keys it controls (live, and persisted to the config file). The values below
+    update accordingly. Edit the Camera page sliders to override any of them.
+  </p>
+  {% if seeing and seeing.drift %}
+    <p class="hint" style="color:#cc6600;">
+      {{ seeing.drift|length }} value(s) currently overridden from the
+      <code>{{ smode }}</code> preset:
+      {% for k in seeing.drift.keys() %}<code>{{ k }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+    </p>
+  {% endif %}
+  {% if seeing and seeing.presets %}
+  <table class="config-table" style="margin-top:6px; font-size:0.85rem;">
+    <thead><tr><th>key</th><th>good</th><th>bad</th><th>effective</th></tr></thead>
+    <tbody>
+      {% for key in seeing.presets.good.keys() %}
+      <tr>
+        <td><code>{{ key }}</code></td>
+        <td>{{ seeing.presets.good[key] }}</td>
+        <td>{{ seeing.presets.bad[key] }}</td>
+        <td>{{ seeing.effective.get(key, '') if seeing.effective else '' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
 {% for section in sections %}
 <div class="card" style="margin-bottom:1rem;">
   <h3 style="margin:0 0 10px 0; font-size:1rem;">{{ section.name }}</h3>

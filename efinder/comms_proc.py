@@ -16,8 +16,9 @@ Available maintenance commands:
   set_test_mode {"enabled": true | false}
   status, boresight_show/set/center, calibration_status/reset,
   polar_start/status/cancel/set_latitude, exposure_get/set, gain_set,
-  auto_exposure_set, tuning_set, solver_params_get/set, solve_centroids,
-  bg_cache_status
+  auto_exposure_set, tuning_set, solver_params_get/set, match_params_get/set,
+  seeing_get/set, solve_centroids, bg_cache_status,
+  dark_capture, hot_pixel_status, hot_pixel_clear
 """
 
 import datetime
@@ -42,8 +43,11 @@ from efinder.worker_cmds import (
     SOLVER_OP_POLAR_START, SOLVER_OP_POLAR_STATUS,
     SOLVER_OP_POLAR_CANCEL, SOLVER_OP_POLAR_SET_LATITUDE,
     SOLVER_OP_SOLVE_CENTROIDS, SOLVER_OP_BG_CACHE_STATUS,
+    SOLVER_OP_SET_DB, SOLVER_OP_DARK_CAPTURE,
+    SOLVER_OP_HOT_PIXEL_STATUS, SOLVER_OP_HOT_PIXEL_CLEAR,
     CAMERA_OP_GET_EXPOSURE, CAMERA_OP_SET_EXPOSURE, CAMERA_OP_SET_GAIN,
 )
+from efinder import seeing as seeing_mod
 
 log = logging.getLogger("efinder.comms")
 
@@ -186,10 +190,15 @@ def _auto_exposure_loop(ctx, interval_s=5.0):
             if reply is None or not reply.ok:
                 continue
             cur_s = float(reply.result.get("exposure_s", cfg.exposure_s))
+            # target_stars and max_s are live-mutable (seeing presets / UI write
+            # them to shared_cfg); read them fresh each cycle. min_s is fixed.
+            target = int(ctx.shared_cfg.get(
+                "auto_exposure_target_stars", cfg.auto_exposure_target_stars))
+            max_s = float(ctx.shared_cfg.get(
+                "auto_exposure_max_s", cfg.auto_exposure_max_s))
             new_s = _auto_exposure_decision(
                 sol.get("stars", 0), sol.get("peak", 0),
-                cfg.auto_exposure_target_stars, cur_s,
-                cfg.auto_exposure_min_s, cfg.auto_exposure_max_s)
+                target, cur_s, cfg.auto_exposure_min_s, max_s)
             if new_s is None:
                 continue
             reply = _call_camera(CAMERA_OP_SET_EXPOSURE,
@@ -200,6 +209,54 @@ def _auto_exposure_loop(ctx, interval_s=5.0):
                          cur_s, new_s, sol.get("stars"), sol.get("peak"))
         except Exception as e:
             log.warning("auto-exposure step failed: %s", e)
+
+
+def _watchdog_loop(ctx, interval_s=5.0):
+    """Solver-hang watchdog.
+
+    The solver publishes latest_solution["epoch_monotonic"] on every frame,
+    including dark frames (peak < 20). If that epoch stops advancing for longer
+    than cfg.watchdog_timeout_s, the solver loop is hung; log CRITICAL and
+    os._exit(1) so systemd restarts the whole unit.
+
+    Arming: we wait for the FIRST non-zero epoch (the solver hasn't published
+    anything at startup) before we start enforcing staleness, so a slow boot or
+    a long first database load never trips the watchdog.
+    """
+    cfg = ctx.cfg
+    if not getattr(cfg, "watchdog_enabled", True):
+        log.info("Solver watchdog disabled by config")
+        return
+    timeout_s = float(getattr(cfg, "watchdog_timeout_s", 30.0))
+    armed = False
+    last_epoch = 0.0
+    last_change_mono = time.monotonic()
+    log.info("Solver watchdog armed (timeout=%.0fs)", timeout_s)
+    while True:
+        time.sleep(interval_s)
+        try:
+            epoch = float(ctx.latest_solution.get("epoch_monotonic", 0.0) or 0.0)
+        except Exception as e:
+            log.warning("watchdog read failed: %s", e)
+            continue
+        now = time.monotonic()
+        if not armed:
+            if epoch > 0.0:
+                armed = True
+                last_epoch = epoch
+                last_change_mono = now
+            continue
+        if epoch != last_epoch:
+            last_epoch = epoch
+            last_change_mono = now
+            continue
+        stale_s = now - last_change_mono
+        if stale_s > timeout_s:
+            log.critical(
+                "Solver watchdog: no new solution for %.0fs (> %.0fs timeout); "
+                "solver appears hung. Exiting so systemd restarts the unit.",
+                stale_s, timeout_s)
+            os._exit(1)
 
 
 def _do_alignment(align_state, cfg, shared_cfg,
@@ -669,6 +726,14 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "detect_uniform_filter_size", ctx.cfg.detect_uniform_filter_size),
                 "detect_noise_mode":    ctx.shared_cfg.get(
                     "detect_noise_mode",    ctx.cfg.detect_noise_mode),
+                "detect_kernel_sigma":  ctx.shared_cfg.get(
+                    "detect_kernel_sigma",  ctx.cfg.detect_kernel_sigma),
+                "detect_max_axis_ratio": ctx.shared_cfg.get(
+                    "detect_max_axis_ratio", ctx.cfg.detect_max_axis_ratio),
+                "detect_local_noise":   ctx.shared_cfg.get(
+                    "detect_local_noise",   ctx.cfg.detect_local_noise),
+                "min_centroids":       ctx.shared_cfg.get(
+                    "min_centroids",       ctx.cfg.min_centroids),
                 "solve_timeout_ms":    ctx.shared_cfg.get(
                     "solve_timeout_ms",    ctx.cfg.solve_timeout_ms),
             })
@@ -738,6 +803,44 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                                         error="detect_noise_mode must be 'mad' or 'global_rms'")
                 ctx.shared_cfg["detect_noise_mode"] = nm
                 updates["detect_noise_mode"] = nm
+            if "detect_kernel_sigma" in args:
+                try:
+                    ks = float(args["detect_kernel_sigma"])
+                except (ValueError, TypeError) as e:
+                    return MaintResponse(ok=False,
+                                        error=f"detect_kernel_sigma must be numeric: {e}")
+                if not (1.0 <= ks <= 4.0):
+                    return MaintResponse(ok=False,
+                                        error="detect_kernel_sigma out of range [1.0, 4.0]")
+                ctx.shared_cfg["detect_kernel_sigma"] = ks
+                updates["detect_kernel_sigma"] = ks
+            if "detect_max_axis_ratio" in args:
+                try:
+                    mar = float(args["detect_max_axis_ratio"])
+                except (ValueError, TypeError) as e:
+                    return MaintResponse(ok=False,
+                                        error=f"detect_max_axis_ratio must be numeric: {e}")
+                # 0 disables trail rejection; otherwise must be 1.5–10.0.
+                if mar != 0.0 and not (1.5 <= mar <= 10.0):
+                    return MaintResponse(ok=False,
+                                        error="detect_max_axis_ratio must be 0 (off) or 1.5–10.0")
+                ctx.shared_cfg["detect_max_axis_ratio"] = mar
+                updates["detect_max_axis_ratio"] = mar
+            if "detect_local_noise" in args:
+                ln = bool(args["detect_local_noise"])
+                ctx.shared_cfg["detect_local_noise"] = ln
+                updates["detect_local_noise"] = ln
+            if "min_centroids" in args:
+                try:
+                    mc = int(args["min_centroids"])
+                except (ValueError, TypeError) as e:
+                    return MaintResponse(ok=False,
+                                        error=f"min_centroids must be int: {e}")
+                if not (4 <= mc <= 50):
+                    return MaintResponse(ok=False,
+                                        error="min_centroids out of range [4, 50]")
+                ctx.shared_cfg["min_centroids"] = mc
+                updates["min_centroids"] = mc
             if "solve_timeout_ms" in args:
                 try:
                     ms = int(args["solve_timeout_ms"])
@@ -752,6 +855,143 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             if persist and updates:
                 cfg_mod.save_keys(updates)
             return MaintResponse(ok=True, result={**updates, "persisted": persist})
+
+        if cmd == "match_params_get":
+            return MaintResponse(ok=True, result={
+                "match_radius": ctx.shared_cfg.get(
+                    "match_radius", ctx.cfg.match_radius),
+                "match_threshold": ctx.shared_cfg.get(
+                    "match_threshold", ctx.cfg.match_threshold),
+            })
+
+        if cmd == "match_params_set":
+            persist = bool(args.get("persist", False))
+            updates = {}
+            if "match_radius" in args:
+                try:
+                    mr = float(args["match_radius"])
+                except (ValueError, TypeError) as e:
+                    return MaintResponse(ok=False,
+                                        error=f"match_radius must be numeric: {e}")
+                if not (0.005 <= mr <= 0.05):
+                    return MaintResponse(ok=False,
+                                        error="match_radius out of range [0.005, 0.05]")
+                ctx.shared_cfg["match_radius"] = mr
+                updates["match_radius"] = mr
+            if "match_threshold" in args:
+                try:
+                    mt = float(args["match_threshold"])
+                except (ValueError, TypeError) as e:
+                    return MaintResponse(ok=False,
+                                        error=f"match_threshold must be numeric: {e}")
+                if not (1e-9 <= mt <= 1e-3):
+                    return MaintResponse(ok=False,
+                                        error="match_threshold out of range [1e-9, 1e-3]")
+                ctx.shared_cfg["match_threshold"] = mt
+                updates["match_threshold"] = mt
+            if persist and updates:
+                cfg_mod.save_keys(updates)
+            return MaintResponse(ok=True, result={**updates, "persisted": persist})
+
+        if cmd == "seeing_get":
+            mode = ctx.shared_cfg.get("seeing_mode", ctx.cfg.seeing_mode)
+            try:
+                effective = seeing_mod.effective_values(ctx.cfg, ctx.shared_cfg)
+                drift = seeing_mod.drift_from_preset(mode, ctx.cfg, ctx.shared_cfg)
+            except Exception as e:
+                return MaintResponse(ok=False, error=f"seeing_get failed: {e}")
+            return MaintResponse(ok=True, result={
+                "mode": mode,
+                "presets": seeing_mod.SEEING_PRESETS,
+                "rationale": seeing_mod.PRESET_RATIONALE,
+                "effective": effective,
+                "drift": drift,
+                "deep_db_configured": bool(
+                    (getattr(ctx.cfg, "star_db_deep", "") or "").strip()),
+            })
+
+        if cmd == "seeing_set":
+            mode = str(args.get("mode", "")).strip().lower()
+            if not seeing_mod.is_valid_mode(mode):
+                return MaintResponse(
+                    ok=False,
+                    error=f"seeing_set requires mode 'good' or 'bad', got {mode!r}")
+            try:
+                preset = seeing_mod.apply_preset(mode, ctx.cfg)
+            except ValueError as e:
+                return MaintResponse(ok=False, error=str(e))
+
+            # Route each preset key through the right channel.
+            #  * star_db        -> solver DB reload (in-process), persist solver_db
+            #  * everything else -> live shared_cfg write (solver / auto-exp read it)
+            persisted = {"seeing_mode": mode}
+            db_token = preset.pop("star_db", None)
+
+            for key, val in preset.items():
+                ctx.shared_cfg[key] = val
+                persisted[key] = val
+
+            # Switch the solver database if the preset selected a different one.
+            db_result = None
+            if db_token and db_token != ctx.cfg.solver_db:
+                reply = _call_solver(SOLVER_OP_SET_DB, {"db": db_token},
+                                     ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
+                                     timeout_s=15.0)
+                if reply is None:
+                    return MaintResponse(ok=False,
+                                         error="solver did not respond to set_db")
+                if not reply.ok:
+                    return MaintResponse(ok=False,
+                                         error=f"set_db failed: {reply.error}")
+                ctx.cfg.solver_db = db_token
+                persisted["solver_db"] = db_token
+                db_result = reply.result
+            elif db_token:
+                persisted["solver_db"] = db_token
+
+            ctx.cfg.seeing_mode = mode
+            ctx.shared_cfg["seeing_mode"] = mode
+            try:
+                cfg_mod.save_keys(persisted)
+            except Exception as e:
+                log.warning("Could not persist seeing preset: %s", e)
+
+            _invalidate_solver_cache()
+            log.info("Seeing preset -> %s (db=%s)", mode, db_token)
+            return MaintResponse(ok=True, result={
+                "mode": mode, "applied": persisted, "db": db_result})
+
+        if cmd == "dark_capture":
+            try:
+                frames = int(args.get("frames", 16) or 16)
+            except (ValueError, TypeError):
+                frames = 16
+            reply = _call_solver(SOLVER_OP_DARK_CAPTURE, {"frames": frames},
+                                 ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
+                                 timeout_s=max(30.0, frames * 0.6 + 10.0))
+            if reply is None:
+                return MaintResponse(ok=False, error="solver did not respond")
+            if not reply.ok:
+                return MaintResponse(ok=False, error=reply.error)
+            return MaintResponse(ok=True, result=reply.result)
+
+        if cmd == "hot_pixel_status":
+            reply = _call_solver(SOLVER_OP_HOT_PIXEL_STATUS, {},
+                                 ctx.solver_cmd_q, ctx.solver_cmd_reply_q)
+            if reply is None:
+                return MaintResponse(ok=False, error="solver did not respond")
+            if not reply.ok:
+                return MaintResponse(ok=False, error=reply.error)
+            return MaintResponse(ok=True, result=reply.result)
+
+        if cmd == "hot_pixel_clear":
+            reply = _call_solver(SOLVER_OP_HOT_PIXEL_CLEAR, {},
+                                 ctx.solver_cmd_q, ctx.solver_cmd_reply_q)
+            if reply is None:
+                return MaintResponse(ok=False, error="solver did not respond")
+            if not reply.ok:
+                return MaintResponse(ok=False, error=reply.error)
+            return MaintResponse(ok=True, result=reply.result)
 
         if cmd == "bg_cache_status":
             # Live temporal-background-cache snapshot (state, model age,
@@ -955,6 +1195,9 @@ def comms_main(latest_solution, shared_cfg,
 
     threading.Thread(target=_auto_exposure_loop, args=(ctx,),
                      name="efinder-autoexp", daemon=True).start()
+
+    threading.Thread(target=_watchdog_loop, args=(ctx,),
+                     name="efinder-watchdog", daemon=True).start()
 
     while True:
         try:

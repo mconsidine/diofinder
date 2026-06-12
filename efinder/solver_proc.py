@@ -66,14 +66,57 @@ def _solver_db_path(raw: str) -> str:
     return f"/var/lib/efinder/{raw}.npz"
 
 
+_CAPTURE_DIR_CAP_BYTES = 100 * 1024 * 1024   # 100 MB cap on the captures dir
+
+
+def _enforce_dir_cap(directory: str, cap_bytes: int) -> None:
+    """Delete oldest *.png until the directory is under cap_bytes.
+
+    Best-effort: any IO error is swallowed so capture never breaks the loop.
+    """
+    try:
+        entries = []
+        total = 0
+        with os.scandir(directory) as it:
+            for e in it:
+                if not e.name.endswith(".png"):
+                    continue
+                try:
+                    st = e.stat()
+                except OSError:
+                    continue
+                entries.append((st.st_mtime, st.st_size, e.path))
+                total += st.st_size
+        if total <= cap_bytes:
+            return
+        entries.sort()  # oldest first
+        for _mtime, size, path in entries:
+            if total <= cap_bytes:
+                break
+            try:
+                os.remove(path)
+                total -= size
+            except OSError:
+                continue
+    except OSError:
+        pass
+
+
 def _save_frame(frame, cfg, label: str) -> None:
+    """Write a frame PNG to the captures dir, enforcing a 100 MB cap.
+
+    Filename: {utc-timestamp}_{status}.png. Never raises — any IO error is
+    logged and swallowed so the solver loop keeps running.
+    """
     import datetime
     try:
         from PIL import Image
-        os.makedirs(cfg.failed_frames_dir, exist_ok=True)
-        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-        path = os.path.join(cfg.failed_frames_dir, f"capture_{ts}_{label}.png")
+        directory = cfg.failed_frames_dir
+        os.makedirs(directory, exist_ok=True)
+        ts = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%S_%f")[:-3]
+        path = os.path.join(directory, f"{ts}_{label}.png")
         Image.fromarray(frame, mode="L").save(path)
+        _enforce_dir_cap(directory, _CAPTURE_DIR_CAP_BYTES)
         log.info("Saved frame: %s", path)
     except Exception as e:
         log.warning("Could not save frame: %s", e)
@@ -131,16 +174,106 @@ def _drain_cmd_queue(q):
     return cmds
 
 
+class _SolverState:
+    """Mutable holder for solver objects that out-of-band commands can swap.
+
+    solver_t3 is reloaded in-place by set_db; hot_pixel_mask is loaded/cleared
+    by the dark-capture commands. read_frame() returns a fresh copy of the
+    current SHM frame for dark capture.
+    """
+    def __init__(self, solver_t3, cfg):
+        self.solver_t3 = solver_t3
+        self.cfg = cfg
+        self.hot_pixel_mask = None
+        self.read_frame = None   # set by solver_main
+
+
 def _handle_solver_cmd(cmd, calibrator, polar,
-                       solver_t3=None, cfg=None, shared_cfg=None, bg_cache=None):
+                       solver_t3=None, cfg=None, shared_cfg=None, bg_cache=None,
+                       state=None):
     from efinder.worker_cmds import (
         SolverCmdReply,
         SOLVER_OP_CALIBRATION_STATUS, SOLVER_OP_CALIBRATION_RESET,
         SOLVER_OP_POLAR_START, SOLVER_OP_POLAR_STATUS,
         SOLVER_OP_POLAR_CANCEL, SOLVER_OP_POLAR_SET_LATITUDE,
         SOLVER_OP_SOLVE_CENTROIDS, SOLVER_OP_BG_CACHE_STATUS,
+        SOLVER_OP_SET_DB, SOLVER_OP_DARK_CAPTURE,
+        SOLVER_OP_HOT_PIXEL_STATUS, SOLVER_OP_HOT_PIXEL_CLEAR,
     )
     try:
+        if cmd.op == SOLVER_OP_SET_DB:
+            if state is None:
+                return SolverCmdReply(request_id=cmd.request_id, ok=False,
+                                      error="solver state unavailable")
+            db = str(cmd.args.get("db", "")).strip()
+            if not db:
+                return SolverCmdReply(request_id=cmd.request_id, ok=False,
+                                      error="set_db requires 'db'")
+            db_path = _solver_db_path(db)
+            if not os.path.exists(db_path):
+                return SolverCmdReply(request_id=cmd.request_id, ok=False,
+                                      error=f"database not found: {db_path}")
+            try:
+                import tetra3 as _tetra3
+                new_t3 = _tetra3.Tetra3(db_path)
+            except Exception as e:
+                return SolverCmdReply(request_id=cmd.request_id, ok=False,
+                                      error=f"failed to load {db_path}: {e}")
+            state.solver_t3 = new_t3
+            log.info("Solver database switched -> %s", db_path)
+            return SolverCmdReply(request_id=cmd.request_id, ok=True,
+                                  result={"db": db, "db_path": db_path})
+
+        if cmd.op == SOLVER_OP_DARK_CAPTURE:
+            if state is None or state.read_frame is None:
+                return SolverCmdReply(request_id=cmd.request_id, ok=False,
+                                      error="dark capture unavailable")
+            from efinder import hot_pixel as _hp
+            n = int(cmd.args.get("frames", 16) or 16)
+            n = max(2, min(64, n))
+            shape = (cfg.frame_height, cfg.frame_width)
+            try:
+                mask = _hp.capture_dark_mask(state.read_frame, n, shape)
+                mask.save(_hp.DEFAULT_MASK_PATH)
+                state.hot_pixel_mask = mask
+            except Exception as e:
+                return SolverCmdReply(request_id=cmd.request_id, ok=False,
+                                      error=f"dark capture failed: {e}")
+            log.info("Hot-pixel mask captured: %d pixels from %d frames",
+                     mask.count, n)
+            return SolverCmdReply(request_id=cmd.request_id, ok=True, result={
+                "count": mask.count, "frames": n, "path": _hp.DEFAULT_MASK_PATH})
+
+        if cmd.op == SOLVER_OP_HOT_PIXEL_STATUS:
+            from efinder import hot_pixel as _hp
+            m = state.hot_pixel_mask if state else None
+            mtime = None
+            try:
+                if os.path.exists(_hp.DEFAULT_MASK_PATH):
+                    mtime = os.path.getmtime(_hp.DEFAULT_MASK_PATH)
+            except OSError:
+                pass
+            return SolverCmdReply(request_id=cmd.request_id, ok=True, result={
+                "count": (m.count if m else 0),
+                "loaded": m is not None,
+                "mtime": mtime,
+                "path": _hp.DEFAULT_MASK_PATH,
+            })
+
+        if cmd.op == SOLVER_OP_HOT_PIXEL_CLEAR:
+            from efinder import hot_pixel as _hp
+            try:
+                if os.path.exists(_hp.DEFAULT_MASK_PATH):
+                    os.remove(_hp.DEFAULT_MASK_PATH)
+            except OSError as e:
+                return SolverCmdReply(request_id=cmd.request_id, ok=False,
+                                      error=f"could not delete mask: {e}")
+            if state is not None:
+                state.hot_pixel_mask = None
+            log.info("Hot-pixel mask cleared")
+            return SolverCmdReply(request_id=cmd.request_id, ok=True,
+                                  result={"count": 0, "loaded": False})
+
         if cmd.op == SOLVER_OP_BG_CACHE_STATUS:
             if bg_cache is None:
                 return SolverCmdReply(request_id=cmd.request_id, ok=True,
@@ -148,6 +281,8 @@ def _handle_solver_cmd(cmd, calibrator, polar,
             return SolverCmdReply(request_id=cmd.request_id, ok=True,
                                   result=bg_cache.stats())
         if cmd.op == SOLVER_OP_SOLVE_CENTROIDS:
+            if state is not None and state.solver_t3 is not None:
+                solver_t3 = state.solver_t3
             if solver_t3 is None or cfg is None:
                 return SolverCmdReply(request_id=cmd.request_id, ok=False,
                                       error="solver not available")
@@ -157,15 +292,15 @@ def _handle_solver_cmd(cmd, calibrator, polar,
                     "solved": False, "status": "TooFew",
                     "matches": 0, "stars": len(raw)})
             cents = np.array(raw, dtype=np.float64)
-            timeout_ms = (shared_cfg.get("solve_timeout_ms", cfg.solve_timeout_ms)
-                          if shared_cfg is not None else cfg.solve_timeout_ms)
+            _sc = shared_cfg if shared_cfg is not None else {}
+            timeout_ms = _sc.get("solve_timeout_ms", cfg.solve_timeout_ms)
             soln = solver_t3.solve_from_centroids(
                 cents, (cfg.frame_height, cfg.frame_width),
                 fov_estimate=calibrator.get_fov_estimate(),
                 fov_max_error=calibrator.get_fov_max_error(),
                 solve_timeout=timeout_ms,
-                match_threshold=cfg.match_threshold,
-                match_radius=cfg.match_radius,
+                match_threshold=float(_sc.get("match_threshold", cfg.match_threshold)),
+                match_radius=float(_sc.get("match_radius", cfg.match_radius)),
                 distortion=calibrator.get_distortion_estimate(),
                 return_matches=False,
             )
@@ -370,6 +505,20 @@ def solver_main(slots, latest_solution, shared_cfg,
         bg_cache.enabled, cfg.detect_bg_mode, cfg.detect_tophat_radius,
         cfg.detect_bin)
 
+    # Mutable holder so out-of-band commands can swap the database and the
+    # hot-pixel mask without restarting the process.
+    state = _SolverState(solver_t3, cfg)
+
+    # Load a previously-captured hot-pixel mask if present (rejects hot pixels
+    # during slews when the temporal cache is offline).
+    try:
+        from efinder import hot_pixel as _hp
+        state.hot_pixel_mask = _hp.HotPixelMask.load(_hp.DEFAULT_MASK_PATH)
+        if state.hot_pixel_mask is not None:
+            log.info("Hot-pixel mask loaded: %d pixels", state.hot_pixel_mask.count)
+    except Exception as e:
+        log.warning("Could not load hot-pixel mask: %s", e)
+
     calibrator = FovCalibrator(cfg, shared_cfg)
     log.info("Calibrator: state=%s fov=%.4f° tolerance=%.3f°",
              calibrator.state.value,
@@ -384,6 +533,14 @@ def solver_main(slots, latest_solution, shared_cfg,
             for i in range(NUM_BUFFERS)]
     bufs = [np.ndarray((cfg.frame_height, cfg.frame_width), dtype=np.uint8,
                         buffer=s.buf) for s in shms]
+
+    def _read_current_frame():
+        """Copy the most-recent published SHM frame (for dark capture)."""
+        i = slots.latest_ready.value
+        if i is None or i < 0:
+            return None
+        return np.array(bufs[i], dtype=np.uint8, copy=True)
+    state.read_frame = _read_current_frame
 
     # ---- Pre-allocate hot-path buffers -------------------------------------
     # Reused every frame to avoid per-frame heap allocation.
@@ -408,8 +565,9 @@ def solver_main(slots, latest_solution, shared_cfg,
             # Drain out-of-band solver commands (calibration, polar, etc.)
             for cmd in _drain_cmd_queue(solver_cmd_q):
                 reply = _handle_solver_cmd(cmd, calibrator, polar,
-                                           solver_t3=solver_t3, cfg=cfg,
-                                           shared_cfg=shared_cfg, bg_cache=bg_cache)
+                                           solver_t3=state.solver_t3, cfg=cfg,
+                                           shared_cfg=shared_cfg, bg_cache=bg_cache,
+                                           state=state)
                 try:
                     solver_cmd_reply_q.put_nowait(reply)
                 except Exception as e:
@@ -450,6 +608,15 @@ def solver_main(slots, latest_solution, shared_cfg,
             np.copyto(frame_buf, bufs[idx])
             slots.release_read_slot()
 
+            # Hot-pixel repair: replace masked pixels with their 8-neighbor
+            # mean before detection. Vectorized; < 1 ms for a few hundred
+            # pixels. No-op when no mask is loaded.
+            if state.hot_pixel_mask is not None:
+                try:
+                    state.hot_pixel_mask.repair(frame_buf)
+                except Exception as e:
+                    log.warning("hot-pixel repair failed: %s", e)
+
             # Feed the temporal background worker (copies internally) and let it
             # track slew via the IMU. No-ops when the cache is disabled.
             bg_cache.submit_frame(frame_buf)
@@ -480,16 +647,26 @@ def solver_main(slots, latest_solution, shared_cfg,
             uniform_filter_size = int(
                 shared_cfg.get("detect_uniform_filter_size", cfg.detect_uniform_filter_size))
             noise_mode = shared_cfg.get("detect_noise_mode", cfg.detect_noise_mode)
+            kernel_sigma = float(
+                shared_cfg.get("detect_kernel_sigma", cfg.detect_kernel_sigma))
+            # 0 disables trail rejection -> infinite axis ratio.
+            _mar = float(
+                shared_cfg.get("detect_max_axis_ratio", cfg.detect_max_axis_ratio))
+            max_axis_ratio = float("inf") if _mar <= 0.0 else _mar
+            local_noise = bool(
+                shared_cfg.get("detect_local_noise", cfg.detect_local_noise))
             try:
                 _raw = bg_cache.detect(
                     frame_buf,
                     sigma=sigma,
                     bg_mode=bg_mode,
                     tophat_radius=tophat_radius,
-                    max_axis_ratio=float("inf"),
+                    max_axis_ratio=max_axis_ratio,
                     bg_block_size=bg_block_size,
                     uniform_filter_size=uniform_filter_size,
                     noise_mode=noise_mode,
+                    kernel_sigma=kernel_sigma,
+                    local_noise=local_noise,
                 )
                 # sycamore returns (x=col, y=row, brightness, peak).
                 # tetra3 solve_from_centroids expects (row, col) = (y, x).
@@ -541,16 +718,20 @@ def solver_main(slots, latest_solution, shared_cfg,
 
             # --- Step 4: plate solve -----------------------------------------
             t_solve = time.monotonic()
+            match_threshold = float(
+                shared_cfg.get("match_threshold", cfg.match_threshold))
+            match_radius = float(
+                shared_cfg.get("match_radius", cfg.match_radius))
             try:
-                soln = solver_t3.solve_from_centroids(
+                soln = state.solver_t3.solve_from_centroids(
                     centroids,
                     (cfg.frame_height, cfg.frame_width),
                     fov_estimate=calibrator.get_fov_estimate(),
                     fov_max_error=calibrator.get_fov_max_error(),
                     solve_timeout=shared_cfg.get(
                         "solve_timeout_ms", cfg.solve_timeout_ms),
-                    match_threshold=cfg.match_threshold,
-                    match_radius=cfg.match_radius,
+                    match_threshold=match_threshold,
+                    match_radius=match_radius,
                     distortion=calibrator.get_distortion_estimate(),
                     target_pixel=target_pixel,
                     target_sky_coord=target_sky,

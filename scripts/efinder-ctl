@@ -18,6 +18,9 @@ Usage:
   efinder-ctl exposure set SECONDS [--persist]
   efinder-ctl gain set GAIN [--persist]
 
+  efinder-ctl seeing get
+  efinder-ctl seeing set {good|bad}
+
   efinder-ctl raw '{"cmd":"...","args":{...}}'
 
 Talks to /run/efinder/maint.sock. You need to be a member of the
@@ -118,6 +121,15 @@ def cmd_polar(args, parser):
              "persist": not args.no_persist}))
 
 
+def cmd_seeing(args, parser):
+    if args.action == "get":
+        return _print_result(maint_call("seeing_get"))
+    if args.action == "set":
+        if args.mode not in ("good", "bad"):
+            parser.error("seeing set requires MODE 'good' or 'bad'")
+        return _print_result(maint_call("seeing_set", {"mode": args.mode}))
+
+
 def cmd_raw(args, parser):
     try:
         obj = json.loads(args.json)
@@ -166,6 +178,11 @@ def main():
     p_pol.add_argument("--no-persist", action="store_true",
                        help="Don't write the latitude back to efinder.conf")
 
+    p_see = sub.add_parser("seeing", help="Good/Bad seeing preset")
+    p_see.add_argument("action", choices=["get", "set"])
+    p_see.add_argument("mode", nargs="?", choices=["good", "bad"], default=None,
+                       help="Preset to apply (for set)")
+
     p_raw = sub.add_parser("raw", help="Send a raw JSON request")
     p_raw.add_argument("json", help='e.g. \'{"cmd":"status","args":{}}\'')
 
@@ -179,6 +196,7 @@ def main():
         "calibration": cmd_calibration,
         "exposure": cmd_exposure,
         "gain": cmd_gain,
+        "seeing": cmd_seeing,
         "raw": cmd_raw,
     }
     try:

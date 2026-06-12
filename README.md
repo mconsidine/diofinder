@@ -21,19 +21,22 @@ boresight registration and a built-in three-point polar alignment assistant.
 6. [LX200 command reference](#lx200-command-reference)
 7. [Web UI](#web-ui)
 8. [Polar alignment](#polar-alignment)
-9. [Focus assessment](#focus-assessment)
-10. [IMU dead-reckoning (optional)](#imu-dead-reckoning-optional)
-11. [Wi-Fi modes](#wi-fi-modes)
-12. [Configuration reference](#configuration-reference)
-13. [Maintenance CLI (`efinder-ctl`)](#maintenance-cli-efinder-ctl)
-14. [Updating without a git repository](#updating-without-a-git-repository)
-15. [Architecture](#architecture)
-16. [Diagnostic guide (SSH / PuTTY)](#diagnostic-guide-ssh--putty)
+9. [Seeing presets](#seeing-presets)
+10. [Dark-frame / hot-pixel capture](#dark-frame--hot-pixel-capture)
+11. [Solver-hang watchdog](#solver-hang-watchdog)
+12. [Focus assessment](#focus-assessment)
+13. [IMU dead-reckoning (optional)](#imu-dead-reckoning-optional)
+14. [Wi-Fi modes](#wi-fi-modes)
+15. [Configuration reference](#configuration-reference)
+16. [Maintenance CLI (`efinder-ctl`)](#maintenance-cli-efinder-ctl)
+17. [Updating without a git repository](#updating-without-a-git-repository)
+18. [Architecture](#architecture)
+19. [Diagnostic guide (SSH / PuTTY)](#diagnostic-guide-ssh--putty)
     - [Can't solve even though stars are visible](#cant-solve-even-though-stars-are-visible)
-17. [Benchmark and diagnostic scripts](#benchmark-and-diagnostic-scripts)
-18. [Performance characteristics](#performance-characteristics)
-19. [Building and development](#building-and-development)
-20. [Known limitations and deferred work](#known-limitations-and-deferred-work)
+20. [Benchmark and diagnostic scripts](#benchmark-and-diagnostic-scripts)
+21. [Performance characteristics](#performance-characteristics)
+22. [Building and development](#building-and-development)
+23. [Known limitations and deferred work](#known-limitations-and-deferred-work)
 
 ---
 
@@ -305,6 +308,72 @@ efinder-ctl polar cancel              # abort if needed
 ```
 
 ---
+
+## Seeing presets
+
+A single **Good / Bad** toggle re-tunes the whole detection + solve pipeline
+for the night's conditions. It lives on the **Status** page and the **Config**
+page, and on the CLI as `efinder-ctl seeing {get|set good|set bad}`.
+
+| Key | Good | Bad | Rationale |
+|---|---|---|---|
+| `detect_sigma` | 5.0 | 4.0 | Lower threshold in bad seeing to keep faint-but-real stars. |
+| `detect_kernel_sigma` | 1.5 | 2.5 | Wider matched-filter kernel matches a bloated/smeared PSF. |
+| `detect_bg_mode` | `row_percentile` | `block_percentile` | 2-D block background handles uneven sky-glow / gradients. |
+| `detect_max_axis_ratio` | 3.0 | 5.0 | Looser trail rejection: bad seeing elongates real stars. |
+| `min_centroids` | 8 | 5 | Accept a sparser field rather than never solving. |
+| `match_radius` | 0.01 | 0.015 | More catalog-match slack for distorted/blurred centroids. |
+| `match_threshold` | 1e-5 | 1e-5 | False-positive ceiling unchanged. |
+| `solve_timeout_ms` | 1500 | 3000 | A harder field deserves a longer solve budget. |
+| `auto_exposure_target_stars` | 20 | 15 | Fewer stars expected; don't over-expose chasing them. |
+| `auto_exposure_max_s` | 0.5 | 1.0 | Allow longer exposures to reach faint stars. |
+| `star_db` | standard | deep | Use a deeper-magnitude catalog if one is configured. |
+
+Applying a preset writes every key live (and persists it to `efinder.conf`).
+You can still fine-tune any individual value afterward on the Camera page; the
+Config page shows a **drift** note listing keys you have overridden since.
+
+### Deeper database for the Bad preset
+
+The Bad preset asks for `star_db="deep"`. This only takes effect if you set
+`star_db_deep` in `efinder.conf` to a database that **exists on disk** —
+otherwise the preset stays on the standard `solver_db`, so a missing catalog
+never breaks solving. Build/download a deeper-magnitude tetra3 `.npz` (see the
+`astro_databases` release pattern) and point at it:
+
+```
+star_db_deep: deep_database        # -> /var/lib/efinder/deep_database.npz
+# or an absolute path:
+# star_db_deep: /var/lib/efinder/gaia_mag9.npz
+```
+
+The switch is done in-process by the solver (no second database is held in
+memory); it reloads `tetra3.Tetra3` on the live solver when the preset changes.
+
+## Dark-frame / hot-pixel capture
+
+Hot (always-bright) pixels masquerade as stars, especially during slews when
+the temporal background cache is offline. Build a hot-pixel mask once per rig:
+
+1. **Cap the lens.**
+2. On the **Camera** page click **Capture dark frame** (or
+   `efinder-ctl raw '{"cmd":"dark_capture","args":{"frames":16}}'`).
+
+The solver median-stacks the dark frames, flags pixels above
+`median + 5·(1.4826·MAD)`, saves the mask to
+`/var/lib/efinder/hot_pixel_mask.npz`, and loads it immediately. From then on
+each frame has its masked pixels replaced by the mean of their 8 neighbors
+before detection (sub-millisecond, vectorized). The mask is reloaded on every
+service start. Clear it from the Camera page or `hot_pixel_clear`.
+
+## Solver-hang watchdog
+
+A watchdog thread in `comms_proc` confirms the solver keeps publishing
+solutions (it publishes on every frame, even dark ones). If nothing new
+appears for `watchdog_timeout_s` (default 30 s) the solver is treated as hung:
+the process exits with a CRITICAL log line and systemd restarts the unit.
+Disable with `watchdog_enabled: false`. The watchdog only arms after the first
+solution is published, so a slow first boot never trips it.
 
 ## Focus assessment
 
