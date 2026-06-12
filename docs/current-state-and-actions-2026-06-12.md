@@ -1,199 +1,84 @@
-# Current State & Outstanding Actions — 2026-06-12
+# Current State & Outstanding Actions
 
-**Inputs:** all 36 records in `docs/decisions/` (deduplicated to ~22 distinct), verified
-against live git state of diofinder, olive-solve, sycamore-extract, tetra3rs,
-astro_databases, and the GitHub releases API. Companion document:
-`docs/technical-assessment.md` (updated component comparison).
-
----
-
-## 1. olive-solve: the v0.1.2 release problem — diagnosis and runbook
-
-### Why "Run workflow" doesn't appear in Actions
-
-`release-wheels.yml` exists **only on `olive-solve-noext`** — `main` has no
-`.github/workflows/` at all. GitHub's Actions UI only offers the **Run workflow**
-button for workflows that exist on the repository's **default branch** (`main`).
-That is the entire reason the button is missing online.
-
-### Why the v0.1.2 tag built nothing
-
-The existing `v0.1.2` tag points at `765300a` — a docs commit on **main** — where
-`release-wheels.yml` does not exist. Tag-push triggers run the workflow file *at the
-tagged commit*, so nothing ran. Verified via the GitHub API: **no v0.1.2 release
-object exists**; v0.1.1 ("Olive solve fork noext", built from noext) is still the
-latest non-prerelease.
-
-That last fact is good news: diofinder's `release.yml` resolves
-`inputs.olive_solve_tag || vars.OLIVE_SOLVE_TAG || latest-non-prerelease`, so default
-image builds are **currently still pulling the correct noext wheel (v0.1.1)**. But the
-moment a v0.1.2 release is created from main, it would supersede v0.1.1 as "latest"
-and default builds would silently lose the noext work (parallel solver, extractor
-feature gate). Fix the tag before building anything.
-
-### What's already prepared
-
-Branch `claude/beautiful-ritchie-iqyu8w` on olive-solve (commit `8ff2f3b`, based
-directly on `olive-solve-noext`) bumps tetra3 / tetra3-py / tetra3-server +
-Cargo.lock to **0.1.2** — noext still said 0.1.0, so a release built from it would
-have produced a wheel whose version contradicts the tag.
-
-### Runbook (Option A — recommended, no change to main needed)
-
-```bash
-# 1. Merge the version bump into noext (PR or fast-forward):
-#    claude/beautiful-ritchie-iqyu8w -> olive-solve-noext
-
-# 2. Re-point the tag at the noext head and push it:
-git fetch origin
-git tag -f v0.1.2 origin/olive-solve-noext
-git push origin :refs/tags/v0.1.2     # delete the stale tag
-git push origin v0.1.2                # tag push triggers release-wheels.yml
-
-# 3. Nothing else: v0.1.2 (noext) becomes latest non-prerelease;
-#    diofinder default builds pick it up. Optionally pin
-#    OLIVE_SOLVE_TAG=v0.1.2 in diofinder repo variables for determinism.
-```
-
-### Option B — make the UI button work
-
-Either copy the workflow to main
-(`git checkout main && git checkout olive-solve-noext -- .github/workflows/release-wheels.yml && commit/push`)
-and then use **Run workflow** with branch `olive-solve-noext` and version `v0.1.2` — or,
-cleaner and consistent with the pensive-allen decision that *noext is the branch of
-record*: **change the repository default branch to `olive-solve-noext`** in GitHub
-settings. That one click makes the Actions button appear *and* makes the repo's
-landing view match reality.
-
-### Longer term (unresolved contradiction C3 from the decision records)
-
-pensive-allen declared noext the branch of record, yet main has since drifted
-*forward* independently (its own `target-cpu` commit `43d8df0`, the v0.1.2 tag).
-The branches now diverge in **both** directions. Pick one: (a) merge noext → main and
-retire the split, or (b) make noext the default branch and treat main as the upstream-
-tracking branch. Either ends the class of error that produced the dead v0.1.2 tag.
+**Last verified: 2026-06-12 ~20:50 UTC** against live git state and the GitHub
+releases/Actions APIs. Companion: `docs/technical-assessment.md` (rev 3, component
+comparison). Earlier revisions of this document narrated the olive-solve release
+problem and a longer outstanding list as they were diagnosed and worked; that
+history is compressed into §4 — everything above it is the *present* state.
 
 ---
 
-## 2. Master list of outstanding items (verified against git, by repo)
+## 1. Deployed stack (all released, all merged)
 
-### olive-solve
-| # | Item | Status / evidence |
+| Component | Released | Notes |
 |---|---|---|
-| O1 | v0.1.2 release from noext | **OPEN — runbook above.** Version bump ready on `claude/beautiful-ritchie-iqyu8w` (`8ff2f3b`). |
-| O2 | Reconcile noext ↔ main (or switch default branch) | **OPEN.** Diverged both directions; `release-wheels.yml`, parallel solver (`7229e18`), extractor feature (`75cede0`), prerelease guard (`ac57e4b`) are noext-only. |
-| O3 | f32 kd-tree / f32 vector math (est. 20–40% verification speedup) | **OPEN — deliberately deferred** (vigilant-wright, funny-noether). Needs on-device solve validation. |
-| O4 | gRPC `parallel` field in server proto | **OPEN** (minor; server got only a struct-literal fix on noext). |
+| diofinder image | **v0.0.25** (green build) | from `olive`; seeing presets, hot-pixel mask, watchdog, auto-exposure ON, docs reconciled (`cccb6c8`) |
+| star_detect (sycamore-extract) | **v0.12.0** | kernel_sigma, 2-D moment trail rejection, perimeter local noise, bin=4, block-grid cache — all live on-device |
+| tetra3 (olive-solve) | **v0.1.2** (`tetra3-0.1.2-…aarch64.whl`) | built from reconciled `main` (former `noext`): parallel solver, extractor feature gate; the branch split is resolved |
+| star database (astro_databases) | **v2026.06** | `cedar_solve_13deg.npz`, Gaia DR3+Hip G≤8.0, epoch 2026.0; deep `_mag85` assets pending the catalog (item 2 below) |
+| CI runtimes | Node-24 action majors merged in all five repos | first post-bump runs still pending (item 5) |
 
-### sycamore-extract
-| # | Item | Status / evidence |
-|---|---|---|
-| S1 | **Tag/release v0.12.0** | **OPEN — high priority.** The 0.12.0 seeing-robustness work (kernel_sigma, 2-D moments, perimeter local noise, bin=4, block cache) is merged to main (`86bd736`) but the highest tag is v0.11.2. Until released, diofinder's Bad-seeing preset runs with kernel_sigma / local_noise / block-cache **inert** (capability probing degrades them silently). |
-| S2 | On-Pi bench (`tests/bench.py` on test1–3, p50 targets) for 0.12.0 | **OPEN** — all verification so far was x86 (bit-identity vs 0.11.2 on synthetic frames). |
+Do not pin `SYCAMORE_TAG=v0.11.2` — that release's wheel assets were clobbered
+during the 0.12.0 transition and it now serves no wheel.
 
-### diofinder
-| # | Item | Status / evidence |
-|---|---|---|
-| D1 | On-device verification batch | **OPEN.** Accumulated across sessions: bin=2 solve-rate parity, 3-core solver speedup (`bench_pipeline_combos.py --live-shm`), auto-exposure convergence, governor persistence, top_hat timing, seeing-preset A/B (Good vs Bad on marginal frames), hot-pixel dark-capture workflow, watchdog fire/restart. |
-| D2 | Rebuild image after O1+S1 land | **OPEN.** Current image v0.0.24 carries star_detect 0.11.2 + tetra3 0.1.0. After olive-solve v0.1.2(noext) and sycamore v0.12.0 exist, cut v0.0.25 (pins optional: `OLIVE_SOLVE_TAG`, `SYCAMORE_TAG`). |
-| D3 | Delete/archive the `hybrid` branch | **OPEN.** 30+ unmerged commits of the superseded cedar-detect-gRPC architecture; contradicts the shipped `olive` line (C1). Tag it `archive/hybrid` if you want the history findable, then delete. `sycamore-only` is fully merged — safe to delete. |
-| D4 | GitHub Actions Node 24 bump | **OPEN — deadline 2026-06-16 (4 days).** Runners drop Node 20; bump checkout/setup-python/upload-artifact majors across workflows (also applies to the other repos' workflows). |
-| D5 | `tests/README.md`: document `diag_background.py --solve` | **OPEN** (sharp-goodall deferred item). |
-| D6 | docs/decisions housekeeping | **SUGGESTED.** 36 files → ~22 distinct; 14 are exact duplicates (" (1).md" copies and unprefixed twins). A dedupe pass + a naming convention (`YYYY-MM-DD-<session>-<repo>.md`) would keep this folder auditable. Not done here — they're your curated records. |
+## 2. Live to-do list (suggested order)
 
-### astro_databases / tetra3rs
-| # | Item | Status / evidence |
-|---|---|---|
-| A1 | Deep G≤8.5 variant | **DONE & RELEASED** — in `v2026.06` (tag == main HEAD). Remaining sub-item: the deep build still needs the G≤9.0 source catalog generated once (network step documented in its README); until then CI skips the deep assets gracefully. |
-| A2 | Regenerate DBs at calibrated FOV (13.497° vs 10.5–14°) | **OPEN** (tetra-hybrid session rec). Worth folding into the next DB release; tightens pattern density around the real FOV. |
-| A3 | Rename "13deg" label to match true FOV range | **OPEN, cosmetic** (touches install scripts + workflows; batch with A2). |
-| T1 | tetra3rs pi-wheels off cibuildwheel/QEMU → maturin | **OPEN, deferred.** PyPI-owner guard, prerelease + Cortex-A53 tuning are in place. |
-
-### Out-of-scope repos (for completeness)
-eFinder_cli_new / efinder-combo / efinder_cli_tetra3rs_mp items (`:GA#` altitude
-command, `hint_uncertainty_deg` config key, sleep(0.05) removal, live-sky hybrid
-test) are recorded in the decision docs but those repos are outside this session's
-scope — unverifiable here.
-
----
-
-## 3. Superseded architectures (so nobody resurrects them by accident)
-
-1. **`hybrid` (cedar-detect gRPC + olive-solve)** — superseded by `olive`
-   (sycamore + olive-solve). Two sessions explicitly removed all cedar-detect
-   references from the shipped line.
-2. **testrepo aggregator CI** (`buildbinaries.yml`, `databases-latest` store) —
-   dismantled by the pensive-allen per-repo release workflows. The per-repo
-   build-config decision records that reference testrepo describe a dead pipeline.
-3. **cedar-solve / cedar-detect as runtime components** — both are now reference
-   implementations / database generators only.
-
----
-
-## 4. Priority order
-
-1. **O1** — olive-solve v0.1.2 from noext (runbook §1; everything else about wheel
-   consumption is already correct and waiting).
-2. **S1** — tag sycamore-extract v0.12.0 (activates the Bad-seeing preset's new
-   detector features fleet-wide via OTA).
-3. **D4** — Node 24 workflow bumps before 2026-06-16, all repos.
-4. **D2** — rebuild the diofinder image (v0.0.25) once 1–2 are done.
-5. **D1 + S2** — the on-device verification batch (one observing session covers most of it).
-6. **O2, D3, D6** — branch/process reconciliation and housekeeping.
-7. **A2/A3, O3, O4, T1** — next-cycle improvements.
-
----
-
-## Addendum — 15:45 UTC, post noext→main merge
-
-olive-solve noext is now fully merged to main (PRs #7–#9, incl. the 0.1.2 version
-bump); `release-wheels.yml` is on main, so the Actions button works. Two release
-hygiene issues remain from the interim runs:
-
-1. **olive-solve v0.1.2 release**: wheel is named `tetra3-0.1.0-…` (built from a
-   pre-bump ref) and the tag still points at stale `765300a` (source zipball ≠
-   wheel). Fix: delete release + tag, re-run release-wheels on main (now 0.1.2).
-2. **sycamore-extract**: the v0.11.2 release now carries a `star_detect-0.12.0-…`
-   wheel (its original asset was replaced) and no v0.12.0 tag exists. Fix: run the
-   build workflow on main with version `v0.12.0`; optionally clean the mislabeled
-   asset out of v0.11.2 afterwards.
-
-The browser runbook for the next image (v0.0.25) is in the session log; in short:
-re-cut olive-solve v0.1.2 from main → cut sycamore v0.12.0 from main → merge the
-diofinder docs branch → publish diofinder release v0.0.25 (Release image workflow
-attaches the SD image; blank inputs resolve to latest = the two fresh releases +
-astro_databases v2026.06).
-
----
-
-## Final status — 2026-06-12 ~18:00 UTC (supersedes §2 statuses above)
-
-**CLOSED today:** O1 (olive-solve v0.1.2 released, wheel `tetra3-0.1.2`, from
-reconciled main), O2 (noext merged to main both ways), S1 (sycamore v0.12.0
-released), D2 (image **v0.0.25** built green with both new wheels + DB v2026.06),
-D4 (Node-24 bumps merged in all five repos), D5 (tests/README already documented
-`--solve`), D6 (byte-identical duplicates removed), plus the docs-accuracy
-reconciliation commit (`cccb6c8`) and the two assessment docs (rev 3).
-
-**REMAINING TO-DOS, in suggested order:**
-
-1. **On-device / on-sky verification batch** (D1+S2) — flash v0.0.25, then in one
-   session: `tests/bench.py` p50 on test1–3 for both presets; seeing-preset A/B on
+1. **On-device / on-sky verification batch** — the only real gate left. Flash
+   v0.0.25, then one session: `tests/bench.py` p50 on test1–3 for **both** seeing
+   presets (Bad exercises exactly the new non-default code paths); Good/Bad A/B on
    marginal frames; dark-frame hot-pixel capture; auto-exposure convergence;
-   `bench_pipeline_combos.py --live-shm`; watchdog fire/restart; preset-value
-   tuning from the A/B data (edit `efinder/seeing.py` if warranted); run
+   `bench_pipeline_combos.py --live-shm`; watchdog fire/restart; tune
+   `efinder/seeing.py` preset values from the A/B data; run
    `scripts/calibrate_lens.py` on saved solved frames and set `distortion:`.
-2. **Deep Gaia catalog** (in progress on the Mac) — commit the two catalog files,
-   tag astro_databases (e.g. v2026.06.1); that run also validates its Node-24 bumps.
-3. **Deep-DB device plumbing** — fetch the `_mag85.npz` in release.yml /
-   `efinder-update` (or scp once) + set `star_db_deep` in efinder.conf; until then
-   the Bad preset's DB switch is a silent no-op. (Deferred by owner; ask Claude to wire it.)
-4. **D3** — archive-tag and delete the `hybrid` branch; delete `sycamore-only`
-   (verified still present as of this addendum).
-5. **Watch first workflow runs** post-Node-24 (artifact actions crossed multiple
-   majors: v7/v8 in the four libs, v5 in diofinder; drop to v5/v6 if v7 surprises).
-6. **Next cycle:** O3 f32 kd-tree/vector math in olive-solve (est. 20–40%
-   verification speedup — best done after #1 establishes a baseline); A2+A3
-   calibrated-FOV (13.497°) DB regen + "13deg" rename, batched into the next DB
-   release; T1 tetra3rs cibuildwheel→maturin (note: cibuildwheel v4 deliberately
-   not taken in the Node bump); O4 gRPC `parallel` field (minor).
+2. **Deep Gaia catalog (G≤9.0)** — in progress on the owner's Mac (runbook in the
+   astro_databases README): download/merge, commit the `.bin` + `.dat.gz`, tag
+   (e.g. `v2026.06.1`). CI then builds and attaches the `_mag85` deep databases.
+3. **Deep-DB device plumbing** — not yet wired: the image build/`efinder-update`
+   fetch only the standard `.npz`. Until the `_mag85.npz` is on the device **and**
+   `star_db_deep` is set in `efinder.conf`, the Bad preset's database switch is a
+   silent no-op. (Deferred by owner; Claude can wire it on request.)
+4. **Branch cleanup** — `origin/hybrid` (30+ unmerged commits of the superseded
+   cedar-detect-gRPC architecture; archive-tag first if the history should stay
+   findable) and `origin/sycamore-only` (fully merged) still exist. Verified
+   present at last check.
+5. **Watch the first post-Node-24 workflow runs** in each repo. None have run
+   yet (v0.0.25 was built before the bump merged). Artifact actions crossed
+   multiple majors (v7/v8 in the four libraries, v5 in diofinder); if v7 upload
+   semantics surprise, the fallback is a one-line downgrade to v5/v6.
+
+## 3. Next-cycle improvements (deliberately deferred)
+
+| Item | Why deferred |
+|---|---|
+| olive-solve f32 kd-tree / vector math (est. 20–40% verification speedup) | needs an on-device baseline from item 2.1 first |
+| Calibrated-FOV DB regen (13.497° vs 10.5–14°) + retire the "13deg" label | batch into the next astro_databases release (natural fit: item 2.2's tag) |
+| tetra3rs cibuildwheel→maturin migration | cibuildwheel v4 was deliberately *not* taken in the Node bump (changes wheel-repair defaults) — make it one deliberate migration |
+| olive-solve gRPC `parallel` proto field | minor; server path unused by diofinder |
+| docs/decisions naming convention (`YYYY-MM-DD-<session>-<repo>.md`) | housekeeping; exact duplicates already removed |
+
+## 4. Resolved history (2026-06-12, compressed)
+
+- **olive-solve v0.1.2 saga**: `release-wheels.yml` lived only on `olive-solve-noext`
+  while `main` (the default branch) had none — so the Actions "Run workflow" button
+  never appeared, and a v0.1.2 tag on a stale main commit built nothing. Fixed by
+  merging noext↔main (PRs #7–#11), a workspace version bump, and — the last trap —
+  bumping `tetra3-py/pyproject.toml`, which is what maturin actually names the
+  wheel from (the first two release runs produced `tetra3-0.1.0-…whl` from
+  correct code). Lesson recorded: version lives in Cargo.toml(s) **and**
+  pyproject.toml; grep both before tagging.
+- **sycamore 0.12.0**: was merged but untagged (and a 0.12.0 wheel briefly sat
+  inside the v0.11.2 release); proper v0.12.0 release cut, mislabeled asset removed.
+- Closed items from the original audit: image rebuild (v0.0.25), Node-24 bumps
+  (all five repos, before the 2026-06-16 deadline), `tests/README.md` `--solve`
+  documentation, docs/decisions byte-identical duplicate removal, README/TODO/
+  CLAUDE.md/conf.default reconciliation against shipped code.
+
+## 5. Superseded architectures (do not resurrect)
+
+1. **`hybrid`** (cedar-detect gRPC + olive-solve) — superseded by `olive`
+   (sycamore + olive-solve); all cedar-detect references were removed from the
+   shipped line. Pending deletion (item 2.4).
+2. **testrepo aggregator CI** — dismantled in favor of per-repo release workflows;
+   decision records referencing testrepo describe a dead pipeline.
+3. **cedar-solve / cedar-detect as runtime components** — reference
+   implementations and database generators only.
