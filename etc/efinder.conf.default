@@ -42,7 +42,7 @@ auto_exposure_max_s: 1.0
 # fov_calibrated_max_error_deg, which makes solving faster and more
 # robust against false positives.
 fov_deg: 13.5
-arcsec_per_pixel: 50.8
+arcsec_per_pixel: 51.15
 fov_calibrated: false
 fov_calibrated_stddev: 0.05
 fov_calibrated_max_error_deg: 0.1
@@ -78,6 +78,15 @@ detect_bin: 2
 #                     can't see. Requires sycamore >= 0.9.0; degrades to
 #                     line_median on older wheels. Opt-in; tune
 #                     detect_tophat_radius to your rig before enabling.
+#   block_percentile — bilinear interp of per-tile medians (tile detect_bg_block_size,
+#                     0→32); cheap 2-D gradient removal. The "bad" seeing preset
+#                     selects this. Cache-compatible on sycamore >= 0.12.
+#                     (sycamore >= 0.10.0)
+#   column_percentile / row_column_percentile — per-column / separable 2-D
+#                     percentile floors (sycamore >= 0.10.0; force per-frame).
+#   uniform_mean    — 25x25 sliding-window mean (detect_uniform_filter_size,
+#                     0→25); the exact tetra3/olive-solve default pipeline.
+#                     Pair with detect_noise_mode: global_rms. (sycamore >= 0.11.0)
 detect_bg_mode: row_percentile
 
 # Matched-filter kernel sigma (px); 1.5 ≈ a focused HQ Camera PSF. Widen toward
@@ -144,7 +153,7 @@ boresight_x: 480.0
 
 # ---- Comms ----
 lx200_port: 4060
-lx200_client_timeout_s: 10.0
+lx200_client_timeout_s: 30.0
 
 # ---- CPU affinity (Pi Zero 2W: 4 cores) ----
 # 0=comms+webui+IMU (I/O bound, shares with kernel/IRQs)
@@ -163,7 +172,7 @@ watchdog_timeout_s: 30.0
 
 # ---- Diagnostics ----
 # Set save_solved_frames or save_failed_frames to true to write PNG captures
-# to failed_frames_dir. Files are named capture_YYYYMMDD_HHMMSS_<label>.png
+# to failed_frames_dir. Files are named <YYYYMMDDTHHMMSS_mmm>_<label>.png
 # and can be replayed with tests/solve_image.py --image <path>
 save_solved_frames: false
 save_failed_frames: false

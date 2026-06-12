@@ -35,10 +35,15 @@ Possible future improvements:
 `efinder-webui.service`. Uses maintenance socket for all data — no
 state of its own. Pages:
 
-- `/`        dashboard: live RA/Dec, exposure/gain controls, pointing,
-             focus score, calibration, boresight
+- `/`        dashboard: live RA/Dec, pointing, focus score, calibration,
+             boresight, test/live toggle, Good/Bad seeing toggle
+- `/camera`  live frame + exposure/gain/sigma/kernel/trail/match sliders,
+             auto-exposure + tuning toggles, dark-frame (hot-pixel) capture
+- `/focus`   live focus assistant (Laplacian variance + zoomed crop)
+- `/bgtest`  background-mode A/B (with optional live-solver match rates)
 - `/polar`   step-by-step polar alignment workflow with live status
-- `/config`  read-only view of `/etc/efinder/efinder.conf`
+- `/wifi`    AP/station switching
+- `/config`  read-only view of `/etc/efinder/efinder.conf` + seeing toggle
 - `/logs`    live journalctl tail for efinder.service
 - `/update`  trigger efinder-update in one click
 - `/healthz` 200 OK ping endpoint
@@ -53,7 +58,8 @@ with multiple browser tabs.
 Future improvements:
 - Editable config (defer; SSH + restart is fine)
 - Solve history charts
-- Image preview from saved frames (blocked on frame-save implementation)
+- Image preview / overlay from saved frames (frame-save is now implemented —
+  see "Frame save for diagnostics" below; centroid overlays still TODO)
 - Replace Flask dev server with gunicorn (probably never; single-user)
 
 ### Maintenance socket (Unix socket IPC)
@@ -65,13 +71,19 @@ Dispatch table: `efinder/comms_proc.py::_handle_maint_command`.
 
 Supported commands: ping, version, status, boresight (show/center/set),
 calibration (status/reset), exposure (get/set/persist), gain (set/persist),
-polar (start/status/cancel/set-latitude), raw JSON passthrough.
+auto_exposure_set, tuning_set, polar (start/status/cancel/set-latitude),
+solver_params_get/set, match_params_get/set, seeing_get/seeing_set,
+dark_capture, hot_pixel_status, hot_pixel_clear, bg_cache_status,
+solve_centroids, set_test_mode, raw JSON passthrough.
 
 ### LX200 protocol
 ✅ DONE. Implemented commands: `:GR#`, `:GD#`, `:CM#` (sync/boresight),
-`:St#` (set latitude), `:Sg#` (set longitude), `:Gt#` (get latitude),
-`:Gg#` (get longitude), `:SL#`, `:SC#`, `:MS#`, `:Q#`, `:P#`,
-`:GVP#`, `:GVN#`.
+`:Sr#`/`:Sd#` (set target RA/Dec), `:St#` (set latitude), `:Sg#` (set
+longitude), `:Gt#` (get latitude), `:Gg#` (get longitude), `:SG#`/`:SL#`/`:SC#`
+(time/date sync), `:MS#`, `:Q#`, `:M*#`/`:R*#` (motion/rate, ignored),
+`:GVP#`/`:GVN#` (product/firmware), `:GW#`, `:GT#`, plus assorted SkySafari
+query stubs (`:Gr#`, `:GS#`, `:GL#`, `:GC#`, `:GG#`, `:GA#`, `:GZ#`). The
+`:CM#` sync reply is `M31 EX GAL MAG 3.5 SZ178.0'#`.
 
 `:Gt#` and `:Gg#` return stored lat/lon in LX200 DMS format so
 SkySafari receives a proper response and does not time out or retry.
@@ -98,12 +110,16 @@ lens is capped or the sky is completely dark.
 
 ### CPU affinity
 ✅ DONE.
-- CPU 0: kernel/IRQs/system services
-- CPU 1: comms_proc + efinder-webui (I/O bound)
-- CPU 2: solver_proc primary core; olive-solve's rayon thread pool also
-  uses CPU 3 for star extraction, spreading the work across two cores.
-  cpu_solver=2 in config.py.
+- CPU 0: kernel/IRQs/system services + comms_proc + efinder-webui + IMU thread
+  (all I/O bound; cpu_comms=0 in config.py)
+- CPU 1: solver_proc auxiliary core (third rayon core for star extraction;
+  cpu_solver_aux=1)
+- CPU 2: solver_proc primary core (cpu_solver=2)
 - CPU 3: camera_proc (ISP DMA + memcpy to SHM) + solver rayon secondary
+  (cpu_camera=3)
+
+The solver pins itself to {cpu_solver, cpu_camera, cpu_solver_aux} = CPUs 1+2+3
+and runs sycamore with set_num_threads(3).
 
 ### Zram swap
 ✅ DONE. `install.sh` configures `zram-tools` with `PERCENT=50`
@@ -126,9 +142,9 @@ plate-solved star position and the reported boresight. Offset is
 persisted to `/etc/efinder/efinder.conf`.
 
 ### Release image filename stamping
-✅ DONE. Release images named `efinder-YYYYMMDD-vX.Y.Z.img.xz` (tagged
-builds) or `efinder-YYYYMMDD.img.xz` (manual workflow dispatch). The
-build date is embedded at build time.
+✅ DONE. Release images named `efinder-sycamore-YYYYMMDD-vX.Y.Z.img.xz` (tagged
+builds) or `efinder-sycamore-YYYYMMDD.img.xz` (manual workflow dispatch). The
+build date is embedded at build time (see `.github/workflows/release.yml`).
 
 ---
 

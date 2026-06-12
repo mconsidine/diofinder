@@ -103,7 +103,7 @@ The solver accumulates a rolling window of 30 solved FOV measurements.
 Once the window standard deviation falls below `fov_calibrated_stddev` (default
 0.05°), `fov_calibrated` is set `true` in the config file and the search
 tolerance tightens from `fov_max_error_deg` (1.0°) to
-`fov_calibrated_max_error_deg` (0.5°). This makes subsequent solves faster
+`fov_calibrated_max_error_deg` (0.1°). This makes subsequent solves faster
 and more robust against false positives.
 
 If you change the lens or camera mode, reset calibration:
