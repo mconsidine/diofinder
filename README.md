@@ -29,7 +29,7 @@ boresight registration and a built-in three-point polar alignment assistant.
 14. [Wi-Fi modes](#wi-fi-modes)
 15. [Configuration reference](#configuration-reference)
 16. [Maintenance CLI (`efinder-ctl`)](#maintenance-cli-efinder-ctl)
-17. [Updating without a git repository](#updating-without-a-git-repository)
+17. [Updating (OTA)](#updating-ota)
 18. [Architecture](#architecture)
 19. [Diagnostic guide (SSH / PuTTY)](#diagnostic-guide-ssh--putty)
     - [Can't solve even though stars are visible](#cant-solve-even-though-stars-are-visible)
@@ -94,13 +94,13 @@ SkySafari in real time via the LX200 protocol.
 
 ## Quick start — flashing the image
 
-1. Download `efinder-YYYYMMDD-vX.Y.Z.img.xz` from the
+1. Download `efinder-sycamore-YYYYMMDD-vX.Y.Z.img.xz` from the
    [Releases](../../releases) page.
 2. Flash with **Raspberry Pi Imager** (choose "Use custom image"), **balena
    Etcher**, or `dd`:
    ```bash
-   xz -d efinder-YYYYMMDD-vX.Y.Z.img.xz
-   sudo dd if=efinder-YYYYMMDD-vX.Y.Z.img bs=4M status=progress oflag=sync of=/dev/sdX
+   xz -d efinder-sycamore-YYYYMMDD-vX.Y.Z.img.xz
+   sudo dd if=efinder-sycamore-YYYYMMDD-vX.Y.Z.img bs=4M status=progress oflag=sync of=/dev/sdX
    ```
 3. Insert and boot. First boot takes 30–90 s; the green LED steadies when the
    eFinder application has started.
@@ -186,8 +186,8 @@ The eFinder records the pixel offset and writes it to config. Survives restarts.
 | `:SC MM/DD/YY#` | Set date (syncs system clock) | `1Updating Planetary Data#` |
 | `:MS#` | Move to target (ignored) | `0` |
 | `:Q#` | Stop (ignored) | _(empty)_ |
-| `:GVP#` | Product name | `eFinder#` |
-| `:GVN#` | Firmware version | version string |
+| `:GVP#` | Product name | `eFinder <version>#` |
+| `:GVN#` | Firmware version | `eFinder <version>#` |
 
 ---
 
@@ -222,10 +222,12 @@ Live camera view with controls that take effect immediately (no page reload):
   (±0.05 s per click). Valid range: 0.001–10 s.
 - **Gain (1–64)**: slider + numeric box + `−`/`+` buttons (±1 per click).
 - **Detection sigma**: star extraction threshold. Slider + numeric box +
-  `−`/`+` buttons (±1.0 per click). Default 7. Lower finds fainter stars;
-  higher rejects noise. Valid range: 3–20. **This is the first thing to adjust
+  `−`/`+` buttons. Default 5. Lower finds fainter stars;
+  higher rejects noise. Valid range: 0–20. **This is the first thing to adjust
   if the solver is not finding enough stars** — see
   [Can't solve even though stars are visible](#cant-solve-even-though-stars-are-visible).
+- **Matched-filter kernel sigma**, **trail rejection (max axis ratio)**, and
+  **match radius/threshold** sliders are also exposed (sycamore ≥ 0.12 features).
 - **Solve timeout (ms)**: maximum time per frame. Slider + numeric box.
   Default 1500 ms.
 
@@ -262,9 +264,10 @@ Live `journalctl` tail for `efinder.service`.
 
 ### Update (`/update`)
 
-One-click `efinder-update`. Refreshes Python dependencies, installs the latest
-olive-solve wheel from `vendor/wheels/`, and restarts the service. Does not
-touch `efinder.conf`.
+One-click `efinder-update`. Refreshes Python dependencies and the olive-solve
+(`tetra3`) and sycamore (`star_detect`) wheels from their latest GitHub releases
+(a wheel already in `vendor/wheels/` overrides the download), then restarts the
+service. Does not touch `efinder.conf`.
 
 ### Health endpoint (`/healthz`)
 
@@ -486,16 +489,24 @@ sudo EFINDER_EXPOSURE_S=0.5 systemctl restart efinder
 | `sensor_full_width` | `4056` | Full IMX477 sensor width — forces libcamera full-array readout |
 | `sensor_full_height` | `3040` | Full IMX477 sensor height — forces libcamera full-array readout |
 | `exposure_s` | `0.2` | Exposure time in seconds (0.001–10.0) |
-| `gain` | `20.0` | Analogue gain (1.0–64.0) |
-| `auto_exposure_enabled` | `false` | Adaptively adjust exposure to reach `auto_exposure_target_stars` |
-| `auto_exposure_target_stars` | `20` | Desired star count when auto-exposure is active |
+| `gain` | `5.0` | Analogue gain (1.0–64.0) |
+| `auto_exposure_enabled` | `true` | Adaptively adjust exposure to reach `auto_exposure_target_stars`. Defaults ON. |
+| `auto_exposure_target_stars` | `20` | Desired star count when auto-exposure is active. Live-mutable (seeing presets). |
 | `auto_exposure_min_s` | `0.05` | Minimum exposure when auto-exposure is active |
-| `auto_exposure_max_s` | `1.0` | Maximum exposure when auto-exposure is active |
+| `auto_exposure_max_s` | `1.0` | Maximum exposure when auto-exposure is active. Live-mutable (seeing presets). |
 | `fov_deg` | `13.5` | Initial FOV estimate in degrees. Self-calibrates after ~30 solves. |
 | `arcsec_per_pixel` | `51.15` | Plate scale in arcsec/px (display only; solver uses fov_deg). |
 | `distortion` | `0.0` | Barrel/pincushion coefficient. 0 = fit per-solve. |
-| `detect_sigma` | `7.0` | Extraction threshold (σ above background). Lower finds fainter stars; raise to reject noise. Default: 7. |
+| `detect_sigma` | `5.0` | Extraction threshold (σ above background). Lower finds fainter stars; raise to reject noise. |
+| `detect_bin` | `2` | Detection binning: 2 = 2×2-binned (faster, centroids stay full-res), 1 = full-res. Restart to apply. |
+| `detect_bg_mode` | `row_percentile` | Per-frame background mode (row_percentile, line_median, top_hat, block_percentile, column_percentile, row_column_percentile, uniform_mean). |
+| `detect_kernel_sigma` | `1.5` | Matched-filter kernel width (px), 1.0–4.0. Widen for bloated PSFs. sycamore ≥ 0.12. |
+| `detect_max_axis_ratio` | `0.0` | Trail/elongation rejection. 0 = off, else 1.5–10.0. Full 2-D moments (sycamore ≥ 0.12). |
+| `detect_local_noise` | `true` | Per-window local noise in the matched filter. sycamore ≥ 0.12. |
+| `detect_tophat_radius` | `12` | Structuring-element radius (px) for top_hat mode. |
 | `solver_db` | `default_database` | tetra3 `.npz` database name (relative to `/var/lib/efinder/` or absolute path). |
+| `star_db_deep` | _(empty)_ | Optional deeper-magnitude db for the "bad" seeing preset; used only if the file exists. |
+| `seeing_mode` | `good` | Active Good/Bad seeing preset (see [Seeing presets](#seeing-presets)). |
 | `min_centroids` | `8` | Minimum detected stars required to attempt a solve. |
 | `max_solve_stars` | `50` | Cap on centroids passed to the solver (performance guard). |
 | `solve_timeout_ms` | `1500` | Per-frame solver budget in ms. |
@@ -504,15 +515,19 @@ sudo EFINDER_EXPOSURE_S=0.5 systemctl restart efinder
 | `fov_max_error_deg` | `1.0` | FOV tolerance window before calibration. |
 | `fov_calibrated_max_error_deg` | `0.1` | FOV tolerance window after calibration. |
 | `fov_calibrated_stddev` | `0.05` | Stddev threshold (°) for declaring FOV stable. |
+| `bg_cache_enabled` | `true` | Temporal background cache (median-stack recent frames → per-row model). |
 | `boresight_y` | `380` | Boresight Y in pixels. Set by `:CM#` sync. |
 | `boresight_x` | `480` | Boresight X in pixels. Set by `:CM#` sync. |
 | `lx200_port` | `4060` | TCP port for the LX200 server. |
 | `lx200_client_timeout_s` | `30.0` | Disconnect idle LX200 clients. |
 | `latitude_deg` | `0.0` | Observer latitude. Auto-populated from SkySafari `:St` on connect. |
 | `longitude_deg` | `0.0` | Observer longitude. Auto-populated from SkySafari `:Sg` on connect. |
-| `cpu_camera` | `3` | CPU affinity for camera_proc. Also used as a secondary core for olive-solve's rayon thread pool. |
+| `cpu_camera` | `3` | CPU affinity for camera_proc. Also a secondary core for olive-solve's rayon thread pool. |
 | `cpu_solver` | `2` | Primary CPU affinity for solver_proc. |
-| `cpu_comms` | `1` | CPU affinity for comms_proc and web UI. |
+| `cpu_solver_aux` | `1` | Auxiliary solver core (third rayon core for star extraction). |
+| `cpu_comms` | `0` | CPU affinity for comms_proc and web UI (shares CPU 0 with the kernel). |
+| `watchdog_enabled` | `true` | Restart the service if the solver stops publishing solutions. |
+| `watchdog_timeout_s` | `30.0` | Staleness (s) before the solver is declared hung. |
 | `save_failed_frames` | `false` | Save PNG for every failed solve to `failed_frames_dir`. |
 | `save_solved_frames` | `false` | Save PNG for every successful solve to `failed_frames_dir`. |
 | `failed_frames_dir` | `/var/lib/efinder/captures` | Directory for saved frame PNGs. |
@@ -522,10 +537,14 @@ sudo EFINDER_EXPOSURE_S=0.5 systemctl restart efinder
 
 | CPU | Role |
 |---|---|
-| 0 | Linux kernel, IRQs, sshd, NetworkManager — never pinned |
-| 1 | `comms_proc` (LX200 + maint socket) · `efinder-webui` (Flask) · IMU thread (20 Hz I²C) |
+| 0 | Linux kernel, IRQs, sshd, NetworkManager · `comms_proc` (LX200 + maint socket) · `efinder-webui` (Flask) · IMU thread (20 Hz I²C) — all I/O-bound, share CPU 0 with the kernel |
+| 1 | `solver_proc` auxiliary core (third rayon core for star extraction) |
 | 2 | `solver_proc` primary — olive-solve tetra3-py in-process |
-| 3 | `camera_proc` (ISP DMA + SHM copy) · olive-solve rayon secondary thread pool |
+| 3 | `camera_proc` (ISP DMA + SHM copy) · `solver_proc` rayon secondary thread pool |
+
+The solver pins itself to CPUs 1+2+3 (`{cpu_solver, cpu_camera, cpu_solver_aux}`)
+and runs sycamore's thread pool with 3 threads; comms/webui share CPU 0 with the
+kernel because both are I/O-bound.
 
 ---
 
@@ -554,19 +573,23 @@ efinder-ctl exposure set 0.3
 efinder-ctl exposure set 0.3 --persist
 efinder-ctl gain set 15.0 --persist
 
-# Solver parameters
-efinder-ctl solver-params get
-efinder-ctl solver-params set --sigma 7.0
-efinder-ctl solver-params set --timeout 2000 --persist
-
-# Test / live mode
-efinder-ctl raw '{"cmd":"set_test_mode","args":{"enabled":false}}'
-
 # Polar alignment
 efinder-ctl polar start
 efinder-ctl polar status
 efinder-ctl polar cancel
 efinder-ctl polar set-latitude 44.5
+
+# Seeing preset (Good / Bad one-tap tuning)
+efinder-ctl seeing get
+efinder-ctl seeing set good
+efinder-ctl seeing set bad
+
+# Solver parameters (no dedicated subcommand — use raw, or the Camera page)
+efinder-ctl raw '{"cmd":"solver_params_get","args":{}}'
+efinder-ctl raw '{"cmd":"solver_params_set","args":{"detect_sigma":4.0,"persist":true}}'
+
+# Test / live mode
+efinder-ctl raw '{"cmd":"set_test_mode","args":{"enabled":false}}'
 
 # Raw JSON (any command)
 efinder-ctl raw '{"cmd":"ping","args":{}}'
@@ -574,36 +597,27 @@ efinder-ctl raw '{"cmd":"ping","args":{}}'
 
 ---
 
-## Updating without a git repository
+## Updating (OTA)
 
-The device is installed via chroot image copy — there is no `.git` directory
-on the device, so `git pull` will not work. Use `curl` to update individual
-files from the GitHub repository.
-
-### Update all application files
-
-```bash
-BASE="https://raw.githubusercontent.com/mconsidine/diofinder/main"
-
-curl -fsSL "$BASE/efinder/efinder_main.py"     -o /opt/efinder/efinder/efinder_main.py
-curl -fsSL "$BASE/efinder/config.py"           -o /opt/efinder/efinder/config.py
-curl -fsSL "$BASE/efinder/solver_proc.py"      -o /opt/efinder/efinder/solver_proc.py
-curl -fsSL "$BASE/efinder/comms_proc.py"       -o /opt/efinder/efinder/comms_proc.py
-curl -fsSL "$BASE/efinder/camera_proc.py"      -o /opt/efinder/efinder/camera_proc.py
-curl -fsSL "$BASE/webui/app.py"                -o /opt/efinder/webui/app.py
-curl -fsSL "$BASE/webui/templates/camera.html" -o /opt/efinder/webui/templates/camera.html
-curl -fsSL "$BASE/webui/static/style.css"      -o /opt/efinder/webui/static/style.css
-
-sudo systemctl restart efinder efinder-webui
-```
-
-### Pin to a specific branch or commit
-
-Replace `main` with the branch name or full commit SHA:
+Release images are git-provisioned: `install.sh` makes `/opt/efinder` a real
+git clone of this repo (with the build ref checked out), so over-the-air
+updates work on imaged devices. `efinder-update` is the supported path — it
+fetches the target ref, refreshes Python deps and the olive-solve / sycamore
+wheels from their latest GitHub releases, records the version, and restarts
+both services.
 
 ```bash
-BASE="https://raw.githubusercontent.com/mconsidine/diofinder/<branch-or-sha>"
+sudo /usr/local/bin/efinder-update            # latest tag
+sudo /usr/local/bin/efinder-update v0.0.25    # a specific tag/commit
+sudo /usr/local/bin/efinder-update --ref olive  # track a branch (git pull --ff-only)
 ```
+
+The web UI **Update** page wraps the same script. To refresh only the star
+database, use `efinder-db-update` (see below).
+
+If `/opt/efinder` is not a git repository (e.g. a hand-copied install where the
+git graft failed), re-image with the latest release rather than patching files
+in place.
 
 ---
 
@@ -619,7 +633,7 @@ BASE="https://raw.githubusercontent.com/mconsidine/diofinder/<branch-or-sha>"
 │                                                                                │
 │   ┌──────────────┐    ┌──────────────┐    ┌──────────────────────────────────┐ │
 │   │ comms_proc   │    │ camera_proc  │    │ solver_proc                      │ │
-│   │  CPU 1       │    │  CPU 3       │    │  CPU 2 + CPU 3 (rayon)           │ │
+│   │  CPU 0       │    │  CPU 3       │    │  CPUs 1 + 2 + 3 (rayon)         │ │
 │   │              │    │              │    │                                  │ │
 │   │ LX200 :4060  │    │ picamera2    │    │ sycamore star_detect             │ │
 │   │ maint.sock   │◄──►│ → SHM bufs  │◄───│   + olive-solve (in-process)     │ │
@@ -631,7 +645,7 @@ BASE="https://raw.githubusercontent.com/mconsidine/diofinder/<branch-or-sha>"
     ┌──────▼───────┐
     │ efinder-webui│
     │ Flask :80    │
-    │ CPU 1 (float)│
+    │ CPU 0        │
     └──────────────┘
 ```
 
@@ -677,7 +691,7 @@ comms_proc: serves RA/Dec on next :GR# / :GD# poll
 ### Extraction
 
 Star extraction uses **sycamore** (`star_detect.detect_stars`) with a matched-filter gate.
-Default sigma: 7. Speed: ~10–60 ms. Installed from `vendor/wheels/star_detect-*.whl`.
+Default sigma: 5. Speed: ~10–60 ms. Installed from `vendor/wheels/star_detect-*.whl`.
 
 ### Shared state
 
@@ -695,7 +709,11 @@ Default sigma: 7. Speed: ~10–60 ms. Installed from `vendor/wheels/star_detect-
 |---|---|
 | `test_mode` | `True` = serve static test image; `False` = live camera |
 | `detect_sigma` | Extraction threshold, overrides config at runtime |
+| `detect_bg_mode`, `detect_kernel_sigma`, `detect_max_axis_ratio`, `detect_local_noise`, `detect_tophat_radius`, `detect_bg_block_size`, `detect_uniform_filter_size`, `detect_noise_mode`, `min_centroids` | Detection params, all live-mutable via `solver_params_set` / seeing presets |
+| `match_radius`, `match_threshold` | Match params, live-mutable via `match_params_set` / seeing presets |
 | `solve_timeout_ms` | Solver budget, overrides config at runtime |
+| `seeing_mode` | Active Good/Bad preset |
+| `auto_exposure_enabled`, `auto_exposure_target_stars`, `auto_exposure_max_s` | Auto-exposure controller settings (seeing presets) |
 | `boresight_y`, `boresight_x` | Current boresight pixel offset |
 | `imu_available` | BNO055 detected and responding |
 | `imu_q`, `imu_t` | Latest quaternion and its monotonic timestamp |
@@ -877,10 +895,11 @@ sudo systemctl start efinder
 ls -lh /var/lib/efinder/default_database.npz
 ```
 
-Should be present (typically a few hundred MB). If absent:
+Should be present (typically a few hundred MB). If absent, fetch it from the
+`astro_databases` release (SHA-256 verified):
 
 ```bash
-sudo /usr/local/bin/efinder-update   # reinstalls from the vendor wheel
+sudo /usr/local/bin/efinder-db-update   # downloads cedar_solve_13deg.npz
 ```
 
 ### 10. Query or set runtime parameters without a web browser
@@ -913,7 +932,7 @@ web UI does not interrupt active plate-solving.
 | Live view very dark / stars invisible | Heavy underexposure | Increase exposure or gain on the Camera page |
 | Web UI shows stale layout after update | Browser cache | Hard-refresh (`Ctrl+Shift+R`) or open in incognito |
 | Always in test mode on startup | `test.png` found at startup | Use web UI toggle or `set_test_mode` maint cmd |
-| `TOO_FEW` on every frame | Low star count — exposure too short or sigma too high | Lower sigma (try 6–7) or increase exposure; use `diag_detect.py --sigma-sweep` |
+| `TOO_FEW` on every frame | Low star count — exposure too short or sigma too high | Lower sigma (try 3–4) or increase exposure; use `diag_detect.py --sigma-sweep` |
 | `NO_MATCH` with plenty of stars | FOV estimate wrong or database mismatch | Reset calibration (`efinder-ctl calibration reset`), verify database |
 | Solve time > 1.5 s constantly | Blind solve on first frame or after a solve gap | Normal on first frame; if persistent, check `solve_timeout_ms` |
 | `Sensor mode: output_size=(1332, 990)` in journal | `sensor=` hint not applied | Ensure camera_proc.py is up to date; restart efinder |
@@ -936,15 +955,14 @@ This prints a table like:
 
 ```
 sigma=3   stars=47
-sigma=5   stars=31
+sigma=5   stars=31     ← default; above the 8-star minimum
 sigma=7   stars=18
-sigma=7   stars=18     ← default; above the 8-star minimum
 sigma=9   stars=6      ← below the 8-star minimum → TOO_FEW
 sigma=11  stars=2
 ```
 
-If the default sigma=7 yields fewer than 8 stars, **lower sigma on the Camera
-page**. Try 5–6. The change takes effect immediately with no restart. Use
+If the default sigma=5 yields fewer than 8 stars, **lower sigma on the Camera
+page**. Try 3–4. The change takes effect immediately with no restart. Use
 **Persist → Apply & save** to keep it across reboots.
 
 #### Step 2 — understand the frame pipeline
@@ -996,7 +1014,7 @@ scp efinder@efinder.local:/var/lib/efinder/YYYYMMDDHHMMSSMMM.zip .
 #### Quick-reference: sigma adjustment from the web UI
 
 1. Open `http://efinder.local/camera`
-2. Find the **Detection sigma** slider (default 7, range 3–20)
+2. Find the **Detection sigma** slider (default 5, range 0–20)
 3. Drag left or click `−` to lower it — change takes effect on the next frame
 4. Watch the dashboard for `stars` count to climb above 8
 5. When solving reliably, tick **Persist** and click **Apply & save**
@@ -1104,14 +1122,10 @@ bash build/check-tree.sh
 
 ## Known limitations and deferred work
 
-- **Dark frame / hot pixel calibration**: the dark-frame fast-path skips
-  completely dark frames; a full master-dark subtraction workflow is not yet
-  implemented.
-- **Auto-exposure**: solver reports star count per frame; the feedback loop
-  that adjusts exposure to hit `auto_exposure_target_stars` is wired in config
-  but not yet active.
-- **Watchdog for solver hang**: systemd restarts on crash but not on a silent
-  hang. A heartbeat monitor on `latest_solution.epoch_monotonic` is planned.
+- **Master-dark subtraction**: a hot-pixel mask (cap-the-lens `dark_capture`,
+  8-neighbour repair — see [Dark-frame / hot-pixel capture](#dark-frame--hot-pixel-capture))
+  is implemented and the dark-frame fast-path skips completely dark frames, but a
+  full per-pixel master-dark subtraction in `camera_proc` is still deferred.
 - **No authentication**: LX200 server and web UI are open to any device on
   the same network. Do not expose to the public internet.
 - **Single boresight offset**: one calibration per session; swapping eyepieces
