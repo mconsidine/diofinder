@@ -138,6 +138,9 @@ solver_db: default_database
 # to keep presets on the standard db. Set to a bare name or absolute path that
 # exists on disk (see the astro_databases release pattern in the README).
 star_db_deep: /var/lib/efinder/cedar_solve_13deg_mag85.npz
+# Remembered standard database (set automatically the first time a seeing
+# preset switches to the deep db; "standard" resolves here first).
+star_db_standard:
 fov_max_error_deg: 1.0
 min_centroids: 8
 max_solve_stars: 50
