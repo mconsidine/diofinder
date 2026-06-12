@@ -1,10 +1,11 @@
 # Technical Assessment — diofinder Pipeline vs. Alternative Extractors & Solvers
 
-**Revision 2 — 2026-06-12.** Supersedes the session-delivered comparison of the same
-date; updated for the current state of all repos (seeing presets merged to `olive`,
-sycamore-extract 0.12.0 on main, olive-solve `noext` line, astro_databases deep
-variant released). Operational follow-ups live in
-`docs/current-state-and-actions-2026-06-12.md`.
+**Revision 3 — 2026-06-12 (evening).** Updated after the full release cycle landed:
+image **v0.0.25** shipped carrying sycamore-extract **v0.12.0** and olive-solve
+**v0.1.2** (built from the reconciled main, formerly `noext`); olive-solve's
+noext/main split is resolved; Node-24 workflow bumps merged in all five repos.
+Operational follow-ups live in `docs/current-state-and-actions-2026-06-12.md`
+(see its final-status addendum).
 
 "Better" throughout means **faster** or **more able to solve across a range of
 seeing/sky conditions** (turbulence, transparency, moonlight/gradients, wind).
@@ -46,7 +47,7 @@ switching components.**
 Current default path: `BackgroundCache.detect()` → `detect_stars_with_cache`
 (temporal 8-frame median model) with per-frame fallback during slew/warm-up.
 
-| Capability | 0.11.2 (released) | 0.12.0 (main, **untagged**) |
+| Capability | 0.11.2 (superseded) | 0.12.0 (**released — in image v0.0.25**) |
 |---|---|---|
 | Matched-filter kernel | fixed σ=1.5 (compile-time) | `kernel_sigma` 1.0–4.0 runtime; σ=1.5 bit-identical to legacy |
 | Trail rejection | separable var only (diagonal-blind); diofinder had it disabled | full 2×2 covariance (m2_xy) eigen-ratio; skipped when `max_axis_ratio=inf` |
@@ -58,12 +59,12 @@ Remaining extractor limitations (accepted): u8-only; matched filter's conservati
 bias on correlated noise (mitigated by per-preset sigma); cached path needs IMU
 `note_motion` wiring to invalidate (wired in diofinder).
 
-**Gap:** 0.12.0 has no release tag, so deployed devices still run 0.11.2 and the new
-parameters are capability-probed into inertness. Tagging v0.12.0 is the highest-value
-single action for seeing robustness (S1 in the actions doc). On-Pi p50 targets
-(≤6 ms per-frame, ≤4 ms cached at bin=2) must be re-verified with 0.12.0 — default
-path is bit-identical by construction, so regressions are only possible behind
-non-default parameters.
+**Status:** v0.12.0 is released and shipped in image v0.0.25, so all of the above is
+active on-device (the Bad preset's kernel_sigma / local_noise / block-cache now do
+real work). Remaining: on-Pi p50 re-verification (≤6 ms per-frame, ≤4 ms cached at
+bin=2 on test1–3) — default path is bit-identical to 0.11.2 by construction, so
+regressions are only possible behind non-default parameters, i.e. exactly the Bad
+preset; bench both presets.
 
 ## 3. Solver state
 
@@ -76,9 +77,10 @@ serial; `parallel_parity.rs`, 738 fixtures), attitude-hint cone rejection +
 an `extractor` cargo feature so the diofinder wheel drops ~4,300 LOC of unused
 extractor (`--no-default-features`) — sycamore is the extractor.
 
-Note for historical accuracy: olive-solve `main` does **not** contain the parallel
-solver or the feature gate; performance claims for the deployed system attach to
-**noext** wheels only. Deferred solver work: f32 kd-tree/vector math (est. 20–40%
+Historical note, resolved 2026-06-12: the noext/main split is gone — noext was
+merged into `main`, and the **v0.1.2 release** (wheel `tetra3-0.1.2`, built from
+reconciled main) carries the parallel solver and feature gate; it is what image
+v0.0.25 vendors. Deferred solver work: f32 kd-tree/vector math (est. 20–40%
 verification speedup, needs on-device validation), gRPC `parallel` field.
 
 ## 4. diofinder integration state
@@ -102,7 +104,7 @@ Implemented and merged to `olive` (PR #27 and successors):
 | Parameter | Good | Bad | Why |
 |---|---|---|---|
 | `detect_sigma` | 5.0 | 4.0 | recover faint stars when PSFs bloat |
-| `detect_kernel_sigma` | 1.5 | 2.5 | match kernel to PSF width (needs ≥0.12 wheel) |
+| `detect_kernel_sigma` | 1.5 | 2.5 | match kernel to PSF width (active as of v0.0.25) |
 | `detect_bg_mode` | row_percentile | block_percentile | 2-D moon/haze gradients; cache-compatible on ≥0.12 |
 | `detect_max_axis_ratio` | 3.0 | 5.0 | trail cut; looser when seeing smears stars |
 | `min_centroids` | 8 | 5 | binomial verification is the real FP guard |
@@ -128,7 +130,7 @@ calibrated FOV (13.497°) and retire the "13deg" label.
 
 | Recommendation | Status |
 |---|---|
-| 1. Tunable matched-filter kernel sigma | **Implemented** (sycamore 0.12, main) — unreleased |
+| 1. Tunable matched-filter kernel sigma | **Released** (sycamore v0.12.0, image v0.0.25) |
 | 2. Trail rejection on + m2_xy | **Implemented** (0.12 + diofinder presets) |
 | 3. Perimeter local noise; persistent hot-pixel map | **Implemented** (0.12 `local_noise`; diofinder `hot_pixel.py`) |
 | 4. 2-D-capable cached background | **Implemented** (0.12 block cache + bg_cache.py) |
@@ -137,10 +139,11 @@ calibrated FOV (13.497°) and retire the "13deg" label.
 | 7. Off-device tetra3rs lens calibration | **Implemented** (`scripts/calibrate_lens.py`) — not yet run on real frames |
 | 8. save_failed_frames write path | **Implemented & merged** |
 | 9. Solver-hang watchdog | **Implemented & merged** |
-| 10. bin=4 escape hatch | **Implemented** (0.12) — unreleased |
+| 10. bin=4 escape hatch | **Released** (sycamore v0.12.0, image v0.0.25) |
 | 11. Live-mutable match params | **Implemented & merged** |
 | 12. systemd SHM cleanup | **Implemented & merged** |
 
-Everything not yet *operational* funnels through three bottlenecks: the olive-solve
-v0.1.2-from-noext release, the sycamore v0.12.0 release, and one on-device
-verification session. See the actions document.
+As of image v0.0.25 the two release bottlenecks are cleared; everything not yet
+*operational* funnels through one remaining gate: a single on-device / on-sky
+verification session (plus the deep-DB catalog build and its device plumbing).
+See the actions document's final-status addendum for the live to-do list.

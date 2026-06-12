@@ -163,3 +163,37 @@ re-cut olive-solve v0.1.2 from main → cut sycamore v0.12.0 from main → merge
 diofinder docs branch → publish diofinder release v0.0.25 (Release image workflow
 attaches the SD image; blank inputs resolve to latest = the two fresh releases +
 astro_databases v2026.06).
+
+---
+
+## Final status — 2026-06-12 ~18:00 UTC (supersedes §2 statuses above)
+
+**CLOSED today:** O1 (olive-solve v0.1.2 released, wheel `tetra3-0.1.2`, from
+reconciled main), O2 (noext merged to main both ways), S1 (sycamore v0.12.0
+released), D2 (image **v0.0.25** built green with both new wheels + DB v2026.06),
+D4 (Node-24 bumps merged in all five repos), D5 (tests/README already documented
+`--solve`), D6 (byte-identical duplicates removed), plus the docs-accuracy
+reconciliation commit (`cccb6c8`) and the two assessment docs (rev 3).
+
+**REMAINING TO-DOS, in suggested order:**
+
+1. **On-device / on-sky verification batch** (D1+S2) — flash v0.0.25, then in one
+   session: `tests/bench.py` p50 on test1–3 for both presets; seeing-preset A/B on
+   marginal frames; dark-frame hot-pixel capture; auto-exposure convergence;
+   `bench_pipeline_combos.py --live-shm`; watchdog fire/restart; preset-value
+   tuning from the A/B data (edit `efinder/seeing.py` if warranted); run
+   `scripts/calibrate_lens.py` on saved solved frames and set `distortion:`.
+2. **Deep Gaia catalog** (in progress on the Mac) — commit the two catalog files,
+   tag astro_databases (e.g. v2026.06.1); that run also validates its Node-24 bumps.
+3. **Deep-DB device plumbing** — fetch the `_mag85.npz` in release.yml /
+   `efinder-update` (or scp once) + set `star_db_deep` in efinder.conf; until then
+   the Bad preset's DB switch is a silent no-op. (Deferred by owner; ask Claude to wire it.)
+4. **D3** — archive-tag and delete the `hybrid` branch; delete `sycamore-only`
+   (verified still present as of this addendum).
+5. **Watch first workflow runs** post-Node-24 (artifact actions crossed multiple
+   majors: v7/v8 in the four libs, v5 in diofinder; drop to v5/v6 if v7 surprises).
+6. **Next cycle:** O3 f32 kd-tree/vector math in olive-solve (est. 20–40%
+   verification speedup — best done after #1 establishes a baseline); A2+A3
+   calibrated-FOV (13.497°) DB regen + "13deg" rename, batched into the next DB
+   release; T1 tetra3rs cibuildwheel→maturin (note: cibuildwheel v4 deliberately
+   not taken in the Node bump); O4 gRPC `parallel` field (minor).
