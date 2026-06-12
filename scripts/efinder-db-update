@@ -71,6 +71,26 @@ fi
 install -m 644 -o efinder -g efinder "$TMPDIR/$ASSET" "$DB_PATH"
 LOG "Installed $(du -h "$DB_PATH" | cut -f1) database at $DB_PATH"
 
+
+# --- Optional deep (G<=8.5) database for the Bad-seeing preset -------------
+# Downloaded when the release carries it; non-fatal if absent. The seeing
+# preset uses it only when star_db_deep in efinder.conf points at the file.
+DEEP_ASSET=cedar_solve_13deg_mag85.npz
+DEEP_PATH=/var/lib/efinder/$DEEP_ASSET
+if curl -fsSL "$BASE/$DEEP_ASSET" -o "$TMPDIR/$DEEP_ASSET" 2>/dev/null; then
+  WANT_D=$(python3 -c "import json;m=json.load(open('$TMPDIR/manifest.json'));print(m['outputs'].get('cedar_solve_mag85',{}).get('sha256',''))" 2>/dev/null || true)
+  GOT_D=$(sha256sum "$TMPDIR/$DEEP_ASSET" | cut -d' ' -f1)
+  if [ -n "$WANT_D" ] && [ "$GOT_D" != "$WANT_D" ]; then
+    LOG "WARNING: deep database SHA-256 mismatch; skipping deep install"
+  else
+    install -m 644 "$TMPDIR/$DEEP_ASSET" "$DEEP_PATH"
+    LOG "Installed deep database at $DEEP_PATH"
+    grep -q "^star_db_deep: *[^ ]" "$CONF" || LOG "NOTE: set star_db_deep: $DEEP_PATH in $CONF to enable the Bad-preset deep DB"
+  fi
+else
+  LOG "No deep database asset in this release (skipping)"
+fi
+
 LOG "Restarting efinder service..."
 systemctl restart efinder
 LOG "Done. Previous database kept at $DB_PATH.bak"
