@@ -34,7 +34,9 @@ SEEING_PRESETS: Dict[str, Dict[str, Any]] = {
         match_threshold=1e-5,
         solve_timeout_ms=1500,
         auto_exposure_target_stars=20,
+        auto_exposure_target_matches=10,
         auto_exposure_max_s=0.5,
+        auto_exposure_max_gain=8.0,
         star_db="standard",
     ),
     "bad": dict(
@@ -47,7 +49,9 @@ SEEING_PRESETS: Dict[str, Dict[str, Any]] = {
         match_threshold=1e-5,
         solve_timeout_ms=3000,
         auto_exposure_target_stars=15,
+        auto_exposure_target_matches=6,
         auto_exposure_max_s=1.0,
+        auto_exposure_max_gain=16.0,
         star_db="deep",
     ),
 }
@@ -62,8 +66,10 @@ PRESET_RATIONALE: Dict[str, str] = {
     "match_radius": "Catalog-match tolerance as a fraction of FOV.",
     "match_threshold": "Max false-positive probability accepted.",
     "solve_timeout_ms": "Per-frame solve budget.",
-    "auto_exposure_target_stars": "Auto-exposure target star count.",
+    "auto_exposure_target_stars": "Auto-exposure target star count (lost-in-space fallback).",
+    "auto_exposure_target_matches": "Auto-exposure target matched-star count while solving.",
     "auto_exposure_max_s": "Auto-exposure ceiling.",
+    "auto_exposure_max_gain": "Auto-exposure gain-ladder ceiling.",
     "star_db": "standard vs. deeper-magnitude database.",
 }
 

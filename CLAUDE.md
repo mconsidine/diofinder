@@ -66,7 +66,9 @@ is far below one core), freeing CPU 1 as a third solver core. CPU affinity is se
 | `test_mode` | bool | comms (via maint) | camera |
 | `auto_exposure_enabled` | bool | comms (via maint `auto_exposure_set`) | comms auto-exposure thread |
 | `auto_exposure_target_stars` | int | comms (via `seeing_set`) | comms auto-exposure thread |
+| `auto_exposure_target_matches` | int | comms (via `seeing_set`) | comms auto-exposure thread |
 | `auto_exposure_max_s` | float | comms (via `seeing_set`) | comms auto-exposure thread |
+| `auto_exposure_max_gain` | float | comms (via `seeing_set`) | comms auto-exposure thread |
 | `imu_available` | bool | imu_thread | comms, webui |
 | `imu_q` | tuple (w,x,y,z) | imu_thread | comms |
 | `imu_t` | float | imu_thread | comms |
@@ -392,6 +394,35 @@ efinder-ctl raw '{"cmd":"solver_params_set","args":{"tracking_enabled":false}}'
 The `tracking_status` maint command (comms) → `SOLVER_OP_TRACKING_STATUS`
 (solver) returns the live counters; the solver mirrors them into `_SolverState`
 each frame.
+
+---
+
+## Auto-exposure / gain controller
+
+`comms_proc._auto_exposure_loop` (daemon thread, gated by
+`auto_exposure_enabled`) runs every 5 s and drives the camera toward the
+*cheapest* operating point that still yields a confident solve. The pure
+decision lives in `_auto_exposure_decision` (unit-tested in
+`tests/test_auto_exposure.py`, no hardware needed).
+
+* **Metric**: matched stars when the frame is solving (`solved=True`), steering
+  toward `auto_exposure_target_matches`; falls back to raw detected-star count
+  (`auto_exposure_target_stars`) while lost-in-space / slewing, where
+  `matches == 0` carries no exposure information.
+* **Exposure-priority ladder**: when starved it raises exposure first and only
+  climbs gain once exposure is at `auto_exposure_max_s`; when over-served it
+  gives gain back first (cheap — only noise), then shortens exposure (which
+  costs star trailing + latency on a moving mount).
+* **Saturation** (`peak ≥ 250`) overrides everything and backs off (gain first).
+* Wide deadband (0.8×–1.5× of target) so it settles instead of oscillating;
+  sub-5 ms exposure moves are ignored. At most one axis changes per cycle.
+* Bounds: `auto_exposure_min_s`/`max_s`, `auto_exposure_min_gain`/`max_gain`.
+  `target_matches`, `target_stars`, `max_s`, and `max_gain` are live-mutable via
+  `shared_cfg` (the seeing presets write them); the floors are config-only.
+
+A full multi-axis sweep over sigma/kernel/bg-mode *as well* as exposure/gain is
+deliberately **not** done in this live loop — see the offline `auto_tune`
+maintenance command (scoped separately) for that.
 
 ## Hot-pixel mask
 

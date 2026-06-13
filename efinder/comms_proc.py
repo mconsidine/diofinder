@@ -146,26 +146,86 @@ def _call_camera(op, args, camera_cmd_q, camera_cmd_reply_q, timeout_s=2.0):
         return _wait_for_reply(camera_cmd_reply_q, rid, timeout_s=timeout_s)
 
 
-def _auto_exposure_decision(stars, peak, target, cur_s, min_s, max_s):
-    """Pure decision step for the auto-exposure controller.
+# Auto-exposure / gain controller tunables.
+_AE_PEAK_SATURATION = 250     # 8-bit peak at/above which a frame is treated as clipped
+_AE_EXP_UP = 1.3              # exposure multiplier when starved of signal
+_AE_EXP_DOWN = 0.8            # exposure multiplier when over-served
+_AE_GAIN_STEP = 1.5           # gain multiplier per ladder step
+_AE_MIN_EXP_DELTA_S = 0.005   # ignore sub-5 ms exposure moves (clamped / noise)
+_AE_STARVED_FRAC = 0.8        # metric below this fraction of target -> need more signal
+_AE_SPARE_FRAC = 1.5          # metric above this fraction of target -> shed cost
 
-    Returns the new exposure in seconds, or None to leave it alone.
-    Saturation always wins (a blown frame yields few usable centroids no
-    matter the count); otherwise nudge toward the target star count with a
-    deadband so it settles instead of oscillating.
+
+def _auto_exposure_decision(*, solved, stars, matches, peak,
+                            cur_s, cur_g, target_stars, target_matches,
+                            min_s, max_s, min_g, max_g):
+    """Pure decision step for the auto-exposure / gain controller.
+
+    Returns a dict describing the new camera state — at most one of
+    ``{"exposure_s": float}`` or ``{"gain": float}`` per call — or ``None`` to
+    leave the camera alone.
+
+    Objective: the *cheapest* operating point that still yields a confident
+    solve. "Cheap" means short exposure first (less star trailing on a moving
+    mount, lower latency), then low gain (less read noise). The real currency is
+    matched stars while we are solving; raw detected-star count is only a
+    fallback proxy when lost-in-space / slewing (``matches == 0`` then tells us
+    nothing about exposure).
+
+    The control axes form an exposure-priority ladder:
+      * need more signal  -> raise exposure first, climb gain only at max_s
+      * have spare signal -> give gain back first, then shorten exposure
+      * saturated frame   -> always back off (gain first; it costs only noise)
+
+    Wide deadband (``_AE_STARVED_FRAC`` .. ``_AE_SPARE_FRAC`` of target) so the
+    loop settles instead of oscillating across the ladder boundary.
     """
-    if peak >= 250:
-        factor = 0.7                      # saturated — back off
-    elif stars < 0.8 * target:
-        factor = 1.3                      # too few stars — expose longer
-    elif stars > 1.5 * target:
-        factor = 0.8                      # plenty of stars — speed up
-    else:
-        return None                       # within deadband
-    new_s = max(min_s, min(max_s, cur_s * factor))
-    if abs(new_s - cur_s) < 0.005:        # clamped / no meaningful change
+    # 1. Saturation overrides everything: a clipped frame yields poor centroids
+    #    regardless of count. Shed the cheapest-to-restore signal first (gain),
+    #    falling back to exposure once already at the gain floor.
+    if peak >= _AE_PEAK_SATURATION:
+        if cur_g > min_g:
+            new_g = max(min_g, cur_g / _AE_GAIN_STEP)
+            if new_g != cur_g:
+                return {"gain": round(new_g, 2)}
+        new_s = max(min_s, cur_s * _AE_EXP_DOWN)
+        if cur_s - new_s >= _AE_MIN_EXP_DELTA_S:
+            return {"exposure_s": round(new_s, 4)}
         return None
-    return new_s
+
+    # 2. Choose the metric + target. Matches drive the loop when we are solving;
+    #    otherwise fall back to detected-star count.
+    if solved and target_matches > 0:
+        metric, target = matches, target_matches
+    else:
+        metric, target = stars, target_stars
+
+    # 3. Starved — need more signal. Exposure first, then climb the gain ladder.
+    if metric < _AE_STARVED_FRAC * target:
+        if cur_s < max_s:
+            new_s = min(max_s, cur_s * _AE_EXP_UP)
+            if new_s - cur_s >= _AE_MIN_EXP_DELTA_S:
+                return {"exposure_s": round(new_s, 4)}
+        if cur_g < max_g:
+            new_g = min(max_g, cur_g * _AE_GAIN_STEP)
+            if new_g != cur_g:
+                return {"gain": round(new_g, 2)}
+        return None                       # already at the ceiling on both axes
+
+    # 4. Over-served — shed cost to find the minimum. Gain back down first
+    #    (noise), then shorten exposure (trailing / latency).
+    if metric > _AE_SPARE_FRAC * target:
+        if cur_g > min_g:
+            new_g = max(min_g, cur_g / _AE_GAIN_STEP)
+            if new_g != cur_g:
+                return {"gain": round(new_g, 2)}
+        new_s = max(min_s, cur_s * _AE_EXP_DOWN)
+        if cur_s - new_s >= _AE_MIN_EXP_DELTA_S:
+            return {"exposure_s": round(new_s, 4)}
+        return None
+
+    # 5. Within the deadband — settled.
+    return None
 
 
 def _auto_exposure_loop(ctx, interval_s=5.0):
@@ -191,23 +251,44 @@ def _auto_exposure_loop(ctx, interval_s=5.0):
             if reply is None or not reply.ok:
                 continue
             cur_s = float(reply.result.get("exposure_s", cfg.exposure_s))
-            # target_stars and max_s are live-mutable (seeing presets / UI write
-            # them to shared_cfg); read them fresh each cycle. min_s is fixed.
-            target = int(ctx.shared_cfg.get(
+            cur_g = float(reply.result.get("gain", cfg.gain))
+            # target_stars/target_matches/max_s/max_gain are live-mutable (seeing
+            # presets / UI write them to shared_cfg); read them fresh each cycle.
+            # The exposure and gain floors stay config-only.
+            target_stars = int(ctx.shared_cfg.get(
                 "auto_exposure_target_stars", cfg.auto_exposure_target_stars))
+            target_matches = int(ctx.shared_cfg.get(
+                "auto_exposure_target_matches", cfg.auto_exposure_target_matches))
             max_s = float(ctx.shared_cfg.get(
                 "auto_exposure_max_s", cfg.auto_exposure_max_s))
-            new_s = _auto_exposure_decision(
-                sol.get("stars", 0), sol.get("peak", 0),
-                target, cur_s, cfg.auto_exposure_min_s, max_s)
-            if new_s is None:
+            max_g = float(ctx.shared_cfg.get(
+                "auto_exposure_max_gain", cfg.auto_exposure_max_gain))
+            action = _auto_exposure_decision(
+                solved=bool(sol.get("solved", False)),
+                stars=sol.get("stars", 0), matches=sol.get("matches", 0),
+                peak=sol.get("peak", 0), cur_s=cur_s, cur_g=cur_g,
+                target_stars=target_stars, target_matches=target_matches,
+                min_s=cfg.auto_exposure_min_s, max_s=max_s,
+                min_g=cfg.auto_exposure_min_gain, max_g=max_g)
+            if not action:
                 continue
-            reply = _call_camera(CAMERA_OP_SET_EXPOSURE,
-                                 {"exposure_s": round(new_s, 4)},
-                                 ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
-            if reply is not None and reply.ok:
-                log.info("auto-exposure: %.3fs -> %.3fs (stars=%s peak=%s)",
-                         cur_s, new_s, sol.get("stars"), sol.get("peak"))
+            ctx_qs = (ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+            if "exposure_s" in action:
+                reply = _call_camera(CAMERA_OP_SET_EXPOSURE,
+                                     {"exposure_s": action["exposure_s"]}, *ctx_qs)
+                if reply is not None and reply.ok:
+                    log.info("auto-exposure: exp %.3fs -> %.3fs "
+                             "(solved=%s stars=%s matches=%s peak=%s)",
+                             cur_s, action["exposure_s"], sol.get("solved"),
+                             sol.get("stars"), sol.get("matches"), sol.get("peak"))
+            if "gain" in action:
+                reply = _call_camera(CAMERA_OP_SET_GAIN,
+                                     {"gain": action["gain"]}, *ctx_qs)
+                if reply is not None and reply.ok:
+                    log.info("auto-exposure: gain %.1f -> %.1f "
+                             "(solved=%s stars=%s matches=%s peak=%s)",
+                             cur_g, action["gain"], sol.get("solved"),
+                             sol.get("stars"), sol.get("matches"), sol.get("peak"))
         except Exception as e:
             log.warning("auto-exposure step failed: %s", e)
 

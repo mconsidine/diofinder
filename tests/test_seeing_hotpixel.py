@@ -46,7 +46,9 @@ class _FakeCfg:
         self.match_threshold = 1e-5
         self.solve_timeout_ms = 1500
         self.auto_exposure_target_stars = 20
+        self.auto_exposure_target_matches = 8
         self.auto_exposure_max_s = 1.0
+        self.auto_exposure_max_gain = 16.0
         for k, v in kw.items():
             setattr(self, k, v)
 
@@ -116,7 +118,9 @@ class SeeingPresetTests(unittest.TestCase):
             match_threshold=good["match_threshold"],
             solve_timeout_ms=good["solve_timeout_ms"],
             auto_exposure_target_stars=good["auto_exposure_target_stars"],
+            auto_exposure_target_matches=good["auto_exposure_target_matches"],
             auto_exposure_max_s=good["auto_exposure_max_s"],
+            auto_exposure_max_gain=good["auto_exposure_max_gain"],
         )
         self.assertEqual(seeing.drift_from_preset("good", cfg, {}), {})
         # Override detect_sigma in shared_cfg -> drift reported.
