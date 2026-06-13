@@ -709,6 +709,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                         n_stars, min_c, local_peak, extract_ms)
                 if cfg.save_failed_frames and frame_snapshot is not None:
                     _save_frame(frame_snapshot, cfg, "failed_TooFew")
+                bg_cache.note_solve_result(None, False)
                 continue
 
             # --- Step 3: centroid cap ----------------------------------------
@@ -752,6 +753,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                         completed_at=time.monotonic(),
                     ))
                 fail_streak += 1
+                bg_cache.note_solve_result(None, False)
                 continue
 
             solve_only_ms = (time.monotonic() - t_solve) * 1000.0
@@ -781,6 +783,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                         elapsed_ms, extract_ms, solve_only_ms)
                 if cfg.save_failed_frames and frame_snapshot is not None:
                     _save_frame(frame_snapshot, cfg, f"failed_{status_str}")
+                bg_cache.note_solve_result(None, False)
                 continue
 
             measured_fov        = soln.get("FOV") or calibrator.get_fov_estimate()
@@ -793,6 +796,10 @@ def solver_main(slots, latest_solution, shared_cfg,
             if q_solved is not None:
                 last_sky_q       = tuple(q_solved)
                 last_solve_imu_q = shared_cfg.get("imu_q")
+            # Solver-derived cache invalidation (IMU-less safety net): a solved
+            # attitude jump signals an unsensed slew so the temporal background
+            # is rebuilt rather than served stale.
+            bg_cache.note_solve_result(q_solved, True)
 
             ra_target  = soln.get("RA_target")
             dec_target = soln.get("Dec_target")

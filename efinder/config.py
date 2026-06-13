@@ -124,8 +124,10 @@ class Config:
     bg_cache_enabled: bool = True
     bg_cache_stack: int = 8            # frames median-stacked per rebuild
     bg_cache_refresh_s: float = 5.0    # min interval between rebuilds
-    bg_cache_slew_deg: float = 0.5     # IMU angle that invalidates the cache
+    bg_cache_slew_deg: float = 0.5     # IMU/solved-pose angle that invalidates
     bg_cache_max_age_s: float = 60.0   # rebuild if model older than this
+    bg_cache_fail_invalidate: int = 3  # consecutive solve failures (no IMU) that
+                                       # invalidate the cache; 0 disables
 
     # -------- Seeing presets --------
     # One-tap Good/Bad night tuning (see efinder/seeing.py). "good" is the

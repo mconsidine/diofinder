@@ -127,6 +127,11 @@ class BackgroundCache:
         self._stop = threading.Event()
         self._worker: Optional[threading.Thread] = None
         self._last_imu_quat: Optional[Tuple[float, float, float, float]] = None
+        # Solver-derived motion fallback (works without an IMU): the last
+        # solved attitude and a run-length of consecutive solve failures.
+        self._last_solved_quat: Optional[Tuple[float, float, float, float]] = None
+        self._solve_fail_run = 0
+        self._fail_invalidate = max(0, int(getattr(cfg, "bg_cache_fail_invalidate", 3)))
         self._slewing = False
 
         # Lightweight counters for the bg_cache_status diagnostic.
@@ -191,6 +196,46 @@ class BackgroundCache:
         elif ang <= self.slew_threshold_rad and self._slewing:
             self._slewing = False
             self._needs_rebuild.set()
+
+    def note_solve_result(self, quat, solved: bool):
+        """Solver-derived cache invalidation — the IMU-less safety net.
+
+        The solver is itself a ~1-2 Hz attitude sensor. Two signals say the
+        cached background is stale even when no IMU reported the motion:
+
+        * a solved attitude that jumped more than the slew threshold from the
+          pose the model was built at (an unsensed slew the solver caught), and
+        * a run of consecutive solve failures while a model is live — detection
+          against a stale post-slew background is exactly what produces them.
+
+        Complements note_motion (harmless when an IMU is also driving slew
+        detection — the two agree). `quat` is the solved (w,x,y,z) on success.
+        """
+        if not self.enabled:
+            return
+        if solved and quat is not None:
+            self._last_solved_quat = tuple(quat)
+            self._solve_fail_run = 0
+            model = self._model
+            if model is not None and model.pose_quat is not None:
+                ang = _angular_distance(self._last_solved_quat, model.pose_quat)
+                if ang > self.slew_threshold_rad and not self._slewing:
+                    self._slewing = True
+                    self._needs_rebuild.set()
+                elif ang <= self.slew_threshold_rad and self._slewing:
+                    self._slewing = False
+                    self._needs_rebuild.set()
+        elif not solved:
+            self._solve_fail_run += 1
+            if (self._fail_invalidate
+                    and self._solve_fail_run >= self._fail_invalidate
+                    and self._model is not None
+                    and not self._needs_rebuild.is_set()):
+                # Stale-background suspicion: drop to per-frame detection and
+                # rebuild from recent frames. Reset the run so we re-arm rather
+                # than thrash every subsequent failing frame.
+                self._needs_rebuild.set()
+                self._solve_fail_run = 0
 
     # ----- consumer side ---------------------------------------------------
     def state(self) -> CacheState:
@@ -384,7 +429,10 @@ class BackgroundCache:
         common = dict(
             noise=noise, h=h, w=w, bin=self.bin,
             epoch=time.monotonic(), n_frames=len(frames),
-            pose_quat=self._last_imu_quat)
+            # Prefer the IMU pose (20 Hz) when present; fall back to the last
+            # solved attitude so note_solve_result can detect pointing jumps
+            # on IMU-less units.
+            pose_quat=self._last_imu_quat or self._last_solved_quat)
 
         # Build a block-median grid when block_percentile is active and the
         # wheel supports the cached block path; otherwise the per-row model.

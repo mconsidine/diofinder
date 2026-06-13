@@ -120,6 +120,9 @@ bg_cache_stack: 8
 bg_cache_refresh_s: 5.0
 bg_cache_slew_deg: 0.5
 bg_cache_max_age_s: 60.0
+# Consecutive solve failures that invalidate the temporal cache when no IMU is
+# reporting motion (solver-derived slew detection). 0 disables.
+bg_cache_fail_invalidate: 3
 
 # ---- Seeing presets ----
 # One-tap Good/Bad night tuning (toggle on the Status or Config page). "good"
