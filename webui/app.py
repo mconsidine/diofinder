@@ -444,6 +444,43 @@ def api_hotpixel():
     return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
 
 
+# ---- Offline auto-tune sweep ------------------------------------------------
+
+@app.route("/autotune/start", methods=["POST"])
+def autotune_start():
+    """Kick off the background auto-tune sweep (point at a star field first)."""
+    args = {}
+    mode = (request.form.get("mode") or "").strip().lower()
+    if mode:
+        args["mode"] = mode
+    if request.form.get("commit") in ("1", "true", "on", "yes"):
+        args["commit"] = True
+    for key, cast in (("frames_per_point", int), ("time_budget_s", float),
+                      ("match_rate_floor", float)):
+        val = request.form.get(key)
+        if val:
+            try:
+                args[key] = cast(val)
+            except (ValueError, TypeError):
+                pass
+    r = _safe_call("auto_tune", args)
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
+@app.route("/api/autotune")
+def api_autotune():
+    """JSON auto-tune progress / result for the Camera-page poller."""
+    r = _safe_call("auto_tune_status")
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
+@app.route("/autotune/cancel", methods=["POST"])
+def autotune_cancel():
+    """Request cancellation of an in-progress auto-tune sweep."""
+    r = _safe_call("auto_tune_cancel")
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
 @app.route("/calibration/reset", methods=["POST"])
 def calibration_reset():
     """Reset the FOV rolling-window calibration and redirect to the dashboard."""

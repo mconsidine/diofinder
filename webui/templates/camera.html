@@ -146,6 +146,33 @@
   </div>
 
   <div class="card">
+    <h2>Auto-tune (current sky)</h2>
+    <p class="hint" style="margin:0 0 8px">
+      Point the finder at a star field and wait for detection, then sweep
+      exposure / gain / sigma / kernel / background to find the cheapest
+      settings that still solve reliably. Runs in the background (~1–3 min).
+      Tick <em>Commit</em> to persist the result; otherwise it's a dry run.
+    </p>
+    <label>Mode
+      <select id="at-mode">
+        <option value="">current</option>
+        <option value="good">good</option>
+        <option value="bad">bad</option>
+      </select>
+    </label>
+    <label style="margin-left:8px;">
+      <input type="checkbox" id="at-commit"> Commit
+    </label>
+    <div style="margin-top:6px;">
+      <button type="button" class="btn" id="at-start">Start auto-tune</button>
+      <button type="button" class="btn btn-warning" id="at-cancel"
+              style="display:none;">Cancel</button>
+    </div>
+    <pre id="at-status" class="hint"
+         style="margin-top:8px;white-space:pre-wrap;"></pre>
+  </div>
+
+  <div class="card">
     <h2>Solver Parameters</h2>
     {% if solver_params %}
       <form method="post" action="{{ url_for('solver_params_set') }}">
@@ -460,6 +487,67 @@ _bindNum('mar_num',     'mar_slider',     applyMar,     parseFloat);
 _bindNum('minc_num',    'minc_slider',    applyMinc,    v => parseInt(v));
 _bindNum('mradius_num', 'mradius_slider', applyMradius, parseFloat);
 _bindNum('mthresh_num', 'mthresh_slider', applyMthresh, parseFloat);
+
+// --- Offline auto-tune sweep -------------------------------------------------
+let _atPoll = null;
+function _atRender(res) {
+  const box = document.getElementById('at-status');
+  const cancelBtn = document.getElementById('at-cancel');
+  const startBtn = document.getElementById('at-start');
+  if (!res) { box.textContent = ''; return; }
+  let lines = [];
+  if (res.running) {
+    lines.push('▶ ' + (res.phase || '') + ': ' + (res.message || ''));
+    lines.push('progress: ' + Math.round((res.progress || 0) * 100) + '%');
+    cancelBtn.style.display = '';
+    startBtn.disabled = true;
+  } else {
+    cancelBtn.style.display = 'none';
+    startBtn.disabled = false;
+    if (res.error) lines.push('error: ' + res.error);
+    const r = res.result;
+    if (r) {
+      lines.push((r.committed ? '✔ committed' : '✓ dry run') +
+                 (r.met_target ? ' — target met' : ' — target NOT met') +
+                 ' (' + r.elapsed_s + 's)');
+      if (r.photometric) lines.push('exposure: ' + r.photometric.exposure_s +
+                                    's  gain: ' + r.photometric.gain);
+      if (r.detection) lines.push('detection: sigma=' + r.detection.sigma +
+                                  ' kernel=' + r.detection.kernel_sigma +
+                                  ' bg=' + r.detection.bg_mode);
+    }
+  }
+  box.textContent = lines.join('\n');
+}
+async function _atRefresh() {
+  try {
+    const r = await fetch('/api/autotune');
+    const d = await r.json();
+    if (d.ok) {
+      _atRender(d.result);
+      if (d.result && !d.result.running && _atPoll) {
+        clearInterval(_atPoll); _atPoll = null;
+      }
+    }
+  } catch (e) {}
+}
+document.getElementById('at-start').addEventListener('click', async () => {
+  const body = new URLSearchParams();
+  const mode = document.getElementById('at-mode').value;
+  if (mode) body.set('mode', mode);
+  if (document.getElementById('at-commit').checked) body.set('commit', '1');
+  const r = await fetch('/autotune/start', {method: 'POST', body});
+  const d = await r.json();
+  if (!d.ok) { document.getElementById('at-status').textContent =
+                 'error: ' + d.error; return; }
+  if (!_atPoll) _atPoll = setInterval(_atRefresh, 2000);
+  _atRefresh();
+});
+document.getElementById('at-cancel').addEventListener('click', async () => {
+  await fetch('/autotune/cancel', {method: 'POST'});
+  _atRefresh();
+});
+_atRefresh();  // reflect any in-progress / last sweep on load
 </script>
 
 {% endblock %}

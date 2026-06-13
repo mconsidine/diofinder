@@ -152,6 +152,8 @@ command for the database switch — persists via `config.save_keys`, and
 invalidates the solver cache; `seeing_get` returns the mode, the preset table,
 the effective per-key values, and a `drift` map of keys the user has overridden
 since), `auto_exposure_set` (toggle the comms-side auto-exposure controller),
+`auto_tune`/`auto_tune_status`/`auto_tune_cancel` (offline coordinate-search
+sweep — see the Auto-exposure / gain controller section),
 `tuning_set` (switch the libcamera tuning between `imx477_scientific.json` and
 `imx477.json`; restart required), `bg_cache_status` (live temporal-cache
 snapshot — state, model age, model kind row/block, served-cached vs fallback
@@ -421,8 +423,44 @@ decision lives in `_auto_exposure_decision` (unit-tested in
   `shared_cfg` (the seeing presets write them); the floors are config-only.
 
 A full multi-axis sweep over sigma/kernel/bg-mode *as well* as exposure/gain is
-deliberately **not** done in this live loop — see the offline `auto_tune`
-maintenance command (scoped separately) for that.
+deliberately **not** done in this live loop — that is the offline `auto_tune`
+sweep below.
+
+### Offline `auto_tune` sweep
+
+`auto_tune` (comms maint) is a **user-initiated, bounded coordinate search** for
+the cheapest operating point — `(exposure, gain, sigma, kernel_sigma, bg_mode)`
+— that still clears the seeing-mode match target on the *current* sky. It is
+**not** a live controller: it runs as a background thread (the maint socket has
+a 15 s read timeout, far shorter than a multi-point sweep), reports progress via
+`auto_tune_status`, and is abortable via `auto_tune_cancel`. The pure
+selection/merit logic (`_auto_tune_select` / `_auto_tune_cost`) is unit-tested
+in `tests/test_auto_tune.py`.
+
+* **Precondition**: a fresh solution with signal (`peak ≥ 20`, age < 10 s) —
+  i.e. the finder is pointed at stars and roughly stationary. The always-on
+  auto-exposure loop is paused for the duration so it doesn't fight the sweep.
+* **Phase 1 (photometric)**: drives exposure+gain with the same ladder logic as
+  the live controller (`_auto_tune_photometric` reuses `_auto_exposure_decision`).
+* **Phase 2 (detection sweep)**: for each `(bg_mode, kernel_sigma, sigma)`
+  candidate it asks the solver for `frames_per_point` single-frame samples via
+  `SOLVER_OP_AUTO_TUNE_EVAL`. That op extracts with the candidate params
+  **forced per-frame** (`bg_cache.detect(force_per_frame=True)` — the live
+  temporal cache is left untouched) and solves on the resident DB, returning
+  `{solved, matches, stars, peak, solve_ms}`. One frame per call keeps each
+  solver-blocking call well inside the 30 s watchdog window.
+* **Merit**: among candidates clearing the match-rate floor and ≥ 80 % of the
+  match target, minimize `w·solve_ms + w·kernel_sigma − w·sigma + bg_cost` — i.e.
+  prefer fast solves, a tight kernel, a high sigma, and a cheap background.
+  `detect_bin` (restart) and `star_db` (heavy reload) are deliberately **not**
+  swept.
+* **commit=true** persists the winner via `config.save_keys` (live solver keys
+  also written to `shared_cfg`, `_invalidate_solver_cache` called); this drifts
+  the active config away from the named seeing preset (visible in `seeing_get`'s
+  drift map). **commit=false** restores the camera and changes nothing.
+* CLI: `efinder-ctl auto-tune {start [--mode] [--commit] [--wait]|status|cancel}`.
+  Web UI: an "Auto-tune (current sky)" card on the Camera page (start/cancel +
+  progress poller via `/api/autotune`).
 
 ## Hot-pixel mask
 

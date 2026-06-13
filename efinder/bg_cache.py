@@ -250,13 +250,18 @@ class BackgroundCache:
 
     def detect(self, image_u8, sigma, bg_mode, tophat_radius, max_axis_ratio,
                bg_block_size=0, uniform_filter_size=0, noise_mode="mad",
-               kernel_sigma=None, local_noise=None):
+               kernel_sigma=None, local_noise=None, force_per_frame=False):
         """Single detection entry point. Returns the raw star_detect list
         [(x, y, brightness, peak), ...]. Never raises for capability gaps —
         it degrades to the best supported mode.
 
         kernel_sigma / local_noise are sycamore>=0.12 knobs; they are passed
-        only when the installed wheel supports them (capability-probed)."""
+        only when the installed wheel supports them (capability-probed).
+
+        force_per_frame=True bypasses the temporal cache entirely (always
+        per-frame) AND leaves the cache's model-kind tracking untouched. Used by
+        the offline auto-tune sweep to evaluate a candidate bg_mode cleanly
+        without triggering a live model rebuild for the wrong mode."""
         # Modes composable with the per-row cached model. block_percentile is
         # additionally cache-compatible on sycamore>=0.12 via a block-median
         # grid (handled separately below). column_percentile,
@@ -270,50 +275,52 @@ class BackgroundCache:
             want_tophat = False
             bg_mode = "line_median"
 
-        # Tell the worker which model shape to build for the current mode. If
-        # the mode's model-kind changed (e.g. a seeing preset switched
-        # row_percentile -> block_percentile), trigger a rebuild so the next
-        # steady detection uses a matching model.
-        prev_mode = self._active_bg_mode
-        self._active_bg_mode = bg_mode
-        if bg_block_size:
-            self._active_block_size = int(bg_block_size)
-        if self.enabled and _model_kind(prev_mode) != _model_kind(bg_mode):
-            self._needs_rebuild.set()
+        steady = False
+        if not force_per_frame:
+            # Tell the worker which model shape to build for the current mode.
+            # If the mode's model-kind changed (e.g. a seeing preset switched
+            # row_percentile -> block_percentile), trigger a rebuild so the next
+            # steady detection uses a matching model.
+            prev_mode = self._active_bg_mode
+            self._active_bg_mode = bg_mode
+            if bg_block_size:
+                self._active_block_size = int(bg_block_size)
+            if self.enabled and _model_kind(prev_mode) != _model_kind(bg_mode):
+                self._needs_rebuild.set()
 
-        is_block_cache = (bg_mode == "block_percentile" and HAS_BLOCK_CACHE
-                          and self.enabled)
+            is_block_cache = (bg_mode == "block_percentile" and HAS_BLOCK_CACHE
+                              and self.enabled)
 
-        m = self._model
-        force_perframe = (bg_mode not in CACHE_COMPATIBLE_MODES
-                          and not is_block_cache)
-        steady = (
-            not force_perframe
-            and self.enabled and self.state() is CacheState.STEADY and m is not None
-            and m.h == image_u8.shape[0] and m.w == image_u8.shape[1]
-            and m.bin == self.bin
-        )
-        # The steady cached path needs a model of the matching kind.
-        if steady and is_block_cache and m.block_offsets is None:
-            steady = False
-        if steady and not is_block_cache and m.row_offsets is None:
-            steady = False
+            m = self._model
+            force_perframe = (bg_mode not in CACHE_COMPATIBLE_MODES
+                              and not is_block_cache)
+            steady = (
+                not force_perframe
+                and self.enabled and self.state() is CacheState.STEADY and m is not None
+                and m.h == image_u8.shape[0] and m.w == image_u8.shape[1]
+                and m.bin == self.bin
+            )
+            # The steady cached path needs a model of the matching kind.
+            if steady and is_block_cache and m.block_offsets is None:
+                steady = False
+            if steady and not is_block_cache and m.row_offsets is None:
+                steady = False
 
-        if steady:
-            kw = dict(sigma=sigma, bin=self.bin, max_axis_ratio=max_axis_ratio)
-            self._maybe_add_v12(kw, kernel_sigma, local_noise, cached=True)
-            if is_block_cache:
-                kw["block_offsets"] = m.block_offsets
-                if m.block_size:
-                    kw["block_size"] = int(m.block_size)
+            if steady:
+                kw = dict(sigma=sigma, bin=self.bin, max_axis_ratio=max_axis_ratio)
+                self._maybe_add_v12(kw, kernel_sigma, local_noise, cached=True)
+                if is_block_cache:
+                    kw["block_offsets"] = m.block_offsets
+                    if m.block_size:
+                        kw["block_size"] = int(m.block_size)
+                    self._n_cached += 1
+                    return star_detect.detect_stars_with_cache(
+                        image_u8, noise=m.noise, **kw)
+                if want_tophat and CACHE_HAS_TOPHAT:
+                    kw["tophat_radius"] = int(tophat_radius)
                 self._n_cached += 1
                 return star_detect.detect_stars_with_cache(
-                    image_u8, noise=m.noise, **kw)
-            if want_tophat and CACHE_HAS_TOPHAT:
-                kw["tophat_radius"] = int(tophat_radius)
-            self._n_cached += 1
-            return star_detect.detect_stars_with_cache(
-                image_u8, m.row_offsets, m.noise, **kw)
+                    image_u8, m.row_offsets, m.noise, **kw)
 
         # Per-frame path (cache disabled, warming up, slewing, spatial mode
         # incompatible with cache, or top-hat on an old cached wheel).
