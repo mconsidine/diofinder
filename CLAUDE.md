@@ -60,6 +60,9 @@ is far below one core), freeing CPU 1 as a third solver core. CPU affinity is se
 | `match_radius` | float (0.005–0.05) | comms (via maint / `seeing_set`) | solver |
 | `match_threshold` | float (1e-9–1e-3) | comms (via maint / `seeing_set`) | solver |
 | `seeing_mode` | str (`good`/`bad`) | comms (via `seeing_set`) | comms, webui |
+| `tracking_enabled` | bool | comms (via maint `solver_params_set`) | solver |
+| `tracking_window_px` | int | comms (via maint `solver_params_set`) | solver |
+| `tracking_min_recover` | int | comms (via maint `solver_params_set`) | solver |
 | `test_mode` | bool | comms (via maint) | camera |
 | `auto_exposure_enabled` | bool | comms (via maint `auto_exposure_set`) | comms auto-exposure thread |
 | `auto_exposure_target_stars` | int | comms (via `seeing_set`) | comms auto-exposure thread |
@@ -307,6 +310,88 @@ Every preset key is independently tunable through `solver_params_set`
 Camera page exposes sliders for all of them.
 
 ---
+
+## Tracking mode (experimental, opt-in)
+
+A steady-state ROI tracking mode lives in `efinder/tracking.py` (pure numpy, no
+`star_detect`/`tetra3`/`picamera2` import — unit-tested in `tests/test_tracking.py`)
+and is wired into `solver_proc.solver_main` as a small **FULL ↔ TRACKING** state
+machine. **Default OFF** (`tracking_enabled: false`) pending on-sky validation.
+
+### What it does
+
+After a run of confident full-frame solves it switches star **detection** from
+full-frame extraction to small ROI windows placed around the previous frame's
+solved star positions (`tracking.roi_detect` slices a `tracking_window_px`-square
+window per predicted star — sycamore has no ROI API, so we slice the numpy frame
+ourselves, call the injected per-window detector, take the brightest detection,
+and offset its coordinates back to full-frame; overlapping windows are deduped by
+proximity, edge windows are clamped inward). This saves the dominant full-frame
+extraction cost (~6 ms → target ~1.5 ms). The recovered centroids are then solved
+with the **existing** `solve_from_centroids` under a tight attitude hint
+(`strict_hint=True`, 2° cone seeded from `last_sky_q`) instead of the blind path.
+
+### HONEST scope / known limitation (NOT verify-only)
+
+This is **ROI-windowed detection + tight-hint solving**. It does **not** skip the
+solver's 4-star pattern hashing. olive-solve's Python API exposes **no** pure
+verify-only entry point (project the catalog through a known attitude, match,
+refine, skipping the hash), so a true verify-only fast path is impossible from
+here and is left as **future work requiring an olive-solve API addition**. Do not
+describe this as verify-only. The win is the saved extraction cost plus a
+constrained (faster, fewer false positives) solve, not a skipped solver.
+
+### State machine
+
+* **FULL** — full-frame `bg_cache.detect` + the existing blind/IMU-propagated
+  hint solve (`strict_hint=False`). The shipped behaviour, byte-for-byte.
+* Enter **TRACKING** after `tracking_lock_frames` consecutive successful solves
+  (and `tracking_enabled`), once the last solve produced ≥ `tracking_min_recover`
+  centroids to predict from.
+* **TRACKING** — `roi_detect` around the previous frame's solved centroids
+  (`tracking.centroids_to_xy` inverts the solver's (row,col) back to (x,y)). v1
+  uses the raw previous positions with **no** IMU/sidereal shift (sub-pixel drift
+  between frames at this cadence is < 1 px, inside the window). If ≥
+  `tracking_min_recover` stars recover, solve with the tight hint.
+* **Fall back to FULL** on any of: `tracking_enabled` false, ROI recovered <
+  `tracking_min_recover`, the solve failed (too few / no match / solver raised),
+  or `bg_cache.state()` is `SLEWING` (the same slew signal `note_motion` /
+  `note_solve_result` drive). Then re-acquire blind and re-lock.
+
+Publishing, calibration/polar updates, align handling, `note_solve_result`, and
+every `latest_solution` field are **identical** to the FULL path — tracking only
+changes how centroids are obtained and the hint tightness, never the outputs.
+
+The default-off guard: `tracking_on = shared_cfg.get("tracking_enabled",
+cfg.tracking_enabled)`. When false, `tracking_state` is forced to `FULL`,
+`tracking_active` is `False`, `served_by_tracking` stays `False`, and the
+original `bg_cache.detect(frame_buf, …)` runs unchanged.
+
+### Config keys
+
+| Key | Default | Live-mutable | Notes |
+|-----|---------|--------------|-------|
+| `tracking_enabled` | `false` | yes (shared_cfg) | master switch |
+| `tracking_window_px` | `48` | yes (shared_cfg) | ROI side length (px) |
+| `tracking_lock_frames` | `3` | no (config/restart) | good solves before TRACKING |
+| `tracking_min_recover` | `5` | yes (shared_cfg) | min ROI stars to stay tracking |
+
+`tracking_enabled`, `tracking_window_px`, `tracking_min_recover` are added to
+`solver_params_get` / `solver_params_set` (in shared_cfg keys table above) so
+they A/B-toggle live without a restart.
+
+### How to A/B it
+
+```bash
+# Toggle on and watch the state machine:
+efinder-ctl raw '{"cmd":"solver_params_set","args":{"tracking_enabled":true}}'
+efinder-ctl raw '{"cmd":"tracking_status"}'   # {enabled, state, frames_tracked, frames_full, recover_fail}
+efinder-ctl raw '{"cmd":"solver_params_set","args":{"tracking_enabled":false}}'
+```
+
+The `tracking_status` maint command (comms) → `SOLVER_OP_TRACKING_STATUS`
+(solver) returns the live counters; the solver mirrors them into `_SolverState`
+each frame.
 
 ## Hot-pixel mask
 

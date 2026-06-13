@@ -120,6 +120,25 @@ bg_cache_stack: 8
 bg_cache_refresh_s: 5.0
 bg_cache_slew_deg: 0.5
 bg_cache_max_age_s: 60.0
+# Consecutive solve failures that invalidate the temporal cache when no IMU is
+# reporting motion (solver-derived slew detection). 0 disables.
+bg_cache_fail_invalidate: 3
+
+# ---- Tracking mode (experimental, opt-in) ----
+# After tracking_lock_frames consecutive confident full-frame solves, switch
+# star DETECTION to small ROI windows around the previous frame's star
+# positions (saves the dominant ~6 ms full-frame extraction). The recovered
+# centroids are still plate-solved by the ordinary solver under a tight
+# attitude hint -- this is ROI detection + tight-hint solving, NOT verify-only
+# (olive-solve has no verify-only API; see efinder/tracking.py). The solver
+# falls back to full-frame on slew, too few recovered stars, or a failed solve.
+# Default OFF pending on-sky validation. tracking_enabled / tracking_window_px /
+# tracking_min_recover are live-toggleable via solver_params_set (efinder-ctl);
+# tracking_lock_frames is config-only (restart to change).
+tracking_enabled: false
+tracking_window_px: 48
+tracking_lock_frames: 3
+tracking_min_recover: 5
 
 # ---- Seeing presets ----
 # One-tap Good/Bad night tuning (toggle on the Status or Config page). "good"

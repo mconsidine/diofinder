@@ -67,6 +67,9 @@ SOLVER_OP_SET_DB = "set_db"
 SOLVER_OP_DARK_CAPTURE = "dark_capture"
 # Hot-pixel mask status: {"count", "mtime", "loaded"}.
 SOLVER_OP_HOT_PIXEL_STATUS = "hot_pixel_status"
+# Tracking-mode status: {"enabled", "state", "frames_tracked", "frames_full",
+# "recover_fail"}.
+SOLVER_OP_TRACKING_STATUS = "tracking_status"
 # Clear the hot-pixel mask (delete file + unload). args: {}.
 SOLVER_OP_HOT_PIXEL_CLEAR = "hot_pixel_clear"
 
