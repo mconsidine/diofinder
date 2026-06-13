@@ -487,6 +487,177 @@ the end.
 
 ---
 
+### `replay_corpus.py`
+
+Off-device regression-corpus replay harness.  Runs the diofinder detect+solve
+pipeline (sycamore extraction + olive-solve) on a directory of labeled PNG
+frames, sweeping over seeing presets and optionally over background modes, and
+reports solve rate, star count, and timing aggregates.  Designed to run on a
+developer laptop where the `star_detect` and `tetra3` wheels are installed —
+**no Pi, no daemon, no shared memory required**.
+
+**When to use:**
+- After changing a seeing preset, extractor wheel, or solver database: run the
+  corpus to confirm solve rate did not regress.
+- Before a software release: compare Good vs. Bad preset solve rates on a
+  representative set of sky conditions.
+- Tuning `detect_sigma`, `detect_bg_mode`, or matching parameters: sweep
+  `--bg-modes` to find which combination wins on your corpus.
+- Building the corpus itself: transfer saved frames from the Pi with
+  `scp efinder@efinder.local:/var/lib/efinder/captures/*.png tests/corpus/`.
+
+**Prerequisites:** `star_detect` and `tetra3` wheels installed in your Python
+environment; `numpy` and `Pillow`; a tetra3 `.npz` database.  The script
+fails gracefully with a clear install/usage message if any of these are missing
+(no raw tracebacks).  Running with `--help` or checking syntax with
+`python3 -m py_compile` works without the wheels.
+
+```bash
+# Full run on a labeled corpus, both presets
+python3 tests/replay_corpus.py \
+    --corpus tests/corpus/ \
+    --database /var/lib/efinder/default_database.npz
+
+# Quick check: first 20 frames, good preset only
+python3 tests/replay_corpus.py \
+    --corpus tests/corpus/ \
+    --database /var/lib/efinder/default_database.npz \
+    --presets good \
+    --limit 20
+
+# Sweep background modes and write per-frame CSV
+python3 tests/replay_corpus.py \
+    --corpus tests/corpus/ \
+    --database /var/lib/efinder/default_database.npz \
+    --bg-modes row_percentile,block_percentile,uniform_mean \
+    --csv /tmp/bg_sweep.csv
+
+# Non-default FOV (e.g. after a lens change)
+python3 tests/replay_corpus.py \
+    --corpus tests/corpus/ \
+    --database /var/lib/efinder/default_database.npz \
+    --fov 10.0
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--corpus` | required | Directory of PNG frames (flat or labeled subdirs) |
+| `--database` | `/var/lib/efinder/default_database.npz` | tetra3 `.npz` solver database |
+| `--presets` | `good,bad` | Comma-separated list of seeing presets to run |
+| `--bg-modes` | preset's value | Comma-separated bg modes to additionally sweep (overrides preset's `detect_bg_mode`) |
+| `--csv` | — | Path for per-frame CSV output |
+| `--fov` | from config (13.5°) | FOV estimate in degrees |
+| `--limit` | `0` (no limit) | Cap frame count for a quick run |
+
+**Output:** Per-frame progress lines followed by an aggregate table showing
+frames, solved count, solve rate %, star count (p50/p90), extract time (p50/p90),
+and solve time (p50/p90) for each preset×bg_mode combination.  If the corpus
+contains multiple labels a second table breaks the results down by label.
+
+**Corpus layout and labeling** is documented in `tests/corpus/README.md`.
+In brief: frames in a named subdirectory inherit the subdirectory name as their
+label; frames in the root use the `{ts}_{label}.png` filename convention from
+the daemon's save-frame feature; unlabeled frames get label `"unlabeled"`.
+
+**Preset fidelity:** Presets are loaded live from `efinder.seeing.SEEING_PRESETS`
+(importing `efinder/seeing.py` from the repo root) so the harness stays in
+sync with the daemon's actual preset table automatically.  A fallback hard-coded
+copy is used only if the `efinder` package is not importable (dev-box without
+a full install), with a warning.
+
+**Capability probing:** The harness probes the installed `star_detect` wheel for
+`kernel_sigma`, `local_noise`, `noise_mode`, `bg_block_size`, `uniform_filter_size`,
+and `tophat_radius` exactly as `efinder/bg_cache.py` does, using
+`inspect.signature`.  Unsupported kwargs are silently omitted, so the same
+script works on sycamore 0.11 and 0.12 wheels.
+
+---
+
+## Regression Corpus Workflow
+
+The corpus + replay harness is the measurement tool that makes extractor and
+preset tuning data-driven rather than on-sky anecdote.
+
+### Building the corpus
+
+1. On the Pi, enable frame saving:
+
+   ```bash
+   # In /etc/efinder/efinder.conf
+   save_failed_frames: true
+   save_solved_frames: true
+   ```
+
+   Or toggle per-session via the web UI Camera page.
+
+2. Observe: let the daemon run for a session or two across different conditions.
+   Frames accumulate in `/var/lib/efinder/captures/`.
+
+3. Copy frames off the Pi into labeled subdirectories:
+
+   ```bash
+   mkdir -p tests/corpus/clear_dark tests/corpus/moonlit
+
+   # All solved frames from a clear-sky night
+   scp efinder@efinder.local:'/var/lib/efinder/captures/*solved*' \
+       tests/corpus/clear_dark/
+
+   # Failed frames from a moonlit session
+   scp efinder@efinder.local:'/var/lib/efinder/captures/*failed*' \
+       tests/corpus/moonlit/
+   ```
+
+4. Optionally keep a flat `tests/corpus/` for quick one-off tests; files named
+   `{ts}_{label}.png` (the daemon's convention) auto-label themselves.
+
+### Running a preset A/B
+
+```bash
+# Before changing a preset:
+python3 tests/replay_corpus.py \
+    --corpus tests/corpus/ \
+    --database /var/lib/efinder/default_database.npz \
+    --csv /tmp/before.csv
+
+# After changing efinder/seeing.py:
+python3 tests/replay_corpus.py \
+    --corpus tests/corpus/ \
+    --database /var/lib/efinder/default_database.npz \
+    --csv /tmp/after.csv
+
+# Compare solve rates manually or with any CSV tool.
+```
+
+### Running a background-mode sweep
+
+```bash
+python3 tests/replay_corpus.py \
+    --corpus tests/corpus/ \
+    --database /var/lib/efinder/default_database.npz \
+    --bg-modes row_percentile,line_median,block_percentile,uniform_mean,top_hat \
+    --presets good \
+    --csv /tmp/bg_sweep.csv
+```
+
+The aggregate table shows solve rate and star counts per mode.  The mode with
+the highest solve rate on your corpus — particularly on the `moonlit` or
+`gradient` label — is a strong candidate for that condition's seeing preset.
+
+### Checking for regressions after a wheel update
+
+```bash
+# After installing a new sycamore or olive-solve wheel:
+python3 tests/replay_corpus.py \
+    --corpus tests/corpus/ \
+    --database /var/lib/efinder/default_database.npz
+```
+
+The script prints both wheel versions at the top of its output.  A solve rate
+drop of more than a few percent is a regression worth investigating with
+`diag_background.py` on a specific failing frame.
+
+---
+
 ## Operational Scripts (`scripts/`, installed to `/usr/local/bin/`)
 
 ### `efinder-ctl`

@@ -26,6 +26,7 @@ No external daemon, gRPC, or server is involved.
 | `bench_extractor_compare.py` | Time sycamore extraction in isolation; star counts + solve outcomes |
 | `test_hint.py` | Attitude-hint effectiveness across a sequence of shifted images |
 | `test_seeing_hotpixel.py` | **Pure-logic unit tests** (no hardware, no sycamore): seeing preset application/drift + hot-pixel neighbor-median repair. Run with `python3 -m unittest tests.test_seeing_hotpixel` |
+| `replay_corpus.py` | **Off-device** regression-corpus replay: run detect+solve over a labeled PNG corpus, sweep seeing presets (and optionally bg_modes), report solve rate / star count / timing. See `tests/corpus/README.md` for corpus layout. |
 
 ---
 
