@@ -186,6 +186,15 @@ class _SolverState:
         self.cfg = cfg
         self.hot_pixel_mask = None
         self.read_frame = None   # set by solver_main
+        # Tracking-mode observability (written by solver_main each frame, read
+        # by the tracking_status maint command). Plain ints — no lock needed:
+        # the GIL makes single int assignments/reads atomic and a stale read in
+        # a status query is harmless.
+        self.tracking_state = "FULL"
+        self.frames_tracked = 0
+        self.frames_full = 0
+        self.tracking_recover_fail = 0
+        self.tracking_enabled = bool(getattr(cfg, "tracking_enabled", False))
 
 
 def _handle_solver_cmd(cmd, calibrator, polar,
@@ -199,6 +208,7 @@ def _handle_solver_cmd(cmd, calibrator, polar,
         SOLVER_OP_SOLVE_CENTROIDS, SOLVER_OP_BG_CACHE_STATUS,
         SOLVER_OP_SET_DB, SOLVER_OP_DARK_CAPTURE,
         SOLVER_OP_HOT_PIXEL_STATUS, SOLVER_OP_HOT_PIXEL_CLEAR,
+        SOLVER_OP_TRACKING_STATUS,
     )
     try:
         if cmd.op == SOLVER_OP_SET_DB:
@@ -273,6 +283,21 @@ def _handle_solver_cmd(cmd, calibrator, polar,
             log.info("Hot-pixel mask cleared")
             return SolverCmdReply(request_id=cmd.request_id, ok=True,
                                   result={"count": 0, "loaded": False})
+
+        if cmd.op == SOLVER_OP_TRACKING_STATUS:
+            if state is None:
+                return SolverCmdReply(request_id=cmd.request_id, ok=True,
+                                      result={"enabled": False, "state": "FULL",
+                                              "frames_tracked": 0,
+                                              "frames_full": 0,
+                                              "recover_fail": 0})
+            return SolverCmdReply(request_id=cmd.request_id, ok=True, result={
+                "enabled":        bool(state.tracking_enabled),
+                "state":          state.tracking_state,
+                "frames_tracked": int(state.frames_tracked),
+                "frames_full":    int(state.frames_full),
+                "recover_fail":   int(state.tracking_recover_fail),
+            })
 
         if cmd.op == SOLVER_OP_BG_CACHE_STATUS:
             if bg_cache is None:
@@ -489,7 +514,7 @@ def solver_main(slots, latest_solution, shared_cfg,
         # Imported here (not at module top) so star_detect stays a runtime, not
         # import-time, dependency — this try owns the "missing wheel" error.
         # Must be bound before the log line below uses HAS_TOPHAT.
-        from efinder.bg_cache import BackgroundCache, HAS_TOPHAT
+        from efinder.bg_cache import BackgroundCache, HAS_TOPHAT, CacheState
         log.info("sycamore star_detect ready (top_hat support: %s)", HAS_TOPHAT)
     except ImportError as e:
         log.error("sycamore star_detect not installed: %s", e)
@@ -556,6 +581,30 @@ def solver_main(slots, latest_solution, shared_cfg,
     # IMU-seeded attitude hint state
     last_sky_q       = None   # quaternion (w,x,y,z) from last successful solve
     last_solve_imu_q = None   # IMU quaternion recorded at that same solve
+
+    # ---- Tracking-mode state machine (experimental, opt-in) ---------------
+    # Two states: FULL (full-frame detect + blind/IMU-hint solve, the shipped
+    # behaviour) and TRACKING (ROI-windowed detect around the previous solved
+    # centroids + tight-hint solve). Entirely skipped when tracking_enabled is
+    # false: tracking_state stays FULL and the `if tracking_active:` guard below
+    # is never taken, so the default path is byte-for-byte unchanged.
+    from efinder import tracking as _tracking_mod
+    TRACK_FULL = "FULL"
+    TRACK_TRACKING = "TRACKING"
+    tracking_state      = TRACK_FULL
+    tracking_good_run   = 0       # consecutive successful solves (for lock-in)
+    tracking_prev_xy    = []      # (x,y) full-frame predictions for next frame
+    frames_tracked      = 0       # counters for tracking_status
+    frames_full         = 0
+    tracking_recover_fail = 0
+    # Capability-probe: only pass strict_hint to the solver when it accepts it.
+    try:
+        import inspect as _inspect
+        _solve_params = _inspect.signature(
+            solver_t3.solve_from_centroids).parameters
+        SOLVER_HAS_STRICT_HINT = "strict_hint" in _solve_params
+    except (TypeError, ValueError):
+        SOLVER_HAS_STRICT_HINT = True  # builtin without signature; current API has it
 
     fail_streak = 0
     solve_count = 0
@@ -655,9 +704,45 @@ def solver_main(slots, latest_solution, shared_cfg,
             max_axis_ratio = float("inf") if _mar <= 0.0 else _mar
             local_noise = bool(
                 shared_cfg.get("detect_local_noise", cfg.detect_local_noise))
+
+            # --- Tracking-mode gate ------------------------------------------
+            # Decide whether THIS frame is served by ROI tracking. The whole
+            # block is skipped when tracking_enabled is false (default): the
+            # state machine never leaves FULL and tracking_active stays False,
+            # so the extraction path below is the original full-frame detect.
+            tracking_on = bool(
+                shared_cfg.get("tracking_enabled", cfg.tracking_enabled))
+            track_window = int(
+                shared_cfg.get("tracking_window_px", cfg.tracking_window_px))
+            track_min_recover = int(
+                shared_cfg.get("tracking_min_recover", cfg.tracking_min_recover))
+            track_lock_frames = int(cfg.tracking_lock_frames)
+            if not tracking_on:
+                # Disabled at runtime mid-session: reset the machine to FULL so
+                # re-enabling starts from a clean lock-in.
+                tracking_state = TRACK_FULL
+                tracking_good_run = 0
+                tracking_prev_xy = []
+            # A solver-detected/IMU slew makes the previous positions stale.
             try:
-                _raw = bg_cache.detect(
-                    frame_buf,
+                _slewing = bg_cache.state() is CacheState.SLEWING
+            except Exception:
+                _slewing = False
+            tracking_active = (
+                tracking_on
+                and tracking_state == TRACK_TRACKING
+                and not _slewing
+                and len(tracking_prev_xy) >= track_min_recover
+            )
+            state.tracking_state = tracking_state
+
+            def _window_detect(win_u8):
+                """Per-window detector for roi_detect: same params as the
+                full-frame path, routed through bg_cache (which falls to the
+                per-frame path for a non-matching window shape — exactly what
+                we want for a small ROI). Returns the raw (x,y,bri,peak) list."""
+                return bg_cache.detect(
+                    win_u8,
                     sigma=sigma,
                     bg_mode=bg_mode,
                     tophat_radius=tophat_radius,
@@ -668,13 +753,56 @@ def solver_main(slots, latest_solution, shared_cfg,
                     kernel_sigma=kernel_sigma,
                     local_noise=local_noise,
                 )
-                # sycamore returns (x=col, y=row, brightness, peak).
-                # tetra3 solve_from_centroids expects (row, col) = (y, x).
-                # Must be float64: Rust PyO3 binding rejects float32.
-                centroids = (
-                    np.array([[s[1], s[0]] for s in _raw], dtype=np.float64)
-                    if _raw else None
-                )
+
+            served_by_tracking = False
+            try:
+                if tracking_active:
+                    # ROI-windowed detection around last frame's solved stars.
+                    # NOTE (v1): predictions are the previous successful frame's
+                    # centroid (x,y) with NO IMU/sidereal shift — sub-pixel drift
+                    # between frames at this cadence is < 1 px, well inside the
+                    # window. A slew is caught by the _slewing fallback above.
+                    _roi_stars, _n_hit = _tracking_mod.roi_detect(
+                        frame_buf,
+                        tracking_prev_xy,
+                        track_window,
+                        _window_detect,
+                        bin=int(cfg.detect_bin),
+                        max_stars=int(
+                            shared_cfg.get("max_solve_stars", cfg.max_solve_stars)),
+                    )
+                    if len(_roi_stars) >= track_min_recover:
+                        served_by_tracking = True
+                        centroids = np.array(
+                            [[s[1], s[0]] for s in _roi_stars], dtype=np.float64)
+                    else:
+                        # Not enough recovered -> fall back to FULL this frame
+                        # and drop the lock so we re-acquire blind.
+                        tracking_recover_fail += 1
+                        tracking_state = TRACK_FULL
+                        tracking_good_run = 0
+                        tracking_prev_xy = []
+
+                if not served_by_tracking:
+                    _raw = bg_cache.detect(
+                        frame_buf,
+                        sigma=sigma,
+                        bg_mode=bg_mode,
+                        tophat_radius=tophat_radius,
+                        max_axis_ratio=max_axis_ratio,
+                        bg_block_size=bg_block_size,
+                        uniform_filter_size=uniform_filter_size,
+                        noise_mode=noise_mode,
+                        kernel_sigma=kernel_sigma,
+                        local_noise=local_noise,
+                    )
+                    # sycamore returns (x=col, y=row, brightness, peak).
+                    # tetra3 solve_from_centroids expects (row, col) = (y, x).
+                    # Must be float64: Rust PyO3 binding rejects float32.
+                    centroids = (
+                        np.array([[s[1], s[0]] for s in _raw], dtype=np.float64)
+                        if _raw else None
+                    )
             except Exception as e:
                 log.warning("centroid extraction raised: %s", e)
                 latest_solution.update(_empty_solution(peak=local_peak))
@@ -689,6 +817,15 @@ def solver_main(slots, latest_solution, shared_cfg,
 
             extract_ms = (time.monotonic() - t_extract) * 1000.0
             n_stars    = len(centroids) if centroids is not None else 0
+            if served_by_tracking:
+                frames_tracked += 1
+            else:
+                frames_full += 1
+            # Mirror live tracking observability into state for tracking_status.
+            state.tracking_enabled = tracking_on
+            state.frames_tracked = frames_tracked
+            state.frames_full = frames_full
+            state.tracking_recover_fail = tracking_recover_fail
 
             # --- Step 2: star-count gate -------------------------------------
             min_c = shared_cfg.get("min_centroids", cfg.min_centroids)
@@ -710,6 +847,10 @@ def solver_main(slots, latest_solution, shared_cfg,
                 if cfg.save_failed_frames and frame_snapshot is not None:
                     _save_frame(frame_snapshot, cfg, "failed_TooFew")
                 bg_cache.note_solve_result(None, False)
+                # Lost the lock: drop to FULL and re-acquire.
+                tracking_state = TRACK_FULL
+                tracking_good_run = 0
+                tracking_prev_xy = []
                 continue
 
             # --- Step 3: centroid cap ----------------------------------------
@@ -723,23 +864,39 @@ def solver_main(slots, latest_solution, shared_cfg,
                 shared_cfg.get("match_threshold", cfg.match_threshold))
             match_radius = float(
                 shared_cfg.get("match_radius", cfg.match_radius))
+            # In TRACKING the search is constrained: reuse last_sky_q with a
+            # tight cone and strict_hint=True. In FULL keep the existing blind /
+            # IMU-propagated hint (strict_hint=False). strict_hint is passed
+            # only when the installed solver accepts it (capability-probed).
+            if served_by_tracking and last_sky_q is not None:
+                solve_q_hint = last_sky_q
+                solve_hint_unc = 2.0       # deg — tight cone around last solve
+                solve_strict = True
+            else:
+                solve_q_hint = q_hint
+                solve_hint_unc = hint_unc
+                solve_strict = False
+            _solve_kw = dict(
+                fov_estimate=calibrator.get_fov_estimate(),
+                fov_max_error=calibrator.get_fov_max_error(),
+                solve_timeout=shared_cfg.get(
+                    "solve_timeout_ms", cfg.solve_timeout_ms),
+                match_threshold=match_threshold,
+                match_radius=match_radius,
+                distortion=calibrator.get_distortion_estimate(),
+                target_pixel=target_pixel,
+                target_sky_coord=target_sky,
+                return_matches=False,
+                attitude_hint=solve_q_hint,
+                hint_uncertainty_deg=solve_hint_unc,
+            )
+            if SOLVER_HAS_STRICT_HINT:
+                _solve_kw["strict_hint"] = solve_strict
             try:
                 soln = state.solver_t3.solve_from_centroids(
                     centroids,
                     (cfg.frame_height, cfg.frame_width),
-                    fov_estimate=calibrator.get_fov_estimate(),
-                    fov_max_error=calibrator.get_fov_max_error(),
-                    solve_timeout=shared_cfg.get(
-                        "solve_timeout_ms", cfg.solve_timeout_ms),
-                    match_threshold=match_threshold,
-                    match_radius=match_radius,
-                    distortion=calibrator.get_distortion_estimate(),
-                    target_pixel=target_pixel,
-                    target_sky_coord=target_sky,
-                    return_matches=False,
-                    attitude_hint=q_hint,
-                    hint_uncertainty_deg=hint_unc,
-                    strict_hint=False,
+                    **_solve_kw,
                 )
             except Exception as e:
                 log.warning("solve_from_centroids raised: %s", e)
@@ -754,6 +911,9 @@ def solver_main(slots, latest_solution, shared_cfg,
                     ))
                 fail_streak += 1
                 bg_cache.note_solve_result(None, False)
+                tracking_state = TRACK_FULL
+                tracking_good_run = 0
+                tracking_prev_xy = []
                 continue
 
             solve_only_ms = (time.monotonic() - t_solve) * 1000.0
@@ -784,6 +944,9 @@ def solver_main(slots, latest_solution, shared_cfg,
                 if cfg.save_failed_frames and frame_snapshot is not None:
                     _save_frame(frame_snapshot, cfg, f"failed_{status_str}")
                 bg_cache.note_solve_result(None, False)
+                tracking_state = TRACK_FULL
+                tracking_good_run = 0
+                tracking_prev_xy = []
                 continue
 
             measured_fov        = soln.get("FOV") or calibrator.get_fov_estimate()
@@ -796,6 +959,23 @@ def solver_main(slots, latest_solution, shared_cfg,
             if q_solved is not None:
                 last_sky_q       = tuple(q_solved)
                 last_solve_imu_q = shared_cfg.get("imu_q")
+            # --- Tracking-mode bookkeeping (success) -------------------------
+            # Remember this frame's centroid (x,y) for next frame's ROI windows
+            # and advance the lock-in counter. After tracking_lock_frames
+            # consecutive solves (with tracking enabled) enter TRACKING. When
+            # tracking is disabled this still runs but tracking_state is forced
+            # to FULL above, so it only maintains counters cheaply.
+            if tracking_on:
+                tracking_prev_xy = _tracking_mod.centroids_to_xy(centroids)
+                tracking_good_run += 1
+                if (tracking_state == TRACK_FULL
+                        and tracking_good_run >= track_lock_frames
+                        and len(tracking_prev_xy) >= track_min_recover):
+                    tracking_state = TRACK_TRACKING
+            else:
+                tracking_prev_xy = []
+                tracking_good_run = 0
+
             # Solver-derived cache invalidation (IMU-less safety net): a solved
             # attitude jump signals an unsensed slew so the temporal background
             # is rebuilt rather than served stale.

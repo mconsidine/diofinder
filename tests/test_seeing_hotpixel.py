@@ -314,6 +314,30 @@ class MaintSeeingDispatchTests(unittest.TestCase):
         r = self._call("solver_params_set", {"detect_max_axis_ratio": 0.5})
         self.assertFalse(r.ok)
 
+    def test_solver_params_set_tracking_keys(self):
+        r = self._call("solver_params_set",
+                       {"tracking_enabled": True, "tracking_window_px": 64,
+                        "tracking_min_recover": 7})
+        self.assertTrue(r.ok, r.error)
+        self.assertEqual(self.ctx.shared_cfg["tracking_enabled"], True)
+        self.assertEqual(self.ctx.shared_cfg["tracking_window_px"], 64)
+        self.assertEqual(self.ctx.shared_cfg["tracking_min_recover"], 7)
+
+    def test_solver_params_set_rejects_bad_tracking(self):
+        r = self._call("solver_params_set", {"tracking_window_px": 4})
+        self.assertFalse(r.ok)
+        r = self._call("solver_params_set", {"tracking_min_recover": 1})
+        self.assertFalse(r.ok)
+
+    def test_solver_params_get_includes_tracking(self):
+        r = self._call("solver_params_get")
+        self.assertTrue(r.ok, r.error)
+        self.assertIn("tracking_enabled", r.result)
+        self.assertIn("tracking_window_px", r.result)
+        self.assertIn("tracking_min_recover", r.result)
+        # Default off.
+        self.assertFalse(r.result["tracking_enabled"])
+
     def test_match_params_set(self):
         r = self._call("match_params_set",
                        {"match_radius": 0.02, "match_threshold": 1e-6})

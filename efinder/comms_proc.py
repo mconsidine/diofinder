@@ -17,7 +17,7 @@ Available maintenance commands:
   status, boresight_show/set/center, calibration_status/reset,
   polar_start/status/cancel/set_latitude, exposure_get/set, gain_set,
   auto_exposure_set, tuning_set, solver_params_get/set, match_params_get/set,
-  seeing_get/set, solve_centroids, bg_cache_status,
+  seeing_get/set, solve_centroids, bg_cache_status, tracking_status,
   dark_capture, hot_pixel_status, hot_pixel_clear
 """
 
@@ -45,6 +45,7 @@ from efinder.worker_cmds import (
     SOLVER_OP_SOLVE_CENTROIDS, SOLVER_OP_BG_CACHE_STATUS,
     SOLVER_OP_SET_DB, SOLVER_OP_DARK_CAPTURE,
     SOLVER_OP_HOT_PIXEL_STATUS, SOLVER_OP_HOT_PIXEL_CLEAR,
+    SOLVER_OP_TRACKING_STATUS,
     CAMERA_OP_GET_EXPOSURE, CAMERA_OP_SET_EXPOSURE, CAMERA_OP_SET_GAIN,
 )
 from efinder import seeing as seeing_mod
@@ -736,6 +737,12 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "min_centroids",       ctx.cfg.min_centroids),
                 "solve_timeout_ms":    ctx.shared_cfg.get(
                     "solve_timeout_ms",    ctx.cfg.solve_timeout_ms),
+                "tracking_enabled":    ctx.shared_cfg.get(
+                    "tracking_enabled",    ctx.cfg.tracking_enabled),
+                "tracking_window_px":  ctx.shared_cfg.get(
+                    "tracking_window_px",  ctx.cfg.tracking_window_px),
+                "tracking_min_recover": ctx.shared_cfg.get(
+                    "tracking_min_recover", ctx.cfg.tracking_min_recover),
             })
 
         if cmd == "solver_params_set":
@@ -852,6 +859,32 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                                         error="solve_timeout_ms out of range")
                 ctx.shared_cfg["solve_timeout_ms"] = ms
                 updates["solve_timeout_ms"] = ms
+            if "tracking_enabled" in args:
+                te = bool(args["tracking_enabled"])
+                ctx.shared_cfg["tracking_enabled"] = te
+                updates["tracking_enabled"] = te
+            if "tracking_window_px" in args:
+                try:
+                    wp = int(args["tracking_window_px"])
+                except (ValueError, TypeError) as e:
+                    return MaintResponse(ok=False,
+                                        error=f"tracking_window_px must be int: {e}")
+                if not (8 <= wp <= 256):
+                    return MaintResponse(ok=False,
+                                        error="tracking_window_px out of range [8, 256]")
+                ctx.shared_cfg["tracking_window_px"] = wp
+                updates["tracking_window_px"] = wp
+            if "tracking_min_recover" in args:
+                try:
+                    mr = int(args["tracking_min_recover"])
+                except (ValueError, TypeError) as e:
+                    return MaintResponse(ok=False,
+                                        error=f"tracking_min_recover must be int: {e}")
+                if not (3 <= mr <= 50):
+                    return MaintResponse(ok=False,
+                                        error="tracking_min_recover out of range [3, 50]")
+                ctx.shared_cfg["tracking_min_recover"] = mr
+                updates["tracking_min_recover"] = mr
             if persist and updates:
                 cfg_mod.save_keys(updates)
             return MaintResponse(ok=True, result={**updates, "persisted": persist})
@@ -1007,6 +1040,18 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             # Live temporal-background-cache snapshot (state, model age,
             # cached-vs-fallback counters). Cheap; no DB or solve involved.
             reply = _cached_call_solver(SOLVER_OP_BG_CACHE_STATUS,
+                                        ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
+                                        ttl_s=0.5)
+            if reply is None:
+                return MaintResponse(ok=False, error="solver did not respond")
+            if not reply.ok:
+                return MaintResponse(ok=False, error=reply.error)
+            return MaintResponse(ok=True, result=reply.result)
+
+        if cmd == "tracking_status":
+            # Live ROI tracking-mode snapshot (enabled, state, frame counters).
+            # Cheap; no DB or solve involved.
+            reply = _cached_call_solver(SOLVER_OP_TRACKING_STATUS,
                                         ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
                                         ttl_s=0.5)
             if reply is None:

@@ -129,6 +129,20 @@ class Config:
     bg_cache_fail_invalidate: int = 3  # consecutive solve failures (no IMU) that
                                        # invalidate the cache; 0 disables
 
+    # -------- Tracking mode (experimental, opt-in) --------
+    # After a run of confident full-frame solves, switch star DETECTION from
+    # full-frame extraction to small ROI windows around the previous frame's
+    # solved star positions (saves the dominant ~6 ms extraction cost). The
+    # recovered centroids are still solved with the ordinary solver under a
+    # tight attitude hint — this is ROI detection + tight-hint solving, NOT a
+    # verify-only fast path (olive-solve exposes no verify-only API; see
+    # efinder/tracking.py). Default OFF pending on-sky validation.
+    # tracking_enabled is live-mutable via shared_cfg (maint solver_params_set).
+    tracking_enabled: bool = False
+    tracking_window_px: int = 48          # ROI side length (full-frame px)
+    tracking_lock_frames: int = 3         # consecutive good solves before TRACKING
+    tracking_min_recover: int = 5         # min ROI-recovered stars to stay tracking
+
     # -------- Seeing presets --------
     # One-tap Good/Bad night tuning (see efinder/seeing.py). "good" is the
     # default; "bad" widens the matched filter, switches to a 2-D block
