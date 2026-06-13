@@ -334,9 +334,10 @@ factory preset  (SEEING_PRESETS, immutable)
   carry absolute `exposure_s`/`gain` (factory presets can't) — `seeing_set`
   routes those to the camera, everything else to `shared_cfg`.
 * `seeing_override_save {"mode"?, "values"?, "source"?}`: persists a sparse
-  override (default = snapshot of the current effective keys + camera
-  exposure/gain; `source` defaults to `manual`). `seeing_override_clear` deletes
-  it. Storage helpers live in `efinder/seeing.py`
+  override (default = the preset keys currently drifting from factory + the
+  camera exposure/gain, mirroring auto_tune's sparseness; `source` defaults to
+  `manual`). `seeing_override_clear` deletes it. Storage helpers live in
+  `efinder/seeing.py`
   (`save_override`/`clear_override`/`get_override`/`load_overrides`, atomic
   JSON write), unit-tested in `tests/test_seeing_overrides.py`.
 * `auto_tune commit=true` saves the winner as the tuned mode's override

@@ -1488,10 +1488,15 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             source = str(args.get("source", "manual"))
             values = args.get("values")
             if not values:
-                # Default "update from current": snapshot the live effective
-                # preset keys plus the camera's current exposure / gain.
-                values = dict(seeing_mod.effective_values(ctx.cfg, ctx.shared_cfg))
-                values.pop("star_db", None)
+                # Default "save from current" is SPARSE (mirrors auto_tune):
+                # keep only the preset keys that drift from the factory preset,
+                # plus the camera's current exposure / gain (which the factory
+                # preset can't express). star_db is left out deliberately.
+                effective = seeing_mod.effective_values(ctx.cfg, ctx.shared_cfg)
+                drift = seeing_mod.drift_from_preset(
+                    mode, ctx.cfg, ctx.shared_cfg)
+                values = {k: effective[k] for k in drift
+                          if k in effective and k != "star_db"}
                 cam = _call_camera(CAMERA_OP_GET_EXPOSURE, {},
                                    ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
                 if cam is not None and cam.ok:
