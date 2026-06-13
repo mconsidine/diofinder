@@ -150,8 +150,11 @@ bg mode/sizes, noise mode, min_centroids, solve_timeout_ms),
 through the right channel — shared_cfg for live solver keys, a solver `set_db`
 command for the database switch — persists via `config.save_keys`, and
 invalidates the solver cache; `seeing_get` returns the mode, the preset table,
-the effective per-key values, and a `drift` map of keys the user has overridden
-since), `auto_exposure_set` (toggle the comms-side auto-exposure controller),
+the effective per-key values, a `drift` map of keys the user has overridden
+since, plus `lineage` (factory/tuned/custom) and a per-mode `overrides`
+summary), `seeing_override_save`/`seeing_override_clear` (manage the saved
+override layer — see Seeing presets), `auto_exposure_set` (toggle the comms-side
+auto-exposure controller),
 `auto_tune`/`auto_tune_status`/`auto_tune_cancel` (offline coordinate-search
 sweep — see the Auto-exposure / gain controller section),
 `tuning_set` (switch the libcamera tuning between `imx477_scientific.json` and
@@ -313,6 +316,39 @@ Every preset key is independently tunable through `solver_params_set`
 (detection/solve keys) and `match_params_set` (match radius/threshold); the
 Camera page exposes sliders for all of them.
 
+### Saved overrides (factory / tuned / custom)
+
+The factory `SEEING_PRESETS` table is **immutable**. An *override* is an
+optional, persisted, **sparse** layer between factory and live hand-edits:
+
+```
+factory preset  (SEEING_PRESETS, immutable)
+   ⊕ saved override   (only the keys it changes; /var/lib/efinder/seeing_overrides.json)
+   ⊕ live hand-edits  (shared_cfg drift)
+   = active config
+```
+
+* Overrides are **explicit to apply**: a plain `seeing_set {"mode":...}` always
+  loads the factory preset. `seeing_set {"mode":..., "use_override": true}`
+  overlays the saved override (via `seeing.merged_preset`). An override may
+  carry absolute `exposure_s`/`gain` (factory presets can't) — `seeing_set`
+  routes those to the camera, everything else to `shared_cfg`.
+* `seeing_override_save {"mode"?, "values"?, "source"?}`: persists a sparse
+  override (default = snapshot of the current effective keys + camera
+  exposure/gain; `source` defaults to `manual`). `seeing_override_clear` deletes
+  it. Storage helpers live in `efinder/seeing.py`
+  (`save_override`/`clear_override`/`get_override`/`load_overrides`, atomic
+  JSON write), unit-tested in `tests/test_seeing_overrides.py`.
+* `auto_tune commit=true` saves the winner as the tuned mode's override
+  (`source="auto_tune"`) **and** applies it live, so the factory preset stays
+  pristine and the result is a labelled, reversible artifact.
+* **Lineage** (`seeing.classify_lineage`, surfaced by `seeing_get`): **tuned**
+  if an override exists and every override key matches the effective config;
+  **factory** if the effective config matches the factory preset; **custom**
+  otherwise (hand-edits on top). The Config page shows a Factory/Tuned/Custom
+  badge plus Apply / Save-from-current / Clear controls; `efinder-ctl seeing
+  {apply-override|save-override|clear-override}` is the CLI equivalent.
+
 ---
 
 ## Tracking mode (experimental, opt-in)
@@ -454,10 +490,11 @@ in `tests/test_auto_tune.py`.
   prefer fast solves, a tight kernel, a high sigma, and a cheap background.
   `detect_bin` (restart) and `star_db` (heavy reload) are deliberately **not**
   swept.
-* **commit=true** persists the winner via `config.save_keys` (live solver keys
-  also written to `shared_cfg`, `_invalidate_solver_cache` called); this drifts
-  the active config away from the named seeing preset (visible in `seeing_get`'s
-  drift map). **commit=false** restores the camera and changes nothing.
+* **commit=true** applies the winner live (`config.save_keys` + `shared_cfg` +
+  `_invalidate_solver_cache`) **and** saves it as the tuned mode's override
+  (`source="auto_tune"`), so the factory preset stays untouched and `seeing_get`
+  lineage reads **tuned**. **commit=false** restores the camera and changes
+  nothing.
 * CLI: `efinder-ctl auto-tune {start [--mode] [--commit] [--wait]|status|cancel}`.
   Web UI: an "Auto-tune (current sky)" card on the Camera page (start/cancel +
   progress poller via `/api/autotune`).
@@ -506,6 +543,7 @@ set in `efinder.conf`.
 | `/etc/efinder/efinder.conf` | Runtime configuration |
 | `/var/lib/efinder/` | Star databases (`.npz`), debug ZIPs, saved frames |
 | `/var/lib/efinder/hot_pixel_mask.npz` | Hot-pixel mask (from `dark_capture`) |
+| `/var/lib/efinder/seeing_overrides.json` | Saved Good/Bad seeing overrides (factory presets stay immutable) |
 | `/var/lib/efinder/captures/` | PNG captures when `save_failed_frames=true` (100 MB cap, oldest evicted) |
 | `/run/efinder/maint.sock` | Maintenance Unix socket |
 | `/usr/local/bin/efinder-ctl` | CLI wrapper for the maint socket |

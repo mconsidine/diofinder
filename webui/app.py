@@ -395,9 +395,16 @@ def bg_jpg():
 
 @app.route("/seeing", methods=["POST"])
 def seeing_set():
-    """Apply a Good/Bad seeing preset (form 'mode') and redirect back."""
+    """Apply a Good/Bad seeing preset (form 'mode') and redirect back.
+
+    A plain toggle loads the factory preset; pass use_override=1 to apply the
+    saved override for that mode instead.
+    """
     mode = request.form.get("mode", "good").strip().lower()
-    r = _safe_call("seeing_set", {"mode": mode})
+    args = {"mode": mode}
+    if request.form.get("use_override") in ("1", "true", "on", "yes"):
+        args["use_override"] = True
+    r = _safe_call("seeing_set", args)
     if not r.ok:
         return r.error, 500
     nxt = request.form.get("next") or "dashboard"
@@ -406,9 +413,41 @@ def seeing_set():
     return redirect(url_for(nxt))
 
 
+@app.route("/seeing/override/save", methods=["POST"])
+def seeing_override_save():
+    """Save the current effective settings as the override for a mode."""
+    args = {}
+    mode = (request.form.get("mode") or "").strip().lower()
+    if mode:
+        args["mode"] = mode
+    r = _safe_call("seeing_override_save", args)
+    if not r.ok:
+        return r.error, 500
+    nxt = request.form.get("next") or "config_page"
+    if nxt not in ("dashboard", "config_page", "camera_page"):
+        nxt = "config_page"
+    return redirect(url_for(nxt))
+
+
+@app.route("/seeing/override/clear", methods=["POST"])
+def seeing_override_clear():
+    """Delete the saved override for a mode (revert to factory)."""
+    args = {}
+    mode = (request.form.get("mode") or "").strip().lower()
+    if mode:
+        args["mode"] = mode
+    r = _safe_call("seeing_override_clear", args)
+    if not r.ok:
+        return r.error, 500
+    nxt = request.form.get("next") or "config_page"
+    if nxt not in ("dashboard", "config_page", "camera_page"):
+        nxt = "config_page"
+    return redirect(url_for(nxt))
+
+
 @app.route("/api/seeing")
 def api_seeing():
-    """JSON seeing mode + preset table + drift for live UI updates."""
+    """JSON seeing mode + preset table + drift + lineage for live UI updates."""
     r = _safe_call("seeing_get")
     return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
 

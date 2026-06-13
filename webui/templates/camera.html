@@ -151,7 +151,8 @@
       Point the finder at a star field and wait for detection, then sweep
       exposure / gain / sigma / kernel / background to find the cheapest
       settings that still solve reliably. Runs in the background (~1–3 min).
-      Tick <em>Commit</em> to persist the result; otherwise it's a dry run.
+      Tick <em>Commit</em> to save the result as this mode's <em>override</em>
+      and apply it (factory preset stays untouched); otherwise it's a dry run.
     </p>
     <label>Mode
       <select id="at-mode">
@@ -507,7 +508,8 @@ function _atRender(res) {
     if (res.error) lines.push('error: ' + res.error);
     const r = res.result;
     if (r) {
-      lines.push((r.committed ? '✔ committed' : '✓ dry run') +
+      lines.push((r.committed ? ('✔ committed — saved as ' + r.mode +
+                                 ' override') : '✓ dry run') +
                  (r.met_target ? ' — target met' : ' — target NOT met') +
                  ' (' + r.elapsed_s + 's)');
       if (r.photometric) lines.push('exposure: ' + r.photometric.exposure_s +

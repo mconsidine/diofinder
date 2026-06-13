@@ -18,8 +18,9 @@ Available maintenance commands:
   polar_start/status/cancel/set_latitude, exposure_get/set, gain_set,
   auto_exposure_set, auto_tune/auto_tune_status/auto_tune_cancel,
   tuning_set, solver_params_get/set, match_params_get/set,
-  seeing_get/set, solve_centroids, bg_cache_status, tracking_status,
-  dark_capture, hot_pixel_status, hot_pixel_clear
+  seeing_get/set, seeing_override_save/clear, solve_centroids,
+  bg_cache_status, tracking_status, dark_capture, hot_pixel_status,
+  hot_pixel_clear
 """
 
 import datetime
@@ -562,9 +563,18 @@ def _auto_tune_run(ctx, params):
                 cfg_mod.save_keys(updates)
             except Exception as e:
                 log.warning("auto-tune could not persist: %s", e)
+            # Save a labelled, reversible override artifact for this mode (the
+            # factory preset stays untouched). The values applied live above
+            # now also match the override -> lineage reads "tuned".
+            try:
+                entry = seeing_mod.save_override(mode, dict(updates),
+                                                 source="auto_tune")
+                result["override"] = entry
+            except Exception as e:
+                log.warning("auto-tune could not save override: %s", e)
             _invalidate_solver_cache()
             result["committed"] = True
-            log.info("auto-tune committed: %s", updates)
+            log.info("auto-tune committed (override saved): %s", updates)
         else:
             # Detection params were never changed live (the eval op took them by
             # argument); only the camera needs restoring.
@@ -1365,6 +1375,19 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             try:
                 effective = seeing_mod.effective_values(ctx.cfg, ctx.shared_cfg)
                 drift = seeing_mod.drift_from_preset(mode, ctx.cfg, ctx.shared_cfg)
+                # Augment effective with live camera exposure/gain so the
+                # lineage check can recognise an override that pins them.
+                eff_full = dict(effective)
+                cam = _call_camera(CAMERA_OP_GET_EXPOSURE, {},
+                                   ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+                if cam is not None and cam.ok:
+                    eff_full["exposure_s"] = cam.result.get("exposure_s")
+                    eff_full["gain"] = cam.result.get("gain")
+                else:
+                    eff_full["exposure_s"] = ctx.cfg.exposure_s
+                    eff_full["gain"] = ctx.cfg.gain
+                lineage = seeing_mod.classify_lineage(mode, ctx.cfg, eff_full)
+                overrides = seeing_mod.overrides_summary()
             except Exception as e:
                 return MaintResponse(ok=False, error=f"seeing_get failed: {e}")
             return MaintResponse(ok=True, result={
@@ -1373,6 +1396,8 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 "rationale": seeing_mod.PRESET_RATIONALE,
                 "effective": effective,
                 "drift": drift,
+                "lineage": lineage,
+                "overrides": overrides,
                 "deep_db_configured": bool(
                     (getattr(ctx.cfg, "star_db_deep", "") or "").strip()),
             })
@@ -1383,16 +1408,31 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 return MaintResponse(
                     ok=False,
                     error=f"seeing_set requires mode 'good' or 'bad', got {mode!r}")
+            # Overrides are explicit: a plain toggle loads the factory preset;
+            # the saved override is applied only when use_override is requested.
+            use_override = bool(args.get("use_override", False))
             try:
-                preset = seeing_mod.apply_preset(mode, ctx.cfg)
+                preset, override_applied = seeing_mod.merged_preset(
+                    mode, ctx.cfg, use_override=use_override)
             except ValueError as e:
                 return MaintResponse(ok=False, error=str(e))
 
             # Route each preset key through the right channel.
-            #  * star_db        -> solver DB reload (in-process), persist solver_db
-            #  * everything else -> live shared_cfg write (solver / auto-exp read it)
+            #  * star_db          -> solver DB reload (in-process), persist solver_db
+            #  * exposure_s / gain -> camera (override-only keys; presets lack them)
+            #  * everything else   -> live shared_cfg write (solver / auto-exp read it)
             persisted = {"seeing_mode": mode}
             db_token = preset.pop("star_db", None)
+
+            for cam_key, cam_op in (("exposure_s", CAMERA_OP_SET_EXPOSURE),
+                                    ("gain", CAMERA_OP_SET_GAIN)):
+                if cam_key in preset:
+                    val = preset.pop(cam_key)
+                    r = _call_camera(cam_op, {cam_key: val},
+                                     ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+                    if r is not None and r.ok:
+                        persisted[cam_key] = val
+                        setattr(ctx.cfg, cam_key, val)
 
             for key, val in preset.items():
                 ctx.shared_cfg[key] = val
@@ -1434,9 +1474,44 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 log.warning("Could not persist seeing preset: %s", e)
 
             _invalidate_solver_cache()
-            log.info("Seeing preset -> %s (db=%s)", mode, db_token)
+            log.info("Seeing preset -> %s (db=%s override=%s)",
+                     mode, db_token, override_applied)
             return MaintResponse(ok=True, result={
-                "mode": mode, "applied": persisted, "db": db_result})
+                "mode": mode, "applied": persisted, "db": db_result,
+                "override_applied": override_applied})
+
+        if cmd == "seeing_override_save":
+            mode = str(args.get("mode") or ctx.shared_cfg.get(
+                "seeing_mode", ctx.cfg.seeing_mode)).strip().lower()
+            if not seeing_mod.is_valid_mode(mode):
+                return MaintResponse(ok=False, error=f"invalid mode {mode!r}")
+            source = str(args.get("source", "manual"))
+            values = args.get("values")
+            if not values:
+                # Default "update from current": snapshot the live effective
+                # preset keys plus the camera's current exposure / gain.
+                values = dict(seeing_mod.effective_values(ctx.cfg, ctx.shared_cfg))
+                values.pop("star_db", None)
+                cam = _call_camera(CAMERA_OP_GET_EXPOSURE, {},
+                                   ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+                if cam is not None and cam.ok:
+                    values["exposure_s"] = cam.result.get("exposure_s")
+                    values["gain"] = cam.result.get("gain")
+            try:
+                entry = seeing_mod.save_override(mode, values, source=source)
+            except ValueError as e:
+                return MaintResponse(ok=False, error=str(e))
+            log.info("Seeing override saved for %s (source=%s)", mode, source)
+            return MaintResponse(ok=True, result={"mode": mode, "override": entry})
+
+        if cmd == "seeing_override_clear":
+            mode = str(args.get("mode") or ctx.shared_cfg.get(
+                "seeing_mode", ctx.cfg.seeing_mode)).strip().lower()
+            if not seeing_mod.is_valid_mode(mode):
+                return MaintResponse(ok=False, error=f"invalid mode {mode!r}")
+            removed = seeing_mod.clear_override(mode)
+            log.info("Seeing override clear for %s -> removed=%s", mode, removed)
+            return MaintResponse(ok=True, result={"mode": mode, "removed": removed})
 
         if cmd == "dark_capture":
             try:

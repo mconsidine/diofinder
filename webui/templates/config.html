@@ -73,10 +73,56 @@
             style="{{ 'background:#cc6600;color:#fff;' if smode == 'bad' else '' }}">Bad</button>
   </form>
   <p class="hint" style="margin-top:6px;">
-    Applying a preset overwrites the individual detection / solve / exposure
-    keys it controls (live, and persisted to the config file). The values below
-    update accordingly. Edit the Camera page sliders to override any of them.
+    Applying a preset loads the factory values for the detection / solve /
+    exposure keys it controls (live, and persisted). A plain toggle always uses
+    the factory preset; a saved <em>override</em> is applied only with the
+    button below. Edit the Camera-page sliders to drift any value.
   </p>
+
+  {# ---- Lineage badge + override controls ---- #}
+  {% set lin = seeing.lineage if seeing else None %}
+  {% set src = lin.source if lin else 'factory' %}
+  {% set ovr = (seeing.overrides.get(smode) if (seeing and seeing.overrides) else None) %}
+  <p style="margin:6px 0;">
+    Active profile:
+    {% if src == 'tuned' %}
+      <span style="background:#1f8a44;color:#fff;padding:2px 8px;border-radius:10px;">
+        {{ smode|capitalize }} · Tuned</span>
+      {% if ovr %}<span class="hint">(source: {{ ovr.source }})</span>{% endif %}
+    {% elif src == 'custom' %}
+      <span style="background:#cc6600;color:#fff;padding:2px 8px;border-radius:10px;">
+        {{ smode|capitalize }} · Custom</span>
+      <span class="hint">({{ (lin.drift|length) if lin and lin.drift else 0 }} edit(s))</span>
+    {% else %}
+      <span style="background:#444;color:#fff;padding:2px 8px;border-radius:10px;">
+        {{ smode|capitalize }} · Factory</span>
+    {% endif %}
+  </p>
+  <div style="margin:6px 0;">
+    {% if ovr %}
+    <form method="post" action="{{ url_for('seeing_set') }}" style="display:inline;">
+      <input type="hidden" name="mode" value="{{ smode }}">
+      <input type="hidden" name="use_override" value="1">
+      <input type="hidden" name="next" value="config_page">
+      <button type="submit" class="btn">Apply {{ smode }} override</button>
+    </form>
+    <form method="post" action="{{ url_for('seeing_override_clear') }}"
+          style="display:inline;"
+          onsubmit="return confirm('Delete the saved {{ smode }} override?');">
+      <input type="hidden" name="mode" value="{{ smode }}">
+      <input type="hidden" name="next" value="config_page">
+      <button type="submit" class="btn btn-warning">Clear override</button>
+    </form>
+    {% endif %}
+    <form method="post" action="{{ url_for('seeing_override_save') }}"
+          style="display:inline;">
+      <input type="hidden" name="mode" value="{{ smode }}">
+      <input type="hidden" name="next" value="config_page">
+      <button type="submit" class="btn">
+        {{ 'Update' if ovr else 'Save' }} {{ smode }} override from current</button>
+    </form>
+  </div>
+
   {% if seeing and seeing.drift %}
     <p class="hint" style="color:#cc6600;">
       {{ seeing.drift|length }} value(s) currently overridden from the
