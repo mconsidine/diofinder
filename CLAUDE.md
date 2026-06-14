@@ -66,7 +66,9 @@ is far below one core), freeing CPU 1 as a third solver core. CPU affinity is se
 | `test_mode` | bool | comms (via maint) | camera |
 | `auto_exposure_enabled` | bool | comms (via maint `auto_exposure_set`) | comms auto-exposure thread |
 | `auto_exposure_target_stars` | int | comms (via `seeing_set`) | comms auto-exposure thread |
+| `auto_exposure_target_matches` | int | comms (via `seeing_set`) | comms auto-exposure thread |
 | `auto_exposure_max_s` | float | comms (via `seeing_set`) | comms auto-exposure thread |
+| `auto_exposure_max_gain` | float | comms (via `seeing_set`) | comms auto-exposure thread |
 | `imu_available` | bool | imu_thread | comms, webui |
 | `imu_q` | tuple (w,x,y,z) | imu_thread | comms |
 | `imu_t` | float | imu_thread | comms |
@@ -148,8 +150,13 @@ bg mode/sizes, noise mode, min_centroids, solve_timeout_ms),
 through the right channel — shared_cfg for live solver keys, a solver `set_db`
 command for the database switch — persists via `config.save_keys`, and
 invalidates the solver cache; `seeing_get` returns the mode, the preset table,
-the effective per-key values, and a `drift` map of keys the user has overridden
-since), `auto_exposure_set` (toggle the comms-side auto-exposure controller),
+the effective per-key values, a `drift` map of keys the user has overridden
+since, plus `lineage` (factory/tuned/custom) and a per-mode `overrides`
+summary), `seeing_override_save`/`seeing_override_clear` (manage the saved
+override layer — see Seeing presets), `auto_exposure_set` (toggle the comms-side
+auto-exposure controller),
+`auto_tune`/`auto_tune_status`/`auto_tune_cancel` (offline coordinate-search
+sweep — see the Auto-exposure / gain controller section),
 `tuning_set` (switch the libcamera tuning between `imx477_scientific.json` and
 `imx477.json`; restart required), `bg_cache_status` (live temporal-cache
 snapshot — state, model age, model kind row/block, served-cached vs fallback
@@ -309,6 +316,40 @@ Every preset key is independently tunable through `solver_params_set`
 (detection/solve keys) and `match_params_set` (match radius/threshold); the
 Camera page exposes sliders for all of them.
 
+### Saved overrides (factory / tuned / custom)
+
+The factory `SEEING_PRESETS` table is **immutable**. An *override* is an
+optional, persisted, **sparse** layer between factory and live hand-edits:
+
+```
+factory preset  (SEEING_PRESETS, immutable)
+   ⊕ saved override   (only the keys it changes; /var/lib/efinder/seeing_overrides.json)
+   ⊕ live hand-edits  (shared_cfg drift)
+   = active config
+```
+
+* Overrides are **explicit to apply**: a plain `seeing_set {"mode":...}` always
+  loads the factory preset. `seeing_set {"mode":..., "use_override": true}`
+  overlays the saved override (via `seeing.merged_preset`). An override may
+  carry absolute `exposure_s`/`gain` (factory presets can't) — `seeing_set`
+  routes those to the camera, everything else to `shared_cfg`.
+* `seeing_override_save {"mode"?, "values"?, "source"?}`: persists a sparse
+  override (default = the preset keys currently drifting from factory + the
+  camera exposure/gain, mirroring auto_tune's sparseness; `source` defaults to
+  `manual`). `seeing_override_clear` deletes it. Storage helpers live in
+  `efinder/seeing.py`
+  (`save_override`/`clear_override`/`get_override`/`load_overrides`, atomic
+  JSON write), unit-tested in `tests/test_seeing_overrides.py`.
+* `auto_tune commit=true` saves the winner as the tuned mode's override
+  (`source="auto_tune"`) **and** applies it live, so the factory preset stays
+  pristine and the result is a labelled, reversible artifact.
+* **Lineage** (`seeing.classify_lineage`, surfaced by `seeing_get`): **tuned**
+  if an override exists and every override key matches the effective config;
+  **factory** if the effective config matches the factory preset; **custom**
+  otherwise (hand-edits on top). The Config page shows a Factory/Tuned/Custom
+  badge plus Apply / Save-from-current / Clear controls; `efinder-ctl seeing
+  {apply-override|save-override|clear-override}` is the CLI equivalent.
+
 ---
 
 ## Tracking mode (experimental, opt-in)
@@ -393,6 +434,72 @@ The `tracking_status` maint command (comms) → `SOLVER_OP_TRACKING_STATUS`
 (solver) returns the live counters; the solver mirrors them into `_SolverState`
 each frame.
 
+---
+
+## Auto-exposure / gain controller
+
+`comms_proc._auto_exposure_loop` (daemon thread, gated by
+`auto_exposure_enabled`) runs every 5 s and drives the camera toward the
+*cheapest* operating point that still yields a confident solve. The pure
+decision lives in `_auto_exposure_decision` (unit-tested in
+`tests/test_auto_exposure.py`, no hardware needed).
+
+* **Metric**: matched stars when the frame is solving (`solved=True`), steering
+  toward `auto_exposure_target_matches`; falls back to raw detected-star count
+  (`auto_exposure_target_stars`) while lost-in-space / slewing, where
+  `matches == 0` carries no exposure information.
+* **Exposure-priority ladder**: when starved it raises exposure first and only
+  climbs gain once exposure is at `auto_exposure_max_s`; when over-served it
+  gives gain back first (cheap — only noise), then shortens exposure (which
+  costs star trailing + latency on a moving mount).
+* **Saturation** (`peak ≥ 250`) overrides everything and backs off (gain first).
+* Wide deadband (0.8×–1.5× of target) so it settles instead of oscillating;
+  sub-5 ms exposure moves are ignored. At most one axis changes per cycle.
+* Bounds: `auto_exposure_min_s`/`max_s`, `auto_exposure_min_gain`/`max_gain`.
+  `target_matches`, `target_stars`, `max_s`, and `max_gain` are live-mutable via
+  `shared_cfg` (the seeing presets write them); the floors are config-only.
+
+A full multi-axis sweep over sigma/kernel/bg-mode *as well* as exposure/gain is
+deliberately **not** done in this live loop — that is the offline `auto_tune`
+sweep below.
+
+### Offline `auto_tune` sweep
+
+`auto_tune` (comms maint) is a **user-initiated, bounded coordinate search** for
+the cheapest operating point — `(exposure, gain, sigma, kernel_sigma, bg_mode)`
+— that still clears the seeing-mode match target on the *current* sky. It is
+**not** a live controller: it runs as a background thread (the maint socket has
+a 15 s read timeout, far shorter than a multi-point sweep), reports progress via
+`auto_tune_status`, and is abortable via `auto_tune_cancel`. The pure
+selection/merit logic (`_auto_tune_select` / `_auto_tune_cost`) is unit-tested
+in `tests/test_auto_tune.py`.
+
+* **Precondition**: a fresh solution with signal (`peak ≥ 20`, age < 10 s) —
+  i.e. the finder is pointed at stars and roughly stationary. The always-on
+  auto-exposure loop is paused for the duration so it doesn't fight the sweep.
+* **Phase 1 (photometric)**: drives exposure+gain with the same ladder logic as
+  the live controller (`_auto_tune_photometric` reuses `_auto_exposure_decision`).
+* **Phase 2 (detection sweep)**: for each `(bg_mode, kernel_sigma, sigma)`
+  candidate it asks the solver for `frames_per_point` single-frame samples via
+  `SOLVER_OP_AUTO_TUNE_EVAL`. That op extracts with the candidate params
+  **forced per-frame** (`bg_cache.detect(force_per_frame=True)` — the live
+  temporal cache is left untouched) and solves on the resident DB, returning
+  `{solved, matches, stars, peak, solve_ms}`. One frame per call keeps each
+  solver-blocking call well inside the 30 s watchdog window.
+* **Merit**: among candidates clearing the match-rate floor and ≥ 80 % of the
+  match target, minimize `w·solve_ms + w·kernel_sigma − w·sigma + bg_cost` — i.e.
+  prefer fast solves, a tight kernel, a high sigma, and a cheap background.
+  `detect_bin` (restart) and `star_db` (heavy reload) are deliberately **not**
+  swept.
+* **commit=true** applies the winner live (`config.save_keys` + `shared_cfg` +
+  `_invalidate_solver_cache`) **and** saves it as the tuned mode's override
+  (`source="auto_tune"`), so the factory preset stays untouched and `seeing_get`
+  lineage reads **tuned**. **commit=false** restores the camera and changes
+  nothing.
+* CLI: `efinder-ctl auto-tune {start [--mode] [--commit] [--wait]|status|cancel}`.
+  Web UI: an "Auto-tune (current sky)" card on the Camera page (start/cancel +
+  progress poller via `/api/autotune`).
+
 ## Hot-pixel mask
 
 `efinder/hot_pixel.py` builds a static hot-pixel mask from a capped-lens dark
@@ -437,6 +544,7 @@ set in `efinder.conf`.
 | `/etc/efinder/efinder.conf` | Runtime configuration |
 | `/var/lib/efinder/` | Star databases (`.npz`), debug ZIPs, saved frames |
 | `/var/lib/efinder/hot_pixel_mask.npz` | Hot-pixel mask (from `dark_capture`) |
+| `/var/lib/efinder/seeing_overrides.json` | Saved Good/Bad seeing overrides (factory presets stay immutable) |
 | `/var/lib/efinder/captures/` | PNG captures when `save_failed_frames=true` (100 MB cap, oldest evicted) |
 | `/run/efinder/maint.sock` | Maintenance Unix socket |
 | `/usr/local/bin/efinder-ctl` | CLI wrapper for the maint socket |

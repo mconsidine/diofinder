@@ -16,9 +16,11 @@ Available maintenance commands:
   set_test_mode {"enabled": true | false}
   status, boresight_show/set/center, calibration_status/reset,
   polar_start/status/cancel/set_latitude, exposure_get/set, gain_set,
-  auto_exposure_set, tuning_set, solver_params_get/set, match_params_get/set,
-  seeing_get/set, solve_centroids, bg_cache_status, tracking_status,
-  dark_capture, hot_pixel_status, hot_pixel_clear
+  auto_exposure_set, auto_tune/auto_tune_status/auto_tune_cancel,
+  tuning_set, solver_params_get/set, match_params_get/set,
+  seeing_get/set, seeing_override_save/clear, solve_centroids,
+  bg_cache_status, tracking_status, dark_capture, hot_pixel_status,
+  hot_pixel_clear
 """
 
 import datetime
@@ -28,6 +30,7 @@ import logging
 import math
 import os
 import socket
+import statistics
 import subprocess
 import threading
 import time
@@ -46,6 +49,7 @@ from efinder.worker_cmds import (
     SOLVER_OP_SET_DB, SOLVER_OP_DARK_CAPTURE,
     SOLVER_OP_HOT_PIXEL_STATUS, SOLVER_OP_HOT_PIXEL_CLEAR,
     SOLVER_OP_TRACKING_STATUS,
+    SOLVER_OP_AUTO_TUNE_EVAL,
     CAMERA_OP_GET_EXPOSURE, CAMERA_OP_SET_EXPOSURE, CAMERA_OP_SET_GAIN,
 )
 from efinder import seeing as seeing_mod
@@ -146,26 +150,86 @@ def _call_camera(op, args, camera_cmd_q, camera_cmd_reply_q, timeout_s=2.0):
         return _wait_for_reply(camera_cmd_reply_q, rid, timeout_s=timeout_s)
 
 
-def _auto_exposure_decision(stars, peak, target, cur_s, min_s, max_s):
-    """Pure decision step for the auto-exposure controller.
+# Auto-exposure / gain controller tunables.
+_AE_PEAK_SATURATION = 250     # 8-bit peak at/above which a frame is treated as clipped
+_AE_EXP_UP = 1.3              # exposure multiplier when starved of signal
+_AE_EXP_DOWN = 0.8            # exposure multiplier when over-served
+_AE_GAIN_STEP = 1.5           # gain multiplier per ladder step
+_AE_MIN_EXP_DELTA_S = 0.005   # ignore sub-5 ms exposure moves (clamped / noise)
+_AE_STARVED_FRAC = 0.8        # metric below this fraction of target -> need more signal
+_AE_SPARE_FRAC = 1.5          # metric above this fraction of target -> shed cost
 
-    Returns the new exposure in seconds, or None to leave it alone.
-    Saturation always wins (a blown frame yields few usable centroids no
-    matter the count); otherwise nudge toward the target star count with a
-    deadband so it settles instead of oscillating.
+
+def _auto_exposure_decision(*, solved, stars, matches, peak,
+                            cur_s, cur_g, target_stars, target_matches,
+                            min_s, max_s, min_g, max_g):
+    """Pure decision step for the auto-exposure / gain controller.
+
+    Returns a dict describing the new camera state — at most one of
+    ``{"exposure_s": float}`` or ``{"gain": float}`` per call — or ``None`` to
+    leave the camera alone.
+
+    Objective: the *cheapest* operating point that still yields a confident
+    solve. "Cheap" means short exposure first (less star trailing on a moving
+    mount, lower latency), then low gain (less read noise). The real currency is
+    matched stars while we are solving; raw detected-star count is only a
+    fallback proxy when lost-in-space / slewing (``matches == 0`` then tells us
+    nothing about exposure).
+
+    The control axes form an exposure-priority ladder:
+      * need more signal  -> raise exposure first, climb gain only at max_s
+      * have spare signal -> give gain back first, then shorten exposure
+      * saturated frame   -> always back off (gain first; it costs only noise)
+
+    Wide deadband (``_AE_STARVED_FRAC`` .. ``_AE_SPARE_FRAC`` of target) so the
+    loop settles instead of oscillating across the ladder boundary.
     """
-    if peak >= 250:
-        factor = 0.7                      # saturated — back off
-    elif stars < 0.8 * target:
-        factor = 1.3                      # too few stars — expose longer
-    elif stars > 1.5 * target:
-        factor = 0.8                      # plenty of stars — speed up
-    else:
-        return None                       # within deadband
-    new_s = max(min_s, min(max_s, cur_s * factor))
-    if abs(new_s - cur_s) < 0.005:        # clamped / no meaningful change
+    # 1. Saturation overrides everything: a clipped frame yields poor centroids
+    #    regardless of count. Shed the cheapest-to-restore signal first (gain),
+    #    falling back to exposure once already at the gain floor.
+    if peak >= _AE_PEAK_SATURATION:
+        if cur_g > min_g:
+            new_g = max(min_g, cur_g / _AE_GAIN_STEP)
+            if new_g != cur_g:
+                return {"gain": round(new_g, 2)}
+        new_s = max(min_s, cur_s * _AE_EXP_DOWN)
+        if cur_s - new_s >= _AE_MIN_EXP_DELTA_S:
+            return {"exposure_s": round(new_s, 4)}
         return None
-    return new_s
+
+    # 2. Choose the metric + target. Matches drive the loop when we are solving;
+    #    otherwise fall back to detected-star count.
+    if solved and target_matches > 0:
+        metric, target = matches, target_matches
+    else:
+        metric, target = stars, target_stars
+
+    # 3. Starved — need more signal. Exposure first, then climb the gain ladder.
+    if metric < _AE_STARVED_FRAC * target:
+        if cur_s < max_s:
+            new_s = min(max_s, cur_s * _AE_EXP_UP)
+            if new_s - cur_s >= _AE_MIN_EXP_DELTA_S:
+                return {"exposure_s": round(new_s, 4)}
+        if cur_g < max_g:
+            new_g = min(max_g, cur_g * _AE_GAIN_STEP)
+            if new_g != cur_g:
+                return {"gain": round(new_g, 2)}
+        return None                       # already at the ceiling on both axes
+
+    # 4. Over-served — shed cost to find the minimum. Gain back down first
+    #    (noise), then shorten exposure (trailing / latency).
+    if metric > _AE_SPARE_FRAC * target:
+        if cur_g > min_g:
+            new_g = max(min_g, cur_g / _AE_GAIN_STEP)
+            if new_g != cur_g:
+                return {"gain": round(new_g, 2)}
+        new_s = max(min_s, cur_s * _AE_EXP_DOWN)
+        if cur_s - new_s >= _AE_MIN_EXP_DELTA_S:
+            return {"exposure_s": round(new_s, 4)}
+        return None
+
+    # 5. Within the deadband — settled.
+    return None
 
 
 def _auto_exposure_loop(ctx, interval_s=5.0):
@@ -191,25 +255,346 @@ def _auto_exposure_loop(ctx, interval_s=5.0):
             if reply is None or not reply.ok:
                 continue
             cur_s = float(reply.result.get("exposure_s", cfg.exposure_s))
-            # target_stars and max_s are live-mutable (seeing presets / UI write
-            # them to shared_cfg); read them fresh each cycle. min_s is fixed.
-            target = int(ctx.shared_cfg.get(
+            cur_g = float(reply.result.get("gain", cfg.gain))
+            # target_stars/target_matches/max_s/max_gain are live-mutable (seeing
+            # presets / UI write them to shared_cfg); read them fresh each cycle.
+            # The exposure and gain floors stay config-only.
+            target_stars = int(ctx.shared_cfg.get(
                 "auto_exposure_target_stars", cfg.auto_exposure_target_stars))
+            target_matches = int(ctx.shared_cfg.get(
+                "auto_exposure_target_matches", cfg.auto_exposure_target_matches))
             max_s = float(ctx.shared_cfg.get(
                 "auto_exposure_max_s", cfg.auto_exposure_max_s))
-            new_s = _auto_exposure_decision(
-                sol.get("stars", 0), sol.get("peak", 0),
-                target, cur_s, cfg.auto_exposure_min_s, max_s)
-            if new_s is None:
+            max_g = float(ctx.shared_cfg.get(
+                "auto_exposure_max_gain", cfg.auto_exposure_max_gain))
+            action = _auto_exposure_decision(
+                solved=bool(sol.get("solved", False)),
+                stars=sol.get("stars", 0), matches=sol.get("matches", 0),
+                peak=sol.get("peak", 0), cur_s=cur_s, cur_g=cur_g,
+                target_stars=target_stars, target_matches=target_matches,
+                min_s=cfg.auto_exposure_min_s, max_s=max_s,
+                min_g=cfg.auto_exposure_min_gain, max_g=max_g)
+            if not action:
                 continue
-            reply = _call_camera(CAMERA_OP_SET_EXPOSURE,
-                                 {"exposure_s": round(new_s, 4)},
-                                 ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
-            if reply is not None and reply.ok:
-                log.info("auto-exposure: %.3fs -> %.3fs (stars=%s peak=%s)",
-                         cur_s, new_s, sol.get("stars"), sol.get("peak"))
+            ctx_qs = (ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+            if "exposure_s" in action:
+                reply = _call_camera(CAMERA_OP_SET_EXPOSURE,
+                                     {"exposure_s": action["exposure_s"]}, *ctx_qs)
+                if reply is not None and reply.ok:
+                    log.info("auto-exposure: exp %.3fs -> %.3fs "
+                             "(solved=%s stars=%s matches=%s peak=%s)",
+                             cur_s, action["exposure_s"], sol.get("solved"),
+                             sol.get("stars"), sol.get("matches"), sol.get("peak"))
+            if "gain" in action:
+                reply = _call_camera(CAMERA_OP_SET_GAIN,
+                                     {"gain": action["gain"]}, *ctx_qs)
+                if reply is not None and reply.ok:
+                    log.info("auto-exposure: gain %.1f -> %.1f "
+                             "(solved=%s stars=%s matches=%s peak=%s)",
+                             cur_g, action["gain"], sol.get("solved"),
+                             sol.get("stars"), sol.get("matches"), sol.get("peak"))
         except Exception as e:
             log.warning("auto-exposure step failed: %s", e)
+
+
+# ----- Offline auto-tune sweep -----------------------------------------------
+#
+# A user-initiated, bounded coordinate search for the cheapest detection +
+# photometric operating point that still clears the seeing-mode match target on
+# the *current* sky. Runs in a background thread (the maint socket has a 15 s
+# read timeout, far shorter than a multi-point sweep), reporting progress via
+# auto_tune_status and abortable via auto_tune_cancel. This is NOT a live
+# controller — see _auto_exposure_loop for the always-on single-axis loop.
+
+# Default search axes. Only live-cheap detection knobs are swept; detect_bin
+# (restart) and star_db (heavy reload) are deliberately excluded.
+_AT_SIGMA_VALUES = (4.0, 5.0, 6.0, 8.0)
+_AT_KERNEL_VALUES = (1.5, 2.5)
+_AT_BG_MODES = ("row_percentile", "block_percentile")
+
+# Merit weights (lower cost is better). Among candidates that clear the match
+# target + rate floor, prefer faster solves, a tighter (cheaper) matched-filter
+# kernel, a higher detection sigma (fewer false positives), and a cheaper
+# background model — i.e. the "minimum kernel, maximum sigma" the user wants.
+_AT_W_SOLVE = 1.0      # per second of median solve time
+_AT_W_KERNEL = 0.30    # per unit kernel_sigma
+_AT_W_SIGMA = 0.05     # per unit detection sigma (subtracted -> larger is cheaper)
+_AT_BG_COST = {"row_percentile": 0.0, "line_median": 0.1,
+               "block_percentile": 0.25, "top_hat": 0.5}
+
+
+def _auto_tune_cost(row):
+    """Scalar cost for one evaluated candidate row (lower is better)."""
+    return (
+        _AT_W_SOLVE * (row.get("median_solve_ms", 0.0) / 1000.0)
+        + _AT_W_KERNEL * float(row.get("kernel_sigma", 0.0))
+        - _AT_W_SIGMA * float(row.get("sigma", 0.0))
+        + _AT_BG_COST.get(row.get("bg_mode"), 0.3)
+    )
+
+
+def _auto_tune_select(rows, target_matches, match_rate_floor):
+    """Pure selection step: pick the cheapest feasible candidate.
+
+    A candidate is *feasible* when it clears the match-rate floor and reaches at
+    least 80% of the target matched-star count. Among feasible rows the lowest
+    ``_auto_tune_cost`` wins. If none are feasible, fall back to the row with the
+    most mean matches (best effort) and report met=False.
+
+    Returns ``(best_row, met_target)``; ``(None, False)`` for empty input.
+    """
+    if not rows:
+        return None, False
+    need = 0.8 * float(target_matches)
+    feasible = [r for r in rows
+                if r.get("match_rate", 0.0) >= match_rate_floor
+                and r.get("mean_matches", 0.0) >= need]
+    if feasible:
+        return min(feasible, key=_auto_tune_cost), True
+    return max(rows, key=lambda r: r.get("mean_matches", 0.0)), False
+
+
+_auto_tune_lock = threading.Lock()
+_auto_tune_state = {
+    "running": False, "phase": "idle", "message": "",
+    "progress": 0.0, "result": None, "error": None,
+    "cancel": False, "started_at": 0.0,
+}
+
+
+def _at_set(**kw):
+    with _auto_tune_lock:
+        _auto_tune_state.update(kw)
+
+
+def _at_snapshot():
+    with _auto_tune_lock:
+        return dict(_auto_tune_state)
+
+
+def _at_cancelled():
+    with _auto_tune_lock:
+        return _auto_tune_state["cancel"]
+
+
+def _wait_fresh_solution(ctx, after_monotonic, timeout_s):
+    """Return the first latest_solution published strictly after
+    ``after_monotonic``, or the latest available once ``timeout_s`` elapses."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        sol = dict(ctx.latest_solution)
+        if sol.get("epoch_monotonic", 0.0) > after_monotonic:
+            return sol
+        time.sleep(0.2)
+    return dict(ctx.latest_solution)
+
+
+def _auto_tune_photometric(ctx, *, target_stars, target_matches,
+                           max_s, max_g, deadline, max_iters=6):
+    """Drive exposure+gain to a good signal level using the live pipeline and
+    the same ladder logic as the always-on controller. Returns
+    ``(exposure_s, gain)`` — the converged point (or the current one if already
+    settled / out of budget)."""
+    cfg = ctx.cfg
+    cur_s = cur_g = None
+    for _ in range(max_iters):
+        if _at_cancelled() or time.monotonic() > deadline:
+            break
+        reply = _call_camera(CAMERA_OP_GET_EXPOSURE, {},
+                             ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+        if reply is None or not reply.ok:
+            break
+        cur_s = float(reply.result.get("exposure_s", cfg.exposure_s))
+        cur_g = float(reply.result.get("gain", cfg.gain))
+        sol = dict(ctx.latest_solution)
+        action = _auto_exposure_decision(
+            solved=bool(sol.get("solved", False)),
+            stars=sol.get("stars", 0), matches=sol.get("matches", 0),
+            peak=sol.get("peak", 0), cur_s=cur_s, cur_g=cur_g,
+            target_stars=target_stars, target_matches=target_matches,
+            min_s=cfg.auto_exposure_min_s, max_s=max_s,
+            min_g=cfg.auto_exposure_min_gain, max_g=max_g)
+        if not action:
+            break                              # settled
+        t_set = time.monotonic()
+        if "exposure_s" in action:
+            _call_camera(CAMERA_OP_SET_EXPOSURE, {"exposure_s": action["exposure_s"]},
+                         ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+            cur_s = action["exposure_s"]
+        if "gain" in action:
+            _call_camera(CAMERA_OP_SET_GAIN, {"gain": action["gain"]},
+                         ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+            cur_g = action["gain"]
+        # Let the new setting flush through a couple of frames before re-reading.
+        _wait_fresh_solution(ctx, t_set, timeout_s=max(1.0, 3.0 * cur_s))
+        time.sleep(max(0.3, cur_s))
+    return cur_s, cur_g
+
+
+def _auto_tune_run(ctx, params):
+    """Background worker: photometric phase -> detection sweep -> select ->
+    commit/restore. Updates _auto_tune_state throughout; restores the camera on
+    cancel / no-commit / error."""
+    cfg = ctx.cfg
+    started = time.monotonic()
+    deadline = started + params["time_budget_s"]
+    snap = _call_camera(CAMERA_OP_GET_EXPOSURE, {},
+                        ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+    snap_s = (float(snap.result.get("exposure_s", cfg.exposure_s))
+              if (snap and snap.ok) else cfg.exposure_s)
+    snap_g = (float(snap.result.get("gain", cfg.gain))
+              if (snap and snap.ok) else cfg.gain)
+    # Pause the always-on auto-exposure loop so it doesn't fight the sweep.
+    ae_was = bool(ctx.shared_cfg.get("auto_exposure_enabled",
+                                     cfg.auto_exposure_enabled))
+    ctx.shared_cfg["auto_exposure_enabled"] = False
+
+    def _restore_camera():
+        _call_camera(CAMERA_OP_SET_EXPOSURE, {"exposure_s": snap_s},
+                     ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+        _call_camera(CAMERA_OP_SET_GAIN, {"gain": snap_g},
+                     ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+
+    try:
+        mode = params["mode"]
+        preset = seeing_mod.SEEING_PRESETS.get(mode, {})
+        target_matches = int(preset.get("auto_exposure_target_matches",
+                                        cfg.auto_exposure_target_matches))
+        target_stars = int(preset.get("auto_exposure_target_stars",
+                                      cfg.auto_exposure_target_stars))
+        max_s = float(preset.get("auto_exposure_max_s", cfg.auto_exposure_max_s))
+        max_g = float(preset.get("auto_exposure_max_gain", cfg.auto_exposure_max_gain))
+
+        # --- Phase 1: photometric (exposure + gain) ----------------------
+        _at_set(phase="photometric", message="tuning exposure / gain",
+                progress=0.05)
+        exp_s, gain = _auto_tune_photometric(
+            ctx, target_stars=target_stars, target_matches=target_matches,
+            max_s=max_s, max_g=max_g, deadline=deadline)
+        if exp_s is None:
+            exp_s, gain = snap_s, snap_g
+
+        # --- Phase 2: detection sweep ------------------------------------
+        candidates = [
+            {"bg_mode": bg, "kernel_sigma": ks, "sigma": sg}
+            for bg in params["bg_modes"]
+            for ks in params["kernel_values"]
+            for sg in params["sigma_values"]
+        ]
+        rows = []
+        n = len(candidates)
+        eval_timeout = params["eval_solve_timeout_ms"]
+        settle_s = max(0.25, exp_s or cfg.exposure_s)
+        for i, c in enumerate(candidates):
+            if _at_cancelled():
+                _at_set(message="cancelled")
+                break
+            if time.monotonic() > deadline:
+                _at_set(message="time budget reached; stopping sweep early")
+                break
+            _at_set(phase="sweep",
+                    message=(f"candidate {i + 1}/{n}: bg={c['bg_mode']} "
+                             f"k={c['kernel_sigma']} sigma={c['sigma']}"),
+                    progress=0.1 + 0.85 * (i / max(1, n)))
+            samples = []
+            for f in range(params["frames_per_point"]):
+                if _at_cancelled() or time.monotonic() > deadline:
+                    break
+                reply = _call_solver(
+                    SOLVER_OP_AUTO_TUNE_EVAL,
+                    {**c, "solve_timeout_ms": eval_timeout},
+                    ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
+                    timeout_s=eval_timeout / 1000.0 + 3.0)
+                if reply is not None and reply.ok and reply.result:
+                    samples.append(reply.result)
+                if f < params["frames_per_point"] - 1:
+                    time.sleep(settle_s)
+            if not samples:
+                continue
+            n_solved = sum(1 for s in samples if s.get("solved"))
+            solved_ms = [s["solve_ms"] for s in samples if s.get("solved")]
+            rows.append({
+                **c,
+                "n_frames": len(samples),
+                "match_rate": round(n_solved / len(samples), 3),
+                "mean_matches": round(
+                    sum(s.get("matches", 0) for s in samples) / len(samples), 2),
+                "mean_stars": round(
+                    sum(s.get("stars", 0) for s in samples) / len(samples), 1),
+                "median_solve_ms": round(statistics.median(solved_ms), 1)
+                if solved_ms else 0.0,
+                "max_peak": max(s.get("peak", 0) for s in samples),
+            })
+
+        best, met = _auto_tune_select(
+            rows, target_matches, params["match_rate_floor"])
+
+        result = {
+            "mode": mode, "target_matches": target_matches,
+            "met_target": met, "committed": False,
+            "photometric": {
+                "exposure_s": round(exp_s, 4) if exp_s else None,
+                "gain": round(gain, 2) if gain else None},
+            "detection": ({"sigma": best["sigma"],
+                           "kernel_sigma": best["kernel_sigma"],
+                           "bg_mode": best["bg_mode"]} if best else None),
+            "best": best, "table": rows,
+            "elapsed_s": round(time.monotonic() - started, 1),
+            "cancelled": _at_cancelled(),
+        }
+
+        # --- Commit or restore -------------------------------------------
+        if params["commit"] and best is not None and not _at_cancelled():
+            updates = {
+                "detect_sigma": float(best["sigma"]),
+                "detect_kernel_sigma": float(best["kernel_sigma"]),
+                "detect_bg_mode": str(best["bg_mode"]),
+                "exposure_s": float(exp_s),
+                "gain": float(gain),
+            }
+            for k in ("detect_sigma", "detect_kernel_sigma", "detect_bg_mode"):
+                ctx.shared_cfg[k] = updates[k]
+            ctx.cfg.detect_sigma = updates["detect_sigma"]
+            ctx.cfg.detect_kernel_sigma = updates["detect_kernel_sigma"]
+            ctx.cfg.detect_bg_mode = updates["detect_bg_mode"]
+            ctx.cfg.exposure_s = updates["exposure_s"]
+            ctx.cfg.gain = updates["gain"]
+            try:
+                cfg_mod.save_keys(updates)
+            except Exception as e:
+                log.warning("auto-tune could not persist: %s", e)
+            # Save a labelled, reversible override artifact for this mode (the
+            # factory preset stays untouched). The values applied live above
+            # now also match the override -> lineage reads "tuned".
+            try:
+                entry = seeing_mod.save_override(mode, dict(updates),
+                                                 source="auto_tune")
+                result["override"] = entry
+            except Exception as e:
+                log.warning("auto-tune could not save override: %s", e)
+            _invalidate_solver_cache()
+            result["committed"] = True
+            log.info("auto-tune committed (override saved): %s", updates)
+        else:
+            # Detection params were never changed live (the eval op took them by
+            # argument); only the camera needs restoring.
+            _restore_camera()
+
+        _at_set(phase="done", message="complete", progress=1.0,
+                result=result, error=None)
+        log.info("auto-tune done: met=%s committed=%s elapsed=%.0fs",
+                 met, result["committed"], result["elapsed_s"])
+    except Exception as e:
+        log.warning("auto-tune failed: %s", e)
+        try:
+            _restore_camera()
+        except Exception:
+            pass
+        _at_set(phase="error", message=str(e),
+                error=f"{type(e).__name__}: {e}")
+    finally:
+        ctx.shared_cfg["auto_exposure_enabled"] = ae_was
+        _at_set(running=False)
 
 
 def _watchdog_loop(ctx, interval_s=5.0):
@@ -658,6 +1043,65 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             return MaintResponse(ok=True, result={
                 "auto_exposure_enabled": enabled, "persisted": persist})
 
+        if cmd == "auto_tune":
+            # Precondition: we must currently see a star field (fresh detection
+            # with signal), else the sweep has nothing to optimise against.
+            sol = dict(ctx.latest_solution)
+            age = time.monotonic() - sol.get("epoch_monotonic", 0.0)
+            if age > 10.0 or sol.get("peak", 0) < 20:
+                return MaintResponse(ok=False, error=(
+                    "point the finder at a star field and wait for detection "
+                    "before auto-tuning (no fresh frame with signal)"))
+            mode = str(args.get("mode") or ctx.shared_cfg.get(
+                "seeing_mode", ctx.cfg.seeing_mode)).strip().lower()
+            if not seeing_mod.is_valid_mode(mode):
+                return MaintResponse(ok=False,
+                                     error=f"invalid mode {mode!r} (good|bad)")
+            try:
+                params = {
+                    "mode": mode,
+                    "frames_per_point": max(2, min(15, int(
+                        args.get("frames_per_point", 3)))),
+                    "match_rate_floor": max(0.0, min(1.0, float(
+                        args.get("match_rate_floor", 0.6)))),
+                    "commit": bool(args.get("commit", False)),
+                    "time_budget_s": max(20.0, min(600.0, float(
+                        args.get("time_budget_s", 180.0)))),
+                    "eval_solve_timeout_ms": max(200, min(5000, int(
+                        args.get("eval_solve_timeout_ms", 1500)))),
+                    "sigma_values": [float(x) for x in
+                                     args.get("sigma_values", _AT_SIGMA_VALUES)],
+                    "kernel_values": [float(x) for x in
+                                      args.get("kernel_values", _AT_KERNEL_VALUES)],
+                    "bg_modes": [str(x) for x in
+                                 args.get("bg_modes", _AT_BG_MODES)],
+                }
+            except (ValueError, TypeError) as e:
+                return MaintResponse(ok=False, error=f"bad auto_tune args: {e}")
+            # Atomically claim the single in-flight slot.
+            with _auto_tune_lock:
+                if _auto_tune_state["running"]:
+                    return MaintResponse(ok=False,
+                                         error="auto-tune already running")
+                _auto_tune_state.update(
+                    running=True, phase="starting", message="initialising",
+                    progress=0.0, result=None, error=None, cancel=False,
+                    started_at=time.time())
+            threading.Thread(target=_auto_tune_run, args=(ctx, params),
+                             daemon=True).start()
+            return MaintResponse(ok=True, result={
+                "started": True, "mode": mode, "params": params})
+
+        if cmd == "auto_tune_status":
+            return MaintResponse(ok=True, result=_at_snapshot())
+
+        if cmd == "auto_tune_cancel":
+            with _auto_tune_lock:
+                if not _auto_tune_state["running"]:
+                    return MaintResponse(ok=True, result={"running": False})
+                _auto_tune_state["cancel"] = True
+            return MaintResponse(ok=True, result={"cancelling": True})
+
         if cmd == "tuning_set":
             # Toggle the libcamera tuning profile. Takes effect on the NEXT
             # service restart (the camera is initialised once at startup).
@@ -931,6 +1375,19 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             try:
                 effective = seeing_mod.effective_values(ctx.cfg, ctx.shared_cfg)
                 drift = seeing_mod.drift_from_preset(mode, ctx.cfg, ctx.shared_cfg)
+                # Augment effective with live camera exposure/gain so the
+                # lineage check can recognise an override that pins them.
+                eff_full = dict(effective)
+                cam = _call_camera(CAMERA_OP_GET_EXPOSURE, {},
+                                   ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+                if cam is not None and cam.ok:
+                    eff_full["exposure_s"] = cam.result.get("exposure_s")
+                    eff_full["gain"] = cam.result.get("gain")
+                else:
+                    eff_full["exposure_s"] = ctx.cfg.exposure_s
+                    eff_full["gain"] = ctx.cfg.gain
+                lineage = seeing_mod.classify_lineage(mode, ctx.cfg, eff_full)
+                overrides = seeing_mod.overrides_summary()
             except Exception as e:
                 return MaintResponse(ok=False, error=f"seeing_get failed: {e}")
             return MaintResponse(ok=True, result={
@@ -939,6 +1396,8 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 "rationale": seeing_mod.PRESET_RATIONALE,
                 "effective": effective,
                 "drift": drift,
+                "lineage": lineage,
+                "overrides": overrides,
                 "deep_db_configured": bool(
                     (getattr(ctx.cfg, "star_db_deep", "") or "").strip()),
             })
@@ -949,16 +1408,31 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 return MaintResponse(
                     ok=False,
                     error=f"seeing_set requires mode 'good' or 'bad', got {mode!r}")
+            # Overrides are explicit: a plain toggle loads the factory preset;
+            # the saved override is applied only when use_override is requested.
+            use_override = bool(args.get("use_override", False))
             try:
-                preset = seeing_mod.apply_preset(mode, ctx.cfg)
+                preset, override_applied = seeing_mod.merged_preset(
+                    mode, ctx.cfg, use_override=use_override)
             except ValueError as e:
                 return MaintResponse(ok=False, error=str(e))
 
             # Route each preset key through the right channel.
-            #  * star_db        -> solver DB reload (in-process), persist solver_db
-            #  * everything else -> live shared_cfg write (solver / auto-exp read it)
+            #  * star_db          -> solver DB reload (in-process), persist solver_db
+            #  * exposure_s / gain -> camera (override-only keys; presets lack them)
+            #  * everything else   -> live shared_cfg write (solver / auto-exp read it)
             persisted = {"seeing_mode": mode}
             db_token = preset.pop("star_db", None)
+
+            for cam_key, cam_op in (("exposure_s", CAMERA_OP_SET_EXPOSURE),
+                                    ("gain", CAMERA_OP_SET_GAIN)):
+                if cam_key in preset:
+                    val = preset.pop(cam_key)
+                    r = _call_camera(cam_op, {cam_key: val},
+                                     ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+                    if r is not None and r.ok:
+                        persisted[cam_key] = val
+                        setattr(ctx.cfg, cam_key, val)
 
             for key, val in preset.items():
                 ctx.shared_cfg[key] = val
@@ -1000,9 +1474,49 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 log.warning("Could not persist seeing preset: %s", e)
 
             _invalidate_solver_cache()
-            log.info("Seeing preset -> %s (db=%s)", mode, db_token)
+            log.info("Seeing preset -> %s (db=%s override=%s)",
+                     mode, db_token, override_applied)
             return MaintResponse(ok=True, result={
-                "mode": mode, "applied": persisted, "db": db_result})
+                "mode": mode, "applied": persisted, "db": db_result,
+                "override_applied": override_applied})
+
+        if cmd == "seeing_override_save":
+            mode = str(args.get("mode") or ctx.shared_cfg.get(
+                "seeing_mode", ctx.cfg.seeing_mode)).strip().lower()
+            if not seeing_mod.is_valid_mode(mode):
+                return MaintResponse(ok=False, error=f"invalid mode {mode!r}")
+            source = str(args.get("source", "manual"))
+            values = args.get("values")
+            if not values:
+                # Default "save from current" is SPARSE (mirrors auto_tune):
+                # keep only the preset keys that drift from the factory preset,
+                # plus the camera's current exposure / gain (which the factory
+                # preset can't express). star_db is left out deliberately.
+                effective = seeing_mod.effective_values(ctx.cfg, ctx.shared_cfg)
+                drift = seeing_mod.drift_from_preset(
+                    mode, ctx.cfg, ctx.shared_cfg)
+                values = {k: effective[k] for k in drift
+                          if k in effective and k != "star_db"}
+                cam = _call_camera(CAMERA_OP_GET_EXPOSURE, {},
+                                   ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+                if cam is not None and cam.ok:
+                    values["exposure_s"] = cam.result.get("exposure_s")
+                    values["gain"] = cam.result.get("gain")
+            try:
+                entry = seeing_mod.save_override(mode, values, source=source)
+            except ValueError as e:
+                return MaintResponse(ok=False, error=str(e))
+            log.info("Seeing override saved for %s (source=%s)", mode, source)
+            return MaintResponse(ok=True, result={"mode": mode, "override": entry})
+
+        if cmd == "seeing_override_clear":
+            mode = str(args.get("mode") or ctx.shared_cfg.get(
+                "seeing_mode", ctx.cfg.seeing_mode)).strip().lower()
+            if not seeing_mod.is_valid_mode(mode):
+                return MaintResponse(ok=False, error=f"invalid mode {mode!r}")
+            removed = seeing_mod.clear_override(mode)
+            log.info("Seeing override clear for %s -> removed=%s", mode, removed)
+            return MaintResponse(ok=True, result={"mode": mode, "removed": removed})
 
         if cmd == "dark_capture":
             try:

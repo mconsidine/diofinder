@@ -20,6 +20,13 @@ Usage:
 
   efinder-ctl seeing get
   efinder-ctl seeing set {good|bad}
+  efinder-ctl seeing apply-override {good|bad}
+  efinder-ctl seeing save-override [good|bad]
+  efinder-ctl seeing clear-override [good|bad]
+
+  efinder-ctl auto-tune start [--mode good|bad] [--commit] [--wait]
+  efinder-ctl auto-tune status
+  efinder-ctl auto-tune cancel
 
   efinder-ctl raw '{"cmd":"...","args":{...}}'
 
@@ -128,6 +135,54 @@ def cmd_seeing(args, parser):
         if args.mode not in ("good", "bad"):
             parser.error("seeing set requires MODE 'good' or 'bad'")
         return _print_result(maint_call("seeing_set", {"mode": args.mode}))
+    if args.action == "apply-override":
+        if args.mode not in ("good", "bad"):
+            parser.error("seeing apply-override requires MODE 'good' or 'bad'")
+        return _print_result(maint_call(
+            "seeing_set", {"mode": args.mode, "use_override": True}))
+    if args.action in ("save-override", "clear-override"):
+        call_args = {}
+        if args.mode in ("good", "bad"):
+            call_args["mode"] = args.mode
+        cmd = ("seeing_override_save" if args.action == "save-override"
+               else "seeing_override_clear")
+        return _print_result(maint_call(cmd, call_args))
+
+
+def cmd_autotune(args, parser):
+    if args.action == "status":
+        return _print_result(maint_call("auto_tune_status"))
+    if args.action == "cancel":
+        return _print_result(maint_call("auto_tune_cancel"))
+    if args.action == "start":
+        call_args = {"commit": bool(args.commit)}
+        if args.mode:
+            call_args["mode"] = args.mode
+        if args.frames is not None:
+            call_args["frames_per_point"] = args.frames
+        if args.budget is not None:
+            call_args["time_budget_s"] = args.budget
+        if args.rate is not None:
+            call_args["match_rate_floor"] = args.rate
+        resp = maint_call("auto_tune", call_args)
+        if not resp.ok or not args.wait:
+            return _print_result(resp)
+        # Poll to completion, printing phase/progress transitions.
+        import time
+        last = None
+        while True:
+            time.sleep(2.0)
+            st = maint_call("auto_tune_status")
+            if not st.ok:
+                return _print_result(st)
+            res = st.result or {}
+            line = f"{res.get('phase')}: {res.get('message')}"
+            if line != last:
+                print(line, file=sys.stderr)
+                last = line
+            if not res.get("running"):
+                return _print_result(
+                    maint_call("auto_tune_status"))
 
 
 def cmd_raw(args, parser):
@@ -178,10 +233,27 @@ def main():
     p_pol.add_argument("--no-persist", action="store_true",
                        help="Don't write the latitude back to efinder.conf")
 
-    p_see = sub.add_parser("seeing", help="Good/Bad seeing preset")
-    p_see.add_argument("action", choices=["get", "set"])
+    p_see = sub.add_parser("seeing", help="Good/Bad seeing preset + overrides")
+    p_see.add_argument("action", choices=["get", "set", "apply-override",
+                                          "save-override", "clear-override"])
     p_see.add_argument("mode", nargs="?", choices=["good", "bad"], default=None,
-                       help="Preset to apply (for set)")
+                       help="Mode for set / *-override (defaults to current)")
+
+    p_at = sub.add_parser("auto-tune",
+                          help="Offline detection/exposure tuning sweep")
+    p_at.add_argument("action", choices=["start", "status", "cancel"])
+    p_at.add_argument("--mode", choices=["good", "bad"], default=None,
+                      help="Seeing preset to tune toward (default: current)")
+    p_at.add_argument("--commit", action="store_true",
+                      help="Persist the discovered settings (else dry run)")
+    p_at.add_argument("--frames", type=int, default=None,
+                      help="Frames evaluated per candidate (2-15, default 3)")
+    p_at.add_argument("--budget", type=float, default=None,
+                      help="Time budget in seconds (20-600, default 180)")
+    p_at.add_argument("--rate", type=float, default=None,
+                      help="Required match rate, 0-1 (default 0.6)")
+    p_at.add_argument("--wait", action="store_true",
+                      help="Poll until the sweep finishes, then print result")
 
     p_raw = sub.add_parser("raw", help="Send a raw JSON request")
     p_raw.add_argument("json", help='e.g. \'{"cmd":"status","args":{}}\'')
@@ -197,6 +269,7 @@ def main():
         "exposure": cmd_exposure,
         "gain": cmd_gain,
         "seeing": cmd_seeing,
+        "auto-tune": cmd_autotune,
         "raw": cmd_raw,
     }
     try:

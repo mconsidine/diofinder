@@ -65,6 +65,13 @@ SOLVER_OP_SET_DB = "set_db"
 # Capture N frames from SHM, median-stack, build a hot-pixel mask, save + load
 # it. args: {"frames": int}.
 SOLVER_OP_DARK_CAPTURE = "dark_capture"
+# Single-frame extract+solve probe for the offline auto-tune sweep. Grabs the
+# current SHM frame, extracts with caller-supplied detection params (forced
+# per-frame so the live temporal cache is untouched), solves on the resident
+# database, and returns one sample {solved, matches, stars, peak, solve_ms}.
+# args: {sigma, kernel_sigma, bg_mode, max_axis_ratio, bg_block_size,
+#        uniform_filter_size, noise_mode, local_noise, solve_timeout_ms}.
+SOLVER_OP_AUTO_TUNE_EVAL = "auto_tune_eval"
 # Hot-pixel mask status: {"count", "mtime", "loaded"}.
 SOLVER_OP_HOT_PIXEL_STATUS = "hot_pixel_status"
 # Tracking-mode status: {"enabled", "state", "frames_tracked", "frames_full",

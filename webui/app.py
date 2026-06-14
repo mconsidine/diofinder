@@ -395,9 +395,16 @@ def bg_jpg():
 
 @app.route("/seeing", methods=["POST"])
 def seeing_set():
-    """Apply a Good/Bad seeing preset (form 'mode') and redirect back."""
+    """Apply a Good/Bad seeing preset (form 'mode') and redirect back.
+
+    A plain toggle loads the factory preset; pass use_override=1 to apply the
+    saved override for that mode instead.
+    """
     mode = request.form.get("mode", "good").strip().lower()
-    r = _safe_call("seeing_set", {"mode": mode})
+    args = {"mode": mode}
+    if request.form.get("use_override") in ("1", "true", "on", "yes"):
+        args["use_override"] = True
+    r = _safe_call("seeing_set", args)
     if not r.ok:
         return r.error, 500
     nxt = request.form.get("next") or "dashboard"
@@ -406,9 +413,41 @@ def seeing_set():
     return redirect(url_for(nxt))
 
 
+@app.route("/seeing/override/save", methods=["POST"])
+def seeing_override_save():
+    """Save the current effective settings as the override for a mode."""
+    args = {}
+    mode = (request.form.get("mode") or "").strip().lower()
+    if mode:
+        args["mode"] = mode
+    r = _safe_call("seeing_override_save", args)
+    if not r.ok:
+        return r.error, 500
+    nxt = request.form.get("next") or "config_page"
+    if nxt not in ("dashboard", "config_page", "camera_page"):
+        nxt = "config_page"
+    return redirect(url_for(nxt))
+
+
+@app.route("/seeing/override/clear", methods=["POST"])
+def seeing_override_clear():
+    """Delete the saved override for a mode (revert to factory)."""
+    args = {}
+    mode = (request.form.get("mode") or "").strip().lower()
+    if mode:
+        args["mode"] = mode
+    r = _safe_call("seeing_override_clear", args)
+    if not r.ok:
+        return r.error, 500
+    nxt = request.form.get("next") or "config_page"
+    if nxt not in ("dashboard", "config_page", "camera_page"):
+        nxt = "config_page"
+    return redirect(url_for(nxt))
+
+
 @app.route("/api/seeing")
 def api_seeing():
-    """JSON seeing mode + preset table + drift for live UI updates."""
+    """JSON seeing mode + preset table + drift + lineage for live UI updates."""
     r = _safe_call("seeing_get")
     return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
 
@@ -441,6 +480,43 @@ def hotpixel_clear():
 def api_hotpixel():
     """JSON hot-pixel mask status (count, mtime)."""
     r = _safe_call("hot_pixel_status")
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
+# ---- Offline auto-tune sweep ------------------------------------------------
+
+@app.route("/autotune/start", methods=["POST"])
+def autotune_start():
+    """Kick off the background auto-tune sweep (point at a star field first)."""
+    args = {}
+    mode = (request.form.get("mode") or "").strip().lower()
+    if mode:
+        args["mode"] = mode
+    if request.form.get("commit") in ("1", "true", "on", "yes"):
+        args["commit"] = True
+    for key, cast in (("frames_per_point", int), ("time_budget_s", float),
+                      ("match_rate_floor", float)):
+        val = request.form.get(key)
+        if val:
+            try:
+                args[key] = cast(val)
+            except (ValueError, TypeError):
+                pass
+    r = _safe_call("auto_tune", args)
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
+@app.route("/api/autotune")
+def api_autotune():
+    """JSON auto-tune progress / result for the Camera-page poller."""
+    r = _safe_call("auto_tune_status")
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
+@app.route("/autotune/cancel", methods=["POST"])
+def autotune_cancel():
+    """Request cancellation of an in-progress auto-tune sweep."""
+    r = _safe_call("auto_tune_cancel")
     return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
 
 

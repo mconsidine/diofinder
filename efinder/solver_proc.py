@@ -209,6 +209,7 @@ def _handle_solver_cmd(cmd, calibrator, polar,
         SOLVER_OP_SET_DB, SOLVER_OP_DARK_CAPTURE,
         SOLVER_OP_HOT_PIXEL_STATUS, SOLVER_OP_HOT_PIXEL_CLEAR,
         SOLVER_OP_TRACKING_STATUS,
+        SOLVER_OP_AUTO_TUNE_EVAL,
     )
     try:
         if cmd.op == SOLVER_OP_SET_DB:
@@ -339,6 +340,83 @@ def _handle_solver_cmd(cmd, calibrator, polar,
                 "dec":     (soln.get("Dec") if soln else None),
                 "fov":     (soln.get("FOV") if soln else None),
             })
+        if cmd.op == SOLVER_OP_AUTO_TUNE_EVAL:
+            # One extract+solve sample for the offline auto-tune sweep. Grabs
+            # the current SHM frame, extracts with the caller's candidate
+            # detection params (forced per-frame so the live temporal cache is
+            # untouched), and solves on the resident DB. Kept to a single frame
+            # so the call returns well within the solver-hang watchdog window.
+            if state is not None and state.solver_t3 is not None:
+                solver_t3 = state.solver_t3
+            if solver_t3 is None or cfg is None or bg_cache is None:
+                return SolverCmdReply(request_id=cmd.request_id, ok=False,
+                                      error="solver not available")
+            if state is None or state.read_frame is None:
+                return SolverCmdReply(request_id=cmd.request_id, ok=False,
+                                      error="frame source unavailable")
+            frame = state.read_frame()
+            if frame is None:
+                return SolverCmdReply(request_id=cmd.request_id, ok=False,
+                                      error="no frame available")
+            a = cmd.args
+            _mar = float(a.get("max_axis_ratio", 0.0) or 0.0)
+            max_axis_ratio = float("inf") if _mar <= 0.0 else _mar
+            local_peak = int(frame[::2, ::2].max())
+            t_extract = time.monotonic()
+            try:
+                _raw = bg_cache.detect(
+                    frame,
+                    sigma=float(a.get("sigma", cfg.detect_sigma)),
+                    bg_mode=str(a.get("bg_mode", cfg.detect_bg_mode)),
+                    tophat_radius=int(a.get("tophat_radius", cfg.detect_tophat_radius)),
+                    max_axis_ratio=max_axis_ratio,
+                    bg_block_size=int(a.get("bg_block_size", cfg.detect_bg_block_size)),
+                    uniform_filter_size=int(
+                        a.get("uniform_filter_size", cfg.detect_uniform_filter_size)),
+                    noise_mode=str(a.get("noise_mode", cfg.detect_noise_mode)),
+                    kernel_sigma=float(a.get("kernel_sigma", cfg.detect_kernel_sigma)),
+                    local_noise=bool(a.get("local_noise", cfg.detect_local_noise)),
+                    force_per_frame=True,
+                )
+            except Exception as e:
+                return SolverCmdReply(request_id=cmd.request_id, ok=False,
+                                      error=f"extract failed: {type(e).__name__}: {e}")
+            extract_ms = (time.monotonic() - t_extract) * 1000.0
+            n_stars = len(_raw)
+            min_c = a.get("min_centroids",
+                          (shared_cfg or {}).get("min_centroids", cfg.min_centroids))
+            if n_stars < int(min_c):
+                return SolverCmdReply(request_id=cmd.request_id, ok=True, result={
+                    "solved": False, "matches": 0, "stars": n_stars,
+                    "peak": local_peak, "solve_ms": 0.0,
+                    "extract_ms": round(extract_ms, 2)})
+            # sycamore returns (x=col, y=row, ...); tetra3 wants (row, col).
+            cents = np.array([[s[1], s[0]] for s in _raw], dtype=np.float64)
+            timeout_ms = int(a.get(
+                "solve_timeout_ms",
+                (shared_cfg or {}).get("solve_timeout_ms", cfg.solve_timeout_ms)))
+            t_solve = time.monotonic()
+            soln = solver_t3.solve_from_centroids(
+                cents, (cfg.frame_height, cfg.frame_width),
+                fov_estimate=calibrator.get_fov_estimate(),
+                fov_max_error=calibrator.get_fov_max_error(),
+                solve_timeout=timeout_ms,
+                match_threshold=float(
+                    (shared_cfg or {}).get("match_threshold", cfg.match_threshold)),
+                match_radius=float(
+                    (shared_cfg or {}).get("match_radius", cfg.match_radius)),
+                distortion=calibrator.get_distortion_estimate(),
+                return_matches=False,
+            )
+            solve_ms = (time.monotonic() - t_solve) * 1000.0
+            solved = bool(soln is not None and soln.get("RA") is not None)
+            return SolverCmdReply(request_id=cmd.request_id, ok=True, result={
+                "solved": solved,
+                "matches": int(soln.get("Matches", 0) or 0) if soln else 0,
+                "stars": n_stars, "peak": local_peak,
+                "solve_ms": round(solve_ms, 2),
+                "extract_ms": round(extract_ms, 2)})
+
         if cmd.op == SOLVER_OP_CALIBRATION_STATUS:
             return SolverCmdReply(request_id=cmd.request_id, ok=True,
                                   result=calibrator.get_status())
