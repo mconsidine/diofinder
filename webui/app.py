@@ -622,8 +622,8 @@ def api_camera_set():
         except (ValueError, TypeError) as e:
             errors.append(f"gain invalid: {e}")
     _solver_float_keys = ("detect_sigma", "detect_kernel_sigma",
-                          "detect_max_axis_ratio")
-    _solver_int_keys = ("solve_timeout_ms", "min_centroids")
+                          "detect_max_axis_ratio", "fov_max_error_deg")
+    _solver_int_keys = ("solve_timeout_ms", "min_centroids", "max_solve_stars")
     if any(k in data for k in _solver_float_keys + _solver_int_keys + ("detect_local_noise",)):
         pargs = {"persist": False}
         for k in _solver_float_keys:
@@ -700,6 +700,16 @@ def solver_params_set():
             pargs["solve_timeout_ms"] = int(request.form["solve_timeout_ms"])
         except ValueError:
             return "solve_timeout_ms must be integer", 400
+    if request.form.get("max_solve_stars"):
+        try:
+            pargs["max_solve_stars"] = int(request.form["max_solve_stars"])
+        except ValueError:
+            return "max_solve_stars must be integer", 400
+    if request.form.get("fov_max_error_deg"):
+        try:
+            pargs["fov_max_error_deg"] = float(request.form["fov_max_error_deg"])
+        except ValueError:
+            return "fov_max_error_deg must be numeric", 400
     r = _safe_call("solver_params_set", pargs)
     if not r.ok:
         return r.error, 400

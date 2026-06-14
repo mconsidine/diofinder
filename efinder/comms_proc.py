@@ -1179,6 +1179,10 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "detect_local_noise",   ctx.cfg.detect_local_noise),
                 "min_centroids":       ctx.shared_cfg.get(
                     "min_centroids",       ctx.cfg.min_centroids),
+                "max_solve_stars":     ctx.shared_cfg.get(
+                    "max_solve_stars",     ctx.cfg.max_solve_stars),
+                "fov_max_error_deg":   ctx.shared_cfg.get(
+                    "fov_max_error_deg",   ctx.cfg.fov_max_error_deg),
                 "solve_timeout_ms":    ctx.shared_cfg.get(
                     "solve_timeout_ms",    ctx.cfg.solve_timeout_ms),
                 "tracking_enabled":    ctx.shared_cfg.get(
@@ -1292,6 +1296,28 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                                         error="min_centroids out of range [4, 50]")
                 ctx.shared_cfg["min_centroids"] = mc
                 updates["min_centroids"] = mc
+            if "max_solve_stars" in args:
+                try:
+                    ms_cap = int(args["max_solve_stars"])
+                except (ValueError, TypeError) as e:
+                    return MaintResponse(ok=False,
+                                        error=f"max_solve_stars must be int: {e}")
+                if not (4 <= ms_cap <= 200):
+                    return MaintResponse(ok=False,
+                                        error="max_solve_stars out of range [4, 200]")
+                ctx.shared_cfg["max_solve_stars"] = ms_cap
+                updates["max_solve_stars"] = ms_cap
+            if "fov_max_error_deg" in args:
+                try:
+                    fe = float(args["fov_max_error_deg"])
+                except (ValueError, TypeError) as e:
+                    return MaintResponse(ok=False,
+                                        error=f"fov_max_error_deg must be numeric: {e}")
+                if not (0.05 <= fe <= 5.0):
+                    return MaintResponse(ok=False,
+                                        error="fov_max_error_deg out of range [0.05, 5.0]")
+                ctx.shared_cfg["fov_max_error_deg"] = fe
+                updates["fov_max_error_deg"] = fe
             if "solve_timeout_ms" in args:
                 try:
                     ms = int(args["solve_timeout_ms"])

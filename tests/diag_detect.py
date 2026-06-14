@@ -64,6 +64,7 @@ try:
                            else f'/var/lib/efinder/{db_raw}.npz')
     sigma   = args.sigma if args.sigma is not None else cfg.detect_sigma
     min_c   = cfg.min_centroids
+    max_c   = cfg.max_solve_stars
     W, H    = cfg.frame_width, cfg.frame_height
     tag(PASS, cfg.summary())
 except Exception as e:
@@ -71,9 +72,14 @@ except Exception as e:
     db_path = pathlib.Path('/var/lib/efinder/default_database.npz')
     sigma   = args.sigma if args.sigma is not None else 7.0
     min_c   = 8
+    max_c   = 50
     W, H    = 960, 760
 
-tag(INFO, f'sigma={sigma:.1f}  frame={W}x{H}  min_centroids={min_c}')
+# This is an extraction-only diagnostic: fov_max_error_deg is a solve-stage
+# parameter and does not apply here. max_solve_stars is the cap solver_proc
+# applies to the detection list before solving, so we surface it for context.
+tag(INFO, f'sigma={sigma:.1f}  frame={W}x{H}  min_centroids={min_c}  '
+          f'max_solve_stars={max_c}')
 tag(INFO, f'db={db_path}')
 
 try:
@@ -191,7 +197,8 @@ for i in range(args.reps):
     times.append(ms)
     last_n = n
     lbl = PASS if n >= min_c else WARN
-    tag(lbl, f'[{i+1:2d}] {ms:6.1f} ms  stars={n:3d}')
+    cap = f'  (solver caps to {max_c})' if n > max_c else ''
+    tag(lbl, f'[{i+1:2d}] {ms:6.1f} ms  stars={n:3d}{cap}')
 
 if times:
     avg = sum(times) / len(times)
@@ -215,9 +222,11 @@ if args.sigma_sweep:
             _, n, ms = _extract(frame, sig)
             note = ' ← min_centroids met' if n >= min_c else ''
             cur  = ' ← current' if abs(sig - sigma) < 0.05 else ''
-            print(f'  {sig:6.1f}  {n:6d}  {ms:7.1f}{note or cur}')
+            cap  = f' (capped to {max_c})' if n > max_c else ''
+            print(f'  {sig:6.1f}  {n:6d}  {ms:7.1f}{note or cur}{cap}')
         except Exception as e:
             print(f'  {sig:6.1f}  ERROR: {e}')
-    print(f'\n  min_centroids={min_c}  current sigma={sigma:.1f}')
+    print(f'\n  min_centroids={min_c}  max_solve_stars={max_c}  '
+          f'current sigma={sigma:.1f}')
 
 print()

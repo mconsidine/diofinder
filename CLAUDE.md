@@ -56,6 +56,8 @@ is far below one core), freeing CPU 1 as a third solver core. CPU affinity is se
 | `detect_uniform_filter_size` | int | comms (via maint) | solver |
 | `detect_noise_mode` | str (`mad`/`global_rms`) | comms (via maint) | solver |
 | `min_centroids` | int | comms (via maint / `seeing_set`) | solver |
+| `max_solve_stars` | int (4–200) | comms (via maint `solver_params_set`) | solver |
+| `fov_max_error_deg` | float (0.05–5.0) | comms (via maint `solver_params_set`) | solver (calibrator, loose/blind tolerance only) |
 | `solve_timeout_ms` | int | comms (via maint / `seeing_set`) | solver |
 | `match_radius` | float (0.005–0.05) | comms (via maint / `seeing_set`) | solver |
 | `match_threshold` | float (1e-9–1e-3) | comms (via maint / `seeing_set`) | solver |
@@ -143,7 +145,10 @@ The maintenance socket is the internal RPC bus used by the web UI and
 
 Notable commands beyond the basics: `solver_params_get`/`solver_params_set`
 (sigma 0–20, kernel_sigma 1.0–4.0, max_axis_ratio 0=off/1.5–10.0, local_noise,
-bg mode/sizes, noise mode, min_centroids, solve_timeout_ms),
+bg mode/sizes, noise mode, min_centroids, max_solve_stars 4–200,
+fov_max_error_deg 0.05–5.0 (the loose blind-solve search tolerance; the
+calibrated tight tolerance is owned by the calibration machinery),
+solve_timeout_ms),
 `match_params_get`/`match_params_set` (match_radius 0.005–0.05, match_threshold
 1e-9–1e-3), `seeing_get`/`seeing_set` (apply the Good/Bad presets in
 `efinder/seeing.py`; `seeing_set {"mode":"good"|"bad"}` routes every preset key

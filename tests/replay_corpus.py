@@ -359,7 +359,8 @@ def _detect(sd, image_u8, preset: Dict[str, Any], bg_mode_override: Optional[str
 
 
 def _solve(t3_instance, centroids_xy, preset: Dict[str, Any],
-           fov_deg: Optional[float]) -> Tuple[bool, float, Optional[Dict]]:
+           fov_deg: Optional[float],
+           fov_err_deg: Optional[float] = None) -> Tuple[bool, float, Optional[Dict]]:
     """Plate-solve from (x,y) centroids.
 
     Swaps (x,y) -> (row,col) = (y,x) as float64 exactly as solver_proc.py does.
@@ -374,7 +375,8 @@ def _solve(t3_instance, centroids_xy, preset: Dict[str, Any],
         cents = np.zeros((0, 2), dtype=np.float64)
 
     fov_est   = fov_deg if fov_deg is not None else float(_CFG_DEFAULTS["fov_deg"])
-    fov_err   = float(_CFG_DEFAULTS["fov_max_error_deg"])
+    fov_err   = float(fov_err_deg if fov_err_deg is not None
+                      else _CFG_DEFAULTS["fov_max_error_deg"])
     timeout   = int(_cfg(preset, "solve_timeout_ms") or 1500)
     threshold = float(_cfg(preset, "match_threshold") or 1e-5)
     radius    = float(_cfg(preset, "match_radius") or 0.01)
@@ -570,6 +572,16 @@ See tests/corpus/README.md for the full labeling convention.
         help="FOV estimate in degrees (default: from config, 13.5).",
     )
     parser.add_argument(
+        "--fov-err", type=float, default=None,
+        help="FOV max error (blind search tolerance) in degrees "
+             "(default: from config, 1.0).",
+    )
+    parser.add_argument(
+        "--max-stars", type=int, default=None,
+        help="Cap on centroids handed to the solver, as solver_proc applies "
+             "(default: from config, 50).",
+    )
+    parser.add_argument(
         "--limit", type=int, default=0,
         help="Cap number of frames for a quick run (0 = no limit).",
     )
@@ -624,10 +636,25 @@ See tests/corpus/README.md for the full labeling convention.
                 "  On the Pi, databases live in /var/lib/efinder/*.npz."
             )
 
+    # Effective solve parameters (CLI override -> config default), echoed for
+    # reference so a saved run is reproducible.
+    fov_est_eff = (args.fov if args.fov is not None
+                   else float(_CFG_DEFAULTS["fov_deg"]))
+    fov_err_eff = (args.fov_err if args.fov_err is not None
+                   else float(_CFG_DEFAULTS["fov_max_error_deg"]))
+    max_stars_eff = (args.max_stars if args.max_stars and args.max_stars > 0
+                     else int(_CFG_DEFAULTS["max_solve_stars"]))
+
     print(f"Database            : {db_path}")
     print(f"Presets             : {', '.join(preset_names)}")
     if bg_modes_sweep:
         print(f"BgMode sweep        : {', '.join(bg_modes_sweep)}")
+    print(f"FOV estimate        : {fov_est_eff:.3f} deg"
+          f"{'  (CLI)' if args.fov is not None else '  (default)'}")
+    print(f"FOV max error       : {fov_err_eff:.3f} deg"
+          f"{'  (CLI)' if args.fov_err is not None else '  (default)'}")
+    print(f"Max solve stars     : {max_stars_eff}"
+          f"{'  (CLI)' if args.max_stars else '  (default)'}")
     print()
 
     try:
@@ -695,12 +722,12 @@ See tests/corpus/README.md for the full labeling convention.
                 continue
 
             # Cap centroid list exactly as solver_proc does
-            max_stars = int(_CFG_DEFAULTS["max_solve_stars"])
-            if n_stars > max_stars:
+            if n_stars > max_stars_eff:
                 # take brightest (sorted brightest-first by sycamore already)
-                centroids = centroids[:max_stars]
+                centroids = centroids[:max_stars_eff]
 
-            solved, solve_ms, soln = _solve(solver, centroids, preset, args.fov)
+            solved, solve_ms, soln = _solve(
+                solver, centroids, preset, fov_est_eff, fov_err_eff)
 
             ra  = soln.get("RA")  if soln and solved else None
             dec = soln.get("Dec") if soln and solved else None
@@ -730,6 +757,10 @@ See tests/corpus/README.md for the full labeling convention.
     if all_rows:
         unique_labels = sorted(set(r["label"] for r in all_rows))
         _print_table(all_rows, unique_labels)
+        print(f"  Parameters: fov={fov_est_eff:.3f} deg  "
+              f"fov_err={fov_err_eff:.3f} deg  max_stars={max_stars_eff}  "
+              f"(presets supply sigma / bg_mode / match / timeout)")
+        print()
 
     # CSV output
     if args.csv:
