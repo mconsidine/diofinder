@@ -105,9 +105,19 @@ class FovCalibrator:
         return self.cfg.fov_deg
 
     def get_fov_max_error(self) -> float:
-        """Tolerance to feed to olive-solve. Tight after calibration."""
+        """Tolerance to feed to olive-solve. Tight after calibration.
+
+        The loose (uncalibrated / blind) tolerance honours a live
+        shared_cfg["fov_max_error_deg"] override so it can be A/B-tuned over
+        the maint socket without a restart; absent an override it falls back to
+        the config value. The tight (calibrated) tolerance is left to the
+        calibration machinery.
+        """
         if self.use_tight_tolerance:
             return getattr(self.cfg, "fov_calibrated_max_error_deg", 0.1)
+        override = self.shared_cfg.get("fov_max_error_deg")
+        if override is not None:
+            return float(override)
         return self.cfg.fov_max_error_deg
 
     def get_distortion_estimate(self) -> float:

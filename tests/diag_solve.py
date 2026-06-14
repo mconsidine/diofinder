@@ -75,6 +75,7 @@ try:
     timeout = args.timeout or cfg.solve_timeout_ms
     sigma   = args.sigma   or cfg.detect_sigma
     min_c   = cfg.min_centroids
+    max_c   = cfg.max_solve_stars
     W, H    = cfg.frame_width, cfg.frame_height
     tag(PASS, cfg.summary())
 except Exception as e:
@@ -85,10 +86,12 @@ except Exception as e:
     timeout = args.timeout or 1500
     sigma   = args.sigma   or 7.0
     min_c   = 8
+    max_c   = 50
     W, H    = 960, 760
 
 tag(INFO, f'db={db_path}')
-tag(INFO, f'FOV={fov:.2f}° ±{fov_err:.2f}°  timeout={timeout} ms  sigma={sigma}  min_c={min_c}')
+tag(INFO, f'FOV={fov:.2f}° ±{fov_err:.2f}°  timeout={timeout} ms  sigma={sigma}  '
+          f'min_c={min_c}  max_c={max_c}')
 
 try:
     import numpy as np
@@ -203,6 +206,10 @@ def _extract(arr_u8):
     # sycamore returns (x=col, y=row); tetra3 expects (row, col)
     cent = (np.array([[s[1], s[0]] for s in raw], dtype=np.float64)
             if raw else None)
+    # Cap to max_solve_stars exactly as solver_proc.py does before solving
+    # (centroids are brightest-first). n reports the pre-cap detection count.
+    if cent is not None and len(cent) > max_c:
+        cent = cent[:max_c]
     return cent, n, ms
 
 
