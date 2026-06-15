@@ -505,6 +505,32 @@ in `tests/test_auto_tune.py`.
   Web UI: an "Auto-tune (current sky)" card on the Camera page (start/cancel +
   progress poller via `/api/autotune`).
 
+### Hindsight tuning from a saved burst
+
+auto_tune is **live-only**. To find the best parameters *in hindsight* for an
+already-captured burst (the `bg_ab_*.zip` archives the Background A/B run writes
+to `/var/lib/efinder/bg_runs/`), there are two paths:
+
+* **`tests/replay_corpus.py`** (off-device or on-device): the offline sweep.
+  `--corpus` accepts a **directory of PNGs OR a `.zip`** (burst archives /
+  debug bundles — only the raw `*.png` frames are extracted). It sweeps
+  presets × `--bg-modes` × `--sweep-sigma` × `--sweep-kernel`, honours
+  `--fov`/`--fov-err`/`--max-stars`, echoes the effective parameters in the run
+  header + footer, and selects a winner (best solve rate, then median solve_ms,
+  then star count). `--apply [--apply-mode good|bad]` persists the winner via
+  the maint socket (`solver_params_set`/`match_params_set` with `persist`, plus
+  an optional `seeing_override_save source=replay`) — the same machinery
+  `auto_tune commit` uses. On-device, `--apply` needs the daemon running.
+* **Dashboard "Tune from burst" card** (`webui/app.py` `/tune/start`,
+  `/api/tune`, `/tune/apply`; `_tune_worker`): the on-device, button-driven
+  sibling. It replays a chosen `bg_ab_*.zip` through the **live** solver
+  (`solve_centroids`, resident DB — memory-safe, no second copy) over a grid of
+  **detection** params (bg_mode × sigma × kernel; solving uses the live
+  geometry), shows the winning combination, and "Apply winner" persists it
+  (`solver_params_set persist=true`, optional `seeing_override_save
+  source=replay`). For a sweep that *also* varies fov/max_stars, use
+  `replay_corpus.py` on the same zip.
+
 ## Hot-pixel mask
 
 `efinder/hot_pixel.py` builds a static hot-pixel mask from a capped-lens dark

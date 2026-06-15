@@ -149,6 +149,7 @@ def dashboard():
         imu=(status.result.get("imu") if status.ok else None),
         seeing=(seeing.result if seeing.ok else None),
         solver_backend="sycamore",
+        bursts=_list_bursts(),
         test_mode=(
             status.result.get("test_mode", True)
             if status.ok else True),
@@ -1813,6 +1814,212 @@ def bgtest_run_download():
     return send_file(str(path), mimetype="application/zip",
                      as_attachment=True, download_name=name)
 
+
+
+# ── Tune-from-burst: hindsight detection sweep over a saved burst archive ─────
+#
+# Replays a saved bg_ab_*.zip burst through the LIVE solver (solve_centroids,
+# resident DB — no second copy, so it is memory-safe on the Pi) across a grid of
+# detection params, and reports the combination that solves the most frames.
+# This is the on-device, button-driven sibling of tests/replay_corpus.py. It
+# sweeps EXTRACTION params (bg_mode × sigma × kernel); solving uses the live
+# solver's current geometry (fov tolerance, match radius). For an offline sweep
+# that also varies fov/max_stars, use tests/replay_corpus.py on the same zip.
+
+_TUNE_SIGMAS  = (4.0, 5.0, 6.0)
+_TUNE_KERNELS = (1.5, 2.5)
+_TUNE_BG_MODES = ("row_percentile", "block_percentile", "line_median")
+
+_tune_lock = threading.Lock()
+_tune = {
+    "running": False, "phase": "idle", "progress": 0, "message": "",
+    "zip": None, "table": None, "winner": None, "error": None,
+    "started": None, "finished": None,
+}
+
+
+def _tune_set(**kw):
+    with _tune_lock:
+        _tune.update(kw)
+
+
+def _tune_snapshot():
+    with _tune_lock:
+        return dict(_tune)
+
+
+def _list_bursts():
+    """Newest-first burst archives available for hindsight tuning."""
+    out = []
+    try:
+        for p in sorted(_BGRUN_DIR.glob("bg_ab_*.zip"), reverse=True):
+            try:
+                out.append({"name": p.name, "size": p.stat().st_size})
+            except OSError:
+                continue
+    except Exception:
+        pass
+    return out
+
+
+def _tune_load_frames(zip_path):
+    """Load every PNG frame from a burst zip into uint8 numpy arrays."""
+    import io
+    import zipfile
+    import numpy as np
+    from PIL import Image
+    frames = []
+    with zipfile.ZipFile(str(zip_path)) as zf:
+        for m in sorted(zf.namelist()):
+            if not m.lower().endswith(".png"):
+                continue
+            try:
+                img = Image.open(io.BytesIO(zf.read(m))).convert("L")
+                frames.append(np.ascontiguousarray(np.asarray(img, dtype=np.uint8)))
+            except Exception:
+                continue
+    return frames
+
+
+def _tune_worker(zip_name, sigmas, kernels, bg_modes):
+    import inspect as _inspect
+    try:
+        import star_detect as sd
+        from efinder.config import load_config
+        cfg = load_config()
+        det_bin    = cfg.detect_bin
+        max_c      = cfg.max_solve_stars
+        min_c      = cfg.min_centroids
+        block_size = getattr(cfg, "detect_bg_block_size", 0) or 32
+        try:
+            sd.set_num_threads(2)
+        except Exception:
+            pass
+        params     = _inspect.signature(sd.detect_stars).parameters
+        has_kernel = "kernel_sigma" in params
+        has_block  = "bg_block_size" in params
+        # On wheels without kernel_sigma support, sweeping kernels is redundant.
+        if not has_kernel:
+            kernels = [kernels[0]]
+
+        _tune_set(phase="loading", progress=3, message=f"loading {zip_name}…")
+        frames = _tune_load_frames(_BGRUN_DIR / zip_name)
+        if not frames:
+            raise RuntimeError(f"no PNG frames found in {zip_name}")
+
+        combos = [(bm, sg, kn) for bm in bg_modes for sg in sigmas for kn in kernels]
+        table = []
+        for ci, (bm, sg, kn) in enumerate(combos):
+            _tune_set(phase="analyzing",
+                      progress=int(5 + 90 * ci / max(1, len(combos))),
+                      message=f"combo {ci + 1}/{len(combos)}: "
+                              f"bg={bm} σ={sg} k={kn}")
+            kw = dict(sigma=sg, bin=det_bin, centroid_full_res=True, bg_mode=bm)
+            if bm == "block_percentile" and has_block and block_size:
+                kw["bg_block_size"] = block_size
+            if has_kernel:
+                kw["kernel_sigma"] = kn
+            solved, matches, stars = 0, [], []
+            for fr in frames:
+                try:
+                    raw = sd.detect_stars(fr, **kw)
+                except Exception:
+                    raw = []
+                stars.append(len(raw) if raw else 0)
+                ok, nm = _bgrun_solve(raw, max_c, min_c)
+                if ok:
+                    solved += 1
+                    matches.append(nm)
+            n = len(frames)
+            stars.sort()
+            table.append({
+                "bg_mode": bm, "sigma": sg, "kernel": kn if has_kernel else None,
+                "frames": n, "solved": solved,
+                "rate": (solved / n) if n else 0.0,
+                "median_stars": stars[len(stars) // 2] if stars else 0,
+                "mean_matches": (sum(matches) / len(matches)) if matches else 0.0,
+            })
+
+        # Winner: highest solve rate, then most mean matches, then fewer stars
+        # (cheaper extraction / less crowding).
+        winner = max(
+            table,
+            key=lambda r: (r["rate"], r["mean_matches"], -r["median_stars"]),
+        ) if table else None
+        if winner and winner["solved"] == 0:
+            winner = None
+        _tune_set(phase="done", progress=100, running=False,
+                  table=table, winner=winner,
+                  finished=datetime.now().strftime("%Y%m%d_%H%M%S"),
+                  message=("done" if winner else
+                           "done — no combination solved any frame"))
+    except Exception as e:
+        log.exception("tune worker failed")
+        _tune_set(phase="error", running=False, error=str(e),
+                  message=f"error: {e}")
+
+
+@app.route("/tune/start", methods=["POST"])
+def tune_start():
+    """Kick off a hindsight detection sweep over a saved burst archive."""
+    name = os.path.basename(request.form.get("zip") or "")
+    if not name or not (_BGRUN_DIR / name).exists():
+        return jsonify({"ok": False, "error": "burst archive not found"}), 404
+    with _tune_lock:
+        if _tune["running"]:
+            return jsonify({"ok": False, "error": "a tune is already running"}), 409
+        _tune.update(running=True, phase="starting", progress=0,
+                     message="starting…", zip=name, table=None, winner=None,
+                     error=None, finished=None,
+                     started=datetime.now().strftime("%Y%m%d_%H%M%S"))
+
+    def _floats(spec, default):
+        vals = []
+        for tok in (spec or "").split(","):
+            tok = tok.strip()
+            if tok:
+                try:
+                    vals.append(float(tok))
+                except ValueError:
+                    pass
+        return vals or list(default)
+
+    sigmas   = _floats(request.form.get("sigmas"), _TUNE_SIGMAS)
+    kernels  = _floats(request.form.get("kernels"), _TUNE_KERNELS)
+    bg_modes = [m.strip() for m in (request.form.get("bg_modes") or "").split(",")
+                if m.strip()] or list(_TUNE_BG_MODES)
+    threading.Thread(target=_tune_worker, args=(name, sigmas, kernels, bg_modes),
+                     daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/tune")
+def api_tune():
+    """Tune-from-burst progress / winner for the Dashboard poller."""
+    return jsonify(_tune_snapshot())
+
+
+@app.route("/tune/apply", methods=["POST"])
+def tune_apply():
+    """Persist the winning detection combo live (solver_params_set, persist),
+    optionally saving it as a tuned seeing override (source=replay)."""
+    s = _tune_snapshot()
+    w = s.get("winner")
+    if not w:
+        return jsonify({"ok": False, "error": "no winner to apply"}), 400
+    pargs = {"persist": True, "detect_bg_mode": w["bg_mode"],
+             "detect_sigma": float(w["sigma"])}
+    if w.get("kernel") is not None:
+        pargs["detect_kernel_sigma"] = float(w["kernel"])
+    r = _safe_call("solver_params_set", pargs)
+    if not r.ok:
+        return jsonify({"ok": False, "error": r.error}), 400
+    mode = (request.form.get("mode") or "").strip().lower()
+    if mode in ("good", "bad"):
+        r2 = _safe_call("seeing_override_save", {"mode": mode, "source": "replay"})
+        if not r2.ok:
+            return jsonify({"ok": False, "error": r2.error}), 400
+    return jsonify({"ok": True, "applied": pargs})
 
 
 @app.route("/healthz")

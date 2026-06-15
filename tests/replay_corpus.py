@@ -296,8 +296,13 @@ def _cfg(preset: Dict[str, Any], key: str) -> Any:
 # ---------------------------------------------------------------------------
 
 def _detect(sd, image_u8, preset: Dict[str, Any], bg_mode_override: Optional[str],
-            caps: Dict[str, bool]) -> Tuple[List, float]:
+            caps: Dict[str, bool], sigma_override: Optional[float] = None,
+            kernel_override: Optional[float] = None) -> Tuple[List, float]:
     """Run star_detect.detect_stars on image_u8 with settings from preset.
+
+    sigma_override / kernel_override, when given, replace the preset's
+    detect_sigma / detect_kernel_sigma (used by the --sweep-sigma/--sweep-kernel
+    grid).
 
     Returns (centroids, extract_ms).
     centroids: list of (x, y, brightness, peak) in (x,y)-origin-at-top-left coords.
@@ -305,13 +310,15 @@ def _detect(sd, image_u8, preset: Dict[str, Any], bg_mode_override: Optional[str
     import numpy as np
 
     bg_mode = bg_mode_override or _cfg(preset, "detect_bg_mode") or "row_percentile"
-    sigma   = float(_cfg(preset, "detect_sigma") or 5.0)
+    sigma   = float(sigma_override if sigma_override is not None
+                    else (_cfg(preset, "detect_sigma") or 5.0))
     det_bin = int(_cfg(preset, "detect_bin") or 2)
     tophat_radius  = int(_cfg(preset, "detect_tophat_radius") or 12)
     bg_block_size  = int(_cfg(preset, "detect_bg_block_size") or 0)
     uniform_size   = int(_cfg(preset, "detect_uniform_filter_size") or 0)
     noise_mode     = str(_cfg(preset, "detect_noise_mode") or "mad")
-    kernel_sigma   = float(_cfg(preset, "detect_kernel_sigma") or 1.5)
+    kernel_sigma   = float(kernel_override if kernel_override is not None
+                           else (_cfg(preset, "detect_kernel_sigma") or 1.5))
     local_noise    = bool(_cfg(preset, "detect_local_noise") if "detect_local_noise" in preset
                           else True)
     max_axis_ratio_raw = float(_cfg(preset, "detect_max_axis_ratio") or 0.0)
@@ -428,28 +435,40 @@ def _format_stat(v: Optional[float]) -> str:
 # Reporting
 # ---------------------------------------------------------------------------
 
+def _combo_label(sigma, kernel) -> str:
+    """Compact 'sig/ker' tag for a swept combo; '' when neither was swept."""
+    parts = []
+    if sigma is not None:
+        parts.append(f"σ{sigma:g}")
+    if kernel is not None:
+        parts.append(f"k{kernel:g}")
+    return " ".join(parts)
+
+
 def _print_table(rows: List[Dict[str, Any]], labels: List[str]) -> None:
     """Print aggregated results to stdout in a readable table."""
-    # Group rows by (preset_name, bg_mode)
+    # Group rows by the full combo (preset, bg_mode, sigma, kernel)
     from collections import defaultdict
-    groups: Dict[Tuple[str, str], List[Dict]] = defaultdict(list)
+    groups: Dict[Tuple, List[Dict]] = defaultdict(list)
     for r in rows:
-        groups[(r["preset"], r["bg_mode"])].append(r)
+        groups[(r["preset"], r["bg_mode"], r.get("sigma"),
+                r.get("kernel_sigma"))].append(r)
 
-    # Per-(preset,bg_mode) aggregate
+    # Per-combo aggregate
     print()
-    print("=" * 90)
-    print("  RESULTS BY PRESET")
-    print("=" * 90)
+    print("=" * 96)
+    print("  RESULTS BY COMBINATION")
+    print("=" * 96)
     header = (
-        f"{'Preset':<14} {'BgMode':<22} {'Frames':>6} {'Solved':>6} "
+        f"{'Preset':<10} {'BgMode':<20} {'Combo':<10} {'Frames':>6} {'Solved':>6} "
         f"{'Rate%':>6} {'Stars p50':>9} {'Stars p90':>9} "
-        f"{'ExtMs p50':>9} {'ExtMs p90':>9} "
-        f"{'SlvMs p50':>9} {'SlvMs p90':>9}"
+        f"{'ExtMs p50':>9} {'SlvMs p50':>9} {'SlvMs p90':>9}"
     )
     print(header)
-    print("-" * 90)
-    for (preset_name, bg_mode), group in sorted(groups.items()):
+    print("-" * 96)
+    for (preset_name, bg_mode, sigma, kernel), group in sorted(
+            groups.items(), key=lambda kv: (str(kv[0][0]), str(kv[0][1]),
+                                            kv[0][2] or 0, kv[0][3] or 0)):
         n_frames = len(group)
         n_solved = sum(1 for r in group if r["solved"])
         rate = 100.0 * n_solved / n_frames if n_frames else 0.0
@@ -458,12 +477,11 @@ def _print_table(rows: List[Dict[str, Any]], labels: List[str]) -> None:
         solve_mss    = [r["solve_ms"]   for r in group if r["solved"]]
 
         print(
-            f"  {preset_name:<12} {bg_mode:<22} {n_frames:>6} {n_solved:>6} "
-            f"{rate:>5.1f}% "
+            f"  {preset_name:<8} {bg_mode:<20} {_combo_label(sigma, kernel):<10} "
+            f"{n_frames:>6} {n_solved:>6} {rate:>5.1f}% "
             f"{_format_stat(_percentile(star_counts, 50)):>9} "
             f"{_format_stat(_percentile(star_counts, 90)):>9} "
             f"{_format_stat(_percentile(extract_mss, 50)):>9} "
-            f"{_format_stat(_percentile(extract_mss, 90)):>9} "
             f"{_format_stat(_percentile(solve_mss, 50)):>9} "
             f"{_format_stat(_percentile(solve_mss, 90)):>9}"
         )
@@ -499,7 +517,7 @@ def _print_table(rows: List[Dict[str, Any]], labels: List[str]) -> None:
 def _write_csv(rows: List[Dict[str, Any]], csv_path: str) -> None:
     """Write per-frame rows to a CSV file."""
     fields = [
-        "frame", "label", "preset", "bg_mode",
+        "frame", "label", "preset", "bg_mode", "sigma", "kernel_sigma",
         "n_stars", "solved", "extract_ms", "solve_ms",
         "ra", "dec", "fov", "matches",
     ]
@@ -508,6 +526,142 @@ def _write_csv(rows: List[Dict[str, Any]], csv_path: str) -> None:
         w.writeheader()
         w.writerows(rows)
     print(f"Per-frame CSV written to: {csv_path}")
+
+
+# ---------------------------------------------------------------------------
+# Zip-corpus input (e.g. a bg_runs/bg_ab_*.zip burst archive)
+# ---------------------------------------------------------------------------
+
+def _prepare_corpus(corpus_arg: str) -> Tuple[Path, Optional["tempfile.TemporaryDirectory"]]:
+    """Resolve --corpus to a directory of PNG frames.
+
+    If corpus_arg is a .zip (e.g. a bg_runs/bg_ab_*.zip burst archive or a
+    debug bundle), extract its raw frame PNGs to a temp dir and return that.
+    The display JPEGs in debug bundles are arcsinh-stretched with overlays, so
+    only true PNG frames are extracted. Returns (dir_path, tmp_or_None); keep a
+    reference to tmp so it isn't cleaned up until the run finishes.
+    """
+    import tempfile
+    import zipfile
+
+    p = Path(corpus_arg)
+    if p.is_dir():
+        return p.resolve(), None
+    if not p.exists():
+        _die(f"--corpus not found: {p}")
+    if not zipfile.is_zipfile(str(p)):
+        _die(f"--corpus must be a directory or a .zip archive: {p}")
+
+    tmp = tempfile.TemporaryDirectory(prefix="replay_corpus_")
+    out = Path(tmp.name)
+    extracted = 0
+    with zipfile.ZipFile(str(p)) as zf:
+        for member in zf.namelist():
+            name = member.lower()
+            if name.endswith("/") or not name.endswith(".png"):
+                continue  # frames are PNG; skip dirs, JPEG previews, metadata
+            # Flatten any internal directory (bg_ab zips store frames/frame_NN.png).
+            data = zf.read(member)
+            dest = out / Path(member).name
+            dest.write_bytes(data)
+            extracted += 1
+    if extracted == 0:
+        tmp.cleanup()
+        _die(f"No PNG frames found inside {p.name} (looked for *.png members).")
+    print(f"Extracted {extracted} frame(s) from {p.name}")
+    return out, tmp
+
+
+# ---------------------------------------------------------------------------
+# Winner selection + persistence (--apply)
+# ---------------------------------------------------------------------------
+
+def _select_winner(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Pick the best (preset, bg_mode, sigma, kernel) combo from per-frame rows.
+
+    Ranks by solve rate (desc), then median solve_ms (asc), then median star
+    count (desc). Returns a summary dict for the winning combo, or None if no
+    combo solved any frame.
+    """
+    from collections import defaultdict
+    groups: Dict[Tuple, List[Dict]] = defaultdict(list)
+    for r in rows:
+        key = (r["preset"], r["bg_mode"], r.get("sigma"), r.get("kernel_sigma"))
+        groups[key].append(r)
+
+    best = None
+    for (preset, bg_mode, sigma, kernel), group in groups.items():
+        n = len(group)
+        solved = [r for r in group if r["solved"]]
+        rate = len(solved) / n if n else 0.0
+        med_slv = _percentile([r["solve_ms"] for r in solved], 50) or float("inf")
+        med_stars = _percentile([r["n_stars"] for r in group], 50) or 0
+        cand = {
+            "preset": preset, "bg_mode": bg_mode,
+            "sigma": sigma, "kernel_sigma": kernel,
+            "frames": n, "solved": len(solved), "rate": rate,
+            "median_solve_ms": med_slv, "median_stars": med_stars,
+        }
+        rank = (rate, -med_slv, med_stars)
+        if best is None or rank > best[0]:
+            best = (rank, cand)
+    if best is None or best[1]["solved"] == 0:
+        return None
+    return best[1]
+
+
+def _apply_winner(winner: Dict[str, Any], presets: Dict[str, Any],
+                  fov_err_eff: float, max_stars_eff: int,
+                  apply_mode: Optional[str]) -> None:
+    """Persist the winning combo to the live daemon via the maint socket.
+
+    Routes detection/solve keys through solver_params_set, match keys through
+    match_params_set (both persist=true), then optionally saves the result as a
+    tuned seeing override (source=replay) for apply_mode.
+    """
+    try:
+        from efinder.maint import call as maint_call
+    except Exception as e:
+        _die(f"--apply needs efinder.maint (on-device, daemon running): {e}")
+
+    preset = presets[winner["preset"]]
+    sigma = winner["sigma"] if winner["sigma"] is not None else _cfg(preset, "detect_sigma")
+    kernel = (winner["kernel_sigma"] if winner["kernel_sigma"] is not None
+              else _cfg(preset, "detect_kernel_sigma"))
+
+    solver_args = {"persist": True, "detect_bg_mode": winner["bg_mode"],
+                   "fov_max_error_deg": float(fov_err_eff),
+                   "max_solve_stars": int(max_stars_eff)}
+    if sigma is not None:
+        solver_args["detect_sigma"] = float(sigma)
+    if kernel is not None:
+        solver_args["detect_kernel_sigma"] = float(kernel)
+    for k in ("min_centroids", "solve_timeout_ms", "detect_max_axis_ratio"):
+        v = _cfg(preset, k)
+        if v is not None:
+            solver_args[k] = v
+
+    r = maint_call("solver_params_set", solver_args)
+    if not r.ok:
+        _die(f"--apply: solver_params_set failed: {r.error}")
+    print(f"Applied solver params: {solver_args}")
+
+    match_args = {"persist": True}
+    for k in ("match_radius", "match_threshold"):
+        v = _cfg(preset, k)
+        if v is not None:
+            match_args[k] = float(v)
+    if len(match_args) > 1:
+        r = maint_call("match_params_set", match_args)
+        if not r.ok:
+            _die(f"--apply: match_params_set failed: {r.error}")
+        print(f"Applied match params: {match_args}")
+
+    if apply_mode:
+        r = maint_call("seeing_override_save", {"mode": apply_mode, "source": "replay"})
+        if not r.ok:
+            _die(f"--apply: seeing_override_save failed: {r.error}")
+        print(f"Saved tuned override for seeing mode '{apply_mode}' (source=replay)")
 
 
 # ---------------------------------------------------------------------------
@@ -582,6 +736,28 @@ See tests/corpus/README.md for the full labeling convention.
              "(default: from config, 50).",
     )
     parser.add_argument(
+        "--sweep-sigma", default="",
+        help="Comma-separated detect_sigma values to sweep, overriding each "
+             "preset's sigma. Example: --sweep-sigma 4,5,6,8",
+    )
+    parser.add_argument(
+        "--sweep-kernel", default="",
+        help="Comma-separated detect_kernel_sigma values to sweep (1.0-4.0), "
+             "overriding each preset's kernel. Example: --sweep-kernel 1.5,2.5",
+    )
+    parser.add_argument(
+        "--apply", action="store_true",
+        help="After the sweep, persist the winning combination to the live "
+             "daemon via the maintenance socket (solver_params_set / "
+             "match_params_set with persist=true). On-device only; the daemon "
+             "must be running.",
+    )
+    parser.add_argument(
+        "--apply-mode", choices=["good", "bad"], default=None,
+        help="With --apply, also save the winner as this seeing mode's tuned "
+             "override (source=replay), mirroring auto_tune commit.",
+    )
+    parser.add_argument(
         "--limit", type=int, default=0,
         help="Cap number of frames for a quick run (0 = no limit).",
     )
@@ -617,10 +793,24 @@ See tests/corpus/README.md for the full labeling convention.
     # Optional bg_mode sweep
     bg_modes_sweep = [m.strip() for m in args.bg_modes.split(",") if m.strip()]
 
-    # Discover frames
-    corpus_path = Path(args.corpus)
-    frames = _discover_frames(corpus_path, args.limit or None)
-    print(f"Corpus              : {corpus_path} ({len(frames)} frames)")
+    # Optional sigma / kernel sweeps ([None] = use each preset's own value)
+    def _floats(spec):
+        out = []
+        for tok in spec.split(","):
+            tok = tok.strip()
+            if tok:
+                try:
+                    out.append(float(tok))
+                except ValueError:
+                    _die(f"invalid sweep value: {tok!r}")
+        return out
+    sigma_sweep = _floats(args.sweep_sigma) or [None]
+    kernel_sweep = _floats(args.sweep_kernel) or [None]
+
+    # Discover frames (a .zip burst archive is extracted to a temp dir first)
+    corpus_dir, _corpus_tmp = _prepare_corpus(args.corpus)
+    frames = _discover_frames(corpus_dir, args.limit or None)
+    print(f"Corpus              : {args.corpus} ({len(frames)} frames)")
 
     # Load database
     db_path = args.database
@@ -655,6 +845,10 @@ See tests/corpus/README.md for the full labeling convention.
           f"{'  (CLI)' if args.fov_err is not None else '  (default)'}")
     print(f"Max solve stars     : {max_stars_eff}"
           f"{'  (CLI)' if args.max_stars else '  (default)'}")
+    if sigma_sweep != [None]:
+        print(f"Sigma sweep         : {', '.join(str(s) for s in sigma_sweep)}")
+    if kernel_sweep != [None]:
+        print(f"Kernel sweep        : {', '.join(str(k) for k in kernel_sweep)}")
     print()
 
     try:
@@ -665,14 +859,15 @@ See tests/corpus/README.md for the full labeling convention.
             "  Ensure the file is a valid tetra3 .npz database."
         )
 
-    # Build the list of (preset_name, bg_mode_override) combinations to run
-    combos: List[Tuple[str, Optional[str]]] = []
+    # Build the list of (preset_name, bg_mode_override, sigma, kernel) combos.
+    # bg_mode None = use the preset's own; sigma/kernel None = use the preset's.
+    combos: List[Tuple[str, Optional[str], Optional[float], Optional[float]]] = []
     for pname in preset_names:
-        if bg_modes_sweep:
-            for bm in bg_modes_sweep:
-                combos.append((pname, bm))
-        else:
-            combos.append((pname, None))
+        bg_choices = bg_modes_sweep if bg_modes_sweep else [None]
+        for bm in bg_choices:
+            for sg in sigma_sweep:
+                for kn in kernel_sweep:
+                    combos.append((pname, bm, sg, kn))
 
     # Run
     all_rows: List[Dict[str, Any]] = []
@@ -689,35 +884,38 @@ See tests/corpus/README.md for the full labeling convention.
             print(f"  SKIP {png_path.name}: could not load image: {e}")
             continue
 
-        for pname, bg_override in combos:
+        for pname, bg_override, sg, kn in combos:
             preset = presets[pname]
             effective_bg = bg_override or _cfg(preset, "detect_bg_mode") or "row_percentile"
+            eff_sigma = sg if sg is not None else _cfg(preset, "detect_sigma")
+            eff_kernel = kn if kn is not None else _cfg(preset, "detect_kernel_sigma")
             min_centroids = int(_cfg(preset, "min_centroids") or 8)
 
-            try:
-                centroids, extract_ms = _detect(sd, image_u8, preset, bg_override, caps)
-            except Exception as e:
-                print(f"  DETECT ERROR {png_path.name} preset={pname} bg={effective_bg}: {e}")
-                all_rows.append(dict(
+            def _row(**extra):
+                base = dict(
                     frame=str(png_path), label=label,
                     preset=pname, bg_mode=effective_bg,
-                    n_stars=0, solved=False,
-                    extract_ms=0.0, solve_ms=0.0,
+                    sigma=eff_sigma, kernel_sigma=eff_kernel,
+                    n_stars=0, solved=False, extract_ms=0.0, solve_ms=0.0,
                     ra=None, dec=None, fov=None, matches=0,
-                ))
+                )
+                base.update(extra)
+                return base
+
+            try:
+                centroids, extract_ms = _detect(
+                    sd, image_u8, preset, bg_override, caps,
+                    sigma_override=sg, kernel_override=kn)
+            except Exception as e:
+                print(f"  DETECT ERROR {png_path.name} preset={pname} bg={effective_bg}: {e}")
+                all_rows.append(_row())
                 done += 1
                 continue
 
             n_stars = len(centroids)
 
             if n_stars < min_centroids:
-                all_rows.append(dict(
-                    frame=str(png_path), label=label,
-                    preset=pname, bg_mode=effective_bg,
-                    n_stars=n_stars, solved=False,
-                    extract_ms=extract_ms, solve_ms=0.0,
-                    ra=None, dec=None, fov=None, matches=0,
-                ))
+                all_rows.append(_row(n_stars=n_stars, extract_ms=extract_ms))
                 done += 1
                 continue
 
@@ -734,20 +932,20 @@ See tests/corpus/README.md for the full labeling convention.
             fov = soln.get("FOV") if soln and solved else None
             matches = int(soln.get("Matches", 0) or 0) if soln and solved else 0
 
-            all_rows.append(dict(
-                frame=str(png_path), label=label,
-                preset=pname, bg_mode=effective_bg,
+            all_rows.append(_row(
                 n_stars=n_stars, solved=solved,
                 extract_ms=extract_ms, solve_ms=solve_ms,
-                ra=ra, dec=dec, fov=fov, matches=matches,
-            ))
+                ra=ra, dec=dec, fov=fov, matches=matches))
             done += 1
 
             status = "SOLVED" if solved else "FAILED"
+            sk = ""
+            if sg is not None or kn is not None:
+                sk = f" sig={eff_sigma} ker={eff_kernel}"
             print(
                 f"  [{done:>4}/{total_combos}] "
-                f"{png_path.name:<35} label={label:<14} "
-                f"preset={pname:<6} bg={effective_bg:<22} "
+                f"{png_path.name:<28} label={label:<12} "
+                f"preset={pname:<5} bg={effective_bg:<20}{sk} "
                 f"stars={n_stars:>3} {status} "
                 f"ext={extract_ms:5.1f}ms"
                 + (f" slv={solve_ms:5.0f}ms" if solved else "")
@@ -759,8 +957,28 @@ See tests/corpus/README.md for the full labeling convention.
         _print_table(all_rows, unique_labels)
         print(f"  Parameters: fov={fov_est_eff:.3f} deg  "
               f"fov_err={fov_err_eff:.3f} deg  max_stars={max_stars_eff}  "
-              f"(presets supply sigma / bg_mode / match / timeout)")
+              f"(presets supply match / timeout; sigma/kernel swept if requested)")
         print()
+
+    # Winner selection + optional persistence
+    winner = _select_winner(all_rows) if all_rows else None
+    if winner:
+        combo = _combo_label(winner["sigma"], winner["kernel_sigma"]) or "(preset defaults)"
+        print("  WINNER: "
+              f"preset={winner['preset']}  bg={winner['bg_mode']}  {combo}  "
+              f"solved {winner['solved']}/{winner['frames']} "
+              f"({100.0 * winner['rate']:.0f}%)  "
+              f"median_solve={winner['median_solve_ms']:.0f}ms  "
+              f"median_stars={winner['median_stars']:.0f}")
+        if not args.apply:
+            print("  (re-run with --apply [--apply-mode good|bad] to persist "
+                  "this on the live daemon)")
+        print()
+    elif args.apply:
+        _die("--apply requested but no combination solved any frame; nothing to persist.")
+
+    if winner and args.apply:
+        _apply_winner(winner, presets, fov_err_eff, max_stars_eff, args.apply_mode)
 
     # CSV output
     if args.csv:
