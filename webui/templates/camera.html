@@ -495,8 +495,9 @@ function _atRender(res) {
   const box = document.getElementById('at-status');
   const cancelBtn = document.getElementById('at-cancel');
   const startBtn = document.getElementById('at-start');
-  if (!res) { box.textContent = ''; return; }
+  if (!res) { box.textContent = ''; box.style.color = ''; return; }
   let lines = [];
+  box.style.color = '';
   if (res.running) {
     lines.push('▶ ' + (res.phase || '') + ': ' + (res.message || ''));
     lines.push('progress: ' + Math.round((res.progress || 0) * 100) + '%');
@@ -505,13 +506,24 @@ function _atRender(res) {
   } else {
     cancelBtn.style.display = 'none';
     startBtn.disabled = false;
-    if (res.error) lines.push('error: ' + res.error);
+    if (res.error) { lines.push('error: ' + res.error); box.style.color = '#ff5500'; }
     const r = res.result;
     if (r) {
       lines.push((r.committed ? ('✔ committed — saved as ' + r.mode +
                                  ' override') : '✓ dry run') +
-                 (r.met_target ? ' — target met' : ' — target NOT met') +
                  ' (' + r.elapsed_s + 's)');
+      if (r.met_target) {
+        box.style.color = '#44cc44';
+        lines.push('✓ target met (' + r.target_matches + ' matches)');
+      } else {
+        // Prominent: the sweep ran but found no reliably-solving point.
+        box.style.color = '#ff7700';
+        lines.push('⚠ target NOT met (' + r.target_matches + ' matches) — ' +
+                   'showing the best-effort settings, not a confident solve.');
+        lines.push('  Too few matches on this sky. Try: raise exposure / gain,');
+        lines.push('  improve focus, or switch to the Bad seeing preset, then');
+        lines.push('  re-run. Commit only once it reports "target met".');
+      }
       if (r.photometric) lines.push('exposure: ' + r.photometric.exposure_s +
                                     's  gain: ' + r.photometric.gain);
       if (r.detection) lines.push('detection: sigma=' + r.detection.sigma +
