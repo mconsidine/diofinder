@@ -287,6 +287,9 @@ install -m 440 "$EFINDER_DIR/etc/sudoers.d/efinder-update" /etc/sudoers.d/efinde
 install -m 440 "$EFINDER_DIR/etc/sudoers.d/efinder-clock"  /etc/sudoers.d/efinder-clock
 install -m 440 "$EFINDER_DIR/etc/sudoers.d/efinder-wifi"   /etc/sudoers.d/efinder-wifi
 
+# Auto-activate the venv for interactive login (ssh) shells.
+install -m 644 "$EFINDER_DIR/etc/profile.d/efinder-venv.sh" /etc/profile.d/efinder-venv.sh
+
 install -m 755 "$EFINDER_DIR/scripts/efinder-update"          /usr/local/bin/
 install -m 755 "$EFINDER_DIR/scripts/efinder-db-update"       /usr/local/bin/
 install -m 755 "$EFINDER_DIR/scripts/efinder-ctl"             /usr/local/bin/
