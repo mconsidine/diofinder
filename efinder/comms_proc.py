@@ -58,6 +58,30 @@ log = logging.getLogger("efinder.comms")
 
 _request_id_seq = itertools.count(1)
 
+# Release tag recorded by efinder-update (and install.sh) after each OTA.
+# Format: "<tag> <iso8601-timestamp>" e.g. "v0.0.28 2026-06-15T11:40:00Z".
+_RELEASE_FILE = "/var/lib/efinder/version"
+
+
+def _release_info():
+    """Return (tag, released_at) from the OTA-written release file.
+
+    Returns (None, None) when the file is absent or unreadable (e.g. a manual
+    install or a freshly imaged device that predates the file), so callers can
+    fall back to the in-code config version.
+    """
+    try:
+        with open(_RELEASE_FILE) as f:
+            line = f.readline().strip()
+    except (OSError, ValueError):
+        return None, None
+    if not line:
+        return None, None
+    parts = line.split(None, 1)
+    tag = parts[0] or None
+    released_at = parts[1].strip() if len(parts) > 1 else None
+    return tag, released_at
+
 _solver_call_lock = threading.Lock()
 _camera_call_lock = threading.Lock()
 
@@ -885,7 +909,20 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             return MaintResponse(ok=True, result={"pong": True})
 
         if cmd == "version":
-            return MaintResponse(ok=True, result={"version": ctx.cfg.version})
+            # "version" reports the installed release tag (from the OTA-written
+            # /var/lib/efinder/version) when available, falling back to the
+            # in-code config version. code_version always carries the latter so
+            # nothing is lost.
+            tag, released_at = _release_info()
+            result = {
+                "version": tag or ctx.cfg.version,
+                "code_version": ctx.cfg.version,
+            }
+            if tag:
+                result["release"] = tag
+            if released_at:
+                result["released_at"] = released_at
+            return MaintResponse(ok=True, result=result)
 
         if cmd == "status":
             sol         = dict(ctx.latest_solution)
