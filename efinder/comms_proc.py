@@ -1235,6 +1235,9 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "detect_uniform_filter_size", ctx.cfg.detect_uniform_filter_size),
                 "detect_noise_mode":    ctx.shared_cfg.get(
                     "detect_noise_mode",    ctx.cfg.detect_noise_mode),
+                "extractor_backend":    ctx.shared_cfg.get(
+                    "extractor_backend",
+                    getattr(ctx.cfg, "extractor_backend", "sycamore")),
                 "detect_kernel_sigma":  ctx.shared_cfg.get(
                     "detect_kernel_sigma",  ctx.cfg.detect_kernel_sigma),
                 "detect_max_axis_ratio": ctx.shared_cfg.get(
@@ -1322,6 +1325,13 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                                         error="detect_noise_mode must be 'mad' or 'global_rms'")
                 ctx.shared_cfg["detect_noise_mode"] = nm
                 updates["detect_noise_mode"] = nm
+            if "extractor_backend" in args:
+                eb = str(args["extractor_backend"]).strip().lower()
+                if eb not in ("sycamore", "tetra3"):
+                    return MaintResponse(ok=False,
+                                        error="extractor_backend must be 'sycamore' or 'tetra3'")
+                ctx.shared_cfg["extractor_backend"] = eb
+                updates["extractor_backend"] = eb
             if "detect_kernel_sigma" in args:
                 try:
                     ks = float(args["detect_kernel_sigma"])
