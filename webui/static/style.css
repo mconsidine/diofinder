@@ -25,6 +25,40 @@ header {
 header h1 { margin: 0; font-size: 1.2rem; }
 header h1 a { color: #cc0000; text-decoration: none; }
 header nav { display: flex; gap: 1rem; flex-wrap: wrap; }
+
+/* Interface mode (novice / expert). The <html> class is set before paint in
+   base.html; default is novice. Expert-only chrome is hidden for novices. */
+html.mode-novice .expert-only { display: none !important; }
+html.mode-expert  .novice-only { display: none !important; }
+
+.mode-toggle {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+.mode-toggle-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #cc3333;
+}
+.mode-btn {
+  background: #110000;
+  color: #cc3333;
+  border: 1px solid #2d0000;
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-family: inherit;
+}
+.mode-btn:hover { background: #1a0000; }
+.mode-btn.active {
+  background: #2d0000;
+  color: #ff1111;
+  border-color: #cc0000;
+}
 header nav a {
   color: #ff1111;
   text-decoration: none;
