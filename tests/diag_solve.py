@@ -59,6 +59,16 @@ ap.add_argument('--reps',    type=int, default=3,
                 help='Repetitions per path per image (default 3)')
 ap.add_argument('--extended-timeout', action='store_true',
                 help='Retry with 3× timeout when path 1 produces no match')
+ap.add_argument('--match-runtime', action='store_true',
+                help='Reproduce the LIVE solver pipeline: read detect_bin, '
+                     'kernel_sigma, noise_mode, bg_mode, max_axis_ratio and '
+                     'extractor_backend from config (or a debug bundle\'s '
+                     'effective_params.json via EFINDER_CONFIG) instead of the '
+                     'historical bin=1 / sycamore-default diagnostic path.')
+ap.add_argument('--bin', type=int, choices=(1, 2, 4),
+                help='Detection binning (overrides config / --match-runtime)')
+ap.add_argument('--backend', choices=('sycamore', 'tetra3'),
+                help='Extractor backend (overrides config / --match-runtime)')
 args = ap.parse_args()
 
 
@@ -77,6 +87,20 @@ try:
     min_c   = cfg.min_centroids
     max_c   = cfg.max_solve_stars
     W, H    = cfg.frame_width, cfg.frame_height
+    # Live-pipeline knobs. By default the diagnostic uses the historical
+    # bin=1 / sycamore-default path; --match-runtime makes it mirror the live
+    # solver (see solver_proc.py) so "fails live, solves in diag" can be
+    # reproduced rather than masked.
+    if args.match_runtime:
+        det_bin      = int(cfg.detect_bin)
+        kernel_sigma = float(getattr(cfg, 'detect_kernel_sigma', 1.5))
+        noise_mode   = getattr(cfg, 'detect_noise_mode', 'mad')
+        bg_mode      = getattr(cfg, 'detect_bg_mode', 'row_percentile')
+        _mar         = float(getattr(cfg, 'detect_max_axis_ratio', 0.0))
+        backend      = getattr(cfg, 'extractor_backend', 'sycamore')
+    else:
+        det_bin, kernel_sigma, noise_mode = 1, 1.5, 'mad'
+        bg_mode, _mar, backend = 'row_percentile', 0.0, 'sycamore'
     tag(PASS, cfg.summary())
 except Exception as e:
     tag(WARN, f'Config unavailable ({e}); using defaults')
@@ -88,10 +112,25 @@ except Exception as e:
     min_c   = 8
     max_c   = 50
     W, H    = 960, 760
+    det_bin, kernel_sigma, noise_mode = 1, 1.5, 'mad'
+    bg_mode, _mar, backend = 'row_percentile', 0.0, 'sycamore'
+
+# Explicit CLI overrides win over config / --match-runtime.
+if args.bin:
+    det_bin = args.bin
+if args.backend:
+    backend = args.backend
+max_axis_ratio = float('inf') if _mar <= 0.0 else _mar
 
 tag(INFO, f'db={db_path}')
 tag(INFO, f'FOV={fov:.2f}° ±{fov_err:.2f}°  timeout={timeout} ms  sigma={sigma}  '
           f'min_c={min_c}  max_c={max_c}')
+tag(INFO, f'backend={backend}  bin={det_bin}  noise_mode={noise_mode}  '
+          f'bg_mode={bg_mode}  kernel_sigma={kernel_sigma}  '
+          f'max_axis_ratio={max_axis_ratio}'
+          + ('   [--match-runtime: mirroring live solver]'
+             if args.match_runtime else
+             '   [legacy diag defaults; add --match-runtime to mirror live]'))
 
 try:
     import numpy as np
@@ -195,17 +234,37 @@ base_kw = dict(
 # ── Extraction helper ─────────────────────────────────────────────────────────
 
 def _extract(arr_u8):
-    """Extract centroids using sycamore detect_stars (matched_filter gate).
+    """Extract centroids using the selected backend.
 
+    sycamore detect_stars (matched_filter gate) by default, or the olive-solve
+    tetra3 get_centroids_from_image (AstroKeith path) when backend=='tetra3'.
     Returns (centroids_rowcol, n_stars, extract_ms).
     """
-    t0  = time.monotonic()
-    raw = _sd.detect_stars(arr_u8, sigma=sigma, bin=1, centroid_full_res=True)
-    ms  = (time.monotonic() - t0) * 1000
-    n   = len(raw) if raw else 0
-    # sycamore returns (x=col, y=row); tetra3 expects (row, col)
-    cent = (np.array([[s[1], s[0]] for s in raw], dtype=np.float64)
-            if raw else None)
+    t0 = time.monotonic()
+    if backend == 'tetra3' and hasattr(t3, 'get_centroids_from_image_fast'):
+        # tetra3 returns [y, x] = (row, col) already — no swap.
+        _opts = dict(downsample=1, sigma=float(sigma),
+                     bg_sub_mode='local_mean',
+                     sigma_mode=('global_root_square'
+                                 if noise_mode == 'global_rms'
+                                 else 'local_median_abs'),
+                     binary_open=True, min_area=5, max_area=100)
+        if max_axis_ratio != float('inf'):
+            _opts['max_axis_ratio'] = max_axis_ratio
+        _yx = t3.get_centroids_from_image_fast(arr_u8, **_opts)
+        cent = (np.asarray(_yx, dtype=np.float64)
+                if _yx is not None and len(_yx) else None)
+        n = len(cent) if cent is not None else 0
+    else:
+        raw = _sd.detect_stars(arr_u8, sigma=sigma, bin=det_bin,
+                               centroid_full_res=True, bg_mode=bg_mode,
+                               noise_mode=noise_mode, kernel_sigma=kernel_sigma,
+                               max_axis_ratio=max_axis_ratio)
+        n = len(raw) if raw else 0
+        # sycamore returns (x=col, y=row); tetra3 expects (row, col)
+        cent = (np.array([[s[1], s[0]] for s in raw], dtype=np.float64)
+                if raw else None)
+    ms = (time.monotonic() - t0) * 1000
     # Cap to max_solve_stars exactly as solver_proc.py does before solving
     # (centroids are brightest-first). n reports the pre-cap detection count.
     if cent is not None and len(cent) > max_c:

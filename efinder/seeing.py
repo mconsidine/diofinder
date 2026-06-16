@@ -29,9 +29,12 @@ from typing import Any, Dict, Optional
 # setting each of these by hand.
 SEEING_PRESETS: Dict[str, Dict[str, Any]] = {
     "good": dict(
+        extractor_backend="sycamore",
         detect_sigma=5.0,
         detect_kernel_sigma=1.5,
         detect_bg_mode="row_percentile",
+        detect_noise_mode="mad",
+        detect_uniform_filter_size=0,
         detect_max_axis_ratio=3.0,
         min_centroids=8,
         match_radius=0.01,
@@ -44,9 +47,12 @@ SEEING_PRESETS: Dict[str, Dict[str, Any]] = {
         star_db="standard",
     ),
     "bad": dict(
+        extractor_backend="sycamore",
         detect_sigma=4.0,
         detect_kernel_sigma=2.5,
         detect_bg_mode="block_percentile",
+        detect_noise_mode="mad",
+        detect_uniform_filter_size=0,
         detect_max_axis_ratio=5.0,
         min_centroids=5,
         match_radius=0.015,
@@ -58,13 +64,41 @@ SEEING_PRESETS: Dict[str, Dict[str, Any]] = {
         auto_exposure_max_gain=16.0,
         star_db="deep",
     ),
+    # "Keith" — an exact re-creation of the AstroKeith eFinder_cli "original"
+    # pipeline (tetra3 get_centroids_from_image: local_mean background +
+    # global-RMS noise + sigma=2, no matched filter, no temporal cache),
+    # routed through the olive-solve tetra3 extractor backend rather than
+    # sycamore. This is the BASELINE to improve upon, not the recommended
+    # default. detect_kernel_sigma / detect_bg_mode are ignored by the tetra3
+    # backend but kept here so a toggle back to good/bad fully re-tunes.
+    "keith": dict(
+        extractor_backend="tetra3",
+        detect_sigma=2.0,
+        detect_kernel_sigma=1.5,
+        detect_bg_mode="uniform_mean",
+        detect_noise_mode="global_rms",
+        detect_uniform_filter_size=25,
+        detect_max_axis_ratio=0.0,
+        min_centroids=15,
+        match_radius=0.01,
+        match_threshold=1e-5,
+        solve_timeout_ms=5000,
+        auto_exposure_target_stars=20,
+        auto_exposure_target_matches=10,
+        auto_exposure_max_s=1.0,
+        auto_exposure_max_gain=20.0,
+        star_db="standard",
+    ),
 }
 
 # Human-readable rationale for each key, surfaced in the UI / docs.
 PRESET_RATIONALE: Dict[str, str] = {
+    "extractor_backend": "Centroid extractor: sycamore (matched filter) or tetra3 (AstroKeith).",
     "detect_sigma": "Detection threshold in noise sigmas.",
     "detect_kernel_sigma": "Matched-filter kernel width; wider for bloated PSFs.",
     "detect_bg_mode": "Per-frame background model.",
+    "detect_noise_mode": "Noise estimator: mad (robust) or global_rms (tetra3).",
+    "detect_uniform_filter_size": "uniform_mean / tetra3 background window (px).",
     "detect_max_axis_ratio": "Trail/elongation rejection; looser when seeing smears stars.",
     "min_centroids": "Minimum stars before attempting a solve.",
     "match_radius": "Catalog-match tolerance as a fraction of FOV.",
@@ -77,7 +111,7 @@ PRESET_RATIONALE: Dict[str, str] = {
     "star_db": "standard vs. deeper-magnitude database.",
 }
 
-VALID_MODES = ("good", "bad")
+VALID_MODES = ("good", "bad", "keith")
 
 
 def is_valid_mode(mode: str) -> bool:
