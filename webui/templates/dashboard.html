@@ -46,7 +46,7 @@
     {% endif %}
   </div>
 
-  <div class="card">
+  <div class="card expert-only">
     <h2>Calibration</h2>
     {% if calibration %}
       <dl class="stats">
@@ -71,7 +71,7 @@
     {% endif %}
   </div>
 
-  <div class="card">
+  <div class="card expert-only">
     <h2>Boresight</h2>
     {% if boresight %}
       <dl class="stats">
@@ -85,7 +85,7 @@
     <p class="hint">Use SkySafari &ldquo;Align&rdquo; on a known star for normal alignment.</p>
   </div>
 
-  <div class="card" id="imu-card">
+  <div class="card expert-only" id="imu-card">
     <h2>IMU</h2>
     {% if imu and imu.available %}
       <p id="imu-status-text" {% if imu.active %}style="color:#ff1111; font-weight:500;"{% else %}class="hint"{% endif %}>
@@ -177,7 +177,7 @@
     <span id="debug-status" style="margin-left:10px;font-size:0.85rem;color:#888;"></span>
   </div>
 
-  <div class="card" id="tune-card">
+  <div class="card expert-only" id="tune-card">
     <h2>Tune from burst</h2>
     <p class="hint" style="margin:0 0 8px 0;">
       Replays a saved burst archive (from the Background A/B page) through the

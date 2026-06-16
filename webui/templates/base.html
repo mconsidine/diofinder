@@ -4,6 +4,17 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}eFinder{% endblock %}</title>
+  <script>
+    // Apply the saved interface mode (default: novice) to <html> *before* the
+    // stylesheet paints, so expert-only elements never flash in novice mode.
+    (function () {
+      var m = 'novice';
+      try {
+        if (localStorage.getItem('efinderUiMode') === 'expert') m = 'expert';
+      } catch (e) {}
+      document.documentElement.classList.add('mode-' + m);
+    })();
+  </script>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
@@ -13,16 +24,42 @@
       <a href="{{ url_for('dashboard') }}">Status</a>
       <a href="{{ url_for('camera_page') }}">Camera</a>
       <a href="{{ url_for('focus_page') }}">Focus</a>
-      <a href="{{ url_for('bgtest_page') }}">Background</a>
+      <a class="expert-only" href="{{ url_for('bgtest_page') }}">Background</a>
       <a href="{{ url_for('polar_page') }}">Polar</a>
       <a href="{{ url_for('wifi_page') }}">Wi-Fi</a>
       <a href="{{ url_for('config_page') }}">Config</a>
-      <a href="{{ url_for('logs') }}">Logs</a>
+      <a class="expert-only" href="{{ url_for('logs') }}">Logs</a>
       <a href="{{ url_for('update_page') }}">Update</a>
     </nav>
+    <div class="mode-toggle" role="group" aria-label="Interface mode">
+      <span class="mode-toggle-label">View</span>
+      <button type="button" id="mode-novice-btn" class="mode-btn"
+              onclick="setUiMode('novice')">Novice</button>
+      <button type="button" id="mode-expert-btn" class="mode-btn"
+              onclick="setUiMode('expert')">Expert</button>
+    </div>
   </header>
   <main>
     {% block content %}{% endblock %}
   </main>
+  <script>
+    function _applyModeButtons(m) {
+      var n = document.getElementById('mode-novice-btn');
+      var e = document.getElementById('mode-expert-btn');
+      if (n) n.classList.toggle('active', m === 'novice');
+      if (e) e.classList.toggle('active', m === 'expert');
+    }
+    function setUiMode(m) {
+      m = (m === 'expert') ? 'expert' : 'novice';
+      var html = document.documentElement;
+      html.classList.remove('mode-novice', 'mode-expert');
+      html.classList.add('mode-' + m);
+      try { localStorage.setItem('efinderUiMode', m); } catch (e) {}
+      _applyModeButtons(m);
+    }
+    _applyModeButtons(
+      document.documentElement.classList.contains('mode-expert')
+        ? 'expert' : 'novice');
+  </script>
 </body>
 </html>

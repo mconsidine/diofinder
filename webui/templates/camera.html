@@ -73,7 +73,7 @@
         </label>
       </form>
       <form method="post" action="{{ url_for('tuning_set') }}"
-            style="margin-top:10px;">
+            class="expert-only" style="margin-top:10px;">
         <label>Tuning profile
           <select name="profile">
             <option value="scientific" {{ 'selected' if tuning_profile == 'scientific' }}>
@@ -120,6 +120,37 @@
   </div>
 
   <div class="card">
+    <h2>Background mode</h2>
+    <p class="hint" style="margin:0 0 8px">
+      How the sky background is removed before star detection.
+      <code>row_percentile</code> is the fast default; the block / uniform modes
+      handle light pollution and gradients. The
+      <a class="expert-only" href="{{ url_for('bgtest_page') }}">Background page</a>
+      has previews, a live A/B test, and per-mode notes.
+    </p>
+    {% if solver_params %}
+      <form method="post" action="{{ url_for('bgtest_set') }}">
+        <input type="hidden" name="next" value="camera_page">
+        {% set bgm = solver_params.detect_bg_mode %}
+        <label>Mode
+          <select name="bg_mode">
+            <option value="row_percentile" {{ 'selected' if bgm == 'row_percentile' }}>row_percentile (default, fastest)</option>
+            <option value="line_median" {{ 'selected' if bgm == 'line_median' }}>line_median (robust row correction)</option>
+            <option value="column_percentile" {{ 'selected' if bgm == 'column_percentile' }}>column_percentile (vertical gradient)</option>
+            <option value="row_column_percentile" {{ 'selected' if bgm == 'row_column_percentile' }}>row_column_percentile (separable 2-D)</option>
+            <option value="block_percentile" {{ 'selected' if bgm == 'block_percentile' }}>block_percentile (2-D tiles, light pollution)</option>
+            <option value="uniform_mean" {{ 'selected' if bgm == 'uniform_mean' }}>uniform_mean (tetra3-compatible)</option>
+            <option value="top_hat" {{ 'selected' if bgm == 'top_hat' }}>top_hat (morphological, slowest)</option>
+          </select>
+        </label>
+        <button type="submit" class="btn">Apply &amp; save</button>
+      </form>
+    {% else %}
+      <p class="muted">Daemon not reachable.</p>
+    {% endif %}
+  </div>
+
+  <div class="card expert-only">
     <h2>Hot-pixel mask</h2>
     <p class="hint" style="margin:0 0 8px">
       <strong>Cap the lens first.</strong> Captures dark frames, finds hot
@@ -145,7 +176,7 @@
     {% endif %}
   </div>
 
-  <div class="card">
+  <div class="card expert-only">
     <h2>Auto-tune (current sky)</h2>
     <p class="hint" style="margin:0 0 8px">
       Point the finder at a star field and wait for detection, then sweep
@@ -209,7 +240,7 @@
                    value="{{ solver_params.detect_kernel_sigma }}">
           </div>
         </label>
-        <label>
+        <label class="expert-only">
           Max axis ratio (trail rejection)
           <p class="hint" style="margin:0 0 4px">
             Reject elongated detections (satellites / aircraft). 0 = off,
@@ -224,7 +255,7 @@
                    value="{{ solver_params.detect_max_axis_ratio }}">
           </div>
         </label>
-        <label>
+        <label class="expert-only">
           Min stars to solve
           <p class="hint" style="margin:0 0 4px">
             Minimum detected stars before attempting a solve. Default: 8.
@@ -238,7 +269,7 @@
                    value="{{ solver_params.min_centroids }}">
           </div>
         </label>
-        <label>
+        <label class="expert-only">
           Max solve stars
           <p class="hint" style="margin:0 0 4px">
             Cap on centroids passed to the solver (brightest first). Lower =
@@ -255,7 +286,7 @@
           </div>
         </label>
         {% if match_params %}
-        <label>
+        <label class="expert-only">
           Match radius (fraction of FOV)
           <p class="hint" style="margin:0 0 4px">
             Catalog-match tolerance. Larger = more permissive. Range
@@ -270,7 +301,7 @@
                    value="{{ match_params.match_radius }}">
           </div>
         </label>
-        <label>
+        <label class="expert-only">
           Match threshold (log scale)
           <p class="hint" style="margin:0 0 4px">
             Max false-positive probability accepted. Lower = stricter. Range
@@ -286,7 +317,7 @@
           </div>
         </label>
         {% endif %}
-        <label>
+        <label class="expert-only">
           Solve timeout (ms)
           <p class="hint" style="margin:0 0 4px">
             Maximum time the solver may spend per frame. Default: 1500 ms.
@@ -300,7 +331,7 @@
                    value="{{ solver_params.solve_timeout_ms }}">
           </div>
         </label>
-        <label>
+        <label class="expert-only">
           Uncalibrated FOV tolerance (°)
           <p class="hint" style="margin:0 0 4px">
             Blind-search FOV window used before calibration. Smaller = faster

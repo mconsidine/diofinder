@@ -278,7 +278,10 @@ def bgtest_set():
     r = _safe_call("solver_params_set", params)
     if not r.ok:
         return r.error, 500
-    return redirect(url_for("bgtest_page"))
+    nxt = request.form.get("next") or "bgtest_page"
+    if nxt not in ("bgtest_page", "camera_page"):
+        nxt = "bgtest_page"
+    return redirect(url_for(nxt))
 
 
 @app.route("/api/bgcache")

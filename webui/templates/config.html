@@ -147,8 +147,9 @@
   {% endif %}
 </div>
 
+{% set novice_sections = ['Camera', 'Optics / FOV', 'Observer Location'] %}
 {% for section in sections %}
-<div class="card" style="margin-bottom:1rem;">
+<div class="card{% if section.name not in novice_sections %} expert-only{% endif %}" style="margin-bottom:1rem;">
   <h3 style="margin:0 0 10px 0; font-size:1rem;">{{ section.name }}</h3>
   <table class="config-table">
     <tbody>
