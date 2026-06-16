@@ -296,14 +296,43 @@ New keys (this release):
 | `auto_exposure_enabled` | `true` | **Flipped to ON** this release. |
 | `watchdog_enabled` | `true` | Solver-hang watchdog (comms thread). |
 | `watchdog_timeout_s` | `30.0` | Staleness before the solver is declared hung. |
+| `extractor_backend` | `sycamore` | Centroid extractor: `sycamore` (matched filter + bg_cache) or `tetra3` (AstroKeith's olive-solve `get_centroids_from_image`). Live-mutable; set by the Keith preset. |
 
 ---
 
 ## Seeing presets
 
-`efinder/seeing.py` holds two flat preset tables, `SEEING_PRESETS["good"]` and
-`["bad"]`. Each key in a preset is *also* an individually adjustable config
-key, so applying a preset is exactly equivalent to setting each by hand.
+`efinder/seeing.py` holds three flat preset tables — `SEEING_PRESETS["good"]`,
+`["bad"]`, and `["keith"]`. Each key in a preset is *also* an individually
+adjustable config key, so applying a preset is exactly equivalent to setting
+each by hand. All three presets carry the **same key set** so a toggle fully
+re-tunes the pipeline (including resetting `extractor_backend`).
+
+**"Keith" preset / `tetra3` extractor backend.** Keith is an exact re-creation
+of the AstroKeith `eFinder_cli` `original`-branch pipeline: it sets
+`extractor_backend="tetra3"`, which routes detection through the olive-solve
+binding's `get_centroids_from_image_fast` (local_mean background + global-RMS
+noise + sigma threshold, *no* matched filter, *no* temporal cache, *no*
+hot-pixel — `downsample=1`, `min_area=5`, `max_area=100`) instead of sycamore +
+`bg_cache`. The tetra3 extractor returns `[row, col]` centroids directly (no x/y
+swap, unlike sycamore). It is **capability-probed** in `solver_proc` via
+`hasattr(solver_t3, "get_centroids_from_image_fast")` — if the installed
+olive-solve wheel was built without the `extractor` feature (it is on by
+default), detection falls back to sycamore and warns once. Keith is the
+**baseline to improve upon**, not the recommended default.
+
+**Diagnostics / runtime reproduction.** Live solves and the diagnostic scripts
+can diverge (the classic "fails live, solves in diag"): `diag_solve.py`
+historically extracted at `bin=1` with sycamore defaults and the *loose* config
+FOV tolerance, while the live solver uses `cfg.detect_bin` (2), the temporal
+cache, the *calibrated* (tight) FOV tolerance, the config solve timeout, and an
+IMU attitude hint. Two aids close the gap: (1) `debug_collect` writes
+`effective_params.json` (live `solver_params_get` / `match_params_get` /
+`bg_cache_status` / `seeing_get` + the calibrated FOV estimate & tolerance
+actually in force) into the bundle; (2) `diag_solve.py --match-runtime` reads
+those knobs (detect_bin, kernel_sigma, noise_mode, bg_mode, max_axis_ratio,
+`extractor_backend`) and reproduces the live pipeline (`--bin` / `--backend`
+override individually).
 
 * `seeing_set {"mode": "good"|"bad"}` (comms maint): writes every preset key to
   `shared_cfg` (live solver/auto-exposure keys), switches the solver database

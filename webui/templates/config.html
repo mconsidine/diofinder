@@ -72,6 +72,12 @@
     <button type="submit" class="btn"
             style="{{ 'background:#cc6600;color:#fff;' if smode == 'bad' else '' }}">Bad</button>
   </form>
+  <form method="post" action="{{ url_for('seeing_set') }}" style="display:inline;margin-left:4px;">
+    <input type="hidden" name="mode" value="keith">
+    <input type="hidden" name="next" value="config_page">
+    <button type="submit" class="btn"
+            style="{{ 'background:#7755cc;color:#fff;' if smode == 'keith' else '' }}">Keith</button>
+  </form>
   <p class="hint" style="margin-top:6px;">
     Applying a preset loads the factory values for the detection / solve /
     exposure keys it controls (live, and persisted). A plain toggle always uses

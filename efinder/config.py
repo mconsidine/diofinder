@@ -90,6 +90,18 @@ class Config:
     # agrees with what devices actually run.
     detect_sigma: float = 5.0
 
+    # Centroid extractor backend (live-mutable via shared_cfg / seeing preset):
+    #   "sycamore" — the default matched-filter extractor (bg_cache + temporal
+    #                cache + hot-pixel; all the diofinder detection knobs apply).
+    #   "tetra3"   — AstroKeith's exact eFinder_cli extractor via the olive-solve
+    #                tetra3 get_centroids_from_image (local_mean bg + global-RMS
+    #                noise + sigma threshold, no matched filter, no temporal
+    #                cache). Used by the "Keith" seeing preset as a baseline.
+    # The tetra3 backend is capability-probed at runtime; if the installed
+    # olive-solve wheel lacks the extractor feature, detection falls back to
+    # sycamore and logs a warning.
+    extractor_backend: str = "sycamore"
+
     # Detection binning passed to star_detect. 2 = 2x2-binned detection:
     # ~2-3x faster extraction and lower noise; centroids remain full-res via
     # centroid_full_res. Set 1 only if faint-star recall measurably suffers

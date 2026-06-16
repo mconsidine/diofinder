@@ -201,6 +201,8 @@ class _SolverState:
         self.frames_full = 0
         self.tracking_recover_fail = 0
         self.tracking_enabled = bool(getattr(cfg, "tracking_enabled", False))
+        # Latch so the "tetra3 extractor unavailable" fallback warns only once.
+        self.tetra3_backend_warned = False
 
 
 def _handle_solver_cmd(cmd, calibrator, polar,
@@ -793,6 +795,9 @@ def solver_main(slots, latest_solution, shared_cfg,
             max_axis_ratio = float("inf") if _mar <= 0.0 else _mar
             local_noise = bool(
                 shared_cfg.get("detect_local_noise", cfg.detect_local_noise))
+            extractor_backend = str(
+                shared_cfg.get("extractor_backend",
+                               getattr(cfg, "extractor_backend", "sycamore")))
 
             # --- Tracking-mode gate ------------------------------------------
             # Decide whether THIS frame is served by ROI tracking. The whole
@@ -873,25 +878,67 @@ def solver_main(slots, latest_solution, shared_cfg,
                         tracking_prev_xy = []
 
                 if not served_by_tracking:
-                    _raw = bg_cache.detect(
-                        frame_buf,
-                        sigma=sigma,
-                        bg_mode=bg_mode,
-                        tophat_radius=tophat_radius,
-                        max_axis_ratio=max_axis_ratio,
-                        bg_block_size=bg_block_size,
-                        uniform_filter_size=uniform_filter_size,
-                        noise_mode=noise_mode,
-                        kernel_sigma=kernel_sigma,
-                        local_noise=local_noise,
-                    )
-                    # sycamore returns (x=col, y=row, brightness, peak).
-                    # tetra3 solve_from_centroids expects (row, col) = (y, x).
-                    # Must be float64: Rust PyO3 binding rejects float32.
-                    centroids = (
-                        np.array([[s[1], s[0]] for s in _raw], dtype=np.float64)
-                        if _raw else None
-                    )
+                    _t3 = getattr(state, "solver_t3", None) if state else None
+                    use_tetra3 = (
+                        extractor_backend == "tetra3"
+                        and _t3 is not None
+                        and hasattr(_t3, "get_centroids_from_image_fast"))
+                    if extractor_backend == "tetra3" and not use_tetra3:
+                        # Requested but unavailable (olive-solve wheel built
+                        # without the extractor feature) -> fall back to
+                        # sycamore, but only warn once to avoid log spam.
+                        if not state.tetra3_backend_warned:
+                            log.warning(
+                                "extractor_backend=tetra3 requested but the "
+                                "olive-solve extractor is unavailable; using "
+                                "sycamore. Rebuild the wheel with --features "
+                                "extractor.")
+                            state.tetra3_backend_warned = True
+                    if use_tetra3:
+                        # AstroKeith's exact extractor: tetra3
+                        # get_centroids_from_image (no matched filter, no
+                        # temporal cache, no bg_cache). Returns [y, x] = (row,
+                        # col) already, so NO axis swap (unlike sycamore).
+                        sigma_mode = ("global_root_square"
+                                      if noise_mode == "global_rms"
+                                      else "local_median_abs")
+                        _opts = dict(
+                            downsample=1,
+                            sigma=float(sigma),
+                            filtsize=int(uniform_filter_size) or 25,
+                            bg_sub_mode="local_mean",
+                            sigma_mode=sigma_mode,
+                            binary_open=True,
+                            min_area=5,
+                            max_area=100,
+                        )
+                        if max_axis_ratio != float("inf"):
+                            _opts["max_axis_ratio"] = max_axis_ratio
+                        _yx = _t3.get_centroids_from_image_fast(
+                            frame_buf, **_opts)
+                        centroids = (
+                            np.asarray(_yx, dtype=np.float64)
+                            if _yx is not None and len(_yx) else None)
+                    else:
+                        _raw = bg_cache.detect(
+                            frame_buf,
+                            sigma=sigma,
+                            bg_mode=bg_mode,
+                            tophat_radius=tophat_radius,
+                            max_axis_ratio=max_axis_ratio,
+                            bg_block_size=bg_block_size,
+                            uniform_filter_size=uniform_filter_size,
+                            noise_mode=noise_mode,
+                            kernel_sigma=kernel_sigma,
+                            local_noise=local_noise,
+                        )
+                        # sycamore returns (x=col, y=row, brightness, peak).
+                        # tetra3 solve_from_centroids expects (row, col) = (y, x).
+                        # Must be float64: Rust PyO3 binding rejects float32.
+                        centroids = (
+                            np.array([[s[1], s[0]] for s in _raw], dtype=np.float64)
+                            if _raw else None
+                        )
             except Exception as e:
                 log.warning("centroid extraction raised: %s", e)
                 latest_solution.update(_empty_solution(peak=local_peak))

@@ -126,12 +126,20 @@
         <button type="submit" id="btn-seeing-bad" class="btn"
                 style="{{ 'background:#cc6600;color:#fff;' if smode == 'bad' else '' }}">Bad</button>
       </form>
+      <form method="post" action="{{ url_for('seeing_set') }}" style="display:inline;margin-left:4px;">
+        <input type="hidden" name="mode" value="keith">
+        <input type="hidden" name="next" value="dashboard">
+        <button type="submit" id="btn-seeing-keith" class="btn"
+                style="{{ 'background:#7755cc;color:#fff;' if smode == 'keith' else '' }}">Keith</button>
+      </form>
       <span id="seeing-drift" class="hint" style="margin-left:8px;"></span>
     </div>
     <p class="hint" style="margin-top:6px;">
       <strong>Good</strong>: steady dark skies (tight kernel, fast). <strong>Bad</strong>:
       poor seeing / light pollution (wider kernel, block background, longer
-      exposure + solve budget). Fine-tune individual values on the
+      exposure + solve budget). <strong>Keith</strong>: AstroKeith's exact
+      eFinder_cli extractor (tetra3, no matched filter) — a baseline for
+      comparison. Fine-tune individual values on the
       <a href="{{ url_for('config_page') }}">Config</a> page.
     </p>
     {% if seeing and seeing.presets %}
@@ -294,10 +302,12 @@ async function refreshSeeing() {
     const d = await r.json();
     if (!d.ok || !d.result) return;
     const mode = d.result.mode;
-    const good = document.getElementById('btn-seeing-good');
-    const bad  = document.getElementById('btn-seeing-bad');
+    const good  = document.getElementById('btn-seeing-good');
+    const bad   = document.getElementById('btn-seeing-bad');
+    const keith = document.getElementById('btn-seeing-keith');
     if (good) good.style.cssText = (mode === 'good') ? 'background:#1166ff;color:#fff;' : '';
     if (bad)  bad.style.cssText  = (mode === 'bad')  ? 'background:#cc6600;color:#fff;' : '';
+    if (keith) keith.style.cssText = (mode === 'keith') ? 'background:#7755cc;color:#fff;' : '';
     const drift = d.result.drift || {};
     const n = Object.keys(drift).length;
     const el = document.getElementById('seeing-drift');

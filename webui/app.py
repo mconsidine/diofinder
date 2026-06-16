@@ -1378,6 +1378,36 @@ def debug_collect():
         except Exception as e:
             zf.writestr("status.json", json.dumps({"error": str(e)}))
 
+        # ── Effective runtime conditions (so the bundle fully reproduces a
+        #    live solve) ──────────────────────────────────────────────────────
+        # The raw frame PNGs carry none of the detection/solve conditions the
+        # live solver applied; efinder.conf only carries the persisted file,
+        # not live shared_cfg overrides or the calibrated (vs. loose) FOV
+        # tolerance. Dump the *effective* knobs so diag_solve.py --match-runtime
+        # can re-create the exact pipeline on another Pi Zero.
+        try:
+            sp  = _safe_call("solver_params_get")
+            mp  = _safe_call("match_params_get")
+            bgc = _safe_call("bg_cache_status")
+            see = _safe_call("seeing_get")
+            calres = cal.result if cal.ok and cal.result else {}
+            eff = {
+                "solver_params": sp.result if sp.ok else {"error": sp.error},
+                "match_params":  mp.result if mp.ok else {"error": mp.error},
+                "bg_cache":      bgc.result if bgc.ok else {"error": bgc.error},
+                "seeing":        see.result if see.ok else {"error": see.error},
+                # The FOV estimate + tolerance ACTUALLY used by the live solve
+                # (calibrated tightens fov_max_error well below the loose conf
+                # value). These are the usual runtime-vs-diagnostic mismatch.
+                "fov_estimate_deg":   calres.get("committed_fov") or calres.get("fov_estimate"),
+                "fov_max_error_deg":  calres.get("fov_max_error_deg"),
+                "fov_calibrated":     calres.get("calibrated"),
+            }
+            zf.writestr("effective_params.json",
+                        json.dumps(eff, indent=2, default=str))
+        except Exception as e:
+            zf.writestr("effective_params.json", json.dumps({"error": str(e)}))
+
         # ── Journal ──────────────────────────────────────────────────────────
         try:
             j = subprocess.run(
