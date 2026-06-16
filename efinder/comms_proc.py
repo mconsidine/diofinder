@@ -319,8 +319,22 @@ _AT_BG_MODES = ("row_percentile", "block_percentile")
 _AT_W_SOLVE = 1.0      # per second of median solve time
 _AT_W_KERNEL = 0.30    # per unit kernel_sigma
 _AT_W_SIGMA = 0.05     # per unit detection sigma (subtracted -> larger is cheaper)
-_AT_BG_COST = {"row_percentile": 0.0, "line_median": 0.1,
-               "block_percentile": 0.25, "top_hat": 0.5}
+# Background-model cost for every sweepable bg_mode (cheaper background = lower
+# cost), roughly ordered by spatial work / per-frame expense. Modes not in the
+# default sweep are scored too, so a user-supplied bg_modes list is ranked
+# deliberately rather than via the fallback. NOTE: uniform_mean only matches its
+# reference (tetra3/olive-solve) behaviour with noise_mode="global_rms", which
+# auto_tune does not currently sweep — see the "future work" note in the
+# Auto-exposure / gain controller docs.
+_AT_BG_COST = {
+    "row_percentile": 0.0,
+    "line_median": 0.1,
+    "column_percentile": 0.15,
+    "block_percentile": 0.25,
+    "row_column_percentile": 0.3,
+    "uniform_mean": 0.35,
+    "top_hat": 0.5,
+}
 
 
 def _auto_tune_cost(row):
