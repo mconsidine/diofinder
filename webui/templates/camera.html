@@ -215,6 +215,22 @@
     <h2>Solver Parameters</h2>
     {% if solver_params %}
       <form method="post" action="{{ url_for('solver_params_set') }}">
+        <label class="expert-only">
+          Extractor backend
+          <p class="hint" style="margin:0 0 4px">
+            <code>sycamore</code> (matched filter + temporal cache) or
+            <code>tetra3</code> (AstroKeith's <code>get_centroids_from_image</code>).
+            Flips only the extractor, holding the solve params constant — for a
+            clean A/B against the Keith preset. Applies live; Apply &amp; save
+            persists.
+          </p>
+          {% set _eb = solver_params.extractor_backend or 'sycamore' %}
+          <select name="extractor_backend" id="backend_sel"
+                  onchange="applyBackend(this.value)">
+            <option value="sycamore" {{ 'selected' if _eb == 'sycamore' }}>sycamore (matched filter)</option>
+            <option value="tetra3" {{ 'selected' if _eb == 'tetra3' }}>tetra3 (AstroKeith)</option>
+          </select>
+        </label>
         <label>
           Detection sigma
           <p class="hint" style="margin:0 0 4px">
@@ -466,6 +482,7 @@ const applyMar     = debounce(v => applyParams({detect_max_axis_ratio: v}, 'solv
 const applyMinc    = debounce(v => applyParams({min_centroids: v},         'solver-status'), 400);
 const applyMaxStars= debounce(v => applyParams({max_solve_stars: v},       'solver-status'), 400);
 const applyFovErr  = debounce(v => applyParams({fov_max_error_deg: v},     'solver-status'), 400);
+function applyBackend(v) { applyParams({extractor_backend: v}, 'solver-status'); }
 const applyMradius = debounce(v => applyParams({match_radius: v},          'solver-status'), 400);
 const applyMthresh = debounce(v => applyParams({match_threshold: v},       'solver-status'), 400);
 

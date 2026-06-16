@@ -55,6 +55,7 @@ is far below one core), freeing CPU 1 as a third solver core. CPU affinity is se
 | `detect_bg_block_size` | int | comms (via maint) | solver, bg_cache |
 | `detect_uniform_filter_size` | int | comms (via maint) | solver |
 | `detect_noise_mode` | str (`mad`/`global_rms`) | comms (via maint) | solver |
+| `extractor_backend` | str (`sycamore`/`tetra3`) | comms (via maint `solver_params_set` / `seeing_set`) | solver |
 | `min_centroids` | int | comms (via maint / `seeing_set`) | solver |
 | `max_solve_stars` | int (4–200) | comms (via maint `solver_params_set`) | solver |
 | `fov_max_error_deg` | float (0.05–5.0) | comms (via maint `solver_params_set`) | solver (calibrator, loose/blind tolerance only) |
@@ -145,7 +146,9 @@ The maintenance socket is the internal RPC bus used by the web UI and
 
 Notable commands beyond the basics: `solver_params_get`/`solver_params_set`
 (sigma 0–20, kernel_sigma 1.0–4.0, max_axis_ratio 0=off/1.5–10.0, local_noise,
-bg mode/sizes, noise mode, min_centroids, max_solve_stars 4–200,
+bg mode/sizes, noise mode, `extractor_backend` sycamore/tetra3 (independent of
+the Keith preset — flip just the extractor for a clean A/B), min_centroids,
+max_solve_stars 4–200,
 fov_max_error_deg 0.05–5.0 (the loose blind-solve search tolerance; the
 calibrated tight tolerance is owned by the calibration machinery),
 solve_timeout_ms),
@@ -332,7 +335,12 @@ IMU attitude hint. Two aids close the gap: (1) `debug_collect` writes
 actually in force) into the bundle; (2) `diag_solve.py --match-runtime` reads
 those knobs (detect_bin, kernel_sigma, noise_mode, bg_mode, max_axis_ratio,
 `extractor_backend`) and reproduces the live pipeline (`--bin` / `--backend`
-override individually).
+override individually). `diag_solve.py --bundle <zip>` goes further: it replays a
+downloaded debug bundle **fully offline on any machine** — it reads the live
+knobs from the bundle's `effective_params.json` (the *calibrated* FOV tolerance
++ shared_cfg drift that `efinder.conf` alone misses), points `EFINDER_CONFIG` at
+the bundle's `efinder.conf`, and solves the bundle's `frame_*_raw.png`. The
+matching star database must be present locally (the bundle omits the `.npz`).
 
 * `seeing_set {"mode": "good"|"bad"}` (comms maint): writes every preset key to
   `shared_cfg` (live solver/auto-exposure keys), switches the solver database

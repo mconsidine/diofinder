@@ -69,7 +69,48 @@ ap.add_argument('--bin', type=int, choices=(1, 2, 4),
                 help='Detection binning (overrides config / --match-runtime)')
 ap.add_argument('--backend', choices=('sycamore', 'tetra3'),
                 help='Extractor backend (overrides config / --match-runtime)')
+ap.add_argument('--bundle', metavar='ZIP',
+                help='Replay a downloaded debug bundle (.zip) fully offline: '
+                     'reads the live knobs from effective_params.json (incl. the '
+                     'calibrated FOV tolerance + extractor_backend) and the raw '
+                     'frames from the zip. Implies --match-runtime. The matching '
+                     'star database must be present locally (the bundle omits the '
+                     '.npz).')
 args = ap.parse_args()
+
+
+# ── Optional: hydrate everything from a downloaded debug bundle ────────────────
+# Makes the diagnostic fully self-contained and reproducible on ANY machine — it
+# uses the knobs the solver actually applied (the calibrated FOV tolerance and
+# any live shared_cfg drift, which efinder.conf alone does not capture) and the
+# exact captured frames.
+_BUNDLE_EFF = {}
+_BUNDLE_FRAMES = []      # list of (label, path)
+if args.bundle:
+    import json as _json, os as _os, tempfile as _tf, zipfile as _zf
+    _bp = pathlib.Path(args.bundle)
+    if not _bp.exists():
+        print(f'  [FAIL] bundle not found: {_bp}'); sys.exit(1)
+    _bundle_tmp = _tf.TemporaryDirectory(prefix='efinder_bundle_')  # kept alive
+    try:
+        with _zf.ZipFile(str(_bp)) as _zfh:
+            _zfh.extractall(_bundle_tmp.name)
+    except Exception as e:
+        print(f'  [FAIL] could not read bundle {_bp.name}: {e}'); sys.exit(1)
+    _root = pathlib.Path(_bundle_tmp.name)
+    _conf = _root / 'efinder.conf'
+    if _conf.exists():
+        _os.environ['EFINDER_CONFIG'] = str(_conf)   # Stage 0 load_config picks it up
+    _effp = _root / 'effective_params.json'
+    if _effp.exists():
+        try:
+            _BUNDLE_EFF = _json.loads(_effp.read_text())
+        except Exception as e:
+            print(f'  [WARN] could not parse effective_params.json: {e}')
+    _BUNDLE_FRAMES = [(p.name, p) for p in sorted(_root.glob('frame_*_raw.png'))]
+    if not _BUNDLE_FRAMES:
+        print(f'  [FAIL] no frame_*_raw.png frames in {_bp.name}'); sys.exit(1)
+    args.match_runtime = True
 
 
 # ── Stage 0: Config & imports ─────────────────────────────────────────────────
@@ -98,9 +139,12 @@ try:
         bg_mode      = getattr(cfg, 'detect_bg_mode', 'row_percentile')
         _mar         = float(getattr(cfg, 'detect_max_axis_ratio', 0.0))
         backend      = getattr(cfg, 'extractor_backend', 'sycamore')
+        match_radius    = getattr(cfg, 'match_radius', None)
+        match_threshold = getattr(cfg, 'match_threshold', None)
     else:
         det_bin, kernel_sigma, noise_mode = 1, 1.5, 'mad'
         bg_mode, _mar, backend = 'row_percentile', 0.0, 'sycamore'
+        match_radius = match_threshold = None
     tag(PASS, cfg.summary())
 except Exception as e:
     tag(WARN, f'Config unavailable ({e}); using defaults')
@@ -114,8 +158,34 @@ except Exception as e:
     W, H    = 960, 760
     det_bin, kernel_sigma, noise_mode = 1, 1.5, 'mad'
     bg_mode, _mar, backend = 'row_percentile', 0.0, 'sycamore'
+    match_radius = match_threshold = None
 
-# Explicit CLI overrides win over config / --match-runtime.
+# A debug bundle is the source of truth for what the LIVE solver actually used:
+# the calibrated FOV tolerance + any shared_cfg drift that efinder.conf misses.
+if _BUNDLE_EFF:
+    _sp = _BUNDLE_EFF.get('solver_params') or {}
+    _mp = _BUNDLE_EFF.get('match_params') or {}
+    sigma        = float(_sp.get('detect_sigma', sigma))
+    kernel_sigma = float(_sp.get('detect_kernel_sigma', kernel_sigma))
+    noise_mode   = _sp.get('detect_noise_mode', noise_mode)
+    bg_mode      = _sp.get('detect_bg_mode', bg_mode)
+    backend      = _sp.get('extractor_backend', backend)
+    min_c        = int(_sp.get('min_centroids', min_c))
+    max_c        = int(_sp.get('max_solve_stars', max_c))
+    timeout      = int(_sp.get('solve_timeout_ms', timeout))
+    if _sp.get('detect_max_axis_ratio') is not None:
+        _mar = float(_sp['detect_max_axis_ratio'])
+    # FOV estimate + tolerance ACTUALLY in force at capture (calibrated, tight).
+    if _BUNDLE_EFF.get('fov_estimate_deg'):
+        fov = float(_BUNDLE_EFF['fov_estimate_deg'])
+    if _BUNDLE_EFF.get('fov_max_error_deg'):
+        fov_err = float(_BUNDLE_EFF['fov_max_error_deg'])
+    if _mp.get('match_radius') is not None:
+        match_radius = float(_mp['match_radius'])
+    if _mp.get('match_threshold') is not None:
+        match_threshold = float(_mp['match_threshold'])
+
+# Explicit CLI overrides win over config / bundle / --match-runtime.
 if args.bin:
     det_bin = args.bin
 if args.backend:
@@ -177,7 +247,15 @@ sep('Stage 2: Frame source')
 
 frames = []  # list of (label, uint8 ndarray)
 
-if args.live_shm:
+if args.bundle:
+    for _label, _p in _BUNDLE_FRAMES:
+        arr = np.array(PILImage.open(_p).convert('L'), dtype=np.uint8)
+        tag(PASS, f'{_label}: {arr.shape[1]}x{arr.shape[0]}  '
+                  f'peak={arr.max()}  mean={arr.mean():.1f}')
+        frames.append((_label, arr))
+    tag(INFO, f'{len(frames)} frame(s) from bundle {pathlib.Path(args.bundle).name}')
+
+elif args.live_shm:
     try:
         from multiprocessing import shared_memory, resource_tracker as _rt
         from efinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
@@ -229,6 +307,10 @@ base_kw = dict(
     fov_max_error=fov_err,
     solve_timeout=timeout,
 )
+if match_radius is not None:
+    base_kw['match_radius'] = match_radius
+if match_threshold is not None:
+    base_kw['match_threshold'] = match_threshold
 
 
 # ── Extraction helper ─────────────────────────────────────────────────────────

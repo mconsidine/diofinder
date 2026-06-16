@@ -632,7 +632,9 @@ def api_camera_set():
     _solver_float_keys = ("detect_sigma", "detect_kernel_sigma",
                           "detect_max_axis_ratio", "fov_max_error_deg")
     _solver_int_keys = ("solve_timeout_ms", "min_centroids", "max_solve_stars")
-    if any(k in data for k in _solver_float_keys + _solver_int_keys + ("detect_local_noise",)):
+    _solver_extra = ("detect_local_noise", "extractor_backend",
+                     "detect_bg_mode", "detect_noise_mode")
+    if any(k in data for k in _solver_float_keys + _solver_int_keys + _solver_extra):
         pargs = {"persist": False}
         for k in _solver_float_keys:
             if k in data:
@@ -648,6 +650,10 @@ def api_camera_set():
                     errors.append(f"{k} invalid: {e}")
         if "detect_local_noise" in data:
             pargs["detect_local_noise"] = bool(data["detect_local_noise"])
+        # String-valued solver knobs (validated daemon-side).
+        for k in ("extractor_backend", "detect_bg_mode", "detect_noise_mode"):
+            if k in data:
+                pargs[k] = str(data[k])
         if len(pargs) > 1:
             r = _safe_call("solver_params_set", pargs)
             if r.ok:
@@ -679,6 +685,8 @@ def solver_params_set():
     # The single "Apply & save" button always applies live AND persists.
     persist = True
     pargs   = {"persist": persist}
+    if request.form.get("extractor_backend"):
+        pargs["extractor_backend"] = request.form["extractor_backend"].strip().lower()
     if request.form.get("detect_sigma"):
         try:
             pargs["detect_sigma"] = float(request.form["detect_sigma"])
