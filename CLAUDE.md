@@ -7,6 +7,10 @@
 - **OS**: Debian GNU/Linux 13 "Trixie" (Pi OS Trixie Lite)
 - **Python**: 3.11+, installed at `/opt/efinder/`
 - **Service**: `systemd` unit `efinder.service`, managed with `sudo systemctl {start,stop,restart,status} efinder`
+- **Host serial tether**: the USB CDC-ACM serial device enumerates as
+  `/dev/ttyACM0` on Linux but **`/dev/tty.usbmodem*`** on macOS (digits vary per
+  port/session; `ls /dev/tty.usbmodem*` to find it). There is no `/dev/ttyACM0`
+  on macOS.
 
 ---
 
