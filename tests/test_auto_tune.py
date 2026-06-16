@@ -23,7 +23,9 @@ if "star_detect" not in sys.modules:
     _stub.set_num_threads = lambda n: None
     sys.modules["star_detect"] = _stub
 
-from efinder.comms_proc import _auto_tune_select, _auto_tune_cost
+from efinder.comms_proc import (
+    _auto_tune_select, _auto_tune_cost, _AT_BG_COST,
+)
 
 
 def _row(bg="row_percentile", kernel=1.5, sigma=5.0,
@@ -59,6 +61,25 @@ class AutoTuneSelectTests(unittest.TestCase):
         row_pct = _row(bg="row_percentile")
         block = _row(bg="block_percentile")
         self.assertLess(_auto_tune_cost(row_pct), _auto_tune_cost(block))
+
+    def test_every_sweepable_bg_mode_is_scored(self):
+        # Each background mode auto_tune can evaluate must have an explicit cost,
+        # so a user-supplied bg_modes list is ranked deliberately rather than via
+        # the .get() fallback. uniform_mean in particular was previously missing.
+        sweepable = {"row_percentile", "line_median", "column_percentile",
+                     "row_column_percentile", "block_percentile",
+                     "uniform_mean", "top_hat"}
+        self.assertTrue(sweepable.issubset(_AT_BG_COST.keys()),
+                        msg=f"missing: {sweepable - set(_AT_BG_COST)}")
+
+    def test_uniform_mean_scored_between_block_and_tophat(self):
+        # uniform_mean (full-image SAT mean, cache-incompatible) should cost more
+        # than the per-tile block model but less than the morphological top-hat.
+        um = _row(bg="uniform_mean")
+        block = _row(bg="block_percentile")
+        top = _row(bg="top_hat")
+        self.assertLess(_auto_tune_cost(block), _auto_tune_cost(um))
+        self.assertLess(_auto_tune_cost(um), _auto_tune_cost(top))
 
     def test_match_rate_floor_excludes(self):
         # High matches but rate below the floor -> not feasible.

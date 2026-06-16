@@ -494,8 +494,19 @@ in `tests/test_auto_tune.py`.
 * **Merit**: among candidates clearing the match-rate floor and ≥ 80 % of the
   match target, minimize `w·solve_ms + w·kernel_sigma − w·sigma + bg_cost` — i.e.
   prefer fast solves, a tight kernel, a high sigma, and a cheap background.
+  `_AT_BG_COST` scores **every** sweepable `bg_mode` (so a user-supplied
+  `bg_modes` list is ranked deliberately, not via the fallback).
   `detect_bin` (restart) and `star_db` (heavy reload) are deliberately **not**
-  swept.
+  swept. The **default** `bg_modes` are just the two the seeing presets ship
+  (`row_percentile`, `block_percentile`) to keep the sweep bounded; others
+  (`uniform_mean`, `column_percentile`, …) can be opted in via the `bg_modes`
+  arg.
+* **Future work (TODO)**: `auto_tune` does **not** sweep `noise_mode`. Because
+  `uniform_mean` only matches its reference (tetra3/olive-solve) behaviour when
+  paired with `noise_mode="global_rms"`, it is scored but kept out of the
+  *default* sweep — evaluating it fairly would mean coupling `noise_mode` into
+  the search (a larger change). Add that pairing if/when the tetra3-reference
+  pipeline becomes a default tuning target.
 * **commit=true** applies the winner live (`config.save_keys` + `shared_cfg` +
   `_invalidate_solver_cache`) **and** saves it as the tuned mode's override
   (`source="auto_tune"`), so the factory preset stays untouched and `seeing_get`
