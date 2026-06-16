@@ -132,7 +132,7 @@ def _empty_solution(stars=0, peak=0, noise=0.0, solve_ms=0.0, status=0):
 
 
 def _filled_solution(*, ra, dec, roll, fov, stars, matches,
-                     peak, noise, solve_ms, status, bright=None):
+                     peak, noise, solve_ms, status, star=None):
     sol = {
         "ra_deg": float(ra), "dec_deg": float(dec),
         "roll_deg": float(roll), "fov_deg": float(fov),
@@ -142,10 +142,11 @@ def _filled_solution(*, ra, dec, roll, fov, stars, matches,
         "status": int(status),
         "epoch_monotonic": time.monotonic(),
     }
-    if bright:
-        sol["bright_name"] = bright["name"]
-        sol["bright_desig"] = bright["desig"]
-        sol["bright_mag"] = bright["mag"]
+    if star:
+        sol["star_name"] = star["name"]
+        sol["star_desig"] = star["desig"]
+        sol["star_mag"] = star["mag"]
+        sol["star_sep_deg"] = star["sep_deg"]
     return sol
 
 
@@ -1079,22 +1080,21 @@ def solver_main(slots, latest_solution, shared_cfg,
                 dec_out = dec_target[0] if hasattr(dec_target, "__len__") else dec_target
 
             n_matches = soln.get("Matches", 0)
-            # Label the brightest cataloged star in the frame (display only).
-            # Uses the solved frame center, not the boresight target offset.
-            bright = None
+            # Name the cataloged star nearest the boresight (display only).
+            # ra_out/dec_out is the boresight sky coordinate (target pixel).
+            star = None
             if star_names is not None:
                 try:
-                    bright = star_names.brightest(
-                        soln["RA"], soln["Dec"], measured_fov)
+                    star = star_names.nearest(ra_out, dec_out, measured_fov)
                 except Exception as e:
-                    log.debug("Brightest-star lookup failed: %s", e)
+                    log.debug("Nearest-star lookup failed: %s", e)
             latest_solution.update(_filled_solution(
                 ra=ra_out, dec=dec_out,
                 roll=soln.get("Roll", 0.0), fov=measured_fov,
                 stars=n_stars, matches=n_matches,
                 peak=local_peak, noise=0.0,
                 solve_ms=elapsed_ms, status=MATCH_FOUND,
-                bright=bright,
+                star=star,
             ))
             _imu_update_reference(
                 shared_cfg, ra_out, dec_out, soln.get("Roll", 0.0))

@@ -1,8 +1,9 @@
-"""Brightest-star naming for the solved field.
+"""Identify the cataloged star nearest the boresight in a solved field.
 
 Loads the compact ``star_names.csv`` catalog published by astro_databases
-(columns: ``ra_deg, dec_deg, mag, name, desig``) and, given a solved
-pointing, returns the brightest cataloged star within the field of view.
+(columns: ``ra_deg, dec_deg, mag, name, desig``) and, given the solved
+boresight pointing, returns the nearest cataloged star — i.e. the star the
+crosshair is on (or closest to).
 
 The catalog is small (~15.6k stars to mag 7) so the lookup is a single
 vectorized dot-product over precomputed unit vectors — no scipy / KD-tree
@@ -19,9 +20,10 @@ import numpy as np
 
 log = logging.getLogger("efinder.solver")
 
-# Search radius as a fraction of the published FOV (the wider frame dimension).
-# The frame is 960x760; half its diagonal is ~0.64 of the 960-axis FOV, so a
-# star anywhere in the frame falls within this cone around the center.
+# Only consider stars within this fraction of the FOV (wider frame dimension)
+# of the boresight, so a pointing at near-blank sky reports nothing rather
+# than naming a star off in a far corner. The frame is 960x760; half its
+# diagonal is ~0.64 of the 960-axis FOV, so this still spans the whole frame.
 _RADIUS_FACTOR = 0.65
 
 
@@ -58,10 +60,11 @@ class StarNames:
             raise ValueError(f"no usable rows in {path}")
         return cls(np.array(ra), np.array(dec), np.array(mag), names, desigs)
 
-    def brightest(self, ra_deg: float, dec_deg: float, fov_deg: float):
-        """Return the brightest star within the field, or None.
+    def nearest(self, ra_deg: float, dec_deg: float, fov_deg: float):
+        """Return the cataloged star nearest the given pointing, or None.
 
-        Result: ``{"name": str, "desig": str, "mag": float}``.
+        Result: ``{"name": str, "desig": str, "mag": float, "sep_deg": float}``
+        where sep_deg is the angular separation from the pointing.
         """
         ra = math.radians(ra_deg)
         dec = math.radians(dec_deg)
@@ -70,16 +73,19 @@ class StarNames:
             [cos_dec * math.cos(ra), cos_dec * math.sin(ra), math.sin(dec)]
         )
         cos_radius = math.cos(math.radians(fov_deg * _RADIUS_FACTOR))
-        dots = self._xyz @ b
+        dots = self._xyz @ b  # cosine of angular separation
         within = dots >= cos_radius
         if not within.any():
             return None
         idx = np.nonzero(within)[0]
-        best = idx[np.argmin(self._mag[idx])]
+        # Nearest = largest cosine = smallest angle.
+        best = idx[np.argmax(dots[idx])]
+        sep_deg = math.degrees(math.acos(min(1.0, max(-1.0, float(dots[best])))))
         return {
             "name": self._names[best],
             "desig": self._desigs[best],
             "mag": round(float(self._mag[best]), 2),
+            "sep_deg": round(sep_deg, 2),
         }
 
 
