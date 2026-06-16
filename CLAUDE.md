@@ -576,6 +576,7 @@ set in `efinder.conf`.
 | `/var/lib/efinder/` | Star databases (`.npz`), debug ZIPs, saved frames |
 | `/var/lib/efinder/hot_pixel_mask.npz` | Hot-pixel mask (from `dark_capture`) |
 | `/var/lib/efinder/seeing_overrides.json` | Saved Good/Bad seeing overrides (factory presets stay immutable) |
+| `/var/lib/efinder/star_names.csv` | Brightest-star naming catalog (from astro_databases release); powers the Camera-page "Brightest star" label. Optional — missing file disables naming. Refreshed by `efinder-db-update`. |
 | `/var/lib/efinder/captures/` | PNG captures when `save_failed_frames=true` (100 MB cap, oldest evicted) |
 | `/run/efinder/maint.sock` | Maintenance Unix socket |
 | `/usr/local/bin/efinder-ctl` | CLI wrapper for the maint socket |

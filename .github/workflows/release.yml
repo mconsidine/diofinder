@@ -156,6 +156,34 @@ jobs:
           python3 build/generate_database.py
           ls -lh build/output/solver_database.npz
 
+      - name: Fetch star-names catalog from astro_databases release
+        # Always fetched (independent of the FOV-driven database path) so both
+        # prebuilt and custom-FOV images carry the brightest-star labels.
+        # Non-fatal: a missing catalog just disables the Camera-page label.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DB_TAG: ${{ inputs.db_tag || vars.DB_TAG || '' }}
+        run: |
+          mkdir -p build/output names-download
+          if [ -n "$DB_TAG" ]; then
+            gh release download "$DB_TAG" --repo mconsidine/astro_databases \
+              --pattern 'star_names.csv' --pattern 'manifest.json' --dir names-download || true
+          else
+            gh release download --repo mconsidine/astro_databases \
+              --pattern 'star_names.csv' --pattern 'manifest.json' --dir names-download || true
+          fi
+          if [ -f names-download/star_names.csv ] && [ -f names-download/manifest.json ]; then
+            WANT=$(python3 -c "import json; print(json.load(open('names-download/manifest.json'))['outputs'].get('star_names',{}).get('sha256',''))")
+            GOT=$(sha256sum names-download/star_names.csv | cut -d' ' -f1)
+            if [ -n "$WANT" ] && [ "$GOT" != "$WANT" ]; then
+              echo "::error::star_names.csv SHA-256 mismatch"; exit 1
+            fi
+            mv names-download/star_names.csv build/output/star_names.csv
+            echo "Star-names catalog: $(wc -l < build/output/star_names.csv) lines"
+          else
+            echo "::warning::No star_names.csv in the astro_databases release; brightest-star naming will be disabled"
+          fi
+
       - name: Run image build
         env:
           EFINDER_VERSION: ${{ steps.ver.outputs.tag }}
@@ -165,6 +193,7 @@ jobs:
           EFINDER_REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
           EFINDER_GIT_REF: ${{ github.ref_name }}
           EFINDER_SOLVER_DB: ${{ github.workspace }}/build/output/solver_database.npz
+          EFINDER_STAR_NAMES: ${{ github.workspace }}/build/output/star_names.csv
         run: |
           sudo -E bash build/build-image.sh
 

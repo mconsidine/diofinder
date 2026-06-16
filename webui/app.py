@@ -99,6 +99,9 @@ def _format_solution(sol):
         "peak":      sol["peak"],
         "noise":     sol.get("noise", 0.0),
         "solve_ms":  sol["solve_ms"],
+        "bright_name":  sol.get("bright_name"),
+        "bright_desig": sol.get("bright_desig"),
+        "bright_mag":   sol.get("bright_mag"),
     }
 
 

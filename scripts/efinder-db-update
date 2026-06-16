@@ -91,6 +91,27 @@ else
   LOG "No deep database asset in this release (skipping)"
 fi
 
+# Refresh the star-names catalog from the same release (optional; powers the
+# brightest-star label on the Camera page). Verified against the manifest if
+# present; failures here are non-fatal.
+NAMES_PATH=/var/lib/efinder/star_names.csv
+if curl -fsSL "$BASE/star_names.csv" -o "$TMPDIR/star_names.csv" 2>/dev/null; then
+  NWANT=$(python3 -c "
+import json
+m = json.load(open('$TMPDIR/manifest.json'))
+print(m['outputs'].get('star_names', {}).get('sha256', ''))
+" 2>/dev/null) || NWANT=""
+  NGOT=$(sha256sum "$TMPDIR/star_names.csv" | cut -d' ' -f1)
+  if [ -n "$NWANT" ] && [ "$NWANT" != "$NGOT" ]; then
+    LOG "WARNING: star_names.csv SHA-256 mismatch; keeping existing catalog"
+  else
+    install -m 644 -o efinder -g efinder "$TMPDIR/star_names.csv" "$NAMES_PATH"
+    LOG "Installed star-names catalog at $NAMES_PATH"
+  fi
+else
+  LOG "No star_names.csv on this release; leaving any existing catalog in place"
+fi
+
 LOG "Restarting efinder service..."
 systemctl restart efinder
 LOG "Done. Previous database kept at $DB_PATH.bak"
