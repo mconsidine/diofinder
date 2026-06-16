@@ -132,8 +132,8 @@ def _empty_solution(stars=0, peak=0, noise=0.0, solve_ms=0.0, status=0):
 
 
 def _filled_solution(*, ra, dec, roll, fov, stars, matches,
-                     peak, noise, solve_ms, status):
-    return {
+                     peak, noise, solve_ms, status, star=None):
+    sol = {
         "ra_deg": float(ra), "dec_deg": float(dec),
         "roll_deg": float(roll), "fov_deg": float(fov),
         "stars": int(stars), "matches": int(matches),
@@ -142,6 +142,12 @@ def _filled_solution(*, ra, dec, roll, fov, stars, matches,
         "status": int(status),
         "epoch_monotonic": time.monotonic(),
     }
+    if star:
+        sol["star_name"] = star["name"]
+        sol["star_desig"] = star["desig"]
+        sol["star_mag"] = star["mag"]
+        sol["star_sep_deg"] = star["sep_deg"]
+    return sol
 
 
 def _drain_align_queue(q, response_q):
@@ -581,6 +587,11 @@ def solver_main(slots, latest_solution, shared_cfg,
     except Exception as e:
         log.error("Failed to load olive-solve: %s", e)
         raise RuntimeError(f"olive-solve unavailable: {e}") from e
+
+    # ---- Load star-names catalog (optional display overlay) ----------------
+    # Never fatal: a missing/bad catalog just disables brightest-star naming.
+    from efinder import star_names as _star_names_mod
+    star_names = _star_names_mod.try_load(cfg.star_names_path)
 
     # ---- Load sycamore extractor -------------------------------------------
     try:
@@ -1069,12 +1080,21 @@ def solver_main(slots, latest_solution, shared_cfg,
                 dec_out = dec_target[0] if hasattr(dec_target, "__len__") else dec_target
 
             n_matches = soln.get("Matches", 0)
+            # Name the cataloged star nearest the boresight (display only).
+            # ra_out/dec_out is the boresight sky coordinate (target pixel).
+            star = None
+            if star_names is not None:
+                try:
+                    star = star_names.nearest(ra_out, dec_out, measured_fov)
+                except Exception as e:
+                    log.debug("Nearest-star lookup failed: %s", e)
             latest_solution.update(_filled_solution(
                 ra=ra_out, dec=dec_out,
                 roll=soln.get("Roll", 0.0), fov=measured_fov,
                 stars=n_stars, matches=n_matches,
                 peak=local_peak, noise=0.0,
                 solve_ms=elapsed_ms, status=MATCH_FOUND,
+                star=star,
             ))
             _imu_update_reference(
                 shared_cfg, ra_out, dec_out, soln.get("Roll", 0.0))

@@ -295,6 +295,18 @@ else
   WARN "No star database available; image will ship without one"
 fi
 
+# Stage the star-names catalog (downloaded from the astro_databases release
+# by release.yml and passed in via EFINDER_STAR_NAMES). Optional.
+CHROOT_NAMES_PATH=""
+if [ -n "${EFINDER_STAR_NAMES:-}" ] && [ -f "${EFINDER_STAR_NAMES}" ]; then
+  LOG "Staging star-names catalog ($(du -sh "${EFINDER_STAR_NAMES}" | cut -f1))"
+  mkdir -p "$ROOT/tmp/star-names"
+  cp "${EFINDER_STAR_NAMES}" "$ROOT/tmp/star-names/star_names.csv"
+  CHROOT_NAMES_PATH="/tmp/star-names/star_names.csv"
+else
+  WARN "No star-names catalog available; brightest-star naming disabled"
+fi
+
 cat > "$ROOT/tmp/run-install.sh" << EOSH
 #!/bin/bash
 set -euo pipefail
@@ -304,6 +316,7 @@ export EFINDER_VERSION="${EFINDER_VERSION}"
 export EFINDER_REPO_URL="${EFINDER_REPO_URL}"
 export EFINDER_GIT_REF="${EFINDER_GIT_REF}"
 ${CHROOT_DB_PATH:+export EFINDER_SOLVER_DB="${CHROOT_DB_PATH}"}
+${CHROOT_NAMES_PATH:+export EFINDER_STAR_NAMES="${CHROOT_NAMES_PATH}"}
 
 cd /tmp/efinder-src
 bash scripts/install.sh

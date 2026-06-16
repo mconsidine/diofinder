@@ -171,6 +171,9 @@ class Config:
     # first time it switches away to the deep db, so the "standard" token never
     # resolves circularly to the (persisted, mutated) solver_db.
     star_db_standard: str = ""
+    # Star-names catalog (star_names.csv from astro_databases) used to label
+    # the brightest star in a solved field. Missing file → naming disabled.
+    star_names_path: str = "/var/lib/efinder/star_names.csv"
     fov_max_error_deg: float = 1.0
     min_centroids: int = 8
     max_solve_stars: int = 50

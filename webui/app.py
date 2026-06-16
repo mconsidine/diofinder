@@ -99,6 +99,10 @@ def _format_solution(sol):
         "peak":      sol["peak"],
         "noise":     sol.get("noise", 0.0),
         "solve_ms":  sol["solve_ms"],
+        "star_name":    sol.get("star_name"),
+        "star_desig":   sol.get("star_desig"),
+        "star_mag":     sol.get("star_mag"),
+        "star_sep_deg": sol.get("star_sep_deg"),
     }
 
 

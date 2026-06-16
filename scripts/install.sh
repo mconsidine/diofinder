@@ -257,6 +257,18 @@ if [ ! -f "$SOLVER_DB" ]; then
   fi
 fi
 
+# --- Install star-names catalog ----------------------------------------------
+# Downloaded from the astro_databases release by release.yml and staged into
+# the chroot by build-image.sh as EFINDER_STAR_NAMES. Optional; a missing
+# catalog just disables the brightest-star label on the Camera page.
+
+STAR_NAMES="/var/lib/efinder/star_names.csv"
+if [ -n "${EFINDER_STAR_NAMES:-}" ] && [ -f "${EFINDER_STAR_NAMES}" ]; then
+  LOG "Installing star-names catalog ($(du -sh "${EFINDER_STAR_NAMES}" | cut -f1))"
+  cp "${EFINDER_STAR_NAMES}" "$STAR_NAMES"
+  chown "${EFINDER_USER}:${EFINDER_USER}" "$STAR_NAMES"
+fi
+
 # --- Download solver test images (fresh install only) ------------------------
 # In chroot/image-build mode these are downloaded by build-image.sh after
 # the chroot exits, so they are already present in the image.

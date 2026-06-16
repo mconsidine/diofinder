@@ -21,6 +21,7 @@
            style="max-width:100%; height:auto; display:block; background:#111;">
     </div>
     <dl class="stats" style="margin-top:8px;" id="solve-stats">
+      <dt>Centered star</dt><dd id="stat-bright">—</dd>
       <dt>Stars detected</dt><dd id="stat-stars">—</dd>
       <dt>Matched</dt>      <dd id="stat-matches">—</dd>
       <dt>Solve time</dt>   <dd id="stat-time">—</dd>
@@ -384,10 +385,26 @@ async function refreshFrame() {
     const d = await r.json();
     if (!d.status || !d.status.ok || !d.status.result) return;
     const sol = d.status.result.solution || {};
+    const bright  = document.getElementById('stat-bright');
     const stars   = document.getElementById('stat-stars');
     const matched = document.getElementById('stat-matches');
     const time_el = document.getElementById('stat-time');
     const status  = document.getElementById('stat-status');
+    if (bright) {
+      if (sol.solved && sol.star_name) {
+        let txt = sol.star_name;
+        if (sol.star_desig) txt += ' (' + sol.star_desig + ')';
+        if (sol.star_mag != null) txt += ' · mag ' + sol.star_mag.toFixed(1);
+        // Flag when the named star is well off the crosshair (blank pointing).
+        if (sol.star_sep_deg != null && sol.star_sep_deg >= 1.0)
+          txt += ' · ' + sol.star_sep_deg.toFixed(1) + '° off';
+        bright.textContent = txt;
+        bright.style.color = '#cda434';
+      } else {
+        bright.textContent = '—';
+        bright.style.color = '';
+      }
+    }
     if (stars)   stars.textContent   = sol.stars   != null ? sol.stars   : '—';
     if (matched) matched.textContent = sol.matches  != null ? sol.matches : (sol.solved ? '—' : '—');
     if (time_el) time_el.textContent = sol.solve_ms != null ? sol.solve_ms.toFixed(0) + ' ms' : '—';
