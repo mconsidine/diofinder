@@ -1083,12 +1083,25 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
         if cmd == "auto_tune":
             # Precondition: we must currently see a star field (fresh detection
             # with signal), else the sweep has nothing to optimise against.
+            # auto-tune optimises detection on signal it can already see — it
+            # cannot manufacture signal, so refuse with an actionable checklist
+            # rather than running a doomed sweep.
             sol = dict(ctx.latest_solution)
             age = time.monotonic() - sol.get("epoch_monotonic", 0.0)
-            if age > 10.0 or sol.get("peak", 0) < 20:
+            peak = int(sol.get("peak", 0) or 0)
+            if age > 10.0 or peak < 20:
+                why = (f"no fresh detection (last frame {age:.0f}s ago)"
+                       if age > 10.0
+                       else f"frame too dim to tune (peak {peak} < 20)")
                 return MaintResponse(ok=False, error=(
-                    "point the finder at a star field and wait for detection "
-                    "before auto-tuning (no fresh frame with signal)"))
+                    f"auto-tune needs a live star field first: {why}. "
+                    "Before retrying: (1) remove the lens cap; (2) point at "
+                    "open sky with stars; (3) focus until dots are sharp; "
+                    "(4) raise exposure / gain (Camera-page sliders or "
+                    "`efinder-ctl exposure set` / `gain set`) until the live "
+                    "frame shows stars and peak >= 20. auto-tune tunes detection "
+                    "on signal it can already see; it can't create signal that "
+                    "isn't there."))
             mode = str(args.get("mode") or ctx.shared_cfg.get(
                 "seeing_mode", ctx.cfg.seeing_mode)).strip().lower()
             if not seeing_mod.is_valid_mode(mode):
