@@ -25,7 +25,13 @@ if "star_detect" not in sys.modules:
 
 from efinder.comms_proc import (
     _auto_tune_select, _auto_tune_cost, _AT_BG_COST,
+    _auto_tune_valid_samples, _auto_tune_row, _AT_SIGNAL_FLOOR,
 )
+
+
+def _sample(peak=120, solved=True, matches=12, stars=20, solve_ms=300.0):
+    return {"peak": peak, "solved": solved, "matches": matches,
+            "stars": stars, "solve_ms": solve_ms}
 
 
 def _row(bg="row_percentile", kernel=1.5, sigma=5.0,
@@ -35,6 +41,44 @@ def _row(bg="row_percentile", kernel=1.5, sigma=5.0,
         "match_rate": rate, "mean_matches": matches,
         "median_solve_ms": solve_ms,
     }
+
+
+class AutoTuneSampleGatingTests(unittest.TestCase):
+    CAND = {"bg_mode": "row_percentile", "kernel_sigma": 1.5, "sigma": 5.0}
+
+    def test_drops_no_signal_samples(self):
+        # Two good samples + two dark (no-signal) ones: the dark grabs are
+        # artifacts and must not be averaged in.
+        samples = [_sample(peak=120, solved=True, matches=12),
+                   _sample(peak=5,  solved=False, matches=0),   # dark
+                   _sample(peak=130, solved=True, matches=14),
+                   _sample(peak=2,  solved=False, matches=0)]   # dark
+        valid = _auto_tune_valid_samples(samples)
+        self.assertEqual(len(valid), 2)
+        row = _auto_tune_row(self.CAND, samples)
+        self.assertEqual(row["n_frames"], 2)
+        self.assertEqual(row["n_dropped"], 2)
+        self.assertEqual(row["match_rate"], 1.0)          # not 0.5
+        self.assertEqual(row["mean_matches"], 13.0)
+
+    def test_signal_present_but_unsolved_counts_as_failure(self):
+        # Good peak but didn't solve -> a REAL vote against the candidate (kept).
+        samples = [_sample(peak=120, solved=True, matches=12),
+                   _sample(peak=110, solved=False, matches=0)]  # real fail
+        row = _auto_tune_row(self.CAND, samples)
+        self.assertEqual(row["n_frames"], 2)
+        self.assertEqual(row["n_dropped"], 0)
+        self.assertEqual(row["match_rate"], 0.5)
+
+    def test_all_no_signal_is_indeterminate(self):
+        samples = [_sample(peak=3, solved=False, matches=0),
+                   _sample(peak=8, solved=False, matches=0)]
+        self.assertEqual(_auto_tune_valid_samples(samples), [])
+        self.assertIsNone(_auto_tune_row(self.CAND, samples))
+
+    def test_floor_boundary_inclusive(self):
+        samples = [_sample(peak=_AT_SIGNAL_FLOOR, solved=True, matches=9)]
+        self.assertEqual(len(_auto_tune_valid_samples(samples)), 1)
 
 
 class AutoTuneSelectTests(unittest.TestCase):
