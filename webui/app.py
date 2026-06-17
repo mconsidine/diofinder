@@ -528,6 +528,13 @@ def autotune_cancel():
     return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
 
 
+@app.route("/autotune/apply", methods=["POST"])
+def autotune_apply():
+    """Apply the last (dry-run) auto-tune winner live + save it as the override."""
+    r = _safe_call("auto_tune_apply_last")
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
 @app.route("/calibration/reset", methods=["POST"])
 def calibration_reset():
     """Reset the FOV rolling-window calibration and redirect to the dashboard."""

@@ -552,10 +552,17 @@ in `tests/test_auto_tune.py`.
   `_invalidate_solver_cache`) **and** saves it as the tuned mode's override
   (`source="auto_tune"`), so the factory preset stays untouched and `seeing_get`
   lineage reads **tuned**. **commit=false** restores the camera and changes
-  nothing.
+  nothing — but the winner is kept in `auto_tune_status`, so you can apply it
+  **after** seeing the result via `auto_tune_apply_last` (the "Apply result"
+  button) instead of having to decide commit up front. `auto_tune_apply_last`
+  mirrors the commit path (shared_cfg + `config.save_keys` + camera exposure/gain
+  + `save_override` source=`auto_tune` + cache invalidate) from the stored
+  result; it errors if a sweep is running or no result exists.
 * CLI: `efinder-ctl auto-tune {start [--mode] [--commit] [--wait]|status|cancel}`.
   Web UI: an "Auto-tune (current sky)" card on the Camera page (start/cancel +
-  progress poller via `/api/autotune`).
+  **Apply result** + progress poller via `/api/autotune`). The Camera page also
+  live-syncs its sliders/selects (`/api/camera/state`) so auto-exposure,
+  auto-tune, and preset changes show without a reload.
 
 The Background A/B (`_bgrun_worker`) reads the **live effective** detection
 params (`solver_params_get` → sigma/kernel_sigma/noise_mode/max_axis_ratio) and
