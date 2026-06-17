@@ -43,7 +43,7 @@ SEEING_PRESETS: Dict[str, Dict[str, Any]] = {
         auto_exposure_target_stars=20,
         auto_exposure_target_matches=10,
         auto_exposure_max_s=0.5,
-        auto_exposure_max_gain=8.0,
+        auto_exposure_max_gain=16.0,
         star_db="standard",
     ),
     "bad": dict(

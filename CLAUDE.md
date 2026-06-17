@@ -494,10 +494,17 @@ decision lives in `_auto_exposure_decision` (unit-tested in
   toward `auto_exposure_target_matches`; falls back to raw detected-star count
   (`auto_exposure_target_stars`) while lost-in-space / slewing, where
   `matches == 0` carries no exposure information.
-* **Exposure-priority ladder**: when starved it raises exposure first and only
-  climbs gain once exposure is at `auto_exposure_max_s`; when over-served it
-  gives gain back first (cheap — only noise), then shortens exposure (which
-  costs star trailing + latency on a moving mount).
+* **Gain-priority ladder, exposure anchored to nominal**: exposure is the
+  *expensive* axis (it sets frame cadence, pointing-feedback latency, and star
+  trailing on a moving mount) and gain is a latency-free trim, so **gain is the
+  primary knob**. When starved it raises gain first and stretches exposure only
+  once gain is at `auto_exposure_max_gain` (gain can't manufacture photons, so a
+  genuinely dark scene still needs integration time); when over-served it drops
+  gain first, shortening exposure only at the gain floor. When settled but
+  exposure has drifted off the anchor `auto_exposure_nominal_s` (0 → the
+  configured `exposure_s`) and gain has headroom, it walks exposure one step
+  back toward nominal and lets the gain ladder restore brightness next cycle —
+  so a starved episode never leaves permanent latency.
 * **Saturation** (`peak ≥ 250`) overrides everything and backs off (gain first).
 * Wide deadband (0.8×–1.5× of target) so it settles instead of oscillating;
   sub-5 ms exposure moves are ignored. At most one axis changes per cycle.
@@ -531,7 +538,15 @@ in `tests/test_auto_tune.py`.
   **forced per-frame** (`bg_cache.detect(force_per_frame=True)` — the live
   temporal cache is left untouched) and solves on the resident DB, returning
   `{solved, matches, stars, peak, solve_ms}`. One frame per call keeps each
-  solver-blocking call well inside the 30 s watchdog window.
+  solver-blocking call well inside the 30 s watchdog window. **Signal gating**:
+  the sweep settles the camera once after Phase 1, and per sample retries up to
+  `_AT_MAX_SAMPLE_RETRY` grabs to land a *signal-bearing* frame
+  (`peak ≥ signal_floor`, default 20). A no-signal grab (dark / caught mid
+  exposure-change / momentarily starved sky) is a capture artifact and is
+  **dropped, not scored 0** — only frames that HAD signal vote, so a candidate
+  isn't penalised for the live view briefly going dark while the sweep runs.
+  Aggregation is the pure, unit-tested `_auto_tune_row` over the valid samples
+  (a candidate with no valid samples is *indeterminate* and excluded, never 0).
 * **Merit**: among candidates clearing the match-rate floor and ≥ 80 % of the
   match target, minimize `w·solve_ms + w·kernel_sigma − w·sigma + bg_cost` — i.e.
   prefer fast solves, a tight kernel, a high sigma, and a cheap background.

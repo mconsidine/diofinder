@@ -65,11 +65,14 @@ class Config:
     # detected-star count. Falls back to target_stars while lost-in-space.
     # Live-mutable via shared_cfg; seeing presets write it.
     auto_exposure_target_matches: int = 8
-    # Gain ladder bounds for the controller. Exposure is raised first; gain is
-    # only climbed once exposure hits auto_exposure_max_s. max_gain is
-    # live-mutable (seeing presets write it); the floor stays config-only.
+    # Gain ladder bounds for the controller. Gain is the primary trim and is
+    # raised first; exposure is only stretched once gain hits auto_exposure_max_gain.
+    # max_gain is live-mutable (seeing presets write it); the floor stays config-only.
     auto_exposure_min_gain: float = 1.0
     auto_exposure_max_gain: float = 16.0
+    # Exposure the controller anchors to and trims around with gain. 0 = use the
+    # configured exposure_s (the last value a user/preset set). Live-mutable.
+    auto_exposure_nominal_s: float = 0.0
 
     # Optical properties
     fov_deg: float = 13.5

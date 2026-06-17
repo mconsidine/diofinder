@@ -55,18 +55,21 @@ class AutoExposureDecisionTests(unittest.TestCase):
         action = _decide(peak=255, matches=0, cur_g=4.0)
         self.assertIn("gain", action)
 
-    # --- starved: exposure-priority ladder ----------------------------------
-    def test_starved_raises_exposure_first(self):
+    # --- starved: gain-priority ladder --------------------------------------
+    def test_starved_raises_gain_first(self):
+        # Gain is the primary knob: a starved frame climbs gain before exposure.
         action = _decide(solved=True, matches=3, target_matches=10,
-                         cur_s=0.2, max_s=0.5)
-        self.assertIn("exposure_s", action)
-        self.assertGreater(action["exposure_s"], 0.2)
-
-    def test_starved_climbs_gain_only_at_max_exposure(self):
-        action = _decide(solved=True, matches=3, target_matches=10,
-                         cur_s=0.5, max_s=0.5, cur_g=4.0, max_g=16.0)
+                         cur_s=0.2, max_s=0.5, cur_g=4.0, max_g=16.0)
         self.assertIn("gain", action)
         self.assertGreater(action["gain"], 4.0)
+
+    def test_starved_stretches_exposure_only_at_max_gain(self):
+        # Gain maxed and still starved -> only now stretch exposure (gain can't
+        # manufacture photons in a genuinely dark scene).
+        action = _decide(solved=True, matches=3, target_matches=10,
+                         cur_s=0.2, max_s=0.5, cur_g=16.0, max_g=16.0)
+        self.assertIn("exposure_s", action)
+        self.assertGreater(action["exposure_s"], 0.2)
 
     def test_starved_at_both_ceilings_is_noop(self):
         self.assertIsNone(_decide(solved=True, matches=3, target_matches=10,
@@ -98,17 +101,46 @@ class AutoExposureDecisionTests(unittest.TestCase):
         self.assertIn("gain", action)  # over-served on the star proxy
         self.assertLess(action["gain"], 4.0)
 
-    def test_unsolved_starved_raises_exposure(self):
+    def test_unsolved_starved_raises_gain(self):
+        # Lost-in-space + too few stars -> starved on the star proxy -> gain
+        # first (not exposure).
         action = _decide(solved=False, matches=0, stars=4, target_stars=20,
-                         cur_s=0.2, max_s=0.5)
-        self.assertIn("exposure_s", action)
-        self.assertGreater(action["exposure_s"], 0.2)
+                         cur_s=0.2, max_s=0.5, cur_g=4.0, max_g=16.0)
+        self.assertIn("gain", action)
+        self.assertGreater(action["gain"], 4.0)
 
     def test_subthreshold_exposure_move_is_noop(self):
         # cur_s already at the floor and over-served at gain floor -> the
         # would-be exposure step is clamped below the 5 ms deadband -> noop.
         self.assertIsNone(_decide(solved=True, matches=20, target_matches=10,
                                   cur_g=1.0, min_g=1.0, cur_s=0.05, min_s=0.05))
+
+    # --- nominal exposure anchor (settled regime) ---------------------------
+    def test_settled_walks_exposure_back_toward_nominal(self):
+        # In-deadband but exposure stretched above nominal with gain headroom ->
+        # shorten exposure toward nominal (gain restores brightness next cycle).
+        action = _decide(solved=True, matches=10, target_matches=10,
+                         cur_s=0.4, nominal_s=0.2, cur_g=4.0, max_g=16.0)
+        self.assertIn("exposure_s", action)
+        self.assertLess(action["exposure_s"], 0.4)
+        self.assertGreaterEqual(action["exposure_s"], 0.2)
+
+    def test_settled_at_nominal_is_noop(self):
+        self.assertIsNone(_decide(solved=True, matches=10, target_matches=10,
+                                  cur_s=0.2, nominal_s=0.2, cur_g=4.0))
+
+    def test_settled_below_nominal_lengthens_exposure(self):
+        action = _decide(solved=True, matches=10, target_matches=10,
+                         cur_s=0.1, nominal_s=0.2, cur_g=4.0, min_g=1.0)
+        self.assertIn("exposure_s", action)
+        self.assertGreater(action["exposure_s"], 0.1)
+        self.assertLessEqual(action["exposure_s"], 0.2)
+
+    def test_settled_above_nominal_but_gain_maxed_is_noop(self):
+        # Can't compensate with gain (already maxed) -> leave the long exposure
+        # in place rather than starve the frame.
+        self.assertIsNone(_decide(solved=True, matches=10, target_matches=10,
+                                  cur_s=0.4, nominal_s=0.2, cur_g=16.0, max_g=16.0))
 
 
 if __name__ == "__main__":

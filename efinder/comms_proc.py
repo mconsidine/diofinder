@@ -186,31 +186,39 @@ _AE_SPARE_FRAC = 1.5          # metric above this fraction of target -> shed cos
 
 def _auto_exposure_decision(*, solved, stars, matches, peak,
                             cur_s, cur_g, target_stars, target_matches,
-                            min_s, max_s, min_g, max_g):
+                            min_s, max_s, min_g, max_g, nominal_s=None):
     """Pure decision step for the auto-exposure / gain controller.
 
     Returns a dict describing the new camera state — at most one of
     ``{"exposure_s": float}`` or ``{"gain": float}`` per call — or ``None`` to
     leave the camera alone.
 
-    Objective: the *cheapest* operating point that still yields a confident
-    solve. "Cheap" means short exposure first (less star trailing on a moving
-    mount, lower latency), then low gain (less read noise). The real currency is
-    matched stars while we are solving; raw detected-star count is only a
-    fallback proxy when lost-in-space / slewing (``matches == 0`` then tells us
-    nothing about exposure).
+    Cost model: on a finder, **exposure is the expensive axis** — it sets the
+    frame cadence, the pointing-feedback latency, and the star trailing on a
+    moving mount — while **gain is a latency-free brightness trim** (and moderate
+    analog gain even lifts signal above the sensor's read noise at low light).
+    So gain is the primary knob and exposure is anchored near ``nominal_s``:
 
-    The control axes form an exposure-priority ladder:
-      * need more signal  -> raise exposure first, climb gain only at max_s
-      * have spare signal -> give gain back first, then shorten exposure
-      * saturated frame   -> always back off (gain first; it costs only noise)
+      * starved      -> raise GAIN first; stretch exposure only once gain is at
+                        ``max_g`` (gain can't manufacture photons, so a genuinely
+                        dark scene still needs integration time).
+      * over-served  -> drop GAIN first; shorten exposure only at the gain floor.
+      * saturated    -> back off, gain first (it costs only noise).
+      * settled but exposure has drifted off ``nominal_s`` with gain headroom to
+        compensate -> nudge exposure one step back toward nominal, letting the
+        gain ladder restore brightness next cycle, so a temporary stretch never
+        becomes permanent latency.
 
     Wide deadband (``_AE_STARVED_FRAC`` .. ``_AE_SPARE_FRAC`` of target) so the
-    loop settles instead of oscillating across the ladder boundary.
+    loop settles instead of oscillating. The real currency is matched stars
+    while solving; raw detected-star count is only a fallback when lost /
+    slewing (``matches == 0`` then carries no exposure information).
     """
+    if nominal_s is None:
+        nominal_s = cur_s
+
     # 1. Saturation overrides everything: a clipped frame yields poor centroids
-    #    regardless of count. Shed the cheapest-to-restore signal first (gain),
-    #    falling back to exposure once already at the gain floor.
+    #    regardless of count. Shed the cheapest-to-restore signal first (gain).
     if peak >= _AE_PEAK_SATURATION:
         if cur_g > min_g:
             new_g = max(min_g, cur_g / _AE_GAIN_STEP)
@@ -228,20 +236,20 @@ def _auto_exposure_decision(*, solved, stars, matches, peak,
     else:
         metric, target = stars, target_stars
 
-    # 3. Starved — need more signal. Exposure first, then climb the gain ladder.
+    # 3. Starved — gain first; stretch exposure only when gain is maxed out.
     if metric < _AE_STARVED_FRAC * target:
-        if cur_s < max_s:
-            new_s = min(max_s, cur_s * _AE_EXP_UP)
-            if new_s - cur_s >= _AE_MIN_EXP_DELTA_S:
-                return {"exposure_s": round(new_s, 4)}
         if cur_g < max_g:
             new_g = min(max_g, cur_g * _AE_GAIN_STEP)
             if new_g != cur_g:
                 return {"gain": round(new_g, 2)}
-        return None                       # already at the ceiling on both axes
+        if cur_s < max_s:
+            new_s = min(max_s, cur_s * _AE_EXP_UP)
+            if new_s - cur_s >= _AE_MIN_EXP_DELTA_S:
+                return {"exposure_s": round(new_s, 4)}
+        return None                       # at the ceiling on both axes
 
-    # 4. Over-served — shed cost to find the minimum. Gain back down first
-    #    (noise), then shorten exposure (trailing / latency).
+    # 4. Over-served — gain back down first (noise), shorten exposure only at
+    #    the gain floor.
     if metric > _AE_SPARE_FRAC * target:
         if cur_g > min_g:
             new_g = max(min_g, cur_g / _AE_GAIN_STEP)
@@ -252,7 +260,17 @@ def _auto_exposure_decision(*, solved, stars, matches, peak,
             return {"exposure_s": round(new_s, 4)}
         return None
 
-    # 5. Within the deadband — settled.
+    # 5. Settled — walk exposure back toward nominal when gain can compensate,
+    #    so a starved episode that stretched exposure doesn't leave us with
+    #    permanent latency. The gain ladder restores brightness next cycle.
+    if cur_s > nominal_s + _AE_MIN_EXP_DELTA_S and cur_g < max_g:
+        new_s = max(nominal_s, cur_s * _AE_EXP_DOWN)
+        if cur_s - new_s >= _AE_MIN_EXP_DELTA_S:
+            return {"exposure_s": round(new_s, 4)}
+    if cur_s < nominal_s - _AE_MIN_EXP_DELTA_S and cur_g > min_g:
+        new_s = min(nominal_s, cur_s * _AE_EXP_UP)
+        if new_s - cur_s >= _AE_MIN_EXP_DELTA_S:
+            return {"exposure_s": round(new_s, 4)}
     return None
 
 
@@ -291,13 +309,22 @@ def _auto_exposure_loop(ctx, interval_s=5.0):
                 "auto_exposure_max_s", cfg.auto_exposure_max_s))
             max_g = float(ctx.shared_cfg.get(
                 "auto_exposure_max_gain", cfg.auto_exposure_max_gain))
+            # Exposure anchor: the exposure the controller prefers to sit at and
+            # trim around with gain. 0 -> use the configured/persisted exposure
+            # (the last value a user or preset intentionally set; the loop never
+            # persists its own moves, so cfg.exposure_s stays a stable anchor).
+            nominal_cfg = float(ctx.shared_cfg.get(
+                "auto_exposure_nominal_s",
+                getattr(cfg, "auto_exposure_nominal_s", 0.0)))
+            nominal_s = nominal_cfg if nominal_cfg > 0.0 else float(cfg.exposure_s)
             action = _auto_exposure_decision(
                 solved=bool(sol.get("solved", False)),
                 stars=sol.get("stars", 0), matches=sol.get("matches", 0),
                 peak=sol.get("peak", 0), cur_s=cur_s, cur_g=cur_g,
                 target_stars=target_stars, target_matches=target_matches,
                 min_s=cfg.auto_exposure_min_s, max_s=max_s,
-                min_g=cfg.auto_exposure_min_gain, max_g=max_g)
+                min_g=cfg.auto_exposure_min_gain, max_g=max_g,
+                nominal_s=nominal_s)
             if not action:
                 continue
             ctx_qs = (ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
@@ -390,6 +417,53 @@ def _auto_tune_select(rows, target_matches, match_rate_floor):
     if feasible:
         return min(feasible, key=_auto_tune_cost), True
     return max(rows, key=lambda r: r.get("mean_matches", 0.0)), False
+
+
+# Per-sample peak below which the frame had no usable signal (a dark / mid-
+# exposure-change / starved grab). Matches the auto-tune precondition floor.
+# Such a sample tells us nothing about a candidate's detection params, so it
+# must NOT be averaged in as a 0-match failure — it is dropped, not scored.
+_AT_SIGNAL_FLOOR = 20
+# Extra grabs allowed to replace a no-signal sample before giving up on it.
+_AT_MAX_SAMPLE_RETRY = 3
+
+
+def _auto_tune_valid_samples(samples, signal_floor=_AT_SIGNAL_FLOOR):
+    """Keep only signal-bearing samples (peak >= floor).
+
+    A no-signal frame is a capture artifact (contention, a frame caught mid
+    exposure/gain change, or a momentarily starved sky), not evidence about the
+    candidate's detection params. Crucially, a sample that HAS signal but failed
+    to solve (good peak, matches==0) is kept — that is a real vote against the
+    candidate.
+    """
+    return [s for s in samples
+            if int(s.get("peak", 0) or 0) >= signal_floor]
+
+
+def _auto_tune_row(candidate, samples, signal_floor=_AT_SIGNAL_FLOOR):
+    """Aggregate a candidate's samples into a merit row over only the
+    signal-bearing samples. Returns ``None`` when none are valid — the candidate
+    is then *indeterminate* and excluded from selection, never scored 0.
+    """
+    valid = _auto_tune_valid_samples(samples, signal_floor)
+    if not valid:
+        return None
+    n_solved = sum(1 for s in valid if s.get("solved"))
+    solved_ms = [s["solve_ms"] for s in valid if s.get("solved")]
+    return {
+        **candidate,
+        "n_frames": len(valid),
+        "n_dropped": len(samples) - len(valid),
+        "match_rate": round(n_solved / len(valid), 3),
+        "mean_matches": round(
+            sum(s.get("matches", 0) for s in valid) / len(valid), 2),
+        "mean_stars": round(
+            sum(s.get("stars", 0) for s in valid) / len(valid), 1),
+        "median_solve_ms": round(statistics.median(solved_ms), 1)
+        if solved_ms else 0.0,
+        "max_peak": max(s.get("peak", 0) for s in valid),
+    }
 
 
 _auto_tune_lock = threading.Lock()
@@ -523,6 +597,21 @@ def _auto_tune_run(ctx, params):
         n = len(candidates)
         eval_timeout = params["eval_solve_timeout_ms"]
         settle_s = max(0.25, exp_s or cfg.exposure_s)
+        signal_floor = int(params.get("signal_floor", _AT_SIGNAL_FLOOR))
+
+        def _eval_once(c):
+            reply = _call_solver(
+                SOLVER_OP_AUTO_TUNE_EVAL,
+                {**c, "solve_timeout_ms": eval_timeout},
+                ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
+                timeout_s=eval_timeout / 1000.0 + 3.0)
+            if reply is not None and reply.ok and reply.result:
+                return reply.result
+            return None
+
+        # Settle the camera once after the photometric phase so the first grabs
+        # aren't captured mid exposure/gain change.
+        time.sleep(settle_s)
         for i, c in enumerate(candidates):
             if _at_cancelled():
                 _at_set(message="cancelled")
@@ -538,31 +627,24 @@ def _auto_tune_run(ctx, params):
             for f in range(params["frames_per_point"]):
                 if _at_cancelled() or time.monotonic() > deadline:
                     break
-                reply = _call_solver(
-                    SOLVER_OP_AUTO_TUNE_EVAL,
-                    {**c, "solve_timeout_ms": eval_timeout},
-                    ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
-                    timeout_s=eval_timeout / 1000.0 + 3.0)
-                if reply is not None and reply.ok and reply.result:
-                    samples.append(reply.result)
+                # Get a SIGNAL-bearing sample; skip transient no-signal grabs so
+                # they don't count as a 0-match failure against this candidate.
+                s = None
+                for _attempt in range(_AT_MAX_SAMPLE_RETRY):
+                    if _at_cancelled() or time.monotonic() > deadline:
+                        break
+                    r = _eval_once(c)
+                    if r is not None and int(r.get("peak", 0) or 0) >= signal_floor:
+                        s = r
+                        break
+                    time.sleep(settle_s)   # let a fresh frame arrive, then retry
+                if s is not None:
+                    samples.append(s)
                 if f < params["frames_per_point"] - 1:
                     time.sleep(settle_s)
-            if not samples:
-                continue
-            n_solved = sum(1 for s in samples if s.get("solved"))
-            solved_ms = [s["solve_ms"] for s in samples if s.get("solved")]
-            rows.append({
-                **c,
-                "n_frames": len(samples),
-                "match_rate": round(n_solved / len(samples), 3),
-                "mean_matches": round(
-                    sum(s.get("matches", 0) for s in samples) / len(samples), 2),
-                "mean_stars": round(
-                    sum(s.get("stars", 0) for s in samples) / len(samples), 1),
-                "median_solve_ms": round(statistics.median(solved_ms), 1)
-                if solved_ms else 0.0,
-                "max_peak": max(s.get("peak", 0) for s in samples),
-            })
+            row = _auto_tune_row(c, samples, signal_floor)
+            if row is not None:
+                rows.append(row)
 
         best, met = _auto_tune_select(
             rows, target_matches, params["match_rate_floor"])
@@ -1133,6 +1215,8 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                         args.get("time_budget_s", 180.0)))),
                     "eval_solve_timeout_ms": max(200, min(5000, int(
                         args.get("eval_solve_timeout_ms", 1500)))),
+                    "signal_floor": max(1, min(250, int(
+                        args.get("signal_floor", _AT_SIGNAL_FLOOR)))),
                     "sigma_values": [float(x) for x in
                                      args.get("sigma_values", _AT_SIGMA_VALUES)],
                     "kernel_values": [float(x) for x in
