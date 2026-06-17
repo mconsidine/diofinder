@@ -210,6 +210,46 @@ tether. Plan: detect failed join after N seconds, fall back to AP mode
 automatically. `comitup` is the cleanest existing solution.
 Target: v0.8.
 
+### Label stars on the live frame overlay
+The Camera page and Status page name only the **single** cataloged star nearest
+the boresight ("Centered star", from `star_names.csv`). To answer "what's that
+bright star over there?" without re-pointing, draw star **names on the live
+frame overlay** in `/frame.jpg`: project the catalog (or the solved match list)
+through the solved WCS onto the image and label the brightest few in-frame named
+stars next to their pixel positions. Needs: the solver to expose matched
+star sky-coords + names (or a small catalog query by RA/Dec/FOV), and
+`frame_jpg()` to draw the labels (it already draws the boresight + FOV rings).
+Heavier than the centered-star readout; do it after the higher-value items.
+
+### Status page: build version, clock, and observer location
+Surface on the Status/dashboard page (`/`):
+- the **image version / git tag** the device is running (the `version` maint
+  command already returns it — the Update page uses it; just also show it on the
+  dashboard, e.g. a small header/footer badge),
+- the **current time** (UTC and/or local), and
+- the **observer latitude / longitude** (already in config / `status`; the
+  Config page shows `runtime_lat`/`runtime_lon` — mirror onto Status).
+
+All three are already available to the web UI; this is a presentation-only
+change to `webui/templates/dashboard.html` (+ the `dashboard()` route passing
+`version` and a timestamp). Low risk.
+
+### Rebrand "efinder" → "diofinder" for this variant (deferred)
+Where `efinder` names *this* fork (not AstroKeith's upstream), migrate to
+`diofinder`. End state:
+- SSH login `diofinder@diofinder.local` (hostname, user, mDNS),
+- Wi-Fi AP SSID `diofinder-XXXX`,
+- and the rest of the user-facing surface (web UI title, README).
+
+Wide, careful rename touching the systemd units (`efinder.service`,
+`efinder-webui.service`, …), install/image scripts, config paths
+(`/etc/efinder/`, `/var/lib/efinder/`, `/opt/efinder/`), the `efinder-ctl` /
+`efinder-update` CLIs, the maint socket path, and docs — with a migration story
+for already-imaged devices (or simply "new images only"). **Do this only after
+the build/burn workflows are stable**, since it changes paths the workflows and
+OTA update depend on. Leave references to AstroKeith's upstream `eFinder_cli`
+unchanged.
+
 ---
 
 ## Known issues to watch

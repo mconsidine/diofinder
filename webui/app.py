@@ -528,6 +528,13 @@ def autotune_cancel():
     return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
 
 
+@app.route("/autotune/apply", methods=["POST"])
+def autotune_apply():
+    """Apply the last (dry-run) auto-tune winner live + save it as the override."""
+    r = _safe_call("auto_tune_apply_last")
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
 @app.route("/calibration/reset", methods=["POST"])
 def calibration_reset():
     """Reset the FOV rolling-window calibration and redirect to the dashboard."""
@@ -601,6 +608,18 @@ def exposure_set():
         except ValueError:
             return "gain must be numeric", 400
     return redirect(url_for("camera_page"))
+
+
+@app.route("/api/camera/state")
+def api_camera_state():
+    """Live exposure/gain + solver/match params, so the Camera page can keep its
+    controls in sync after auto-exposure, auto-tune, or a seeing-preset change."""
+    out = {}
+    for cmd in ("exposure_get", "solver_params_get", "match_params_get"):
+        r = _safe_call(cmd)
+        if r.ok and isinstance(r.result, dict):
+            out.update(r.result)
+    return jsonify(out)
 
 
 @app.route("/api/camera/set", methods=["POST"])
@@ -910,9 +929,30 @@ def logs():
 
 # ---- Update -----------------------------------------------------------------
 
+UPDATE_LOG = "/var/lib/efinder/last-update.log"
+
+
+def _running_commit():
+    """One-line description of the git checkout the daemon code runs from
+    (`/opt/efinder`), e.g. '1ef350d (claude/friendly-lamport-ff02lf) webui: …'.
+    Returns None if it can't be read."""
+    try:
+        out = subprocess.run(
+            ["git", "-c", "safe.directory=/opt/efinder", "-C", "/opt/efinder",
+             "log", "-1", "--format=%h (%D) %s"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
 @app.route("/update", methods=["GET", "POST"])
 def update_page():
-    """OTA update page: GET shows current version; POST fires efinder-update in the background.
+    """OTA update page: GET shows current version + running commit; POST fires
+    efinder-update in the background, capturing its output to a log.
 
     An optional 'ref' form field updates to a specific branch/tag instead of the
     latest release (runs `efinder-update --ref <ref>`)."""
@@ -925,21 +965,46 @@ def update_page():
             if not _re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,200}", ref):
                 return "invalid branch/tag name", 400
             cmd += ["--ref", ref]
+        # Capture output to a log so a failed update (bad ref, dirty tree,
+        # fast-forward conflict) is VISIBLE on the Update page instead of
+        # vanishing into /dev/null. efinder-update is detached (it restarts
+        # this very webui), so it keeps writing the log across the restart.
         try:
-            subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
+            logf = open(UPDATE_LOG, "w")
+            logf.write(f"$ {' '.join(cmd)}\n"
+                       f"started: {datetime.now().isoformat(timespec='seconds')}\n\n")
+            logf.flush()
+            out = logf
+        except OSError:
+            out = subprocess.DEVNULL
+        try:
+            subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT,
+                             start_new_session=True)
         except FileNotFoundError:
             return "efinder-update not installed", 500
-        return render_template("update_running.html")
+        return render_template("update_running.html", ref=ref or "latest release")
     version = _safe_call("version")
     return render_template(
         "update.html",
-        version=(
-            version.result.get("version") if version.ok else "unknown"),
+        version=(version.result.get("version") if version.ok else "unknown"),
+        running=_running_commit(),
     )
+
+
+@app.route("/api/update/log")
+def api_update_log():
+    """Tail of the last efinder-update run + terminal state, for the running page."""
+    try:
+        with open(UPDATE_LOG) as f:
+            text = f.read()
+    except OSError:
+        text = ""
+    low = text.lower()
+    done = ("complete" in low) or ("error" in low)
+    ok = done and ("complete" in low) and ("error" not in low)
+    return jsonify({"log": text, "done": done, "ok": ok,
+                    "commit": _running_commit()})
+
 
 
 # ---- Config view ------------------------------------------------------------
@@ -1675,19 +1740,48 @@ def _bgrun_worker(n_frames, max_seconds, solve_frames):
         import star_detect as sd
         from efinder.config import load_config
         cfg = load_config()
-        sigma = cfg.detect_sigma
-        det_bin = cfg.detect_bin
+        # Use the LIVE effective detection params (shared_cfg over the config
+        # file) so "A/B matches" reflects what the live solver actually does —
+        # not a stale config-file sigma. Falls back to the file if the daemon
+        # is unreachable.
+        sp = _safe_call("solver_params_get")
+        spd = sp.result if sp.ok and sp.result else {}
+        sigma        = float(spd.get("detect_sigma", cfg.detect_sigma))
+        kernel_sigma = float(spd.get("detect_kernel_sigma",
+                                     getattr(cfg, "detect_kernel_sigma", 1.5)))
+        noise_mode   = spd.get("detect_noise_mode", cfg.detect_noise_mode)
+        _mar         = float(spd.get("detect_max_axis_ratio",
+                                     getattr(cfg, "detect_max_axis_ratio", 0.0)))
+        max_axis_ratio = float("inf") if _mar <= 0.0 else _mar
+        backend      = str(spd.get("extractor_backend",
+                                   getattr(cfg, "extractor_backend", "sycamore")))
+        det_bin = cfg.detect_bin          # restart-only -> file value == live
         th_radius = cfg.detect_tophat_radius
         block_size = getattr(cfg, 'detect_bg_block_size', 0) or 32
         uniform_size = getattr(cfg, 'detect_uniform_filter_size', 0) or 25
         max_c = cfg.max_solve_stars
         min_c = cfg.min_centroids
+        ex = _safe_call("exposure_get")
+        exd = ex.result if ex.ok and ex.result else {}
+        exposure_s = exd.get("exposure_s")
+        gain = exd.get("gain")
+        # The sweep extracts with sycamore; when the live solver is on the
+        # tetra3/Keith backend this A/B does NOT represent it (tetra3 ignores
+        # bg_mode and the matched filter). Flag it loudly.
+        backend_warn = (
+            "NOTE: live extractor_backend=tetra3 (Keith) — this A/B uses "
+            "sycamore and does NOT reflect the live pipeline. Use "
+            "diag_solve.py --bundle to evaluate Keith." if backend == "tetra3"
+            else "")
         try:
             sd.set_num_threads(2)
         except Exception:
             pass
         _params = _inspect.signature(sd.detect_stars).parameters
         has_tophat = "tophat_radius" in _params
+        has_kernel = "kernel_sigma" in _params
+        has_noise  = "noise_mode" in _params
+        has_mar    = "max_axis_ratio" in _params
         modes = ["row_percentile", "column_percentile", "row_column_percentile",
                  "line_median", "block_percentile", "uniform_mean"]
         if has_tophat:
@@ -1705,8 +1799,16 @@ def _bgrun_worker(n_frames, max_seconds, solve_frames):
             _bgrun_set(message=f"warning: dim frames (peak={peak}); results may be poor")
 
         def extract(frame, mode):
+            # Match the live sycamore detection knobs (kernel/noise/trail),
+            # capability-probed so it still runs on older wheels.
             kw = dict(sigma=sigma, bin=det_bin, centroid_full_res=True, bg_mode=mode)
-            if mode == "top_hat":
+            if has_kernel:
+                kw["kernel_sigma"] = kernel_sigma
+            if has_noise:
+                kw["noise_mode"] = noise_mode
+            if has_mar and max_axis_ratio != float("inf"):
+                kw["max_axis_ratio"] = max_axis_ratio
+            if mode == "top_hat" and has_tophat:
                 kw["tophat_radius"] = th_radius
             elif mode == "block_percentile" and block_size:
                 kw["bg_block_size"] = block_size
@@ -1746,7 +1848,13 @@ def _bgrun_worker(n_frames, max_seconds, solve_frames):
                 "nmatch": nmatch,
             })
 
-        report = _bgrun_report(table, len(frames), peak, sigma, det_bin, th_radius)
+        report = _bgrun_report(table, len(frames), peak, {
+            "sigma": sigma, "kernel_sigma": kernel_sigma, "noise_mode": noise_mode,
+            "max_axis_ratio": ("off" if max_axis_ratio == float("inf")
+                               else round(max_axis_ratio, 2)),
+            "bin": det_bin, "backend": backend, "tophat_radius": th_radius,
+            "exposure_s": exposure_s, "gain": gain, "warn": backend_warn,
+        })
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / "report.txt").write_text(report)
 
@@ -1755,19 +1863,30 @@ def _bgrun_worker(n_frames, max_seconds, solve_frames):
         _bgrun_make_zip(_BGRUN_DIR / zip_name, frames_dir, report, len(frames), peak)
 
         _bgrun_set(phase="done", progress=100, running=False, finished=ts,
-                   table=table, zip_name=zip_name,
-                   message=f"done — {len(frames)} frames (peak={peak})")
+                   table=table, zip_name=zip_name, backend=backend,
+                   warn=backend_warn,
+                   message=(f"done — {len(frames)} frames (peak={peak})"
+                            + (f"  ·  {backend_warn}" if backend_warn else "")))
     except Exception as e:
         log.exception("bgrun worker failed")
         _bgrun_set(phase="error", running=False, error=str(e), message=f"error: {e}")
 
 
-def _bgrun_report(table, n_frames, peak, sigma, det_bin, th_radius):
+def _bgrun_report(table, n_frames, peak, p):
     lines = [
         "diofinder background-mode A/B with solve (on-device)",
         f"created : {datetime.now().isoformat(timespec='seconds')}",
-        f"frames  : {n_frames} (peak={peak})   sigma={sigma}   bin={det_bin}   "
-        f"tophat_radius={th_radius}",
+        f"frames  : {n_frames} (peak={peak})   exposure={p.get('exposure_s')}s   "
+        f"gain={p.get('gain')}",
+        f"detect  : backend={p.get('backend')}   sigma={p.get('sigma')}   "
+        f"kernel_sigma={p.get('kernel_sigma')}   noise_mode={p.get('noise_mode')}   "
+        f"max_axis_ratio={p.get('max_axis_ratio')}   bin={p.get('bin')}   "
+        f"tophat_radius={p.get('tophat_radius')}",
+        "(detection params are the LIVE effective values, not the config file)",
+    ]
+    if p.get("warn"):
+        lines += ["", "*** " + p["warn"] + " ***"]
+    lines += [
         "=" * 74,
         f"  {'mode':>14}  {'stars':>6}  {'p50ms':>6}  {'base_only':>9}  "
         f"{'mode_only':>9}  {'solved':>7}  {'Nmatch':>6}",

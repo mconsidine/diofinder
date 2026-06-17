@@ -2,9 +2,45 @@
 {% block title %}Update Running{% endblock %}
 {% block content %}
 <h2>Update running</h2>
-<p>The eFinder service is updating. This page will reload itself in
-   a moment; if it doesn't, refresh manually.</p>
+<p class="hint">Updating to <strong>{{ ref }}</strong>. The service (including this
+   web UI) restarts during the update, so this page may blink — it keeps polling
+   the live update log below and shows the result when it finishes.</p>
+
+<pre class="logs" id="ulog" style="max-height:55vh;">starting…</pre>
+<p id="ustatus" style="min-height:1.4em; font-weight:500;"></p>
+<p>
+  <a class="btn btn-primary" href="{{ url_for('dashboard') }}">Back to Status</a>
+  <a class="btn" href="{{ url_for('update_page') }}">Update page</a>
+</p>
+
 <script>
-  setTimeout(() => location.href = '{{ url_for("dashboard") }}', 30000);
+let _done = false;
+async function poll() {
+  try {
+    const r = await fetch('/api/update/log', {cache: 'no-store'});
+    if (!r.ok) return;
+    const d = await r.json();
+    const pre = document.getElementById('ulog');
+    pre.textContent = d.log && d.log.trim() ? d.log : '(no output yet…)';
+    pre.scrollTop = pre.scrollHeight;
+    if (d.done && !_done) {
+      _done = true;
+      const st = document.getElementById('ustatus');
+      if (d.ok) {
+        st.textContent = '✓ Update complete'
+          + (d.commit ? ' — now running ' + d.commit : '');
+        st.style.color = '#44cc44';
+      } else {
+        st.textContent = '✗ Update failed — read the log above, fix it, '
+          + 'and try again.';
+        st.style.color = '#ff5500';
+      }
+    }
+  } catch (e) {
+    /* webui is restarting mid-update — keep polling, it will come back */
+  }
+}
+setInterval(poll, 1500);
+poll();
 </script>
 {% endblock %}

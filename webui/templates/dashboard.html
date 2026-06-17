@@ -17,6 +17,7 @@
         <div><span class="label">Dec</span> <span id="dec">{{ solution.dec_str }}</span></div>
       </div>
       <dl class="stats">
+        <dt>Centered star</dt><dd id="dash-star">{% if solution.star_name %}{{ solution.star_name }}{% if solution.star_desig %} ({{ solution.star_desig }}){% endif %}{% if solution.star_mag is not none %} &middot; mag {{ "%.1f"|format(solution.star_mag) }}{% endif %}{% if solution.star_sep_deg is not none and solution.star_sep_deg >= 1.0 %} &middot; {{ "%.1f"|format(solution.star_sep_deg) }}&deg; off{% endif %}{% else %}&mdash;{% endif %}</dd>
         <dt>Stars</dt><dd id="stars">{{ solution.stars }}</dd>
         <dt>Matches</dt><dd id="matches">{{ solution.matches }}</dd>
         <dt>Solve time</dt><dd id="solve_ms">{{ "%.0f"|format(solution.solve_ms) }} ms</dd>
@@ -33,16 +34,6 @@
           <dt>Status</dt><dd id="status">{{ solution.status if solution else 0 }}{% if solution %} ({{ {0:"waiting",3:"timeout",5:"too few stars"}.get(solution.status, "unknown") }}){% endif %}</dd>
         </dl>
       </div>
-    {% endif %}
-  </div>
-
-  <div class="card">
-    <h2>Focus</h2>
-    {% if committed_focus is not none %}
-      <div class="focus-score-sm">{{ "%.1f"|format(committed_focus) }}</div>
-      <p class="hint">Score at last focus set. <a href="{{ url_for('focus_page') }}">Refocus &rarr;</a></p>
-    {% else %}
-      <p class="muted">Not set. <a href="{{ url_for('focus_page') }}" style="color:#ff1111;">Focus &rarr;</a></p>
     {% endif %}
   </div>
 
@@ -143,18 +134,22 @@
       <a href="{{ url_for('config_page') }}">Config</a> page.
     </p>
     {% if seeing and seeing.presets %}
-    <table class="config-table" style="margin-top:6px; font-size:0.82rem;">
-      <thead><tr><th>key</th><th>good</th><th>bad</th></tr></thead>
-      <tbody>
-        {% for key in seeing.presets.good.keys() %}
-        <tr>
-          <td><code>{{ key }}</code></td>
-          <td>{{ seeing.presets.good[key] }}</td>
-          <td>{{ seeing.presets.bad[key] }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <div class="table-scroll" style="margin-top:6px;">
+      <table class="preset-table">
+        <thead><tr><th>key</th><th class="col-eff">effective</th><th>good</th><th>bad</th><th>keith</th></tr></thead>
+        <tbody>
+          {% for key in seeing.presets.good.keys() %}
+          <tr>
+            <td>{{ key }}</td>
+            <td class="col-eff">{{ seeing.effective.get(key, '') if seeing.effective else '' }}</td>
+            <td>{{ seeing.presets.good[key] }}</td>
+            <td>{{ seeing.presets.bad[key] }}</td>
+            <td>{{ seeing.presets.keith[key] if seeing.presets.keith else '' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
     {% endif %}
   </div>
 
@@ -245,6 +240,19 @@ async function refresh() {
       if (fov) fov.textContent = sol.fov_deg.toFixed(3) + '°';
       const roll = document.getElementById('roll');
       if (roll) roll.textContent = (sol.roll_deg || 0).toFixed(1) + '°';
+      const starEl = document.getElementById('dash-star');
+      if (starEl) {
+        if (sol.star_name) {
+          let t = sol.star_name;
+          if (sol.star_desig) t += ' (' + sol.star_desig + ')';
+          if (sol.star_mag != null) t += ' · mag ' + sol.star_mag.toFixed(1);
+          if (sol.star_sep_deg != null && sol.star_sep_deg >= 1.0)
+            t += ' · ' + sol.star_sep_deg.toFixed(1) + '° off';
+          starEl.textContent = t;
+        } else {
+          starEl.textContent = '—';
+        }
+      }
     } else {
       const ns = document.getElementById('not-solved');
       if (ns) {

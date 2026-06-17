@@ -7,6 +7,10 @@
 - **OS**: Debian GNU/Linux 13 "Trixie" (Pi OS Trixie Lite)
 - **Python**: 3.11+, installed at `/opt/efinder/`
 - **Service**: `systemd` unit `efinder.service`, managed with `sudo systemctl {start,stop,restart,status} efinder`
+- **Host serial tether**: the USB CDC-ACM serial device enumerates as
+  `/dev/ttyACM0` on Linux but **`/dev/tty.usbmodem*`** on macOS (digits vary per
+  port/session; `ls /dev/tty.usbmodem*` to find it). There is no `/dev/ttyACM0`
+  on macOS.
 
 ---
 
@@ -548,10 +552,25 @@ in `tests/test_auto_tune.py`.
   `_invalidate_solver_cache`) **and** saves it as the tuned mode's override
   (`source="auto_tune"`), so the factory preset stays untouched and `seeing_get`
   lineage reads **tuned**. **commit=false** restores the camera and changes
-  nothing.
+  nothing — but the winner is kept in `auto_tune_status`, so you can apply it
+  **after** seeing the result via `auto_tune_apply_last` (the "Apply result"
+  button) instead of having to decide commit up front. `auto_tune_apply_last`
+  mirrors the commit path (shared_cfg + `config.save_keys` + camera exposure/gain
+  + `save_override` source=`auto_tune` + cache invalidate) from the stored
+  result; it errors if a sweep is running or no result exists.
 * CLI: `efinder-ctl auto-tune {start [--mode] [--commit] [--wait]|status|cancel}`.
   Web UI: an "Auto-tune (current sky)" card on the Camera page (start/cancel +
-  progress poller via `/api/autotune`).
+  **Apply result** + progress poller via `/api/autotune`). The Camera page also
+  live-syncs its sliders/selects (`/api/camera/state`) so auto-exposure,
+  auto-tune, and preset changes show without a reload.
+
+The Background A/B (`_bgrun_worker`) reads the **live effective** detection
+params (`solver_params_get` → sigma/kernel_sigma/noise_mode/max_axis_ratio) and
+the real exposure/gain, not the config file, and stamps them into the report —
+so "A/B matches" reflects the live sycamore pipeline. It is **sycamore-only**:
+when `extractor_backend=tetra3` (Keith) the A/B does not represent the live
+extractor and says so (banner + report `*** NOTE ***`); use `diag_solve.py
+--bundle` to evaluate Keith.
 
 ### Hindsight tuning from a saved burst
 

@@ -313,6 +313,32 @@ pre.logs, pre.config {
 }
 .config-modified { background: #150000; }
 
+/* Preset comparison tables (seeing Good/Bad/Keith). Unlike .config-table these
+   stay a real table and scroll horizontally on a phone instead of collapsing
+   each cell into an unlabeled block. Wrap in <div class="table-scroll">. */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+.preset-table {
+  border-collapse: collapse;
+  font-size: 0.82rem;
+}
+.preset-table th,
+.preset-table td {
+  padding: 0.25rem 0.6rem;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid #220000;
+}
+.preset-table th { color: #cc3333; font-weight: 500; }
+.preset-table td {
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+  color: #cc0000;
+}
+.preset-table th.col-eff, .preset-table td.col-eff { color: #ff1111; }
+
 @media (max-width: 600px) {
   header { flex-direction: column; align-items: flex-start; }
   main { padding: 0 0.75rem; }

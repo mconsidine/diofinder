@@ -147,6 +147,13 @@ ping efinder.local
 mDNS hostname `efinder.local` works on macOS and Linux. Windows needs Bonjour.
 Android `.local` resolution varies — use the IP address directly if needed.
 
+> **USB serial device path differs by OS.** When tethered over USB, the Pi's
+> serial (CDC-ACM) interface enumerates as **`/dev/ttyACM0`** on Linux but as
+> **`/dev/tty.usbmodem*`** on macOS (e.g. `/dev/tty.usbmodem14201` — the digits
+> vary by port/session). On a Mac, use the `tty.usbmodem*` path in any serial
+> client (`screen /dev/tty.usbmodem14201 115200`, `minicom`, etc.); there is no
+> `/dev/ttyACM0` on macOS. Run `ls /dev/tty.usbmodem*` to find the current name.
+
 ---
 
 ## Connecting from SkySafari

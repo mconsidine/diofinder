@@ -1166,6 +1166,59 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 _auto_tune_state["cancel"] = True
             return MaintResponse(ok=True, result={"cancelling": True})
 
+        if cmd == "auto_tune_apply_last":
+            # Apply a finished dry-run's winner after the fact (so you decide to
+            # commit AFTER seeing the result). Mirrors the commit branch in
+            # _auto_tune_run; the dry run restored the camera, so set it here.
+            with _auto_tune_lock:
+                if _auto_tune_state["running"]:
+                    return MaintResponse(ok=False, error="auto-tune is running")
+                snap = dict(_auto_tune_state)
+            result = snap.get("result") or {}
+            best = result.get("best")
+            if not best:
+                return MaintResponse(
+                    ok=False,
+                    error="no auto-tune result to apply — run a dry run first")
+            mode = result.get("mode") or ctx.shared_cfg.get(
+                "seeing_mode", ctx.cfg.seeing_mode)
+            photo = result.get("photometric") or {}
+            updates = {
+                "detect_sigma": float(best["sigma"]),
+                "detect_kernel_sigma": float(best["kernel_sigma"]),
+                "detect_bg_mode": str(best["bg_mode"]),
+            }
+            for k in ("detect_sigma", "detect_kernel_sigma", "detect_bg_mode"):
+                ctx.shared_cfg[k] = updates[k]
+            ctx.cfg.detect_sigma = updates["detect_sigma"]
+            ctx.cfg.detect_kernel_sigma = updates["detect_kernel_sigma"]
+            ctx.cfg.detect_bg_mode = updates["detect_bg_mode"]
+            for cam_key, cam_op in (("exposure_s", CAMERA_OP_SET_EXPOSURE),
+                                    ("gain", CAMERA_OP_SET_GAIN)):
+                val = photo.get(cam_key)
+                if val is None:
+                    continue
+                r = _call_camera(cam_op, {cam_key: float(val)},
+                                 ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+                if r is not None and r.ok:
+                    setattr(ctx.cfg, cam_key, float(val))
+                    updates[cam_key] = float(val)
+            try:
+                cfg_mod.save_keys(updates)
+            except Exception as e:
+                log.warning("auto_tune_apply_last could not persist: %s", e)
+            override = None
+            try:
+                override = seeing_mod.save_override(mode, dict(updates),
+                                                    source="auto_tune")
+            except Exception as e:
+                log.warning("auto_tune_apply_last could not save override: %s", e)
+            _invalidate_solver_cache()
+            _at_set(result={**result, "committed": True})
+            log.info("auto-tune apply-last (override saved): %s", updates)
+            return MaintResponse(ok=True, result={
+                "applied": updates, "mode": mode, "override": override})
+
         if cmd == "tuning_set":
             # Toggle the libcamera tuning profile. Takes effect on the NEXT
             # service restart (the camera is initialised once at startup).
