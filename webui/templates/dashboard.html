@@ -17,6 +17,7 @@
         <div><span class="label">Dec</span> <span id="dec">{{ solution.dec_str }}</span></div>
       </div>
       <dl class="stats">
+        <dt>Centered star</dt><dd id="dash-star">{% if solution.star_name %}{{ solution.star_name }}{% if solution.star_desig %} ({{ solution.star_desig }}){% endif %}{% if solution.star_mag is not none %} &middot; mag {{ "%.1f"|format(solution.star_mag) }}{% endif %}{% if solution.star_sep_deg is not none and solution.star_sep_deg >= 1.0 %} &middot; {{ "%.1f"|format(solution.star_sep_deg) }}&deg; off{% endif %}{% else %}&mdash;{% endif %}</dd>
         <dt>Stars</dt><dd id="stars">{{ solution.stars }}</dd>
         <dt>Matches</dt><dd id="matches">{{ solution.matches }}</dd>
         <dt>Solve time</dt><dd id="solve_ms">{{ "%.0f"|format(solution.solve_ms) }} ms</dd>
@@ -239,6 +240,19 @@ async function refresh() {
       if (fov) fov.textContent = sol.fov_deg.toFixed(3) + '°';
       const roll = document.getElementById('roll');
       if (roll) roll.textContent = (sol.roll_deg || 0).toFixed(1) + '°';
+      const starEl = document.getElementById('dash-star');
+      if (starEl) {
+        if (sol.star_name) {
+          let t = sol.star_name;
+          if (sol.star_desig) t += ' (' + sol.star_desig + ')';
+          if (sol.star_mag != null) t += ' · mag ' + sol.star_mag.toFixed(1);
+          if (sol.star_sep_deg != null && sol.star_sep_deg >= 1.0)
+            t += ' · ' + sol.star_sep_deg.toFixed(1) + '° off';
+          starEl.textContent = t;
+        } else {
+          starEl.textContent = '—';
+        }
+      }
     } else {
       const ns = document.getElementById('not-solved');
       if (ns) {

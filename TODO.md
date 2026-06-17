@@ -210,6 +210,17 @@ tether. Plan: detect failed join after N seconds, fall back to AP mode
 automatically. `comitup` is the cleanest existing solution.
 Target: v0.8.
 
+### Label stars on the live frame overlay
+The Camera page and Status page name only the **single** cataloged star nearest
+the boresight ("Centered star", from `star_names.csv`). To answer "what's that
+bright star over there?" without re-pointing, draw star **names on the live
+frame overlay** in `/frame.jpg`: project the catalog (or the solved match list)
+through the solved WCS onto the image and label the brightest few in-frame named
+stars next to their pixel positions. Needs: the solver to expose matched
+star sky-coords + names (or a small catalog query by RA/Dec/FOV), and
+`frame_jpg()` to draw the labels (it already draws the boresight + FOV rings).
+Heavier than the centered-star readout; do it after the higher-value items.
+
 ### Status page: build version, clock, and observer location
 Surface on the Status/dashboard page (`/`):
 - the **image version / git tag** the device is running (the `version` maint
