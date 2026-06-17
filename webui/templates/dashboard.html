@@ -36,16 +36,6 @@
     {% endif %}
   </div>
 
-  <div class="card">
-    <h2>Focus</h2>
-    {% if committed_focus is not none %}
-      <div class="focus-score-sm">{{ "%.1f"|format(committed_focus) }}</div>
-      <p class="hint">Score at last focus set. <a href="{{ url_for('focus_page') }}">Refocus &rarr;</a></p>
-    {% else %}
-      <p class="muted">Not set. <a href="{{ url_for('focus_page') }}" style="color:#ff1111;">Focus &rarr;</a></p>
-    {% endif %}
-  </div>
-
   <div class="card expert-only">
     <h2>Calibration</h2>
     {% if calibration %}
@@ -143,18 +133,21 @@
       <a href="{{ url_for('config_page') }}">Config</a> page.
     </p>
     {% if seeing and seeing.presets %}
-    <table class="config-table" style="margin-top:6px; font-size:0.82rem;">
-      <thead><tr><th>key</th><th>good</th><th>bad</th></tr></thead>
-      <tbody>
-        {% for key in seeing.presets.good.keys() %}
-        <tr>
-          <td><code>{{ key }}</code></td>
-          <td>{{ seeing.presets.good[key] }}</td>
-          <td>{{ seeing.presets.bad[key] }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+    <div class="table-scroll" style="margin-top:6px;">
+      <table class="preset-table">
+        <thead><tr><th>key</th><th>good</th><th>bad</th><th>keith</th></tr></thead>
+        <tbody>
+          {% for key in seeing.presets.good.keys() %}
+          <tr>
+            <td>{{ key }}</td>
+            <td>{{ seeing.presets.good[key] }}</td>
+            <td>{{ seeing.presets.bad[key] }}</td>
+            <td>{{ seeing.presets.keith[key] if seeing.presets.keith else '' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
     {% endif %}
   </div>
 
