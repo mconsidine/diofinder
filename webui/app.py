@@ -910,9 +910,30 @@ def logs():
 
 # ---- Update -----------------------------------------------------------------
 
+UPDATE_LOG = "/var/lib/efinder/last-update.log"
+
+
+def _running_commit():
+    """One-line description of the git checkout the daemon code runs from
+    (`/opt/efinder`), e.g. '1ef350d (claude/friendly-lamport-ff02lf) webui: …'.
+    Returns None if it can't be read."""
+    try:
+        out = subprocess.run(
+            ["git", "-c", "safe.directory=/opt/efinder", "-C", "/opt/efinder",
+             "log", "-1", "--format=%h (%D) %s"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
 @app.route("/update", methods=["GET", "POST"])
 def update_page():
-    """OTA update page: GET shows current version; POST fires efinder-update in the background.
+    """OTA update page: GET shows current version + running commit; POST fires
+    efinder-update in the background, capturing its output to a log.
 
     An optional 'ref' form field updates to a specific branch/tag instead of the
     latest release (runs `efinder-update --ref <ref>`)."""
@@ -925,21 +946,46 @@ def update_page():
             if not _re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,200}", ref):
                 return "invalid branch/tag name", 400
             cmd += ["--ref", ref]
+        # Capture output to a log so a failed update (bad ref, dirty tree,
+        # fast-forward conflict) is VISIBLE on the Update page instead of
+        # vanishing into /dev/null. efinder-update is detached (it restarts
+        # this very webui), so it keeps writing the log across the restart.
         try:
-            subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
+            logf = open(UPDATE_LOG, "w")
+            logf.write(f"$ {' '.join(cmd)}\n"
+                       f"started: {datetime.now().isoformat(timespec='seconds')}\n\n")
+            logf.flush()
+            out = logf
+        except OSError:
+            out = subprocess.DEVNULL
+        try:
+            subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT,
+                             start_new_session=True)
         except FileNotFoundError:
             return "efinder-update not installed", 500
-        return render_template("update_running.html")
+        return render_template("update_running.html", ref=ref or "latest release")
     version = _safe_call("version")
     return render_template(
         "update.html",
-        version=(
-            version.result.get("version") if version.ok else "unknown"),
+        version=(version.result.get("version") if version.ok else "unknown"),
+        running=_running_commit(),
     )
+
+
+@app.route("/api/update/log")
+def api_update_log():
+    """Tail of the last efinder-update run + terminal state, for the running page."""
+    try:
+        with open(UPDATE_LOG) as f:
+            text = f.read()
+    except OSError:
+        text = ""
+    low = text.lower()
+    done = ("complete" in low) or ("error" in low)
+    ok = done and ("complete" in low) and ("error" not in low)
+    return jsonify({"log": text, "done": done, "ok": ok,
+                    "commit": _running_commit()})
+
 
 
 # ---- Config view ------------------------------------------------------------

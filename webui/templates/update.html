@@ -3,6 +3,9 @@
 {% block content %}
 <h2>Update</h2>
 <p>Current version: <strong>{{ version }}</strong></p>
+{% if running %}
+<p class="hint" style="margin-top:-6px;">Running commit: <code>{{ running }}</code></p>
+{% endif %}
 <p>This pulls code from GitHub, refreshes Python dependencies (including the
    sycamore wheel), and restarts the service. Downtime is usually under a
    minute.</p>
@@ -21,6 +24,8 @@
     Track a development branch or a specific tag instead of the latest release
     &mdash; e.g. <code>claude/olive-bg-solve-rate</code> or <code>v0.0.15-dev</code>.
     Runs <code>efinder-update --ref &lt;name&gt;</code>.
+    <br><strong>Tip:</strong> copy-paste the exact name — <code>l</code> (ell)
+    and <code>1</code> (one) are easy to confuse on a phone keyboard.
   </p>
   <form method="post" action="{{ url_for('update_page') }}"
         onsubmit="return confirm('Update eFinder to ' + (this.ref.value || '(empty!)') + '? The service will be briefly unavailable.');">
