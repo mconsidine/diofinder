@@ -10,7 +10,16 @@
 <div class="card" style="margin-bottom:1rem;">
   <h3 style="margin:0 0 10px 0; font-size:1rem;">Current Settings</h3>
   {% if params %}
+  {% if params.extractor_backend == 'tetra3' %}
+  <div class="alert alert-warning" style="margin:0 0 10px 0;">
+    Live extractor is <strong>tetra3 (Keith)</strong>. The A/B test below uses
+    <strong>sycamore</strong> and does <strong>not</strong> reflect the live
+    pipeline — use <code>diag_solve.py --bundle</code> to evaluate Keith.
+  </div>
+  {% endif %}
   <dl class="stats">
+    <dt>extractor_backend</dt>
+    <dd><code>{{ params.extractor_backend or 'sycamore' }}</code></dd>
     <dt>detect_bg_mode</dt>
     <dd><code>{{ params.detect_bg_mode }}</code></dd>
     <dt>detect_tophat_radius</dt>

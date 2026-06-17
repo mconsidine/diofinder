@@ -557,6 +557,14 @@ in `tests/test_auto_tune.py`.
   Web UI: an "Auto-tune (current sky)" card on the Camera page (start/cancel +
   progress poller via `/api/autotune`).
 
+The Background A/B (`_bgrun_worker`) reads the **live effective** detection
+params (`solver_params_get` → sigma/kernel_sigma/noise_mode/max_axis_ratio) and
+the real exposure/gain, not the config file, and stamps them into the report —
+so "A/B matches" reflects the live sycamore pipeline. It is **sycamore-only**:
+when `extractor_backend=tetra3` (Keith) the A/B does not represent the live
+extractor and says so (banner + report `*** NOTE ***`); use `diag_solve.py
+--bundle` to evaluate Keith.
+
 ### Hindsight tuning from a saved burst
 
 auto_tune is **live-only**. To find the best parameters *in hindsight* for an
