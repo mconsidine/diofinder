@@ -603,6 +603,18 @@ def exposure_set():
     return redirect(url_for("camera_page"))
 
 
+@app.route("/api/camera/state")
+def api_camera_state():
+    """Live exposure/gain + solver/match params, so the Camera page can keep its
+    controls in sync after auto-exposure, auto-tune, or a seeing-preset change."""
+    out = {}
+    for cmd in ("exposure_get", "solver_params_get", "match_params_get"):
+        r = _safe_call(cmd)
+        if r.ok and isinstance(r.result, dict):
+            out.update(r.result)
+    return jsonify(out)
+
+
 @app.route("/api/camera/set", methods=["POST"])
 def api_camera_set():
     """JSON API for live camera/solver parameter changes without a page reload."""

@@ -140,7 +140,7 @@
         <input type="hidden" name="next" value="camera_page">
         {% set bgm = solver_params.detect_bg_mode %}
         <label>Mode
-          <select name="bg_mode">
+          <select name="bg_mode" id="bg_mode_sel">
             <option value="row_percentile" {{ 'selected' if bgm == 'row_percentile' }}>row_percentile (default, fastest)</option>
             <option value="line_median" {{ 'selected' if bgm == 'line_median' }}>line_median (robust row correction)</option>
             <option value="column_percentile" {{ 'selected' if bgm == 'column_percentile' }}>column_percentile (vertical gradient)</option>
@@ -457,7 +457,9 @@ function setStatus(id, msg, ok) {
   if (ok) setTimeout(() => { if (el.textContent === msg) el.textContent = ' '; }, 2000);
 }
 
+let _lastLocalEdit = 0;   // pause live-sync briefly after the user changes a value
 async function applyParams(params, statusId) {
+  _lastLocalEdit = Date.now();
   setStatus(statusId, 'Applying…', true);
   try {
     const r = await fetch('/api/camera/set', {
@@ -676,6 +678,42 @@ document.getElementById('at-cancel').addEventListener('click', async () => {
   _atRefresh();
 });
 _atRefresh();  // reflect any in-progress / last sweep on load
+
+// --- Live control sync -------------------------------------------------------
+// Keep the sliders/selects in step with values the daemon changes on its own
+// (auto-exposure every 5 s, auto-tune commit, seeing presets). Never clobbers a
+// control the user is actively editing, and pauses right after any local edit.
+function _syncNum(numId, sliderId, value, fmtNum, toSlider) {
+  if (value == null) return;
+  const num = document.getElementById(numId);
+  const sl  = sliderId ? document.getElementById(sliderId) : null;
+  if (num && document.activeElement === num) return;   // user is typing here
+  if (sl && document.activeElement === sl) return;      // user is dragging here
+  if (num) { const v = fmtNum(value); if (num.value !== String(v)) num.value = v; }
+  if (sl)  { sl.value = toSlider ? toSlider(value) : value; }
+}
+function _syncSelect(id, value) {
+  if (value == null) return;
+  const el = document.getElementById(id);
+  if (!el || document.activeElement === el) return;
+  if (el.value !== String(value)) el.value = String(value);
+}
+async function syncCameraState() {
+  if (Date.now() - _lastLocalEdit < 2500) return;   // cooldown after a local edit
+  try {
+    const r = await fetch('/api/camera/state', {cache: 'no-store'});
+    if (!r.ok) return;
+    const d = await r.json();
+    _syncNum('exp_num', 'exp_slider', d.exposure_s,
+             v => parseFloat(v).toFixed(4).replace(/\.?0+$/, ''), v => Math.log10(v));
+    _syncNum('gain_num', 'gain_slider', d.gain, v => Math.round(v), v => Math.round(v));
+    _syncNum('sigma_num', 'sigma_slider', d.detect_sigma, v => parseFloat(v).toFixed(1));
+    _syncNum('kernel_num', 'kernel_slider', d.detect_kernel_sigma, v => parseFloat(v).toFixed(1));
+    _syncSelect('bg_mode_sel', d.detect_bg_mode);
+    _syncSelect('backend_sel', d.extractor_backend);
+  } catch (e) { /* keep trying */ }
+}
+setInterval(syncCameraState, 3000);
 </script>
 
 {% endblock %}
