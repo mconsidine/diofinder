@@ -244,6 +244,22 @@ fi
 
 mkdir -p /var/lib/efinder
 chown "${EFINDER_USER}:${EFINDER_USER}" /var/lib/efinder 2>/dev/null || true
+
+# Stamp the build version so a freshly burned (never-OTA'd) image reports its
+# real tag via `efinder-ctl version` / the web UI, in the same format
+# efinder-update writes. Prefer the explicit build tag (EFINDER_VERSION); fall
+# back to `git describe` of the provisioned checkout (a shallow clone may only
+# yield a short sha, which is still better than the stale in-code default).
+_stamp_ver="${EFINDER_VERSION:-}"
+case "$_stamp_ver" in
+  ""|latest|main)
+    _stamp_ver="$(sudo -u "$EFINDER_USER" git -C "$EFINDER_DIR" describe \
+      --tags --always 2>/dev/null || echo unknown)" ;;
+esac
+echo "$_stamp_ver $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /var/lib/efinder/version
+chown "${EFINDER_USER}:${EFINDER_USER}" /var/lib/efinder/version 2>/dev/null || true
+LOG "Stamped image version: $_stamp_ver"
+
 SOLVER_DB="/var/lib/efinder/default_database.npz"
 
 if [ ! -f "$SOLVER_DB" ]; then

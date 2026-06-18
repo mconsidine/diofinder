@@ -82,6 +82,27 @@ def _release_info():
     released_at = parts[1].strip() if len(parts) > 1 else None
     return tag, released_at
 
+
+def _git_describe():
+    """Best-effort ``git describe`` of the installed checkout, or None.
+
+    The image is a git checkout (install.sh provisions it so OTA works), so git
+    is the authoritative source of the running tag/commit even on a freshly
+    burned device that predates any OTA-written release file. Returns the exact
+    tag when built from one, else ``<tag>-<n>-g<sha>`` / a bare short sha.
+    """
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    try:
+        out = subprocess.run(
+            ["git", "-c", "safe.directory=*", "-C", repo,
+             "describe", "--tags", "--always", "--dirty"],
+            capture_output=True, text=True, timeout=5)
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except Exception:
+        pass
+    return None
+
 _solver_call_lock = threading.Lock()
 _camera_call_lock = threading.Lock()
 
@@ -1005,19 +1026,22 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             return MaintResponse(ok=True, result={"pong": True})
 
         if cmd == "version":
-            # "version" reports the installed release tag (from the OTA-written
-            # /var/lib/efinder/version) when available, falling back to the
-            # in-code config version. code_version always carries the latter so
-            # nothing is lost.
+            # Resolution order: OTA-written release file -> git describe of the
+            # /opt/efinder checkout -> the in-code config default. The git
+            # fallback is what makes a freshly burned image (no OTA file yet)
+            # report its real tag/commit instead of the stale code default.
             tag, released_at = _release_info()
+            git_desc = _git_describe()
             result = {
-                "version": tag or ctx.cfg.version,
+                "version": tag or git_desc or ctx.cfg.version,
                 "code_version": ctx.cfg.version,
             }
             if tag:
                 result["release"] = tag
             if released_at:
                 result["released_at"] = released_at
+            if git_desc:
+                result["git"] = git_desc
             return MaintResponse(ok=True, result=result)
 
         if cmd == "status":
