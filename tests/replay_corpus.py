@@ -11,6 +11,12 @@ Usage:
   python3 tests/replay_corpus.py --corpus /path/to/corpus --presets good,bad --csv out.csv
   python3 tests/replay_corpus.py --corpus /path/to/corpus --bg-modes row_percentile,block_percentile
   python3 tests/replay_corpus.py --corpus /path/to/corpus --limit 20
+  python3 tests/replay_corpus.py --corpus bg_ab_20260616.zip --database /path/to/db.npz
+  python3 tests/replay_corpus.py --corpus diofinder_debug_20260616.zip --database /path/to/db.npz
+
+--corpus accepts a directory OR a .zip archive (a Background A/B burst
+bg_ab_*.zip or a debug bundle diofinder_debug_*.zip); the raw frame PNGs are
+extracted to a temp dir automatically (display JPEGs / metadata are skipped).
 
 Corpus layout (documented in tests/corpus/README.md):
   corpus/frame.png              -> label "unlabeled"
@@ -695,7 +701,11 @@ See tests/corpus/README.md for the full labeling convention.
     )
     parser.add_argument(
         "--corpus", required=True,
-        help="Directory of PNG frames (flat or label-subdirs; recurses one level).",
+        help="Directory of PNG frames (flat or label-subdirs; recurses one "
+             "level), OR a .zip archive — a Background A/B burst "
+             "(bg_ab_*.zip) or a debug bundle (diofinder_debug_*.zip); its "
+             "raw frame PNGs are extracted automatically (display JPEGs and "
+             "metadata are ignored).",
     )
     parser.add_argument(
         "--database",
