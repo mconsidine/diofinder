@@ -661,6 +661,7 @@ set in `efinder.conf`.
 | `/var/lib/efinder/star_names.csv` | Star naming catalog (from astro_databases release); powers the Camera-page "Centered star" label (names the cataloged star nearest the boresight). Optional — missing file disables naming. Refreshed by `efinder-db-update`. |
 | `/var/lib/efinder/captures/` | PNG captures when `save_failed_frames=true` (100 MB cap, oldest evicted) |
 | `/run/efinder/maint.sock` | Maintenance Unix socket |
+| `/var/lib/efinder/version` | Running release tag + ISO date. Stamped at image build (`install.sh`, from `EFINDER_VERSION`) and rewritten by `efinder-update`. The `version` maint command resolves it as: this file → `git describe` of `/opt/efinder` → in-code `cfg.version` (so a fresh burn reports its real tag instead of the stale default). |
 | `/usr/local/bin/efinder-ctl` | CLI wrapper for the maint socket |
 | `/usr/local/bin/efinder-update` | OTA update script (`--ref BRANCH` to track a branch; `webui Update` page wraps it). Images are git-provisioned by `install.sh` so OTA works on imaged devices. |
 | `/usr/local/bin/efinder-bg-setup` | Show/set background mode + sizes via the maint socket |
