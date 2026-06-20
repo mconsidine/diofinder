@@ -1551,6 +1551,7 @@ def debug_collect():
             zf.writestr(f"frame_{idx:02d}_display.jpg", disp_buf.getvalue())
 
         frames_saved = 0
+        frame_imu = []   # per-frame IMU snapshot, sampled at capture time
         import time as _time
         first_frame = None
         for attempt in range(2):
@@ -1573,6 +1574,15 @@ def debug_collect():
                         frames_saved += 1
                         if first_frame is None:
                             first_frame = f
+                        # Snapshot the IMU output as close to this frame as we
+                        # can (maint round-trip; IMU runs at 20 Hz).
+                        si = _safe_call("status")
+                        frame_imu.append({
+                            "frame": f"frame_{attempt + 1:02d}",
+                            "wall_time": datetime.now().isoformat(timespec="milliseconds"),
+                            "imu": (si.result.get("imu")
+                                    if si.ok and si.result else None),
+                        })
                     except Exception:
                         pass
 
@@ -1613,7 +1623,21 @@ def debug_collect():
             lines.append(f"last_solve_ms: {sol.get('solve_ms')}")
             imu = r.get("imu") or {}
             lines.append(f"imu_active: {imu.get('active')}")
+        # Per-frame IMU output (quaternion + post-solve attitude reference),
+        # so the bundle records the actual attitude at each frame's capture.
+        if frame_imu:
+            lines.append("-" * 52)
+            for rec in frame_imu:
+                imu = rec.get("imu") or {}
+                lines.append(
+                    f"{rec['frame']} @ {rec['wall_time']}  "
+                    f"available={imu.get('available')} active={imu.get('active')} "
+                    f"q={imu.get('q')} age_s={imu.get('age_s')} "
+                    f"ref(ra={imu.get('ref_ra_deg')},dec={imu.get('ref_dec_deg')},"
+                    f"roll={imu.get('ref_roll_deg')})")
         zf.writestr("capture_info.txt", "\n".join(lines) + "\n")
+        # Structured per-frame IMU for offline analysis / replay.
+        zf.writestr("imu.json", json.dumps(frame_imu, indent=2))
 
     # Save a copy to disk so scp/curl also works
     out_dir = pathlib.Path("/var/lib/efinder")

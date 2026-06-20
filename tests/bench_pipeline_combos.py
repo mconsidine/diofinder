@@ -100,6 +100,9 @@ ap.add_argument('--zip', metavar='ZIP', dest='zip_path',
 ap.add_argument('--db', metavar='NPZ', dest='db_override',
                 help='Override the solver database path (e.g. a session-cropped DB) '
                      'to A/B blind-solve time against the full catalogue.')
+ap.add_argument('--max-stars', type=int, dest='max_stars',
+                help='Override max_solve_stars (centroid cap handed to the solver) '
+                     'to A/B the star-count lever.')
 args = ap.parse_args()
 
 
@@ -117,7 +120,7 @@ try:
     timeout_ms = args.timeout if args.timeout is not None else cfg.solve_timeout_ms
     sigma      = args.sigma   if args.sigma   is not None else cfg.detect_sigma
     min_c      = cfg.min_centroids
-    max_c      = cfg.max_solve_stars
+    max_c      = args.max_stars if args.max_stars is not None else cfg.max_solve_stars
     tag(PASS, f'Config: {cfg.summary()}')
     tag(INFO, f'FOV: {fov_est:.4f}° ± {fov_err:.4f}°  timeout: {timeout_ms} ms  '
               f'sigma: {sigma}  min_c: {min_c}  max_c: {max_c}')
