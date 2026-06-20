@@ -4,7 +4,7 @@ name: Release image
 # releases at build time — nothing is vendored in git:
 #   tetra3 (olive-solve)      -> mconsidine/olive-solve releases
 #   star_detect (sycamore)    -> mconsidine/sycamore-extract releases
-#   cedar_solve_13deg.npz     -> mconsidine/astro_databases releases
+#   diofinder_13deg.npz     -> mconsidine/astro_databases releases
 # Pin versions with the OLIVE_SOLVE_TAG / SYCAMORE_TAG / DB_TAG repo
 # variables; unset means the latest release of each.
 #
@@ -113,8 +113,8 @@ jobs:
           echo "min_fov=${{ github.event.inputs.db_min_fov || vars.DB_MIN_FOV || '' }}"     >> $GITHUB_OUTPUT
 
       - name: Fetch star database from astro_databases release
-        # Default path: download the prebuilt cedar_solve_13deg.npz
-        # (10.5-14 deg FOV, Gaia-derived, olive-solve loads it directly)
+        # Default path: download the prebuilt diofinder_13deg.npz
+        # (13-14 deg FOV band, Gaia-derived, olive-solve loads it directly)
         # and verify it against the release manifest.
         if: steps.dbfov.outputs.max_fov == '14.0' && steps.dbfov.outputs.min_fov == ''
         env:
@@ -124,15 +124,15 @@ jobs:
           mkdir -p build/output db-download
           if [ -n "$DB_TAG" ]; then
             gh release download "$DB_TAG" --repo mconsidine/astro_databases \
-              --pattern 'cedar_solve_13deg.npz' --pattern 'manifest.json' --dir db-download
+              --pattern 'diofinder_13deg.npz' --pattern 'manifest.json' --dir db-download
           else
             gh release download --repo mconsidine/astro_databases \
-              --pattern 'cedar_solve_13deg.npz' --pattern 'manifest.json' --dir db-download
+              --pattern 'diofinder_13deg.npz' --pattern 'manifest.json' --dir db-download
           fi
-          WANT=$(python3 -c "import json; print(json.load(open('db-download/manifest.json'))['outputs']['cedar_solve']['sha256'])")
-          GOT=$(sha256sum db-download/cedar_solve_13deg.npz | cut -d' ' -f1)
+          WANT=$(python3 -c "import json; print(json.load(open('db-download/manifest.json'))['outputs']['diofinder']['sha256'])")
+          GOT=$(sha256sum db-download/diofinder_13deg.npz | cut -d' ' -f1)
           [ "$GOT" = "$WANT" ] || { echo "::error::database SHA-256 mismatch"; exit 1; }
-          mv db-download/cedar_solve_13deg.npz build/output/solver_database.npz
+          mv db-download/diofinder_13deg.npz build/output/solver_database.npz
           ls -lh build/output/solver_database.npz
 
       - name: Generate tetra3 star database (custom FOV)
