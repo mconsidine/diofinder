@@ -22,6 +22,7 @@ never during the frame copy itself.
 """
 
 import multiprocessing as mp
+import time
 
 # Architectural constants -- not user-tunable.
 # NUM_BUFFERS=3 is the minimum that keeps camera and solver from
@@ -37,6 +38,10 @@ class FrameSlots:
         # Use Value('i', ...) so they're shared across spawn'd processes
         self.latest_ready = mp.Value("i", -1, lock=False)
         self.reading_idx = mp.Value("i", -1, lock=False)
+        # Monotonic publish counter. The slot index alone can repeat across the
+        # 3-buffer ring, so a reader uses this to wait for a *genuinely new*
+        # frame instead of re-processing the one it already handled.
+        self.seq = mp.Value("q", 0, lock=False)
 
     def acquire_write_slot(self) -> int:
         """Camera: pick any buffer that's neither the latest published frame
@@ -56,21 +61,41 @@ class FrameSlots:
         """Camera: mark a slot as the newest available frame and wake solver."""
         with self.cond:
             self.latest_ready.value = idx
+            self.seq.value += 1
             self.cond.notify_all()
 
-    def acquire_read_slot(self, timeout: float = None) -> int:
-        """Solver: block until a frame is published, take ownership.
+    def acquire_read_slot(self, timeout: float = None, after_seq: int = -1):
+        """Solver: block until a frame *newer than* ``after_seq`` is published,
+        then take ownership. Pass the seq returned by the previous call as
+        ``after_seq`` to wait for a genuinely new frame instead of re-processing
+        the one already handled (a new-frame gate). Default ``after_seq=-1``
+        returns as soon as any frame exists.
 
-        Returns the index of the slot to read from.
+        On ``timeout`` (seconds) it returns the current latest frame even if it
+        is not newer than ``after_seq`` — so a camera stall can't wedge the
+        solver; it still runs its housekeeping and feeds the watchdog. It keeps
+        waiting only while *no* frame has ever been published.
+
+        Returns ``(idx, seq)``.
         """
         with self.cond:
-            while self.latest_ready.value == -1:
-                self.cond.wait(timeout=timeout)
+            deadline = None if timeout is None else time.monotonic() + timeout
+            while not (self.latest_ready.value != -1 and self.seq.value > after_seq):
+                if deadline is None:
+                    self.cond.wait()
+                    continue
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    if self.latest_ready.value != -1:
+                        break  # timed out: return the current (not-new) frame
+                    deadline = time.monotonic() + timeout  # no frame yet: keep waiting
+                    continue
+                self.cond.wait(remaining)
             idx = self.latest_ready.value
             self.reading_idx.value = idx
             # Don't clear latest_ready: camera is allowed to overwrite some
             # other slot (free or the previously-reading one).
-            return idx
+            return idx, self.seq.value
 
     def release_read_slot(self) -> None:
         """Solver: relinquish the buffer it was reading from."""
