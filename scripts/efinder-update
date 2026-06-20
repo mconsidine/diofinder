@@ -141,6 +141,28 @@ install_wheel "olive-solve"      mconsidine/olive-solve      "tetra3-*aarch64*.w
 install_wheel "sycamore-extract" mconsidine/sycamore-extract \
   "star_detect-*${PYTAG}*aarch64*.whl" "star_detect-*abi3*aarch64*.whl"
 
+# --- Refresh CLI wrapper scripts in /usr/local/bin ----------------------------
+# install.sh COPIES these wrappers into /usr/local/bin at image-build time (they
+# are not symlinks), so OTA must re-sync them or renamed release assets / new
+# flags never reach the device (e.g. efinder-db-update pointing at an old DB
+# asset name). Each is written to a temp file and atomically renamed into place
+# so overwriting the *running* efinder-update is safe (this process keeps its
+# original open file).
+LOG "Refreshing CLI wrapper scripts"
+for s in efinder-update efinder-db-update efinder-ctl efinder-bg-setup \
+         efinder-bg-test efinder-gadget-connect efinder-set-time \
+         ap.sh station.sh; do
+  src="$EFINDER_DIR/scripts/$s"
+  [ -f "$src" ] || continue
+  tmp=$(mktemp "/usr/local/bin/.$s.XXXXXX") || continue
+  if cp "$src" "$tmp" && chmod 755 "$tmp"; then
+    mv -f "$tmp" "/usr/local/bin/$s"
+  else
+    rm -f "$tmp"
+    LOG "WARN: could not refresh /usr/local/bin/$s"
+  fi
+done
+
 # --- Record version & restart -------------------------------------------------
 
 echo "$TAG $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /var/lib/efinder/version
