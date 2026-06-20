@@ -244,6 +244,16 @@ class BackgroundCache:
             return CacheState.WARMING_UP
         if self._slewing:
             return CacheState.SLEWING
+        # A pending rebuild means the live model is stale: an unsensed slew the
+        # solver caught via its fail-streak (the IMU-less safety net), a solved
+        # pose jump, a bg-mode switch, or a frame-size change all set this flag.
+        # Until the worker publishes the fresh model and clears it, fall back to
+        # per-frame detection. Without this the consumer kept serving the STALE
+        # model during the async rebuild window — after a slew with no IMU, that
+        # stale per-row background suppressed the new field's stars and the
+        # solver could not re-acquire until the rebuild eventually landed.
+        if self._needs_rebuild.is_set():
+            return CacheState.SLEWING
         if time.monotonic() - m.epoch > self.max_age_s:
             return CacheState.SLEWING
         return CacheState.STEADY
