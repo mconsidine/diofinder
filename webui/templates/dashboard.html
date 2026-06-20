@@ -37,6 +37,74 @@
     {% endif %}
   </div>
 
+  {# ---- Quick setup: novice-friendly controls ---- #}
+  <div class="card" id="quicksetup-card">
+    <h2>Quick setup</h2>
+    <p class="hint" style="margin:0 0 12px 0;">
+      The everyday controls. Defaults are recommended &mdash; only change these
+      if a more advanced page told you to.
+    </p>
+
+    {% set _eb  = (solver_params.extractor_backend if solver_params else None)
+                  or (seeing.effective.get('extractor_backend') if seeing and seeing.effective else None)
+                  or 'sycamore' %}
+    {% set _bgm = (solver_params.detect_bg_mode if solver_params else None)
+                  or (seeing.effective.get('detect_bg_mode') if seeing and seeing.effective else None)
+                  or 'row_percentile' %}
+
+    {# 1. Star detector ------------------------------------------------------ #}
+    <div style="margin-bottom:14px;">
+      <label for="qs-backend" class="label">Star detector</label>
+      <p class="hint" style="margin:2px 0 4px 0;">
+        <strong>Default</strong> is recommended. <strong>Keith</strong>
+        reproduces AstroKeith's classic pipeline.
+      </p>
+      <form method="post" action="{{ url_for('solver_params_set') }}" style="display:inline;">
+        <input type="hidden" name="next" value="dashboard">
+        <select name="extractor_backend" id="qs-backend"
+                onchange="this.form.submit()">
+          <option value="sycamore" {{ 'selected' if _eb == 'sycamore' }}>Default (Sycamore)</option>
+          <option value="tetra3"   {{ 'selected' if _eb == 'tetra3' }}>Keith (AstroKeith)</option>
+        </select>
+        <noscript><button type="submit" class="btn">Apply</button></noscript>
+      </form>
+    </div>
+
+    {# 2. Background mode (curated) ------------------------------------------ #}
+    <div style="margin-bottom:14px;">
+      <label for="qs-bgmode" class="label">Sky background</label>
+      <p class="hint" style="margin:2px 0 4px 0;">
+        Pick what your sky looks like.
+        <a href="{{ url_for('bgtest_page') }}">Advanced&hellip;</a>
+      </p>
+      <form method="post" action="{{ url_for('bgtest_set') }}" style="display:inline;">
+        <input type="hidden" name="next" value="dashboard">
+        <select name="bg_mode" id="qs-bgmode" onchange="this.form.submit()">
+          <option value="row_percentile"   {{ 'selected' if _bgm == 'row_percentile' }}>Standard</option>
+          <option value="block_percentile" {{ 'selected' if _bgm == 'block_percentile' }}>Uneven sky / glow</option>
+          <option value="line_median"      {{ 'selected' if _bgm == 'line_median' }}>Vignetting</option>
+        </select>
+        <noscript><button type="submit" class="btn">Apply</button></noscript>
+      </form>
+      {% if _bgm not in ('row_percentile', 'block_percentile', 'line_median') %}
+        <p class="hint" style="margin:4px 0 0 0;">
+          Current advanced mode: <code>{{ _bgm }}</code> (set on the Advanced page).
+        </p>
+      {% endif %}
+    </div>
+
+    {# 3. Save diagnostics --------------------------------------------------- #}
+    <div>
+      <span class="label">Save diagnostics</span>
+      <p class="hint" style="margin:2px 0 6px 0;">
+        Grab both ZIP files to email for support.
+      </p>
+      <a class="btn" href="{{ url_for('bgtest_run_download') }}">Download last background test</a>
+      <button id="qs-debug-btn" class="btn btn-primary" style="margin-left:4px;">Download debug bundle</button>
+      <span id="qs-debug-status" style="margin-left:8px;font-size:0.85rem;color:#888;"></span>
+    </div>
+  </div>
+
   <div class="card expert-only">
     <h2>Calibration</h2>
     {% if calibration %}
@@ -343,9 +411,10 @@ function formatDMS(d) {
 setInterval(refresh, 1500);
 
 // ── Debug bundle collection ──────────────────────────────────────────────────
-document.getElementById('debug-btn').addEventListener('click', async function() {
-  const btn = this;
-  const st  = document.getElementById('debug-status');
+// POSTs to /debug/collect, which builds the bundle and streams it back as an
+// attachment (it also saves a copy to /var/lib/efinder). Shared by the expert
+// Debug card and the novice Quick-setup card.
+async function collectDebugBundle(btn, st, label) {
   btn.disabled  = true;
   btn.textContent = 'Collecting…';
   st.textContent  = '';
@@ -353,7 +422,7 @@ document.getElementById('debug-btn').addEventListener('click', async function() 
     const r = await fetch('/debug/collect', {method: 'POST'});
     if (!r.ok) {
       st.textContent = 'Error: server returned ' + r.status;
-      btn.textContent = 'Collect debug bundle';
+      btn.textContent = label;
       btn.disabled = false;
       return;
     }
@@ -377,9 +446,21 @@ document.getElementById('debug-btn').addEventListener('click', async function() 
   } catch(e) {
     st.textContent = 'Error: ' + e.message;
   }
-  btn.textContent = 'Collect debug bundle';
+  btn.textContent = label;
   btn.disabled = false;
+}
+document.getElementById('debug-btn').addEventListener('click', function() {
+  collectDebugBundle(this, document.getElementById('debug-status'),
+                     'Collect debug bundle');
 });
+(function() {
+  const qb = document.getElementById('qs-debug-btn');
+  if (!qb) return;
+  qb.addEventListener('click', function() {
+    collectDebugBundle(this, document.getElementById('qs-debug-status'),
+                       'Download debug bundle');
+  });
+})();
 
 // --- Tune from burst ---------------------------------------------------------
 (function() {
