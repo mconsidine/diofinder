@@ -93,6 +93,13 @@ ap.add_argument('--hint-sweep', action='store_true',
                 help='Sweep hint_uncertainty_deg from 0.5° to 30° after main table')
 ap.add_argument('--sigma-sweep', action='store_true',
                 help='Sweep sigma 3–12 to show detection vs solve trade-off')
+ap.add_argument('--zip', metavar='ZIP', dest='zip_path',
+                help='Run Path 1/2 over the raw PNG frames inside a '
+                     'bg_ab_*.zip (Background A/B burst) or diofinder_debug_*.zip '
+                     '(debug bundle). Each frame is one trial; --reps is ignored.')
+ap.add_argument('--db', metavar='NPZ', dest='db_override',
+                help='Override the solver database path (e.g. a session-cropped DB) '
+                     'to A/B blind-solve time against the full catalogue.')
 args = ap.parse_args()
 
 
@@ -129,10 +136,14 @@ except ImportError as e:
 try:
     import tetra3 as _t3
     import pathlib as _pl
-    db_path = (cfg.solver_db if cfg.solver_db.startswith('/')
-               else f'/var/lib/efinder/{cfg.solver_db}.npz')
+    if args.db_override:
+        db_path = args.db_override
+    else:
+        db_path = (cfg.solver_db if cfg.solver_db.startswith('/')
+                   else f'/var/lib/efinder/{cfg.solver_db}.npz')
     t3 = _t3.Tetra3(db_path)
-    tag(PASS, f'tetra3 (olive-solve)  db={db_path}')
+    tag(PASS, f'tetra3 (olive-solve)  db={db_path}'
+              f'{"  (override)" if args.db_override else ""}')
 except Exception as e:
     tag(FAIL, f'tetra3 / database: {e}')
     sys.exit(1)
@@ -150,6 +161,8 @@ except ImportError as e:
 sep('Stage 1: Frame source')
 
 raw_frame = None
+frames_list = None   # populated by --zip (multiple real frames; one trial each)
+_zip_tmp = None      # keep the TemporaryDirectory alive until the process exits
 
 if args.live_shm:
     try:
@@ -173,6 +186,42 @@ if args.live_shm:
     except Exception as e:
         tag(FAIL, f'SHM attach failed: {e}'); sys.exit(1)
 
+elif args.zip_path:
+    try:
+        import zipfile, tempfile, pathlib
+        from PIL import Image as PILImage
+        zp = pathlib.Path(args.zip_path)
+        if not zipfile.is_zipfile(str(zp)):
+            tag(FAIL, f'Not a zip archive: {zp}'); sys.exit(1)
+        _zip_tmp = tempfile.TemporaryDirectory(prefix='bench_zip_')
+        outdir = pathlib.Path(_zip_tmp.name)
+        npng = 0
+        with zipfile.ZipFile(str(zp)) as zf:
+            for member in zf.namelist():
+                nm = member.lower()
+                # Raw frames are PNG; skip dirs, JPEG previews and metadata.
+                if nm.endswith('/') or not nm.endswith('.png'):
+                    continue
+                (outdir / pathlib.Path(member).name).write_bytes(zf.read(member))
+                npng += 1
+        if npng == 0:
+            tag(FAIL, f'No raw PNG frames inside {zp.name} (looked for *.png)')
+            sys.exit(1)
+        frames_list = []
+        for p in sorted(outdir.glob('*.png')):
+            img = PILImage.open(p).convert('L')
+            if img.size != (w, h):
+                img = img.resize((w, h))
+            frames_list.append(np.array(img, dtype=np.uint8))
+        raw_frame = frames_list[0]
+        peaks = [int(f.max()) for f in frames_list]
+        tag(PASS, f'{zp.name}: {len(frames_list)} raw frame(s)  '
+                  f'peak min/med/max={min(peaks)}/{int(np.median(peaks))}/{max(peaks)}')
+    except SystemExit:
+        raise
+    except Exception as e:
+        tag(FAIL, f'Cannot read zip: {e}'); sys.exit(1)
+
 elif args.image:
     try:
         from PIL import Image as PILImage
@@ -187,7 +236,7 @@ elif args.image:
         tag(FAIL, f'Cannot load image: {e}'); sys.exit(1)
 
 else:
-    tag(WARN, 'No --image or --live-shm specified — generating synthetic star field')
+    tag(WARN, 'No --live-shm / --image / --zip specified — generating synthetic star field')
     tag(INFO, '  (Timing is valid; blind plate solve will fail on a synthetic field)')
     raw_frame = np.zeros((h, w), dtype=np.uint8)
     rng = np.random.default_rng(42)
@@ -205,6 +254,12 @@ else:
 if raw_frame.max() < 20:
     tag(WARN, f'Peak pixel={raw_frame.max()} < 20 — solver_proc would skip this frame. '
               'Check exposure/camera mode.')
+
+# Path 1/2 iterate this list: the real frames from --zip (one trial each), or
+# the single live/image/synthetic frame repeated --reps times. Sweeps below use
+# the representative raw_frame (frames_list[0] under --zip).
+bench_frames = frames_list if frames_list is not None else [raw_frame] * args.reps
+N = len(bench_frames)
 
 
 # ── Shared helpers ─────────────────────────────────────────────────────────────
@@ -279,15 +334,15 @@ except Exception as e:
 summary = {}
 
 # ── Path 1: sycamore split pipeline, blind ────────────────────────────────────
-sep(f'Path 1: sycamore split pipeline, blind   N={args.reps}')
+sep(f'Path 1: sycamore split pipeline, blind   N={N}')
 tag(INFO, 'sycamore detect_stars + solve_from_centroids — blind')
 
 p1_ext, p1_slv, p1_tot, p1_solved = [], [], [], 0
 last_good_q = seed_q  # seed from warm-up if available
 
-for i in range(args.reps):
+for i, fr in enumerate(bench_frames):
     try:
-        cent, n, ext_ms = _extract(raw_frame, sigma)
+        cent, n, ext_ms = _extract(fr, sigma)
         p1_ext.append(ext_ms)
 
         if n < min_c:
@@ -296,7 +351,7 @@ for i in range(args.reps):
             p1_tot.append(ext_ms); p1_slv.append(0)
             continue
 
-        soln, slv_ms = _solve_blind(cent, raw_frame.shape)
+        soln, slv_ms = _solve_blind(cent, fr.shape)
         total = ext_ms + slv_ms
         p1_slv.append(slv_ms); p1_tot.append(total)
 
@@ -327,7 +382,7 @@ summary[1] = {'solved': p1_solved, 'n': len(p1_tot),
               'avg_tot': sum(p1_tot)/len(p1_tot) if p1_tot else 0}
 
 # ── Path 2: sycamore split pipeline + hint ────────────────────────────────────
-sep(f'Path 2: sycamore split pipeline + hint ({args.hint_unc:.1f}°)   N={args.reps}')
+sep(f'Path 2: sycamore split pipeline + hint ({args.hint_unc:.1f}°)   N={N}')
 
 if last_good_q is None:
     tag(WARN, 'No quaternion available (path 1 never solved) — path 2 skipped')
@@ -337,9 +392,9 @@ else:
               f'{last_good_q[2]:.4f}, {last_good_q[3]:.4f})  unc={args.hint_unc:.1f}°')
     p2_ext, p2_slv, p2_tot, p2_solved = [], [], [], 0
 
-    for i in range(args.reps):
+    for i, fr in enumerate(bench_frames):
         try:
-            cent, n, ext_ms = _extract(raw_frame, sigma)
+            cent, n, ext_ms = _extract(fr, sigma)
             p2_ext.append(ext_ms)
 
             if n < min_c:
@@ -347,7 +402,7 @@ else:
                 p2_tot.append(ext_ms); p2_slv.append(0)
                 continue
 
-            soln, slv_ms = _solve_hint(cent, raw_frame.shape, last_good_q, args.hint_unc)
+            soln, slv_ms = _solve_hint(cent, fr.shape, last_good_q, args.hint_unc)
             total = ext_ms + slv_ms
             p2_slv.append(slv_ms); p2_tot.append(total)
 
@@ -404,7 +459,7 @@ for n, label in names.items():
     print(f'  {n:<2}  {label:<50}  {ext:>8}  {slv:>8}  {tot:>8}  {rat:>8}')
 hr()
 print(f'  Frame: {w}x{h}  FOV: {fov_est:.3f}°±{fov_err:.3f}°  '
-      f'timeout: {timeout_ms} ms  sigma: {sigma}  reps: {args.reps}')
+      f'timeout: {timeout_ms} ms  sigma: {sigma}  trials: {N}')
 
 
 # ── Hint-uncertainty sweep ─────────────────────────────────────────────────────
