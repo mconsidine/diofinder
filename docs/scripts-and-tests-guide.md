@@ -817,14 +817,14 @@ to reach GitHub. The webui Update page wraps this script.
 
 ### `efinder-db-update`
 
-Solver database updater. Downloads `cedar_solve_13deg.npz` from the
+Solver database updater. Downloads `diofinder_13deg.npz` from the
 `mconsidine/astro_databases` GitHub releases, verifies the SHA-256 against
 the release manifest, installs it over the database named by `solver_db` in
 `/etc/efinder/efinder.conf` (backing up the old file as `.bak`), and
 restarts the service. If the release also carries
-`cedar_solve_13deg_mag85.npz` (a deeper G≤8.5 database for the Bad-seeing
+`diofinder_13deg_mag85.npz` (a deeper G≤8.5 database for the Bad-seeing
 preset), that is downloaded and installed to
-`/var/lib/efinder/cedar_solve_13deg_mag85.npz` as well.
+`/var/lib/efinder/diofinder_13deg_mag85.npz` as well.
 
 ```bash
 sudo efinder-db-update               # latest release
@@ -836,7 +836,7 @@ sudo efinder-db-update v2026.06      # specific release tag
 | (positional, optional) | `latest` | Specific release tag |
 
 **Note on the deep database:** After installing, set `star_db_deep:
-/var/lib/efinder/cedar_solve_13deg_mag85.npz` in `/etc/efinder/efinder.conf`
+/var/lib/efinder/diofinder_13deg_mag85.npz` in `/etc/efinder/efinder.conf`
 and apply the Bad preset (`efinder-ctl seeing set bad`) to enable it. The
 script prints a reminder if `star_db_deep` is not yet configured.
 
@@ -1021,7 +1021,7 @@ sudo efinder-update                # update code first
 sudo efinder-db-update             # then update the databases
 
 # If the deep database was downloaded, enable it for the Bad preset:
-sudo sed -i 's|^#*star_db_deep:.*|star_db_deep: /var/lib/efinder/cedar_solve_13deg_mag85.npz|' \
+sudo sed -i 's|^#*star_db_deep:.*|star_db_deep: /var/lib/efinder/diofinder_13deg_mag85.npz|' \
     /etc/efinder/efinder.conf
 sudo systemctl restart efinder
 efinder-ctl seeing set bad         # apply the Bad preset, which resolves star_db_deep

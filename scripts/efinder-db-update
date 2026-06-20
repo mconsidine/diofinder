@@ -1,6 +1,6 @@
 #!/bin/bash
 # eFinder solver-database updater.
-# Downloads the cedar_solve_13deg.npz star database published on
+# Downloads the diofinder_13deg.npz star database published on
 # mconsidine/astro_databases releases, verifies its SHA-256 against the
 # release manifest, installs it over the database named by solver_db in
 # /etc/efinder/efinder.conf (backing up the old one), and restarts the
@@ -14,7 +14,7 @@
 set -euo pipefail
 
 REPO=mconsidine/astro_databases
-ASSET=cedar_solve_13deg.npz
+ASSET=diofinder_13deg.npz
 CONF=/etc/efinder/efinder.conf
 TAG="${1:-latest}"
 
@@ -50,14 +50,14 @@ if curl -fsSL "$BASE/manifest.json" -o "$TMPDIR/manifest.json"; then
   WANT=$(python3 -c "
 import json, sys
 m = json.load(open('$TMPDIR/manifest.json'))
-print(m['outputs']['cedar_solve']['sha256'])
+print(m['outputs']['diofinder']['sha256'])
 " 2>/dev/null) || WANT=""
   if [ -n "$WANT" ]; then
     GOT=$(sha256sum "$TMPDIR/$ASSET" | cut -d' ' -f1)
     [ "$GOT" = "$WANT" ] || FAIL "SHA-256 mismatch (got $GOT, manifest says $WANT)"
     LOG "SHA-256 OK ($GOT)"
   else
-    LOG "WARNING: manifest has no cedar_solve hash; skipping verification"
+    LOG "WARNING: manifest has no diofinder hash; skipping verification"
   fi
 else
   LOG "WARNING: no manifest.json on release; skipping verification"
@@ -75,10 +75,10 @@ LOG "Installed $(du -h "$DB_PATH" | cut -f1) database at $DB_PATH"
 # --- Optional deep (G<=8.5) database for the Bad-seeing preset -------------
 # Downloaded when the release carries it; non-fatal if absent. The seeing
 # preset uses it only when star_db_deep in efinder.conf points at the file.
-DEEP_ASSET=cedar_solve_13deg_mag85.npz
+DEEP_ASSET=diofinder_13deg_mag85.npz
 DEEP_PATH=/var/lib/efinder/$DEEP_ASSET
 if curl -fsSL "$BASE/$DEEP_ASSET" -o "$TMPDIR/$DEEP_ASSET" 2>/dev/null; then
-  WANT_D=$(python3 -c "import json;m=json.load(open('$TMPDIR/manifest.json'));print(m['outputs'].get('cedar_solve_mag85',{}).get('sha256',''))" 2>/dev/null || true)
+  WANT_D=$(python3 -c "import json;m=json.load(open('$TMPDIR/manifest.json'));print(m['outputs'].get('diofinder_mag85',{}).get('sha256',''))" 2>/dev/null || true)
   GOT_D=$(sha256sum "$TMPDIR/$DEEP_ASSET" | cut -d' ' -f1)
   if [ -n "$WANT_D" ] && [ "$GOT_D" != "$WANT_D" ]; then
     LOG "WARNING: deep database SHA-256 mismatch; skipping deep install"

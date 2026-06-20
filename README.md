@@ -906,7 +906,7 @@ Should be present (typically a few hundred MB). If absent, fetch it from the
 `astro_databases` release (SHA-256 verified):
 
 ```bash
-sudo /usr/local/bin/efinder-db-update   # downloads cedar_solve_13deg.npz
+sudo /usr/local/bin/efinder-db-update   # downloads diofinder_13deg.npz
 ```
 
 ### 10. Query or set runtime parameters without a web browser

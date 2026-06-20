@@ -161,7 +161,7 @@ solver_db: default_database
 # Optional deeper-magnitude database for the "bad" seeing preset. Leave empty
 # to keep presets on the standard db. Set to a bare name or absolute path that
 # exists on disk (see the astro_databases release pattern in the README).
-star_db_deep: /var/lib/efinder/cedar_solve_13deg_mag85.npz
+star_db_deep: /var/lib/efinder/diofinder_13deg_mag85.npz
 # Remembered standard database (set automatically the first time a seeing
 # preset switches to the deep db; "standard" resolves here first).
 star_db_standard:
