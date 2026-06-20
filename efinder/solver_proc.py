@@ -699,6 +699,7 @@ def solver_main(slots, latest_solution, shared_cfg,
 
     fail_streak = 0
     solve_count = 0
+    frame_seq = -1   # last frame sequence processed; gates re-work on stale frames
 
     try:
         while True:
@@ -713,7 +714,13 @@ def solver_main(slots, latest_solution, shared_cfg,
                 except Exception as e:
                     log.warning("Could not enqueue solver reply: %s", e)
 
-            idx = slots.acquire_read_slot(timeout=5.0)
+            # New-frame gate: block until the camera publishes a frame newer
+            # than the one already handled, so the solver doesn't burn CPU
+            # re-extracting and re-solving an identical frame when a solve
+            # finishes faster than the exposure-limited frame period. On a
+            # camera stall the 5 s timeout still returns the current frame so
+            # housekeeping runs and the watchdog epoch keeps advancing.
+            idx, frame_seq = slots.acquire_read_slot(timeout=5.0, after_seq=frame_seq)
             t0  = time.monotonic()
 
             align_req  = _drain_align_queue(align_request_q, align_response_q)
