@@ -23,6 +23,10 @@ on:
         description: "Build SD card image"
         type: boolean
         default: true
+      tag:
+        description: "Cut a release with this tag (e.g. v0.9.0) and attach the image (blank = workflow artifact only)"
+        required: false
+        default: ''
       db_max_fov:
         description: "Database max FOV in degrees (default 14.0)"
         required: false
@@ -57,6 +61,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Create release tag (dispatch with tag input)
+        # Push the tag up front so build-image clones /opt/efinder at the tag.
+        # Pushing with the Actions GITHUB_TOKEN does NOT trigger another
+        # workflow run (recursion-safe), and creating a *tag* does not fire the
+        # release:published trigger — only the explicit release-create step does.
+        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+        run: |
+          git tag "${{ inputs.tag }}" "${{ github.sha }}"
+          git push origin "refs/tags/${{ inputs.tag }}"
 
       - name: Fetch wheels from source-repo releases
         env:
@@ -94,6 +108,8 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "release" ]; then
             echo "tag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+          elif [ -n "${{ inputs.tag }}" ]; then
+            echo "tag=${{ inputs.tag }}" >> $GITHUB_OUTPUT
           else
             echo "tag=manual-$(date -u +%Y%m%d-%H%M)" >> $GITHUB_OUTPUT
           fi
@@ -191,7 +207,7 @@ jobs:
           # Make the image's /opt/efinder a real git clone of THIS repo + ref so
           # OTA (efinder-update / webui Update) works on imaged devices.
           EFINDER_REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
-          EFINDER_GIT_REF: ${{ github.ref_name }}
+          EFINDER_GIT_REF: ${{ (github.event_name == 'workflow_dispatch' && inputs.tag != '') && inputs.tag || github.ref_name }}
           EFINDER_SOLVER_DB: ${{ github.workspace }}/build/output/solver_database.npz
           EFINDER_STAR_NAMES: ${{ github.workspace }}/build/output/star_names.csv
         run: |
@@ -224,11 +240,11 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" build/output/
           xz -T0 -9 build/output/efinder.img
           BUILD_DATE=$(date -u +%Y%m%d)
-          if [ "${{ github.event_name }}" = "release" ]; then
-            IMGNAME="efinder-sycamore-${BUILD_DATE}-${{ steps.ver.outputs.tag }}.img.xz"
-          else
-            IMGNAME="efinder-sycamore-${BUILD_DATE}.img.xz"
-          fi
+          TAG="${{ steps.ver.outputs.tag }}"
+          case "$TAG" in
+            manual-*) IMGNAME="efinder-sycamore-${BUILD_DATE}.img.xz" ;;
+            *)        IMGNAME="efinder-sycamore-${BUILD_DATE}-${TAG}.img.xz" ;;
+          esac
           mv build/output/efinder.img.xz "build/output/${IMGNAME}"
           echo "imgname=${IMGNAME}" >> $GITHUB_OUTPUT
           ls -lh build/output/
@@ -241,8 +257,22 @@ jobs:
           gh release upload "${{ github.event.release.tag_name }}" \
             "build/output/${{ steps.compress.outputs.imgname }}"
 
+      - name: Create release and attach image (dispatch with tag)
+        # The tag was pushed earlier in the run; create a release from it and
+        # upload the image. Using GITHUB_TOKEN means the resulting
+        # release:published event does NOT re-trigger this workflow.
+        if: github.event_name == 'workflow_dispatch' && inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ inputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --title "${{ inputs.tag }}" \
+            --generate-notes \
+            "build/output/${{ steps.compress.outputs.imgname }}"
+
       - name: Upload as workflow artifact (manual builds)
-        if: github.event_name != 'release'
+        if: github.event_name != 'release' && inputs.tag == ''
         uses: actions/upload-artifact@v5
         with:
           name: efinder-sycamore-image-${{ steps.ver.outputs.tag }}
