@@ -133,6 +133,7 @@ def dashboard():
     status = _safe_call("status")
     cal    = _safe_call("calibration_status")
     seeing = _safe_call("seeing_get")
+    sparams = _safe_call("solver_params_get")
 
     sol = (_format_solution(status.result["solution"])
            if status.ok and status.result else None)
@@ -152,6 +153,7 @@ def dashboard():
         committed_focus=committed_focus,
         imu=(status.result.get("imu") if status.ok else None),
         seeing=(seeing.result if seeing.ok else None),
+        solver_params=(sparams.result if sparams.ok else None),
         solver_backend="sycamore",
         bursts=_list_bursts(),
         test_mode=(
@@ -283,7 +285,7 @@ def bgtest_set():
     if not r.ok:
         return r.error, 500
     nxt = request.form.get("next") or "bgtest_page"
-    if nxt not in ("bgtest_page", "camera_page"):
+    if nxt not in ("bgtest_page", "camera_page", "dashboard"):
         nxt = "bgtest_page"
     return redirect(url_for(nxt))
 
@@ -764,7 +766,10 @@ def solver_params_set():
         r = _safe_call("match_params_set", margs)
         if not r.ok:
             return r.error, 400
-    return redirect(url_for("camera_page"))
+    nxt = request.form.get("next") or "camera_page"
+    if nxt not in ("camera_page", "dashboard"):
+        nxt = "camera_page"
+    return redirect(url_for(nxt))
 
 
 # ---- Wi-Fi ------------------------------------------------------------------
