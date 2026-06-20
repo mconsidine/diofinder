@@ -1063,6 +1063,18 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "calib_n":   imu_n,
                     "quality":   round(imu_quality, 3),
                     "active":    imu_active,
+                    # Raw IMU output + post-solve reference, so a debug bundle
+                    # records the actual attitude reading at capture time, not
+                    # just whether the IMU is active.
+                    "q":            ctx.shared_cfg.get("imu_q"),
+                    "t":            ctx.shared_cfg.get("imu_t", 0.0),
+                    "age_s":        (round(time.monotonic()
+                                           - ctx.shared_cfg.get("imu_t", 0.0), 3)
+                                     if ctx.shared_cfg.get("imu_t") else None),
+                    "ref_q":        ctx.shared_cfg.get("imu_ref_q"),
+                    "ref_ra_deg":   ctx.shared_cfg.get("imu_ref_ra_deg"),
+                    "ref_dec_deg":  ctx.shared_cfg.get("imu_ref_dec_deg"),
+                    "ref_roll_deg": ctx.shared_cfg.get("imu_ref_roll_deg"),
                 },
                 "solver_backend": "sycamore",
                 "test_mode":      ctx.shared_cfg.get("test_mode", False),

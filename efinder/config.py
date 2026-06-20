@@ -75,7 +75,7 @@ class Config:
     auto_exposure_nominal_s: float = 0.0
 
     # Optical properties
-    fov_deg: float = 13.5
+    fov_deg: float = 13.64  # 25 mm + IMX477 full-sensor mode (see CLAUDE.md)
     arcsec_per_pixel: float = 51.15  # 6.2 µm eff. pixel × 206265 / 25 mm FL
 
     latitude_deg: float = 0.0
@@ -189,7 +189,7 @@ class Config:
     # Star-names catalog (star_names.csv from astro_databases) used to label
     # the brightest star in a solved field. Missing file → naming disabled.
     star_names_path: str = "/var/lib/efinder/star_names.csv"
-    fov_max_error_deg: float = 1.0
+    fov_max_error_deg: float = 0.3  # tightened: lens FOV is fixed & known
     min_centroids: int = 8
     max_solve_stars: int = 50
     solve_timeout_ms: int = 1500

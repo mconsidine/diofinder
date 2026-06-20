@@ -34,16 +34,21 @@ auto_exposure_max_s: 1.0
 
 # Optical properties.
 #
-# fov_deg is the camera's horizontal field of view in degrees. Start
-# with a coarse measurement; the solver self-calibrates after ~30
-# successful solves and writes the converged value back here. While
-# fov_calibrated is false, the solver uses fov_max_error_deg as the
-# tolerance window. Once fov_calibrated is true, it tightens to
-# fov_calibrated_max_error_deg, which makes solving faster and more
-# robust against false positives.
-fov_deg: 13.5
+# fov_deg is the camera's horizontal field of view in degrees. This image
+# ships PRE-CALIBRATED for the standard 25 mm lens + IMX477 full-sensor mode
+# (13.64°, see the plate-scale derivation in CLAUDE.md), so the solver runs the
+# tight fov_calibrated_max_error_deg tolerance from the first frame instead of
+# relearning over ~30 solves. While fov_calibrated is false the solver uses the
+# (now also tightened) fov_max_error_deg as the tolerance window.
+#
+# IF YOU USE DIFFERENT OPTICS (other focal length / camera), the shipped FOV is
+# wrong and the tight tolerance will reject every solve — reset calibration:
+#   sudo sed -i 's/^fov_calibrated:.*/fov_calibrated: false/' /etc/efinder/efinder.conf
+#   sudo systemctl restart efinder
+# (or the Config page → Reset). The solver will then relearn the real FOV.
+fov_deg: 13.64
 arcsec_per_pixel: 51.15
-fov_calibrated: false
+fov_calibrated: true
 fov_calibrated_stddev: 0.05
 fov_calibrated_max_error_deg: 0.1
 
@@ -160,7 +165,12 @@ star_db_deep: /var/lib/efinder/cedar_solve_13deg_mag85.npz
 # Remembered standard database (set automatically the first time a seeing
 # preset switches to the deep db; "standard" resolves here first).
 star_db_standard:
-fov_max_error_deg: 1.0
+# fov_max_error_deg is the loose (uncalibrated / post-reset) FOV search
+# tolerance. The lens FOV is fixed and known (13.64°), so this is tightened
+# from the old 1.0° to 0.3° — a narrower largest-edge match window means fewer
+# catalogue candidates per image pattern and a faster blind solve. (Once
+# fov_calibrated is true the solver uses fov_calibrated_max_error_deg instead.)
+fov_max_error_deg: 0.3
 min_centroids: 8
 max_solve_stars: 50
 solve_timeout_ms: 1500
