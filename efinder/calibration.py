@@ -1,8 +1,8 @@
 """
 FOV and distortion calibration.
 
-Cedar-solve returns the horizontal field of view (degrees) and distortion
-coefficient on every successful solve. These are intrinsic camera/lens
+The solver (olive-solve) returns the horizontal field of view (degrees) and
+distortion coefficient on every successful solve. These are intrinsic camera/lens
 properties -- they shouldn't change unless the user re-focuses or swaps
 optics. So we treat them as values to *measure once and persist*, not
 configure manually.
