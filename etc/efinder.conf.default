@@ -13,12 +13,15 @@ gain: 5.0
 sensor_full_width: 4056
 sensor_full_height: 3040
 
-# libcamera tuning profile. The IMX477 scientific profile disables ISP
-# noise reduction / sharpening / AWB that corrupt photometry. Toggle between
-# imx477_scientific.json and the standard imx477.json from the Camera page
-# (restart required). Use 'pisp' instead of 'vc4' on a Pi 5; set empty to use
-# the default tuning.
-camera_tuning_file: /usr/share/libcamera/ipa/rpi/vc4/imx477_scientific.json
+# libcamera tuning profile. The shipped imx477_finder.json (installed by
+# install.sh from diofinder's tuning/ dir) is the scientific profile with two
+# detection-targeted changes: DPC off (it deletes 1-2 px faint stars) and an
+# asinh companding gamma so faint stars survive the 12->8-bit reduction;
+# black_level kept. NR / sharpening / AWB are already disabled at runtime by
+# camera_proc's controls regardless of the tuning. Set to imx477_scientific.json
+# or the standard imx477.json to compare (restart required). Use 'pisp' instead
+# of 'vc4' on a Pi 5; set empty to use the default tuning.
+camera_tuning_file: /usr/share/libcamera/ipa/rpi/vc4/imx477_finder.json
 
 # Auto-exposure: a controller in comms_proc nudges exposure toward
 # auto_exposure_target_stars (within min/max) every ~5 s, backing off when
