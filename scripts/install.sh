@@ -329,6 +329,21 @@ install -m 755 "$EFINDER_DIR/scripts/efinder-gadget-connect"  /usr/local/bin/efi
 install -m 755 "$EFINDER_DIR/scripts/efinder-set-time"        /usr/local/bin/efinder-set-time
 chmod 755 "$EFINDER_DIR/scripts/firstboot.sh"
 
+# --- libcamera tuning (finder-optimised IMX477) ------------------------------
+# DPC off (it deletes 1-2 px faint stars) + asinh companding gamma so faint
+# stars survive the 12->8-bit reduction; black_level kept at the sensor pedestal.
+# Copied into the vc4 tuning dir so camera_tuning_file can point at it. NR /
+# sharpen / AWB are already disabled at runtime by camera_proc's controls, so
+# this tuning only changes the two stages the tuning alone governs (DPC, gamma).
+# Non-fatal if the libcamera path is absent (e.g. a non-Pi build host).
+LIBCAMERA_VC4=/usr/share/libcamera/ipa/rpi/vc4
+if [ -d "$LIBCAMERA_VC4" ]; then
+  install -m 644 "$EFINDER_DIR/tuning/imx477_finder.json" "$LIBCAMERA_VC4/imx477_finder.json"
+  LOG "Installed finder libcamera tuning to $LIBCAMERA_VC4/imx477_finder.json"
+else
+  WARN "libcamera vc4 tuning dir not found ($LIBCAMERA_VC4); skipping finder tuning install"
+fi
+
 chown -R "$EFINDER_USER:$EFINDER_USER" /var/lib/efinder
 
 if [ ! -f /etc/efinder/efinder.conf ]; then
