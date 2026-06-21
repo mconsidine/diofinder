@@ -28,6 +28,7 @@ from efinder.align import AlignResult
 from efinder.calibration import FovCalibrator
 from efinder.imu_math import quat_delta_rotvec
 from efinder.polar_run import PolarAligner
+from efinder import frame_health
 from multiprocessing import shared_memory
 
 log = logging.getLogger("efinder.solver")
@@ -700,6 +701,8 @@ def solver_main(slots, latest_solution, shared_cfg,
     fail_streak = 0
     solve_count = 0
     frame_seq = -1   # last frame sequence processed; gates re-work on stale frames
+    _last_health_t = 0.0      # throttle for the exposure/contrast health warning
+    _last_health_warn = False
 
     try:
         while True:
@@ -754,6 +757,23 @@ def solver_main(slots, latest_solution, shared_cfg,
             # immediately so camera_proc is never blocked by solve latency.
             np.copyto(frame_buf, bufs[idx])
             slots.release_read_slot()
+
+            # Exposure/contrast health: flag a crushed/clipped histogram (the
+            # detection-throttling condition no extractor can fix). Throttled to
+            # ~10 s and assessed on a 2x2-subsampled view (1/4 the data) so the
+            # hot path is untouched; logged only on a False->True transition so
+            # it never spams. The fix is exposure/gain (auto-exposure) or the
+            # libcamera black level, not anything in the solver.
+            now_h = time.monotonic()
+            if now_h - _last_health_t > 10.0:
+                _last_health_t = now_h
+                _h = frame_health.assess(frame_buf[::2, ::2])
+                if _h["warn"] and not _last_health_warn:
+                    log.warning(
+                        "frame exposure/contrast crushed: %s — raise exposure/gain "
+                        "or lower the libcamera black level (rpi.black_level); "
+                        "faint stars are likely quantization-limited", _h["msg"])
+                _last_health_warn = _h["warn"]
 
             # Hot-pixel repair: replace masked pixels with their 8-neighbor
             # mean before detection. Vectorized; < 1 ms for a few hundred
