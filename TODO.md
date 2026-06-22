@@ -250,6 +250,23 @@ the build/burn workflows are stable**, since it changes paths the workflows and
 OTA update depend on. Leave references to AstroKeith's upstream `eFinder_cli`
 unchanged.
 
+### IMU→sky alignment: status clarity + persistence (deferred)
+The IMU→sky transform is learned from motion (`solver_proc._imu_update_reference`):
+it needs ≥3 successful solves at pointings 0.1°–15° apart (r² ≥ 0.85) before the
+IMU goes "active"; a fixed camera shows **"calibrating" forever by construction**
+(no motion → no pairs → no fit). This is expected, not a bug — but two
+improvements would make it less confusing:
+
+- **Status clarity:** surface the progress (`imu_calib_n`/3 pairs and the fit
+  quality `imu_calib_quality`) on the Status / Camera page with a hint like
+  "slew to a few sky positions to finish IMU calibration", so a stationary user
+  understands why it never leaves "calibrating".
+- **Persist the transform across reboots:** the IMU-to-camera mounting is
+  physically fixed, so `imu_calib_C` is a constant once learned. Today it lives
+  only in `shared_cfg` and is rebuilt from scratch every boot (forcing a
+  re-slew). Save it to config and restore on boot, gated behind a "recalibrate"
+  reset for when the camera/IMU is physically remounted.
+
 ---
 
 ## Known issues to watch
