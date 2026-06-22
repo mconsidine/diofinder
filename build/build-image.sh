@@ -295,6 +295,19 @@ else
   WARN "No star database available; image will ship without one"
 fi
 
+# Stage the optional deep (mag 8.5) star database for the "bad" seeing preset
+# (downloaded from the astro_databases release by release.yml and passed in via
+# EFINDER_SOLVER_DB_DEEP). Optional; absence just means Bad uses the standard DB.
+CHROOT_DEEP_DB_PATH=""
+if [ -n "${EFINDER_SOLVER_DB_DEEP:-}" ] && [ -f "${EFINDER_SOLVER_DB_DEEP}" ]; then
+  LOG "Staging deep star database ($(du -sh "${EFINDER_SOLVER_DB_DEEP}" | cut -f1))"
+  mkdir -p "$ROOT/tmp/solver-db"
+  cp "${EFINDER_SOLVER_DB_DEEP}" "$ROOT/tmp/solver-db/diofinder_13deg_mag85.npz"
+  CHROOT_DEEP_DB_PATH="/tmp/solver-db/diofinder_13deg_mag85.npz"
+else
+  WARN "No deep star database available; 'bad' seeing preset will use the standard DB"
+fi
+
 # Stage the star-names catalog (downloaded from the astro_databases release
 # by release.yml and passed in via EFINDER_STAR_NAMES). Optional.
 CHROOT_NAMES_PATH=""
@@ -316,6 +329,7 @@ export EFINDER_VERSION="${EFINDER_VERSION}"
 export EFINDER_REPO_URL="${EFINDER_REPO_URL}"
 export EFINDER_GIT_REF="${EFINDER_GIT_REF}"
 ${CHROOT_DB_PATH:+export EFINDER_SOLVER_DB="${CHROOT_DB_PATH}"}
+${CHROOT_DEEP_DB_PATH:+export EFINDER_SOLVER_DB_DEEP="${CHROOT_DEEP_DB_PATH}"}
 ${CHROOT_NAMES_PATH:+export EFINDER_STAR_NAMES="${CHROOT_NAMES_PATH}"}
 
 cd /tmp/efinder-src
