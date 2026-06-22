@@ -77,8 +77,11 @@
             class="expert-only" style="margin-top:10px;">
         <label>Tuning profile
           <select name="profile">
+            <option value="finder" {{ 'selected' if tuning_profile == 'finder' }}>
+              imx477_finder.json (DPC off + asinh gamma — image default)
+            </option>
             <option value="scientific" {{ 'selected' if tuning_profile == 'scientific' }}>
-              imx477_scientific.json (no ISP processing — recommended)
+              imx477_scientific.json (no ISP processing)
             </option>
             <option value="standard" {{ 'selected' if tuning_profile == 'standard' }}>
               imx477.json (standard libcamera tuning)

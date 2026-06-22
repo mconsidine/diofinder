@@ -1344,13 +1344,14 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             # service restart (the camera is initialised once at startup).
             profile = str(args.get("profile", "")).strip().lower()
             paths = {
+                "finder":     "/usr/share/libcamera/ipa/rpi/vc4/imx477_finder.json",
                 "scientific": "/usr/share/libcamera/ipa/rpi/vc4/imx477_scientific.json",
                 "standard":   "/usr/share/libcamera/ipa/rpi/vc4/imx477.json",
             }
             if profile not in paths:
                 return MaintResponse(
                     ok=False,
-                    error="tuning_set requires profile 'scientific' or 'standard'")
+                    error="tuning_set requires profile 'finder', 'scientific', or 'standard'")
             cfg_mod.save_keys({"camera_tuning_file": paths[profile]})
             log.info("Camera tuning -> %s (%s); restart required", profile,
                      paths[profile])
