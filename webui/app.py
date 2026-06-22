@@ -558,7 +558,12 @@ def camera_page():
         tuning_path = load_config().camera_tuning_file
     except Exception:
         tuning_path = ""
-    tuning_profile = "scientific" if "scientific" in tuning_path else "standard"
+    if "finder" in tuning_path:
+        tuning_profile = "finder"
+    elif "scientific" in tuning_path:
+        tuning_profile = "scientific"
+    else:
+        tuning_profile = "standard"
     return render_template(
         "camera.html",
         exposure=(exposure.result if exposure.ok else None),
