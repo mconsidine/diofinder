@@ -133,6 +133,15 @@ class BackgroundCache:
         self._solve_fail_run = 0
         self._fail_invalidate = max(0, int(getattr(cfg, "bg_cache_fail_invalidate", 3)))
         self._slewing = False
+        # Rate-based slew detection: the previous pose observation and which
+        # source feeds it. "_slewing" means *currently moving* (consecutive
+        # observations differ > threshold), NOT "displaced from the model build
+        # pose" — the latter latched SLEWING forever once you aimed the finder,
+        # because the worker won't rebuild while slewing so the model pose never
+        # caught up. IMU and solved quats live in different frames, so only one
+        # source drives motion at a time (IMU when present, else the solver).
+        self._motion_ref_quat: Optional[Tuple[float, float, float, float]] = None
+        self._imu_feeding = False
 
         # Lightweight counters for the bg_cache_status diagnostic.
         self._n_builds = 0      # temporal models built by the worker
@@ -185,17 +194,41 @@ class BackgroundCache:
         """Called with the latest IMU quaternion (w,x,y,z) or None."""
         if not self.enabled or quat is None:
             return
+        self._imu_feeding = True
         self._last_imu_quat = tuple(quat)
+        self._update_slew(self._last_imu_quat)
+
+    def _update_slew(self, new_quat) -> None:
+        """Drive slew/rebuild state from a fresh pose observation.
+
+        ``new_quat`` must come from a single, frame-consistent source (IMU xor
+        the solver — never mixed). Two independent signals:
+
+        * **currently moving** (``_slewing``) — the pose changed > threshold
+          between *consecutive* observations. This gates the rebuild worker
+          (don't rebuild mid-motion) and AUTO-CLEARS the moment motion stops, so
+          a slew that ends at a new resting pose is no longer a permanent
+          SLEWING latch.
+        * **model stale** (``_needs_rebuild``) — the pose is displaced >
+          threshold from where the live model was built (a new field). Marks the
+          model for rebuild but does NOT block it; the worker refreshes at the
+          new pose once motion stops.
+        """
+        ref = self._motion_ref_quat
+        self._motion_ref_quat = new_quat
+        if ref is not None:
+            if _angular_distance(new_quat, ref) > self.slew_threshold_rad:
+                self._slewing = True
+                self._needs_rebuild.set()
+            elif self._slewing:
+                # Motion stopped since the last observation: clear the gate and
+                # ask for a rebuild at the new resting pose.
+                self._slewing = False
+                self._needs_rebuild.set()
         model = self._model
-        if model is None or model.pose_quat is None:
-            return
-        ang = _angular_distance(self._last_imu_quat, model.pose_quat)
-        if ang > self.slew_threshold_rad and not self._slewing:
-            self._slewing = True
-            self._needs_rebuild.set()
-        elif ang <= self.slew_threshold_rad and self._slewing:
-            self._slewing = False
-            self._needs_rebuild.set()
+        if model is not None and model.pose_quat is not None:
+            if _angular_distance(new_quat, model.pose_quat) > self.slew_threshold_rad:
+                self._needs_rebuild.set()
 
     def note_solve_result(self, quat, solved: bool):
         """Solver-derived cache invalidation — the IMU-less safety net.
@@ -216,15 +249,11 @@ class BackgroundCache:
         if solved and quat is not None:
             self._last_solved_quat = tuple(quat)
             self._solve_fail_run = 0
-            model = self._model
-            if model is not None and model.pose_quat is not None:
-                ang = _angular_distance(self._last_solved_quat, model.pose_quat)
-                if ang > self.slew_threshold_rad and not self._slewing:
-                    self._slewing = True
-                    self._needs_rebuild.set()
-                elif ang <= self.slew_threshold_rad and self._slewing:
-                    self._slewing = False
-                    self._needs_rebuild.set()
+            # Solver-derived motion only drives slew when there's no IMU: the
+            # IMU is the higher-rate, authoritative source, and the two quats
+            # live in different frames (mixing them produced garbage angles).
+            if not self._imu_feeding:
+                self._update_slew(self._last_solved_quat)
         elif not solved:
             self._solve_fail_run += 1
             if (self._fail_invalidate

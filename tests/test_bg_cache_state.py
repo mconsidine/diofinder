@@ -107,3 +107,53 @@ def test_slewing_flag_and_model_age():
     assert c.state() is bc.CacheState.STEADY
     c._model = _fake_model(c, age_s=c.max_age_s + 1.0)
     assert c.state() is bc.CacheState.SLEWING
+
+
+def _quat_about_x(deg):
+    import math
+    h = math.radians(deg) / 2.0
+    return (math.cos(h), math.sin(h), 0.0, 0.0)
+
+
+def test_imu_slew_does_not_latch_after_stop():
+    """Regression for the SLEWING deadlock: aiming the finder (a slew that ends
+    at a new resting pose far from the model's build pose) must NOT latch
+    _slewing forever. Once consecutive observations are stable again, _slewing
+    clears even though the new pose differs from model.pose_quat."""
+    c = _make_cache()
+    c._model = _fake_model(c)                      # pose_quat = identity
+    c.note_motion((1.0, 0.0, 0.0, 0.0))           # establish motion ref, still
+    assert not c._slewing
+    far = _quat_about_x(5.0)                        # 5 deg >> 0.5 deg threshold
+    c.note_motion(far)                             # moving
+    assert c._slewing and c._needs_rebuild.is_set()
+    c.note_motion(far)                             # stopped at the new pose
+    assert not c._slewing                          # <-- would latch True before fix
+    assert c._needs_rebuild.is_set()              # still wants a rebuild here
+    # And once the worker rebuilds at the new pose (clears the flag), STEADY.
+    c._needs_rebuild.clear()
+    assert c.state() is bc.CacheState.STEADY
+
+
+def test_solve_driven_slew_without_imu():
+    """No-IMU path: consecutive solved poses drive the same rate-based logic."""
+    c = _make_cache()
+    c._model = _fake_model(c)
+    c.note_solve_result((1.0, 0.0, 0.0, 0.0), True)   # establish ref
+    assert not c._slewing
+    c.note_solve_result(_quat_about_x(5.0), True)     # moved
+    assert c._slewing
+    c.note_solve_result(_quat_about_x(5.0), True)     # stopped
+    assert not c._slewing
+
+
+def test_imu_precedence_over_solve():
+    """When the IMU is feeding, solved poses must not also drive motion (the two
+    quats are in different frames; mixing them produced bogus slews)."""
+    c = _make_cache()
+    c._model = _fake_model(c)
+    c.note_motion((1.0, 0.0, 0.0, 0.0))               # IMU now feeding
+    ref = c._motion_ref_quat
+    c.note_solve_result(_quat_about_x(30.0), True)    # different frame; ignored
+    assert c._motion_ref_quat == ref
+    assert not c._slewing
