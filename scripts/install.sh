@@ -273,6 +273,24 @@ if [ ! -f "$SOLVER_DB" ]; then
   fi
 fi
 
+# --- Install optional deep (mag 8.5) star database ---------------------------
+# Used by the "bad" seeing preset (star_db_deep in efinder.conf points here).
+# Staged into the chroot by build-image.sh as EFINDER_SOLVER_DB_DEEP. Optional;
+# if absent, selecting Bad falls back to the standard DB at runtime.
+
+SOLVER_DB_DEEP="/var/lib/efinder/diofinder_13deg_mag85.npz"
+
+if [ ! -f "$SOLVER_DB_DEEP" ]; then
+  if [ -n "${EFINDER_SOLVER_DB_DEEP:-}" ] && [ -f "${EFINDER_SOLVER_DB_DEEP}" ]; then
+    LOG "Installing deep star database ($(du -sh "${EFINDER_SOLVER_DB_DEEP}" | cut -f1))"
+    cp "${EFINDER_SOLVER_DB_DEEP}" "$SOLVER_DB_DEEP"
+    chown "${EFINDER_USER}:${EFINDER_USER}" "$SOLVER_DB_DEEP"
+    LOG "Deep star database installed at $SOLVER_DB_DEEP"
+  else
+    LOG "No deep star database provided; 'bad' seeing preset will use the standard DB"
+  fi
+fi
+
 # --- Install star-names catalog ----------------------------------------------
 # Downloaded from the astro_databases release by release.yml and staged into
 # the chroot by build-image.sh as EFINDER_STAR_NAMES. Optional; a missing

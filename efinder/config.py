@@ -27,7 +27,7 @@ DEFAULT_CONFIG_PATH = "/etc/efinder/efinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.10.1"
+    version: str = "0.10.2"
 
     # -------- Camera --------
     frame_width: int = 960

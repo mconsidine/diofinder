@@ -140,16 +140,32 @@ jobs:
           mkdir -p build/output db-download
           if [ -n "$DB_TAG" ]; then
             gh release download "$DB_TAG" --repo mconsidine/astro_databases \
-              --pattern 'diofinder_13deg.npz' --pattern 'manifest.json' --dir db-download
+              --pattern 'diofinder_13deg.npz' --pattern 'diofinder_13deg_mag85.npz' \
+              --pattern 'manifest.json' --dir db-download
           else
             gh release download --repo mconsidine/astro_databases \
-              --pattern 'diofinder_13deg.npz' --pattern 'manifest.json' --dir db-download
+              --pattern 'diofinder_13deg.npz' --pattern 'diofinder_13deg_mag85.npz' \
+              --pattern 'manifest.json' --dir db-download
           fi
           WANT=$(python3 -c "import json; print(json.load(open('db-download/manifest.json'))['outputs']['diofinder']['sha256'])")
           GOT=$(sha256sum db-download/diofinder_13deg.npz | cut -d' ' -f1)
           [ "$GOT" = "$WANT" ] || { echo "::error::database SHA-256 mismatch"; exit 1; }
           mv db-download/diofinder_13deg.npz build/output/solver_database.npz
           ls -lh build/output/solver_database.npz
+          # Deep (mag 8.5) DB for the "bad" seeing preset. Best-effort: if the
+          # asset or its manifest entry is missing the image just ships without
+          # it and Bad falls back to the standard DB at runtime.
+          DEEP_WANT=$(python3 -c "import json; print(json.load(open('db-download/manifest.json'))['outputs'].get('diofinder_mag85',{}).get('sha256',''))")
+          if [ -f db-download/diofinder_13deg_mag85.npz ]; then
+            DEEP_GOT=$(sha256sum db-download/diofinder_13deg_mag85.npz | cut -d' ' -f1)
+            if [ -n "$DEEP_WANT" ] && [ "$DEEP_GOT" != "$DEEP_WANT" ]; then
+              echo "::error::deep database SHA-256 mismatch"; exit 1
+            fi
+            mv db-download/diofinder_13deg_mag85.npz build/output/solver_database_deep.npz
+            ls -lh build/output/solver_database_deep.npz
+          else
+            echo "::warning::No diofinder_13deg_mag85.npz in the astro_databases release; the 'bad' seeing preset will fall back to the standard DB"
+          fi
 
       - name: Generate tetra3 star database (custom FOV)
         # Fallback for non-default FOV: generate with stock esa/tetra3 from
@@ -209,6 +225,7 @@ jobs:
           EFINDER_REPO_URL: ${{ github.server_url }}/${{ github.repository }}.git
           EFINDER_GIT_REF: ${{ (github.event_name == 'workflow_dispatch' && inputs.tag != '') && inputs.tag || github.ref_name }}
           EFINDER_SOLVER_DB: ${{ github.workspace }}/build/output/solver_database.npz
+          EFINDER_SOLVER_DB_DEEP: ${{ github.workspace }}/build/output/solver_database_deep.npz
           EFINDER_STAR_NAMES: ${{ github.workspace }}/build/output/star_names.csv
         run: |
           sudo -E bash build/build-image.sh
