@@ -38,7 +38,7 @@ from queue import Empty
 
 from efinder import config as cfg_mod
 from efinder.align import AlignRequest, AlignResult, CommsAlignState
-from efinder.imu_math import quat_delta_rotvec
+from efinder.imu_math import quat_delta_rotvec, alpha_beta_step
 from efinder.maint import MaintRequest, MaintResponse, SOCKET_PATH
 from efinder.worker_cmds import (
     SolverCmd, CameraCmd,
@@ -880,6 +880,56 @@ def _imu_predict(shared_cfg):
     return ra_pred, dec_pred
 
 
+# Alpha-beta tracker for the IMU-predicted pointing reported to LX200 clients.
+# The raw _imu_predict reads the live 20 Hz BNO055 quaternion, so a planetarium
+# app polling :GR#/:GD# a few times a second samples sensor noise directly and
+# its crosshair jitters even when the scope is parked. We smooth the IMU *rate*
+# (not the position) so a parked scope is steady (velocity -> 0) while a real
+# slew is still tracked without lag, and re-anchor to every fresh plate solve so
+# solves stay authoritative. alpha=0.25 averages ~4 samples (~0.2 s) at 20 Hz.
+_IMU_AB_ALPHA = 0.25
+_IMU_AB_BETA = 0.05
+_IMU_AB_RESET_GAP_S = 1.0          # IMU-sample gap that forces a re-snap
+_imu_filt_lock = threading.Lock()
+_imu_filt_state = {}               # ra, dec, vra, vdec, t (imu_t), ref_t
+
+
+def _imu_predict_smoothed(shared_cfg):
+    """IMU-predicted (ra_deg, dec_deg) with an alpha-beta rate filter applied.
+
+    Wraps _imu_predict to remove the per-poll jitter SkySafari sees while still
+    tracking genuine motion. Returns None whenever the raw prediction is
+    unavailable, so the LX200 caller falls back to the last solved position.
+    """
+    z = _imu_predict(shared_cfg)
+    with _imu_filt_lock:
+        st = _imu_filt_state
+        if z is None:
+            st.clear()             # re-snap on the next valid sample
+            return None
+        imu_t = shared_cfg.get("imu_t", 0.0)
+        ref_t = shared_cfg.get("imu_ref_t", 0.0)
+        # Snap (no smoothing) on first sample, a fresh solve anchor, a stale
+        # gap, or a non-increasing timestamp. Keeps plate solves authoritative
+        # and avoids smoothing across a coordinate re-baseline.
+        if (not st or st.get("ref_t") != ref_t
+                or imu_t - st.get("t", imu_t) > _IMU_AB_RESET_GAP_S
+                or imu_t < st.get("t", imu_t)):
+            st.clear()
+            st.update(ra=z[0], dec=z[1], vra=0.0, vdec=0.0, t=imu_t, ref_t=ref_t)
+            return z[0], z[1]
+        # Same IMU sample (e.g. :GR# then :GD# in one poll): return the cached
+        # value so both coordinates agree and the filter steps once per sample.
+        if imu_t == st["t"]:
+            return st["ra"], st["dec"]
+        dt = imu_t - st["t"]
+        ra, dec, vra, vdec = alpha_beta_step(
+            (st["ra"], st["dec"], st["vra"], st["vdec"]),
+            z[0], z[1], dt, _IMU_AB_ALPHA, _IMU_AB_BETA)
+        st.update(ra=ra, dec=dec, vra=vra, vdec=vdec, t=imu_t)
+        return ra, dec
+
+
 def _sync_clock(sl, sg, sc):
     """Set system clock from SkySafari's :SG/:SL/:SC local-time + UTC-offset sequence."""
     try:
@@ -912,13 +962,13 @@ def _handle_lx200_command(cmd, latest_solution, align_state, time_state,
                           align_request_q, align_response_q, ctx=None):
     """Dispatch one LX200 command string and return the raw bytes reply."""
     if cmd == ":GR":
-        pred = _imu_predict(shared_cfg)
+        pred = _imu_predict_smoothed(shared_cfg)
         if pred is not None:
             return _format_ra(pred[0] / 15.0).encode("ascii")
         sol = dict(latest_solution)
         return _format_ra(sol.get("ra_deg", 0.0) / 15.0).encode("ascii")
     if cmd == ":GD":
-        pred = _imu_predict(shared_cfg)
+        pred = _imu_predict_smoothed(shared_cfg)
         if pred is not None:
             return _format_dec(pred[1]).encode("ascii")
         sol = dict(latest_solution)
