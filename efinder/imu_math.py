@@ -48,3 +48,39 @@ def quat_delta_rotvec(q_now, q_ref):
     since the last plate-solve reference.
     """
     return quat_to_rotvec(quat_mul(q_now, quat_conjugate(q_ref)))
+
+
+def wrap180(deg):
+    """Wrap an angle difference into [-180, 180)."""
+    return (deg + 180.0) % 360.0 - 180.0
+
+
+def alpha_beta_step(state, z_ra, z_dec, dt, alpha, beta):
+    """One alpha-beta tracker step on a (RA, Dec) estimate, in degrees.
+
+    This filters the IMU's *rate of change* rather than low-passing the
+    position: it carries a velocity estimate, predicts forward by it, then
+    corrects toward the new measurement. That kills per-sample sensor jitter
+    when the scope is parked (velocity -> 0, output settles) while tracking a
+    steady slew with no lag bias (the prediction term cancels the ramp).
+
+    state: (ra, dec, vra, vdec) prior estimate -- deg, deg, deg/s, deg/s.
+    z_ra, z_dec: new measurement (deg). dt: seconds since last step (> 0).
+    alpha: position gain (0-1). beta: velocity gain (0-1).
+
+    Returns the new (ra, dec, vra, vdec). RA stays on the circle (mod 360,
+    residual taken the short way round); Dec is clamped to [-90, 90].
+    """
+    ra, dec, vra, vdec = state
+    # Predict forward with the current velocity estimate.
+    ra_pred = ra + vra * dt
+    dec_pred = dec + vdec * dt
+    # Residuals (RA measured the short way around the circle).
+    res_ra = wrap180(z_ra - ra_pred)
+    res_dec = z_dec - dec_pred
+    # Correct position and velocity.
+    ra_new = (ra_pred + alpha * res_ra) % 360.0
+    dec_new = max(-90.0, min(90.0, dec_pred + alpha * res_dec))
+    vra_new = vra + (beta / dt) * res_ra
+    vdec_new = vdec + (beta / dt) * res_dec
+    return ra_new, dec_new, vra_new, vdec_new
