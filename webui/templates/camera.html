@@ -394,6 +394,41 @@
       <p class="muted">Daemon not reachable.</p>
     {% endif %}
   </div>
+
+  <div class="card expert-only" id="tune-card">
+    <h2>Tune from burst</h2>
+    <p class="hint" style="margin:0 0 8px 0;">
+      Replays a saved burst archive (from the Background A/B page) through the
+      live solver and finds the detection combination (background mode × sigma ×
+      kernel) that would have solved the most frames. Memory-safe — no second
+      database is loaded. Apply persists the winner live.
+    </p>
+    {% if bursts %}
+    <div class="slider-row">
+      <select id="tune-zip">
+        {% for b in bursts %}
+        <option value="{{ b.name }}">{{ b.name }}</option>
+        {% endfor %}
+      </select>
+      <button id="tune-btn" class="btn btn-primary">Tune</button>
+    </div>
+    <p id="tune-status" class="hint" style="min-height:1.2em;margin:6px 0 0;">&nbsp;</p>
+    <div id="tune-result" style="display:none;margin-top:6px;">
+      <p id="tune-winner" style="font-size:0.9rem;margin:0 0 6px;"></p>
+      <label style="font-size:0.85rem;">Save as override:
+        <select id="tune-mode">
+          <option value="">no (just apply live + persist)</option>
+          <option value="good">good</option>
+          <option value="bad">light-pollution</option>
+        </select>
+      </label>
+      <button id="tune-apply" class="btn">Apply winner</button>
+      <span id="tune-apply-status" style="margin-left:8px;font-size:0.85rem;color:#888;"></span>
+    </div>
+    {% else %}
+    <p class="muted">No burst archives yet. Run a capture on the Background page first.</p>
+    {% endif %}
+  </div>
 </section>
 
 <script>
@@ -765,6 +800,70 @@ async function syncCameraState() {
   } catch (e) { /* keep trying */ }
 }
 setInterval(syncCameraState, 3000);
+
+// --- Tune from burst ---------------------------------------------------------
+(function() {
+  const btn = document.getElementById('tune-btn');
+  if (!btn) return;  // no bursts available
+  const st     = document.getElementById('tune-status');
+  const result = document.getElementById('tune-result');
+  const winEl  = document.getElementById('tune-winner');
+  let poll = null;
+
+  async function refreshTune() {
+    try {
+      const r = await fetch('/api/tune');
+      const d = await r.json();
+      st.textContent = (d.message || d.phase || '') +
+        (d.progress ? '  (' + d.progress + '%)' : '');
+      if (!d.running) {
+        clearInterval(poll); poll = null;
+        btn.disabled = false; btn.textContent = 'Tune';
+        if (d.error) { st.textContent = 'Error: ' + d.error; return; }
+        if (d.winner) {
+          const w = d.winner;
+          winEl.textContent = 'Winner: bg=' + w.bg_mode + '  σ=' + w.sigma +
+            '  k=' + w.kernel + '  — solved ' + w.solved + '/' + w.frames +
+            ' (' + Math.round(w.rate * 100) + '%), mean matches ' +
+            (w.mean_matches || 0).toFixed(1);
+          result.style.display = '';
+        } else {
+          st.textContent = 'No combination solved any frame in this burst.';
+        }
+      }
+    } catch(e) { /* keep polling */ }
+  }
+
+  btn.addEventListener('click', async function() {
+    const zip = document.getElementById('tune-zip').value;
+    btn.disabled = true; btn.textContent = 'Tuning…';
+    result.style.display = 'none'; st.textContent = 'starting…';
+    const body = new URLSearchParams({zip});
+    try {
+      const r = await fetch('/tune/start', {method: 'POST', body});
+      const d = await r.json();
+      if (!d.ok) { st.textContent = 'Error: ' + (d.error || r.status);
+                   btn.disabled = false; btn.textContent = 'Tune'; return; }
+      poll = setInterval(refreshTune, 1000);
+    } catch(e) {
+      st.textContent = 'Error: ' + e.message;
+      btn.disabled = false; btn.textContent = 'Tune';
+    }
+  });
+
+  document.getElementById('tune-apply').addEventListener('click', async function() {
+    const ast = document.getElementById('tune-apply-status');
+    const mode = document.getElementById('tune-mode').value;
+    this.disabled = true; ast.textContent = 'applying…';
+    try {
+      const r = await fetch('/tune/apply', {method: 'POST',
+        body: new URLSearchParams({mode})});
+      const d = await r.json();
+      ast.textContent = d.ok ? '✓ applied & persisted' : ('Error: ' + (d.error || r.status));
+    } catch(e) { ast.textContent = 'Error: ' + e.message; }
+    this.disabled = false;
+  });
+})();
 </script>
 
 {% endblock %}

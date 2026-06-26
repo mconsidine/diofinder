@@ -127,43 +127,14 @@ def _dms(deg):
     return f"{sign}{d:02d}°{m:02d}'{s:02d}\""  # noqa: Q000
 
 
-@app.route("/")
+@app.route("/status")
 def dashboard():
-    """Main dashboard: current solution, boresight, calibration, and IMU status."""
-    status = _safe_call("status")
-    cal    = _safe_call("calibration_status")
-    seeing = _safe_call("seeing_get")
-    sparams = _safe_call("solver_params_get")
-    version = _safe_call("version")
-
-    sol = (_format_solution(status.result["solution"])
-           if status.ok and status.result else None)
-
-    with _focus_lock:
-        committed_focus = _focus_state["committed_score"]
-
-    return render_template(
-        "dashboard.html",
-        status_ok=status.ok,
-        status_error=status.error if not status.ok else None,
-        solution=sol,
-        boresight=(status.result.get("boresight") if status.ok else None),
-        fov_deg=(status.result.get("fov_deg") if status.ok else None),
-        calibration=(cal.result if cal.ok else None),
-        cal_error=cal.error if not cal.ok else None,
-        committed_focus=committed_focus,
-        imu=(status.result.get("imu") if status.ok else None),
-        seeing=(seeing.result if seeing.ok else None),
-        solver_params=(sparams.result if sparams.ok else None),
-        solver_backend="sycamore",
-        bursts=_list_bursts(),
-        test_mode=(
-            status.result.get("test_mode", True)
-            if status.ok else True),
-        version=(version.result.get("version") if version.ok else None),
-    )
+    """Retired: the Status page is merged into Home. Kept as a permanent
+    redirect so old bookmarks and url_for('dashboard') references resolve."""
+    return redirect(url_for("home_page"))
 
 
+@app.route("/")
 @app.route("/home")
 def home_page():
     """Merged Home: live view + pointing + everyday controls (novice), with the
@@ -644,6 +615,7 @@ def camera_page():
         tuning_profile=tuning_profile,
         hotpix=(hotpix.result if hotpix.ok else None),
         seeing=(seeing.result if seeing.ok else None),
+        bursts=_list_bursts(),
     )
 
 
