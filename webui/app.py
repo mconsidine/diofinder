@@ -1,5 +1,5 @@
 """
-eFinder web UI.
+diofinder web UI.
 
 Pipeline: sycamore star_detect (matched_filter gate) + olive-solve (tetra3).
 """
@@ -22,14 +22,14 @@ from flask import (
     send_file,
 )
 
-sys.path.insert(0, "/opt/efinder")
+sys.path.insert(0, "/opt/diofinder")
 try:
-    from efinder.maint import call as maint_call, MaintResponse
+    from diofinder.maint import call as maint_call, MaintResponse
 except ImportError:
     sys.path.insert(0, ".")
-    from efinder.maint import call as maint_call, MaintResponse
+    from diofinder.maint import call as maint_call, MaintResponse
 
-log = logging.getLogger("efinder.webui")
+log = logging.getLogger("diofinder.webui")
 
 app = Flask(__name__,
             template_folder="templates",
@@ -44,9 +44,9 @@ def _safe_call(cmd, args=None, timeout=15.0):
     try:
         return maint_call(cmd, args, timeout=timeout)
     except FileNotFoundError:
-        return MaintResponse(ok=False, error="eFinder daemon socket not found")
+        return MaintResponse(ok=False, error="diofinder daemon socket not found")
     except PermissionError:
-        return MaintResponse(ok=False, error="cannot access eFinder socket")
+        return MaintResponse(ok=False, error="cannot access diofinder socket")
     except Exception as e:
         return MaintResponse(ok=False, error=f"{type(e).__name__}: {e}")
 
@@ -59,8 +59,8 @@ def _load_cfg_cached():
 
     /frame.jpg is polled continuously; reading+parsing the file per request
     was measurable CPU-1 load for a value that almost never changes."""
-    from efinder.config import load_config, DEFAULT_CONFIG_PATH
-    path = os.environ.get("EFINDER_CONFIG", DEFAULT_CONFIG_PATH)
+    from diofinder.config import load_config, DEFAULT_CONFIG_PATH
+    path = os.environ.get("DIOFINDER_CONFIG", DEFAULT_CONFIG_PATH)
     try:
         mtime = os.path.getmtime(path)
     except OSError:
@@ -357,7 +357,7 @@ def bg_jpg():
     except Exception:
         ecfg, W, H = None, 960, 760
 
-    from efinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
+    from diofinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
     frame = None
     for i in range(NUM_BUFFERS):
         try:
@@ -556,7 +556,7 @@ def camera_page():
     hotpix        = _safe_call("hot_pixel_status")
     seeing        = _safe_call("seeing_get")
     try:
-        from efinder.config import load_config
+        from diofinder.config import load_config
         tuning_path = load_config().camera_tuning_file
     except Exception:
         tuning_path = ""
@@ -795,7 +795,7 @@ def _get_wifi_status():
             if len(parts) >= 2 and parts[1] == "wlan0":
                 wlan_con = parts[0]
                 result["connection"] = wlan_con
-                result["mode"] = "ap" if wlan_con == "efinder-ap" else "station"
+                result["mode"] = "ap" if wlan_con == "diofinder-ap" else "station"
                 try:
                     ssid_out = subprocess.check_output(
                         ["nmcli", "-t", "-s", "-f",
@@ -839,7 +839,7 @@ def _scan_networks():
                 signal = int(parts[1].strip()) if len(parts) > 1 else 0
             except ValueError:
                 signal = 0
-            if ssid and ssid not in seen and not ssid.startswith("efinder-"):
+            if ssid and ssid not in seen and not ssid.startswith("diofinder-"):
                 seen.add(ssid)
                 networks.append({"ssid": ssid, "signal": signal})
         networks.sort(key=lambda n: n["signal"], reverse=True)
@@ -919,13 +919,13 @@ def api_wifi_scan():
 
 @app.route("/logs")
 def logs():
-    """Show the most recent n lines (10–500) from the efinder.service journal."""
+    """Show the most recent n lines (10–500) from the diofinder.service journal."""
     n = int(request.args.get("n", 100))
     n = max(10, min(n, 500))
     try:
         out = subprocess.check_output(
             ["journalctl", "--system",
-             "-u", "efinder.service",
+             "-u", "diofinder.service",
              "-n", str(n), "--no-pager", "-o", "short-precise"],
             text=True, errors="replace",
             stderr=subprocess.STDOUT, timeout=5.0,
@@ -941,16 +941,16 @@ def logs():
 
 # ---- Update -----------------------------------------------------------------
 
-UPDATE_LOG = "/var/lib/efinder/last-update.log"
+UPDATE_LOG = "/var/lib/diofinder/last-update.log"
 
 
 def _running_commit():
     """One-line description of the git checkout the daemon code runs from
-    (`/opt/efinder`), e.g. '1ef350d (claude/friendly-lamport-ff02lf) webui: …'.
+    (`/opt/diofinder`), e.g. '1ef350d (claude/friendly-lamport-ff02lf) webui: …'.
     Returns None if it can't be read."""
     try:
         out = subprocess.run(
-            ["git", "-c", "safe.directory=/opt/efinder", "-C", "/opt/efinder",
+            ["git", "-c", "safe.directory=/opt/diofinder", "-C", "/opt/diofinder",
              "log", "-1", "--format=%h (%D) %s"],
             capture_output=True, text=True, timeout=5,
         )
@@ -964,12 +964,12 @@ def _running_commit():
 @app.route("/update", methods=["GET", "POST"])
 def update_page():
     """OTA update page: GET shows current version + running commit; POST fires
-    efinder-update in the background, capturing its output to a log.
+    diofinder-update in the background, capturing its output to a log.
 
     An optional 'ref' form field updates to a specific branch/tag instead of the
-    latest release (runs `efinder-update --ref <ref>`)."""
+    latest release (runs `diofinder-update --ref <ref>`)."""
     if request.method == "POST":
-        cmd = ["sudo", "/usr/local/bin/efinder-update"]
+        cmd = ["sudo", "/usr/local/bin/diofinder-update"]
         ref = (request.form.get("ref") or "").strip()
         if ref:
             # Branch/tag names: letters, digits, and ./_/-, with slashes for
@@ -979,7 +979,7 @@ def update_page():
             cmd += ["--ref", ref]
         # Capture output to a log so a failed update (bad ref, dirty tree,
         # fast-forward conflict) is VISIBLE on the Update page instead of
-        # vanishing into /dev/null. efinder-update is detached (it restarts
+        # vanishing into /dev/null. diofinder-update is detached (it restarts
         # this very webui), so it keeps writing the log across the restart.
         try:
             logf = open(UPDATE_LOG, "w")
@@ -993,7 +993,7 @@ def update_page():
             subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT,
                              start_new_session=True)
         except FileNotFoundError:
-            return "efinder-update not installed", 500
+            return "diofinder-update not installed", 500
         return render_template("update_running.html", ref=ref or "latest release")
     version = _safe_call("version")
     return render_template(
@@ -1005,7 +1005,7 @@ def update_page():
 
 @app.route("/api/update/log")
 def api_update_log():
-    """Tail of the last efinder-update run + terminal state, for the running page."""
+    """Tail of the last diofinder-update run + terminal state, for the running page."""
     try:
         with open(UPDATE_LOG) as f:
             text = f.read()
@@ -1021,7 +1021,7 @@ def api_update_log():
 
 # ---- Config view ------------------------------------------------------------
 
-CONFIG_PATH = os.environ.get("EFINDER_CONFIG", "/etc/efinder/efinder.conf")
+CONFIG_PATH = os.environ.get("DIOFINDER_CONFIG", "/etc/diofinder/diofinder.conf")
 
 _CONFIG_SECTIONS = [
     ("Camera", [
@@ -1122,7 +1122,7 @@ def _fmt_val(v):
 @app.route("/config")
 def config_page():
     """Config viewer: all settings with their defaults and current runtime values."""
-    from efinder.config import Config, load_config as _load_config
+    from diofinder.config import Config, load_config as _load_config
     defaults = Config()
     cfg_ok    = True
     cfg_error = None
@@ -1207,7 +1207,7 @@ def frame_jpg():
     cx = _bs_cache["cx"] if _bs_cache["cx"] is not None else width  // 2
     cy = _bs_cache["cy"] if _bs_cache["cy"] is not None else height // 2
 
-    from efinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
+    from diofinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
     frame = None
     for i in range(NUM_BUFFERS):
         try:
@@ -1304,13 +1304,13 @@ def _read_focus_data():
     from PIL import Image
 
     try:
-        from efinder.config import load_config
+        from diofinder.config import load_config
         ecfg = load_config()
         width, height = ecfg.frame_width, ecfg.frame_height
     except Exception:
         width, height = 960, 760
 
-    from efinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
+    from diofinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
     frame = None
     for i in range(NUM_BUFFERS):
         try:
@@ -1433,7 +1433,7 @@ def debug_collect():
     zip_name = f"diofinder_debug_{ts}.zip"
 
     try:
-        from efinder.config import load_config as _lcfg
+        from diofinder.config import load_config as _lcfg
         ecfg = _lcfg()
         W, H = ecfg.frame_width, ecfg.frame_height
         arcsec_px = ecfg.arcsec_per_pixel
@@ -1444,11 +1444,11 @@ def debug_collect():
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
 
         # ── Config file ──────────────────────────────────────────────────────
-        conf_path = os.environ.get("EFINDER_CONFIG", "/etc/efinder/efinder.conf")
+        conf_path = os.environ.get("DIOFINDER_CONFIG", "/etc/diofinder/diofinder.conf")
         try:
-            zf.write(conf_path, "efinder.conf")
+            zf.write(conf_path, "diofinder.conf")
         except Exception as e:
-            zf.writestr("efinder.conf", f"# could not read: {e}\n")
+            zf.writestr("diofinder.conf", f"# could not read: {e}\n")
 
         # ── Daemon status (JSON) ─────────────────────────────────────────────
         status = _safe_call("status")
@@ -1466,7 +1466,7 @@ def debug_collect():
         # ── Effective runtime conditions (so the bundle fully reproduces a
         #    live solve) ──────────────────────────────────────────────────────
         # The raw frame PNGs carry none of the detection/solve conditions the
-        # live solver applied; efinder.conf only carries the persisted file,
+        # live solver applied; diofinder.conf only carries the persisted file,
         # not live shared_cfg overrides or the calibrated (vs. loose) FOV
         # tolerance. Dump the *effective* knobs so diag_solve.py --match-runtime
         # can re-create the exact pipeline on another Pi Zero.
@@ -1496,7 +1496,7 @@ def debug_collect():
         # ── Journal ──────────────────────────────────────────────────────────
         try:
             j = subprocess.run(
-                ["journalctl", "-u", "efinder", "-n", "300", "--no-pager"],
+                ["journalctl", "-u", "diofinder", "-n", "300", "--no-pager"],
                 capture_output=True, text=True, timeout=10,
             )
             zf.writestr("journal.txt", j.stdout + (j.stderr or ""))
@@ -1506,9 +1506,9 @@ def debug_collect():
         # ── Camera frames from SHM ───────────────────────────────────────────
         from PIL import Image, ImageDraw
         try:
-            from efinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
+            from diofinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
         except Exception:
-            SHM_PREFIX, NUM_BUFFERS = "efinder_frame", 3
+            SHM_PREFIX, NUM_BUFFERS = "diofinder_frame", 3
 
         bs_r = _safe_call("status")
         bs   = bs_r.result.get("boresight") if bs_r.ok and bs_r.result else None
@@ -1647,7 +1647,7 @@ def debug_collect():
         zf.writestr("imu.json", json.dumps(frame_imu, indent=2))
 
     # Save a copy to disk so scp/curl also works
-    out_dir = pathlib.Path("/var/lib/efinder")
+    out_dir = pathlib.Path("/var/lib/diofinder")
     out_dir.mkdir(parents=True, exist_ok=True)
     zip_path = out_dir / zip_name
     try:
@@ -1664,7 +1664,7 @@ def debug_collect():
     )
 
 
-_BGRUN_DIR = pathlib.Path("/var/lib/efinder/bg_runs")
+_BGRUN_DIR = pathlib.Path("/var/lib/diofinder/bg_runs")
 _bgrun_lock = threading.Lock()
 _bgrun = {
     "running": False, "phase": "idle", "progress": 0, "message": "",
@@ -1691,8 +1691,8 @@ def _bgrun_capture(frames_dir, n_target, max_seconds):
     import numpy as np
     from multiprocessing import shared_memory, resource_tracker as _rt
     from PIL import Image
-    from efinder.config import load_config
-    from efinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
+    from diofinder.config import load_config
+    from diofinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
 
     ecfg = load_config()
     W, H = ecfg.frame_width, ecfg.frame_height
@@ -1774,7 +1774,7 @@ def _bgrun_worker(n_frames, max_seconds, solve_frames):
     try:
         import numpy as np
         import star_detect as sd
-        from efinder.config import load_config
+        from diofinder.config import load_config
         cfg = load_config()
         # Use the LIVE effective detection params (shared_cfg over the config
         # file) so "A/B matches" reflects what the live solver actually does —
@@ -1949,11 +1949,11 @@ def _bgrun_make_zip(zip_path, frames_dir, report, n_frames, peak):
         for png in sorted(frames_dir.glob("*.png")):
             zf.write(str(png), f"frames/{png.name}")
         zf.writestr("report.txt", report)
-        conf = os.environ.get("EFINDER_CONFIG", "/etc/efinder/efinder.conf")
+        conf = os.environ.get("DIOFINDER_CONFIG", "/etc/diofinder/diofinder.conf")
         try:
-            zf.write(conf, "efinder.conf")
+            zf.write(conf, "diofinder.conf")
         except Exception as e:
-            zf.writestr("efinder.conf", f"# could not read: {e}\n")
+            zf.writestr("diofinder.conf", f"# could not read: {e}\n")
         st = _safe_call("status")
         cal = _safe_call("calibration_status")
         zf.writestr("status.json", json.dumps({
@@ -1961,7 +1961,7 @@ def _bgrun_make_zip(zip_path, frames_dir, report, n_frames, peak):
             "calibration": {"ok": cal.ok, "result": cal.result, "error": cal.error},
         }, indent=2, default=str))
         try:
-            j = subprocess.run(["journalctl", "-u", "efinder", "-n", "200", "--no-pager"],
+            j = subprocess.run(["journalctl", "-u", "diofinder", "-n", "200", "--no-pager"],
                                capture_output=True, text=True, timeout=10)
             zf.writestr("journal.txt", (j.stdout or "") + (j.stderr or ""))
         except Exception as e:
@@ -1972,7 +1972,7 @@ def _bgrun_make_zip(zip_path, frames_dir, report, n_frames, peak):
             f"frames : {n_frames} (peak={peak})\n\n"
             "frames/      raw parked-mount burst PNGs\n"
             "report.txt   per-mode A/B table (detection + solve rate)\n"
-            "efinder.conf device config at capture time\n"
+            "diofinder.conf device config at capture time\n"
             "status.json  daemon status + calibration\n"
             "journal.txt  recent service log\n")
 
@@ -2085,7 +2085,7 @@ def _tune_worker(zip_name, sigmas, kernels, bg_modes):
     import inspect as _inspect
     try:
         import star_detect as sd
-        from efinder.config import load_config
+        from diofinder.config import load_config
         cfg = load_config()
         det_bin    = cfg.detect_bin
         max_c      = cfg.max_solve_stars

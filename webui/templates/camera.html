@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}eFinder Camera{% endblock %}
+{% block title %}diofinder Camera{% endblock %}
 {% block content %}
 
 <section class="grid">
@@ -401,7 +401,7 @@
 // Pure client-side CSS transform on the <img>, persisted in localStorage. The
 // solver works on the raw shared-memory frame, so rotation is cosmetic only.
 (function initRotate180() {
-  const ROT_KEY = 'efinderRotate180';
+  const ROT_KEY = 'diofinderRotate180';
   const img = document.getElementById('live-frame');
   const box = document.getElementById('rotate-toggle');
   if (!img) return;

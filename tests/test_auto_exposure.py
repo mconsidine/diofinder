@@ -2,7 +2,7 @@
 """
 Pure-logic unit tests for the matches-driven auto-exposure / gain controller
 decision (`comms_proc._auto_exposure_decision`). Runnable WITHOUT picamera2 or
-star_detect — comms_proc only imports efinder-internal + stdlib modules, but we
+star_detect — comms_proc only imports diofinder-internal + stdlib modules, but we
 stub star_detect defensively in case a transitive import ever appears.
 
 Run:
@@ -23,7 +23,7 @@ if "star_detect" not in sys.modules:
     _stub.set_num_threads = lambda n: None
     sys.modules["star_detect"] = _stub
 
-from efinder.comms_proc import _auto_exposure_decision
+from diofinder.comms_proc import _auto_exposure_decision
 
 
 def _decide(**overrides):

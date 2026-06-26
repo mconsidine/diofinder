@@ -2,10 +2,10 @@
 
 This guide covers every script in `tests/` and `scripts/` in the diofinder
 repository. On an imaged device the test scripts live at
-`/opt/efinder/tests/` and the operational scripts are installed to
+`/opt/diofinder/tests/` and the operational scripts are installed to
 `/usr/local/bin/`. Most test scripts require root (for POSIX shared-memory
-access) and must be invoked with the efinder venv Python:
-`sudo /opt/efinder/venv/bin/python3 tests/<script>.py`. The installed
+access) and must be invoked with the diofinder venv Python:
+`sudo /opt/diofinder/venv/bin/python3 tests/<script>.py`. The installed
 scripts in `/usr/local/bin/` are plain executables on `PATH`. Three items in
 `scripts/` are infrastructure-only or off-device tools: `install.sh` and
 `firstboot.sh` are called by the image build / systemd and are never run by
@@ -17,28 +17,28 @@ hand; `calibrate_lens.py` runs on a developer laptop, not the Pi.
 
 ### `diag_services.sh`
 
-Comprehensive system health check. Verifies the `efinder` systemd service
-state, pings the maintenance socket at `/run/efinder/maint.sock` for a live
+Comprehensive system health check. Verifies the `diofinder` systemd service
+state, pings the maintenance socket at `/run/diofinder/maint.sock` for a live
 `status` response (solved, stars, solve_ms, fov), checks that all three
-`/dev/shm/efinder_frame_*` shared-memory buffers exist, verifies that the
-solver database named in `/etc/efinder/efinder.conf` exists and loads
+`/dev/shm/diofinder_frame_*` shared-memory buffers exist, verifies that the
+solver database named in `/etc/diofinder/diofinder.conf` exists and loads
 correctly, checks Python library imports (`numpy`, `tetra3`, `picamera2`,
-`PIL`), lists the efinder process tree, prints the active configuration, and
-tails the last 50 lines of the efinder systemd journal.
+`PIL`), lists the diofinder process tree, prints the active configuration, and
+tails the last 50 lines of the diofinder systemd journal.
 
 **When to use:** First stop when anything is broken; run immediately after
 flashing or after a failed OTA update.
 
-**Prerequisites:** `efinder.service` should be running for the full picture
+**Prerequisites:** `diofinder.service` should be running for the full picture
 (warnings are issued for anything that is not).
 
 ```bash
-sudo bash /opt/efinder/tests/diag_services.sh
+sudo bash /opt/diofinder/tests/diag_services.sh
 ```
 
 No flags; the config path can be overridden via the environment variable
-`EFINDER_CONFIG` (default `/etc/efinder/efinder.conf`) and the socket path
-via `EFINDER_MAINT_SOCKET`.
+`DIOFINDER_CONFIG` (default `/etc/diofinder/diofinder.conf`) and the socket path
+via `DIOFINDER_MAINT_SOCKET`.
 
 **Typical output:** A series of colour-coded PASS / WARN / FAIL / INFO lines
 followed by the last 50 journal lines. All PASS lines on a healthy device.
@@ -53,31 +53,31 @@ raw 8-bit greyscale PNG, then bundles everything into a timestamped ZIP
 archive (deleting the individual PNGs). The ZIP always includes
 `capture_info.txt` (sweep parameters, system info, live daemon status),
 `camera_settings.txt` (tuning file, sensor properties, control ranges, all
-applied controls), and a copy of `efinder.conf`.
+applied controls), and a copy of `diofinder.conf`.
 
 **When to use:** Finding the right exposure and gain before a session;
 evaluating read noise vs. sky background; assessing focus quality across
 settings; capturing reference frames to transfer off the device.
 
-**Prerequisites:** `picamera2`, `numpy`, `Pillow` (all in the efinder venv);
+**Prerequisites:** `picamera2`, `numpy`, `Pillow` (all in the diofinder venv);
 must run as root or a member of the `video` group on the Pi.
 
 ```bash
 # Default sweep: exposures 0.05–0.30 s step 0.05, gains 15–40 step 5
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_camera.py
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_camera.py
 
 # Custom range with 2×2 software binning
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_camera.py \
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_camera.py \
     --exp-min 0.1 --exp-max 0.5 --exp-step 0.1 \
     --gain-min 10 --gain-max 30 --gain-step 5 \
     --binning
 
 # Single exposure/gain pair matching solver defaults
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_camera.py \
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_camera.py \
     --exp-min 0.2 --exp-max 0.2 --gain-min 5 --gain-max 5
 
 # Print camera properties and control ranges without capturing
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_camera.py \
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_camera.py \
     --info-only
 ```
 
@@ -97,10 +97,10 @@ sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_camera.py \
 | `--tuning-file` | IMX477 scientific profile | libcamera tuning JSON path |
 | `--info-only` | off | Print properties/controls and exit without capturing |
 
-Output files are written to `--output-dir` (default `/var/lib/efinder/` when
+Output files are written to `--output-dir` (default `/var/lib/diofinder/` when
 `test.png` is present there). Transfer the archive with:
 ```bash
-scp efinder@efinder.local:/var/lib/efinder/YYYYMMDDHHMMSSMMM.zip .
+scp diofinder@diofinder.local:/var/lib/diofinder/YYYYMMDDHHMMSSMMM.zip .
 ```
 
 ---
@@ -117,18 +117,18 @@ bug with a fix suggestion.
 **When to use:** Verifying the IMU is wired correctly; confirming the daemon's
 IMUPLUS mode assumption matches the sensor; debugging IMU calibration issues.
 
-**Prerequisites:** `smbus2` must be installed (`/opt/efinder/venv/bin/pip
+**Prerequisites:** `smbus2` must be installed (`/opt/diofinder/venv/bin/pip
 install smbus2`); must run as root.
 
 ```bash
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_bno055.py
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_bno055.py
 
-# Match the efinder daemon operating mode (accel + gyro only, no magnetometer)
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_bno055.py \
+# Match the diofinder daemon operating mode (accel + gyro only, no magnetometer)
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_bno055.py \
     --mode imuplus
 
 # Force alternate I2C address, more samples
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_bno055.py \
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_bno055.py \
     --address 0x29 --samples 20 --interval 0.5
 ```
 
@@ -141,7 +141,7 @@ sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_bno055.py \
 | `--mode` | `ndof` | Op mode: `ndof` (full 9-DOF), `imuplus` (accel+gyro, no mag), `current` (leave as-is) |
 | `--no-mode-change` | off | Skip the mode-change step entirely |
 
-Note: the efinder daemon uses IMUPLUS (no magnetometer) to avoid interference
+Note: the diofinder daemon uses IMUPLUS (no magnetometer) to avoid interference
 from telescope motors. This script defaults to NDOF so all outputs are
 exercised. Pass `--mode imuplus` to match the daemon exactly.
 
@@ -159,19 +159,19 @@ affects star count.
 the right `detect_sigma` for your exposure and sky; confirming the star count
 meets `min_centroids` before attempting a full pipeline test.
 
-**Prerequisites:** `star_detect` and `tetra3` installed in the efinder venv;
+**Prerequisites:** `star_detect` and `tetra3` installed in the diofinder venv;
 root required for live SHM access.
 
 ```bash
 # Live frame from the running daemon
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_detect.py
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_detect.py
 
 # Saved frame, custom sigma
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_detect.py \
-    --image /var/lib/efinder/captures/frame.png --sigma 7.0
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_detect.py \
+    --image /var/lib/diofinder/captures/frame.png --sigma 7.0
 
 # Sigma sweep (shows star counts at sigma 3–12)
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_detect.py \
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_detect.py \
     --sigma-sweep
 ```
 
@@ -200,24 +200,24 @@ across all tested images.
 **When to use:** Full pipeline smoke-test; timing the blind vs. hint solve
 speedup; confirming the database and FOV settings produce successful solves.
 
-**Prerequisites:** `star_detect`, `tetra3`, `Pillow` in the efinder venv;
-test images in `/opt/efinder/test-images/` for the default (no-flag) run;
+**Prerequisites:** `star_detect`, `tetra3`, `Pillow` in the diofinder venv;
+test images in `/opt/diofinder/test-images/` for the default (no-flag) run;
 root for SHM access.
 
 ```bash
-# Default: loop over test images in /opt/efinder/test-images/
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_solve.py
+# Default: loop over test images in /opt/diofinder/test-images/
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_solve.py
 
 # Live frame from running daemon
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_solve.py \
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_solve.py \
     --live-shm
 
 # Single image with custom parameters
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_solve.py \
-    --image /var/lib/efinder/captures/frame.png --sigma 7.0 --timeout 2000
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_solve.py \
+    --image /var/lib/diofinder/captures/frame.png --sigma 7.0 --timeout 2000
 
 # Retry at 3× timeout when the normal solve fails
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_solve.py \
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_solve.py \
     --image frame.png --extended-timeout
 ```
 
@@ -249,23 +249,23 @@ condition; verifying that `top_hat` gains faint stars on a gradient sky
 (`--inject-gradient`); confirming that a mode actually produces successful
 solves, not just high star counts.
 
-**Prerequisites:** `star_detect` and `tetra3` in the efinder venv; root for
+**Prerequisites:** `star_detect` and `tetra3` in the diofinder venv; root for
 SHM access; `--solve` requires the daemon to be running.
 
 ```bash
 # Live frame, all modes
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_background.py
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_background.py
 
 # Saved frame with synthetic gradient to stress top_hat
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_background.py \
-    --image /var/lib/efinder/captures/frame.png --inject-gradient 40
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_background.py \
+    --image /var/lib/diofinder/captures/frame.png --inject-gradient 40
 
 # Also solve each mode on the live daemon
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_background.py \
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_background.py \
     --solve
 
 # Test a specific subset of modes
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_background.py \
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_background.py \
     --modes row_percentile,block_percentile,uniform_mean
 ```
 
@@ -296,20 +296,20 @@ session.
 **When to use:** Quick sanity-check on a saved frame; confirming the database
 covers the tested sky region; debugging failed solves interactively.
 
-**Prerequisites:** `star_detect`, `tetra3`, `Pillow` in the efinder venv;
+**Prerequisites:** `star_detect`, `tetra3`, `Pillow` in the diofinder venv;
 root not required unless accessing SHM directly.
 
 ```bash
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/solve_image.py \
-    --image /var/lib/efinder/captures/frame.png
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/solve_image.py \
+    --image /var/lib/diofinder/captures/frame.png
 
 # Override database and FOV
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/solve_image.py \
-    --image frame.png --db /var/lib/efinder/mydb.npz \
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/solve_image.py \
+    --image frame.png --db /var/lib/diofinder/mydb.npz \
     --fov 13.5 --fov-err 1.0 --timeout 3000
 
 # Timing over multiple reps
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/solve_image.py \
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/solve_image.py \
     --image frame.png --reps 5
 ```
 
@@ -342,20 +342,20 @@ and a summary table. Optional sweeps: `--hint-sweep` varies
 `hint_uncertainty_deg` for a given slew speed; confirming performance after
 a wheel update.
 
-**Prerequisites:** `star_detect`, `tetra3` in the efinder venv; root for SHM
+**Prerequisites:** `star_detect`, `tetra3` in the diofinder venv; root for SHM
 access (`--live-shm`).
 
 ```bash
 # Live frame
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/bench_pipeline_combos.py \
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/bench_pipeline_combos.py \
     --live-shm
 
 # Saved frame, 10 reps, hint sweep
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/bench_pipeline_combos.py \
-    --image /var/lib/efinder/captures/frame.png --reps 10 --hint-sweep
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/bench_pipeline_combos.py \
+    --image /var/lib/diofinder/captures/frame.png --reps 10 --hint-sweep
 
 # Sigma sweep
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/bench_pipeline_combos.py \
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/bench_pipeline_combos.py \
     --image frame.png --sigma-sweep
 ```
 
@@ -388,10 +388,10 @@ lighter alternative to `bench_pipeline_combos.py` when you only need one pass.
 **Prerequisites:** Same as `bench_pipeline_combos.py`.
 
 ```bash
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/bench_extractor_compare.py \
-    --image /var/lib/efinder/captures/frame.png
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/bench_extractor_compare.py \
+    --image /var/lib/diofinder/captures/frame.png
 
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/bench_extractor_compare.py \
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/bench_extractor_compare.py \
     --live-shm --reps 10 --sigma 7.0
 ```
 
@@ -420,21 +420,21 @@ with per-image blind/hint times, speedup, and angular separation from image 1.
 choosing the right `--hint-unc` before a session; verifying hint effectiveness
 after a solver or database update.
 
-**Prerequisites:** `star_detect`, `tetra3` in the efinder venv; image files
+**Prerequisites:** `star_detect`, `tetra3` in the diofinder venv; image files
 must exist on disk (not live SHM).
 
 ```bash
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/test_hint.py \
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/test_hint.py \
     --images img1.png img2.png img3.png
 
 # Wider hint cone for large slews
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/test_hint.py \
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/test_hint.py \
     --images *.png --hint-unc 15
 
 # Explicit database and FOV
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/test_hint.py \
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/test_hint.py \
     --images img1.png img2.png \
-    --db /var/lib/efinder/mydb.npz --fov 13.5 --timeout 2000
+    --db /var/lib/diofinder/mydb.npz --fov 13.5 --timeout 2000
 ```
 
 | Flag | Default | Description |
@@ -466,8 +466,8 @@ modules are stubbed before import. Contains three test classes:
   `solver_params_set`, and `match_params_set` via the comms_proc maint
   dispatcher with a fake IPC context (no real solver/camera processes).
 
-**When to use:** CI and after any changes to `efinder/seeing.py`,
-`efinder/hot_pixel.py`, or the corresponding maint command handlers.
+**When to use:** CI and after any changes to `diofinder/seeing.py`,
+`diofinder/hot_pixel.py`, or the corresponding maint command handlers.
 
 **Prerequisites:** numpy; no hardware, no sycamore, no picamera2.
 
@@ -476,7 +476,7 @@ modules are stubbed before import. Contains three test classes:
 python3 -m unittest tests.test_seeing_hotpixel -v
 
 # Or directly:
-python3 /opt/efinder/tests/test_seeing_hotpixel.py
+python3 /opt/diofinder/tests/test_seeing_hotpixel.py
 ```
 
 No command-line flags beyond the standard `unittest` options.
@@ -504,7 +504,7 @@ developer laptop where the `star_detect` and `tetra3` wheels are installed —
 - Tuning `detect_sigma`, `detect_bg_mode`, or matching parameters: sweep
   `--bg-modes` to find which combination wins on your corpus.
 - Building the corpus itself: transfer saved frames from the Pi with
-  `scp efinder@efinder.local:/var/lib/efinder/captures/*.png tests/corpus/`.
+  `scp diofinder@diofinder.local:/var/lib/diofinder/captures/*.png tests/corpus/`.
 
 **Prerequisites:** `star_detect` and `tetra3` wheels installed in your Python
 environment; `numpy` and `Pillow`; a tetra3 `.npz` database.  The script
@@ -516,33 +516,33 @@ fails gracefully with a clear install/usage message if any of these are missing
 # Full run on a labeled corpus, both presets
 python3 tests/replay_corpus.py \
     --corpus tests/corpus/ \
-    --database /var/lib/efinder/default_database.npz
+    --database /var/lib/diofinder/default_database.npz
 
 # Quick check: first 20 frames, good preset only
 python3 tests/replay_corpus.py \
     --corpus tests/corpus/ \
-    --database /var/lib/efinder/default_database.npz \
+    --database /var/lib/diofinder/default_database.npz \
     --presets good \
     --limit 20
 
 # Sweep background modes and write per-frame CSV
 python3 tests/replay_corpus.py \
     --corpus tests/corpus/ \
-    --database /var/lib/efinder/default_database.npz \
+    --database /var/lib/diofinder/default_database.npz \
     --bg-modes row_percentile,block_percentile,uniform_mean \
     --csv /tmp/bg_sweep.csv
 
 # Non-default FOV (e.g. after a lens change)
 python3 tests/replay_corpus.py \
     --corpus tests/corpus/ \
-    --database /var/lib/efinder/default_database.npz \
+    --database /var/lib/diofinder/default_database.npz \
     --fov 10.0
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--corpus` | required | Directory of PNG frames (flat or labeled subdirs) |
-| `--database` | `/var/lib/efinder/default_database.npz` | tetra3 `.npz` solver database |
+| `--database` | `/var/lib/diofinder/default_database.npz` | tetra3 `.npz` solver database |
 | `--presets` | `good,bad` | Comma-separated list of seeing presets to run |
 | `--bg-modes` | preset's value | Comma-separated bg modes to additionally sweep (overrides preset's `detect_bg_mode`) |
 | `--csv` | — | Path for per-frame CSV output |
@@ -559,15 +559,15 @@ In brief: frames in a named subdirectory inherit the subdirectory name as their
 label; frames in the root use the `{ts}_{label}.png` filename convention from
 the daemon's save-frame feature; unlabeled frames get label `"unlabeled"`.
 
-**Preset fidelity:** Presets are loaded live from `efinder.seeing.SEEING_PRESETS`
-(importing `efinder/seeing.py` from the repo root) so the harness stays in
+**Preset fidelity:** Presets are loaded live from `diofinder.seeing.SEEING_PRESETS`
+(importing `diofinder/seeing.py` from the repo root) so the harness stays in
 sync with the daemon's actual preset table automatically.  A fallback hard-coded
-copy is used only if the `efinder` package is not importable (dev-box without
+copy is used only if the `diofinder` package is not importable (dev-box without
 a full install), with a warning.
 
 **Capability probing:** The harness probes the installed `star_detect` wheel for
 `kernel_sigma`, `local_noise`, `noise_mode`, `bg_block_size`, `uniform_filter_size`,
-and `tophat_radius` exactly as `efinder/bg_cache.py` does, using
+and `tophat_radius` exactly as `diofinder/bg_cache.py` does, using
 `inspect.signature`.  Unsupported kwargs are silently omitted, so the same
 script works on sycamore 0.11 and 0.12 wheels.
 
@@ -583,7 +583,7 @@ preset tuning data-driven rather than on-sky anecdote.
 1. On the Pi, enable frame saving:
 
    ```bash
-   # In /etc/efinder/efinder.conf
+   # In /etc/diofinder/diofinder.conf
    save_failed_frames: true
    save_solved_frames: true
    ```
@@ -591,7 +591,7 @@ preset tuning data-driven rather than on-sky anecdote.
    Or toggle per-session via the web UI Camera page.
 
 2. Observe: let the daemon run for a session or two across different conditions.
-   Frames accumulate in `/var/lib/efinder/captures/`.
+   Frames accumulate in `/var/lib/diofinder/captures/`.
 
 3. Copy frames off the Pi into labeled subdirectories:
 
@@ -599,11 +599,11 @@ preset tuning data-driven rather than on-sky anecdote.
    mkdir -p tests/corpus/clear_dark tests/corpus/moonlit
 
    # All solved frames from a clear-sky night
-   scp efinder@efinder.local:'/var/lib/efinder/captures/*solved*' \
+   scp diofinder@diofinder.local:'/var/lib/diofinder/captures/*solved*' \
        tests/corpus/clear_dark/
 
    # Failed frames from a moonlit session
-   scp efinder@efinder.local:'/var/lib/efinder/captures/*failed*' \
+   scp diofinder@diofinder.local:'/var/lib/diofinder/captures/*failed*' \
        tests/corpus/moonlit/
    ```
 
@@ -616,13 +616,13 @@ preset tuning data-driven rather than on-sky anecdote.
 # Before changing a preset:
 python3 tests/replay_corpus.py \
     --corpus tests/corpus/ \
-    --database /var/lib/efinder/default_database.npz \
+    --database /var/lib/diofinder/default_database.npz \
     --csv /tmp/before.csv
 
-# After changing efinder/seeing.py:
+# After changing diofinder/seeing.py:
 python3 tests/replay_corpus.py \
     --corpus tests/corpus/ \
-    --database /var/lib/efinder/default_database.npz \
+    --database /var/lib/diofinder/default_database.npz \
     --csv /tmp/after.csv
 
 # Compare solve rates manually or with any CSV tool.
@@ -633,7 +633,7 @@ python3 tests/replay_corpus.py \
 ```bash
 python3 tests/replay_corpus.py \
     --corpus tests/corpus/ \
-    --database /var/lib/efinder/default_database.npz \
+    --database /var/lib/diofinder/default_database.npz \
     --bg-modes row_percentile,line_median,block_percentile,uniform_mean,top_hat \
     --presets good \
     --csv /tmp/bg_sweep.csv
@@ -649,7 +649,7 @@ the highest solve rate on your corpus — particularly on the `moonlit` or
 # After installing a new sycamore or olive-solve wheel:
 python3 tests/replay_corpus.py \
     --corpus tests/corpus/ \
-    --database /var/lib/efinder/default_database.npz
+    --database /var/lib/diofinder/default_database.npz
 ```
 
 The script prints both wheel versions at the top of its output.  A solve rate
@@ -660,43 +660,43 @@ drop of more than a few percent is a regression worth investigating with
 
 ## Operational Scripts (`scripts/`, installed to `/usr/local/bin/`)
 
-### `efinder-ctl`
+### `diofinder-ctl`
 
-CLI wrapper for the maintenance socket at `/run/efinder/maint.sock`. Provides
+CLI wrapper for the maintenance socket at `/run/diofinder/maint.sock`. Provides
 subcommands for inspecting and controlling a running daemon. Requires
-membership in the `efinder` group (or root):
-`sudo usermod -a -G efinder $USER` then re-login.
+membership in the `diofinder` group (or root):
+`sudo usermod -a -G diofinder $USER` then re-login.
 
 ```bash
-efinder-ctl status
-efinder-ctl ping
-efinder-ctl version
+diofinder-ctl status
+diofinder-ctl ping
+diofinder-ctl version
 
-efinder-ctl boresight show
-efinder-ctl boresight center
-efinder-ctl boresight set 380 480    # Y X in pixels
+diofinder-ctl boresight show
+diofinder-ctl boresight center
+diofinder-ctl boresight set 380 480    # Y X in pixels
 
-efinder-ctl calibration status
-efinder-ctl calibration reset        # prompts for confirmation
-efinder-ctl calibration reset -y     # skip confirmation
+diofinder-ctl calibration status
+diofinder-ctl calibration reset        # prompts for confirmation
+diofinder-ctl calibration reset -y     # skip confirmation
 
-efinder-ctl exposure get
-efinder-ctl exposure set 0.3
-efinder-ctl exposure set 0.3 --persist   # also write to efinder.conf
+diofinder-ctl exposure get
+diofinder-ctl exposure set 0.3
+diofinder-ctl exposure set 0.3 --persist   # also write to diofinder.conf
 
-efinder-ctl gain set 20
-efinder-ctl gain set 20 --persist
+diofinder-ctl gain set 20
+diofinder-ctl gain set 20 --persist
 
-efinder-ctl seeing get
-efinder-ctl seeing set good
-efinder-ctl seeing set bad
+diofinder-ctl seeing get
+diofinder-ctl seeing set good
+diofinder-ctl seeing set bad
 
-efinder-ctl polar start
-efinder-ctl polar status
-efinder-ctl polar cancel
-efinder-ctl polar set-latitude 45.0  # degrees
+diofinder-ctl polar start
+diofinder-ctl polar status
+diofinder-ctl polar cancel
+diofinder-ctl polar set-latitude 45.0  # degrees
 
-efinder-ctl raw '{"cmd":"status","args":{}}'
+diofinder-ctl raw '{"cmd":"status","args":{}}'
 ```
 
 | Subcommand | Description |
@@ -714,24 +714,24 @@ efinder-ctl raw '{"cmd":"status","args":{}}'
 
 ---
 
-### `efinder-bg-setup`
+### `diofinder-bg-setup`
 
 Show or live-change the background compensation mode via the maintenance
 socket. Changes take effect immediately without a restart. Use `--persist` to
-also write the new value to `/etc/efinder/efinder.conf`.
+also write the new value to `/etc/diofinder/diofinder.conf`.
 
 ```bash
 # Show current background settings
-efinder-bg-setup
+diofinder-bg-setup
 
 # Enable top-hat with a custom radius
-efinder-bg-setup set top_hat --radius 14
+diofinder-bg-setup set top_hat --radius 14
 
 # Revert to default
-efinder-bg-setup set row_percentile
+diofinder-bg-setup set row_percentile
 
 # Persist the change
-efinder-bg-setup set block_percentile --persist
+diofinder-bg-setup set block_percentile --persist
 ```
 
 | Subcommand / Flag | Default | Description |
@@ -739,14 +739,14 @@ efinder-bg-setup set block_percentile --persist
 | (no subcommand) | — | Show current `detect_bg_mode` and related config keys |
 | `set MODE` | — | Change to the named mode (see mode list below) |
 | `--radius N` | `12` | Top-hat structuring-element radius in pixels (only for `top_hat`) |
-| `--persist` | off | Write the new value to `efinder.conf` |
+| `--persist` | off | Write the new value to `diofinder.conf` |
 
 Valid modes: `row_percentile`, `line_median`, `column_percentile`,
 `row_column_percentile`, `block_percentile`, `uniform_mean`, `top_hat`.
 
 ---
 
-### `efinder-bg-test`
+### `diofinder-bg-test`
 
 On-device background-mode A/B test. Loads PNG frames from a directory (or
 grabs one live frame via shared memory), runs detection under all or a
@@ -757,26 +757,26 @@ With `--solve`, also plate-solves each mode's centroids on the live daemon
 
 ```bash
 # Test on saved frames in the default captures directory
-sudo efinder-bg-test --dir /var/lib/efinder/captures
+sudo diofinder-bg-test --dir /var/lib/diofinder/captures
 
 # Live frame
-sudo efinder-bg-test --live
+sudo diofinder-bg-test --live
 
 # Inject a vertical gradient (stress-tests top_hat vs row_percentile)
-sudo efinder-bg-test --live --inject-gradient 40
+sudo diofinder-bg-test --live --inject-gradient 40
 
 # Also solve and compare solve outcomes
-sudo efinder-bg-test --live --solve
+sudo diofinder-bg-test --live --solve
 
 # Test specific modes with non-default parameters
-sudo efinder-bg-test --live \
+sudo diofinder-bg-test --live \
     --modes row_percentile,block_percentile,uniform_mean \
     --sigma 8 --bin 2
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--dir PATH` | `/var/lib/efinder/captures` | Directory of PNG/JPG frames to test |
+| `--dir PATH` | `/var/lib/diofinder/captures` | Directory of PNG/JPG frames to test |
 | `--live` | off | Grab one frame from live shared memory (mutually exclusive with `--dir`) |
 | `--inject-gradient DN` | `0` | Add a vertical brightness ramp of this many DN to each frame |
 | `--sigma` | `5.0` | Detection sigma |
@@ -790,18 +790,18 @@ sudo efinder-bg-test --live \
 
 ---
 
-### `efinder-update`
+### `diofinder-update`
 
 OTA update script. Pulls the latest application code from git, refreshes the
 olive-solve (`tetra3`) and sycamore-extract (`star_detect`) wheels from their
 GitHub releases, and restarts the service. Refuses to update if the working
 tree has local modifications. A wheel placed manually in
-`/opt/efinder/vendor/wheels/` overrides the download (local testing path).
+`/opt/diofinder/vendor/wheels/` overrides the download (local testing path).
 
 ```bash
-sudo efinder-update                   # latest release tag
-sudo efinder-update v0.8.1            # specific tag
-sudo efinder-update --ref main        # track a branch (testing)
+sudo diofinder-update                   # latest release tag
+sudo diofinder-update v0.8.1            # specific tag
+sudo diofinder-update --ref main        # track a branch (testing)
 ```
 
 | Argument | Default | Description |
@@ -809,26 +809,26 @@ sudo efinder-update --ref main        # track a branch (testing)
 | (positional, optional) | `latest` | Specific tag to check out |
 | `--ref BRANCH` | — | Track a branch or check out a tag/commit by ref |
 
-**Prerequisites:** The `/opt/efinder/` directory must be a git repository
+**Prerequisites:** The `/opt/diofinder/` directory must be a git repository
 (images provisioned via `install.sh` satisfy this). Requires internet access
 to reach GitHub. The webui Update page wraps this script.
 
 ---
 
-### `efinder-db-update`
+### `diofinder-db-update`
 
 Solver database updater. Downloads `diofinder_13deg.npz` from the
 `mconsidine/astro_databases` GitHub releases, verifies the SHA-256 against
 the release manifest, installs it over the database named by `solver_db` in
-`/etc/efinder/efinder.conf` (backing up the old file as `.bak`), and
+`/etc/diofinder/diofinder.conf` (backing up the old file as `.bak`), and
 restarts the service. If the release also carries
 `diofinder_13deg_mag85.npz` (a deeper G≤8.5 database for the Bad-seeing
 preset), that is downloaded and installed to
-`/var/lib/efinder/diofinder_13deg_mag85.npz` as well.
+`/var/lib/diofinder/diofinder_13deg_mag85.npz` as well.
 
 ```bash
-sudo efinder-db-update               # latest release
-sudo efinder-db-update v2026.06      # specific release tag
+sudo diofinder-db-update               # latest release
+sudo diofinder-db-update v2026.06      # specific release tag
 ```
 
 | Argument | Default | Description |
@@ -836,21 +836,21 @@ sudo efinder-db-update v2026.06      # specific release tag
 | (positional, optional) | `latest` | Specific release tag |
 
 **Note on the deep database:** After installing, set `star_db_deep:
-/var/lib/efinder/diofinder_13deg_mag85.npz` in `/etc/efinder/efinder.conf`
-and apply the Bad preset (`efinder-ctl seeing set bad`) to enable it. The
+/var/lib/diofinder/diofinder_13deg_mag85.npz` in `/etc/diofinder/diofinder.conf`
+and apply the Bad preset (`diofinder-ctl seeing set bad`) to enable it. The
 script prints a reminder if `star_db_deep` is not yet configured.
 
 ---
 
 ### `ap.sh`
 
-Switch the eFinder's Wi-Fi interface to access-point mode. Creates or updates
-the `efinder-ap` NetworkManager profile and activates it. The Pi then
+Switch the diofinder's Wi-Fi interface to access-point mode. Creates or updates
+the `diofinder-ap` NetworkManager profile and activates it. The Pi then
 advertises a WPA2 AP at IP `10.42.0.1`; connect with
-`ssh efinder@10.42.0.1` or `ssh efinder@efinder.local`.
+`ssh diofinder@10.42.0.1` or `ssh diofinder@diofinder.local`.
 
 ```bash
-sudo ap.sh                       # activate existing efinder-ap profile
+sudo ap.sh                       # activate existing diofinder-ap profile
 sudo ap.sh "MySSID" "MyPassword" # change SSID/password and activate
 ```
 
@@ -861,7 +861,7 @@ after activation.
 
 ### `station.sh`
 
-Switch the eFinder's Wi-Fi from AP mode to station (client) mode. Connects to
+Switch the diofinder's Wi-Fi from AP mode to station (client) mode. Connects to
 a named network or interactively scans and presents a menu. The USB tether
 (`10.55.0.1`) remains up while Wi-Fi switches, so you can run this command
 over USB and keep working after the switch.
@@ -884,7 +884,7 @@ device remains accessible.
 PNGs (e.g. captures saved with `save_solved_frames: true` then copied off the
 device), it extracts star centroids and calls `tetra3rs`'s `calibrate_camera`
 to fit SIP distortion across all solvable frames. Prints the dominant radial-k
-coefficient and the exact `distortion:` line to set in `efinder.conf`.
+coefficient and the exact `distortion:` line to set in `diofinder.conf`.
 
 ```bash
 # On the dev box, not the Pi
@@ -911,8 +911,8 @@ value to the Pi:
 # Example output:
 #   distortion: 0.000123
 # Apply on the Pi:
-sudo sed -i 's/^distortion:.*/distortion: 0.000123/' /etc/efinder/efinder.conf
-sudo systemctl restart efinder
+sudo sed -i 's/^distortion:.*/distortion: 0.000123/' /etc/diofinder/diofinder.conf
+sudo systemctl restart diofinder
 ```
 
 ---
@@ -923,18 +923,18 @@ These are image-build and boot-time infrastructure scripts. `install.sh` is
 run during image build (chroot mode) or by a user on a freshly flashed card
 (fresh mode); it sets up the Python venv, installs dependencies, and
 provisions the git repository for OTA. `firstboot.sh` is called on every boot
-by `efinder-firstboot.service`; it recreates the AP NetworkManager profile if
+by `diofinder-firstboot.service`; it recreates the AP NetworkManager profile if
 missing and performs hardware sanity checks. Neither script is intended to be
 invoked by hand during normal operation.
 
-### `scripts/efinder-gadget-connect`
+### `scripts/diofinder-gadget-connect`
 
-Called by the `efinder-gadget.service` systemd unit at boot to configure the
+Called by the `diofinder-gadget.service` systemd unit at boot to configure the
 USB CDC ACM serial gadget via configfs (Pi OS Trixie kernel). Makes the Pi
 appear as `/dev/ttyACM0` (Linux/macOS) or a COM port (Windows) for serial
 access. Not normally invoked by hand.
 
-### `scripts/efinder-set-time`
+### `scripts/diofinder-set-time`
 
 Called by `comms_proc` when SkySafari sends a time-sync command over LX200.
 Briefly disables `systemd-timesyncd`, calls `timedatectl set-time`, then
@@ -946,18 +946,18 @@ re-enables NTP. Not intended for direct use.
 
 ### Post-flash smoke test
 
-After imaging a new card or after `efinder-update`, verify the system end to
+After imaging a new card or after `diofinder-update`, verify the system end to
 end:
 
 ```bash
 # 1. Check all processes and libraries are healthy
-sudo bash /opt/efinder/tests/diag_services.sh
+sudo bash /opt/diofinder/tests/diag_services.sh
 
 # 2. One-shot solve with the current camera frame
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_solve.py --live-shm
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_solve.py --live-shm
 
 # 3. Pipeline timing
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/bench_pipeline_combos.py \
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/bench_pipeline_combos.py \
     --live-shm
 ```
 
@@ -967,16 +967,16 @@ Apply a preset and confirm the live parameters changed:
 
 ```bash
 # Apply Good preset
-efinder-ctl seeing set good
+diofinder-ctl seeing set good
 
 # Confirm current effective values and drift
-efinder-ctl seeing get
+diofinder-ctl seeing get
 
 # Apply Bad preset (uses deeper DB if configured, widens kernel, lowers sigma)
-efinder-ctl seeing set bad
+diofinder-ctl seeing set bad
 
 # Verify the solver still produces successful solves under the new settings
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_solve.py --live-shm
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_solve.py --live-shm
 ```
 
 ### Background-mode A/B
@@ -986,14 +986,14 @@ outcomes:
 
 ```bash
 # Using the installed script (on saved captures)
-sudo efinder-bg-test --dir /var/lib/efinder/captures --solve
+sudo diofinder-bg-test --dir /var/lib/diofinder/captures --solve
 
 # Using the test script (live frame, with injected gradient to stress top_hat)
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_background.py \
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_background.py \
     --inject-gradient 40 --solve
 
 # If a mode wins, switch to it live and persist
-efinder-bg-setup set block_percentile --persist
+diofinder-bg-setup set block_percentile --persist
 ```
 
 ### Hot-pixel dark capture
@@ -1002,14 +1002,14 @@ With the lens cap on and the service running (it uses the camera in test-mode
 during capture):
 
 ```bash
-# Trigger via efinder-ctl (routes through the maint socket)
-efinder-ctl raw '{"cmd":"dark_capture","args":{"frames":20}}'
+# Trigger via diofinder-ctl (routes through the maint socket)
+diofinder-ctl raw '{"cmd":"dark_capture","args":{"frames":20}}'
 
 # Check the result
-efinder-ctl raw '{"cmd":"hot_pixel_status","args":{}}'
+diofinder-ctl raw '{"cmd":"hot_pixel_status","args":{}}'
 ```
 
-The mask is saved to `/var/lib/efinder/hot_pixel_mask.npz` and loaded
+The mask is saved to `/var/lib/diofinder/hot_pixel_mask.npz` and loaded
 automatically on the next restart. The Camera page in the web UI also exposes
 a "Capture dark frame" button.
 
@@ -1017,28 +1017,28 @@ a "Capture dark frame" button.
 
 ```bash
 # Fetch the latest standard + deep databases and restart
-sudo efinder-update                # update code first
-sudo efinder-db-update             # then update the databases
+sudo diofinder-update                # update code first
+sudo diofinder-db-update             # then update the databases
 
 # If the deep database was downloaded, enable it for the Bad preset:
-sudo sed -i 's|^#*star_db_deep:.*|star_db_deep: /var/lib/efinder/diofinder_13deg_mag85.npz|' \
-    /etc/efinder/efinder.conf
-sudo systemctl restart efinder
-efinder-ctl seeing set bad         # apply the Bad preset, which resolves star_db_deep
+sudo sed -i 's|^#*star_db_deep:.*|star_db_deep: /var/lib/diofinder/diofinder_13deg_mag85.npz|' \
+    /etc/diofinder/diofinder.conf
+sudo systemctl restart diofinder
+diofinder-ctl seeing set bad         # apply the Bad preset, which resolves star_db_deep
 ```
 
 ### OTA software update
 
 ```bash
 # Update to latest release
-sudo efinder-update
+sudo diofinder-update
 
 # Update to a specific tag
-sudo efinder-update v0.9.0
+sudo diofinder-update v0.9.0
 
 # Track the main branch (for testing pre-release code)
-sudo efinder-update --ref main
+sudo diofinder-update --ref main
 ```
 
-The web UI's **Update** page wraps `efinder-update` and streams its output in
+The web UI's **Update** page wraps `diofinder-update` and streams its output in
 the browser.

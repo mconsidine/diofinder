@@ -20,8 +20,8 @@ with A/B tooling so background-mode choices are evidence-based.
    tuning. On-device solving for A/B reuses the live solver's resident
    database via a `solve_centroids` maint command (no second DB → memory-safe
    on 512 MB). A second in-process DB load was explicitly rejected (OOM risk).
-3. **Images must be OTA-capable.** `/opt/efinder` is git-provisioned at image
-   build (`EFINDER_REPO_URL`/`EFINDER_GIT_REF` from CI context); copied-tree
+3. **Images must be OTA-capable.** `/opt/diofinder` is git-provisioned at image
+   build (`DIOFINDER_REPO_URL`/`DIOFINDER_GIT_REF` from CI context); copied-tree
    installs cannot self-update.
 4. **Defaults:** `detect_sigma=5.0` (range 0–20), `gain=5.0`, `detect_bin=2`.
 5. **CPU layout:** comms/webui/IMU/launcher on CPU 0 (shared with kernel,
@@ -36,7 +36,7 @@ with A/B tooling so background-mode choices are evidence-based.
 - Full repo audit found `auto_exposure_*` was vaporware (config keys + UI text,
   zero implementation) → implemented this session.
 - Webui never actually pinned itself (docs claimed CPU 1; it floated) → fixed.
-- Recurring `efinder-update` "Local modifications" failures had two root
+- Recurring `diofinder-update` "Local modifications" failures had two root
   causes: (a) git dubious-ownership when the check ran as root, (b)
   `firstboot.sh` committed 100644 but chmod-755'd in place at install →
   permanent mode-diff. Both fixed.
@@ -49,8 +49,8 @@ with A/B tooling so background-mode choices are evidence-based.
 
 - `37f2e54` HAS_TOPHAT crash fix · `b34689f` firstboot.sh 100755
 - `fd0d24b` OTA git-provisioning (install.sh graft, build-image.sh,
-  release.yml, owner-safe efinder-update with `--ref BRANCH`)
-- `2d0f633` `efinder-bg-test --solve` · `1482e55` `bg_cache_status` maint cmd
+  release.yml, owner-safe diofinder-update with `--ref BRANCH`)
+- `2d0f633` `diofinder-bg-test --solve` · `1482e55` `bg_cache_status` maint cmd
   + completed `solve_centroids` solver-side handler
 - `8584bc3` Background preview (`/bg.jpg`) + Camera detection-view toggle
   (`/frame.jpg?sub=1`), 7-mode aware · `425c51c` capture→solve→zip A/B webui
@@ -75,7 +75,7 @@ with A/B tooling so background-mode choices are evidence-based.
   3-core speedup (`bench_pipeline_combos.py --live-shm`), auto-exposure
   convergence, governor persistence.
 - Devices with old conf files keep old `cpu_*`/`detect_bin` values — update
-  `/etc/efinder/efinder.conf` or re-image.
+  `/etc/diofinder/diofinder.conf` or re-image.
 - Not built: "view the temporal cache's stacked frame as an image" (cache
   stores per-row model only).
 - BNO055 errno-104 re-probes: non-fatal, watch I²C wiring if persistent.

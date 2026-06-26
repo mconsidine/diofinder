@@ -1,0 +1,174 @@
+#!/bin/bash
+# diofinder in-place updater (olive branch).
+# Pulls latest application code, refreshes the olive-solve and optional
+# sycamore-extract wheels from their repos' GitHub releases (a wheel
+# placed in vendor/wheels/ overrides the download — local testing path),
+# and restarts the service.
+# No cedar-detect binary or gRPC stubs are involved.
+#
+# Usage:
+#   sudo /usr/local/bin/diofinder-update                 # latest release tag
+#   sudo /usr/local/bin/diofinder-update v0.8.1          # specific tag
+#   sudo /usr/local/bin/diofinder-update --ref BRANCH    # track a branch (testing)
+#
+# Refuses to update if the working tree has local modifications.
+
+set -euo pipefail
+
+DIOFINDER_DIR=/opt/diofinder
+REPO=mconsidine/diofinder
+
+TARGET_VERSION="latest"
+REF=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --ref)   REF="${2:-}"; shift 2 || { echo "--ref needs an argument" >&2; exit 1; } ;;
+    --ref=*) REF="${1#*=}"; shift ;;
+    *)       TARGET_VERSION="$1"; shift ;;
+  esac
+done
+
+LOG() { echo "[update] $*"; }
+FAIL() { echo "[update] ERROR: $*" >&2; exit 1; }
+
+[ "$EUID" -eq 0 ] || FAIL "must run as root"
+
+# --- Sanity + refuse to clobber local changes --------------------------------
+
+cd "$DIOFINDER_DIR"
+# Must be a git checkout (image builds that copied the tree without grafting
+# git can't self-update — re-image with a build that provisions git).
+if ! sudo -u diofinder git -C "$DIOFINDER_DIR" rev-parse --git-dir >/dev/null 2>&1; then
+  FAIL "$DIOFINDER_DIR is not a git repository; OTA update is unavailable. Re-image with a build that provisions git."
+fi
+# Run the dirty-check as the repo OWNER (diofinder), not root: root touching an
+# diofinder-owned repo trips git's safe.directory protection and would be
+# misreported as 'local modifications'.
+if ! sudo -u diofinder git -C "$DIOFINDER_DIR" diff --quiet HEAD; then
+  FAIL "Local modifications in $DIOFINDER_DIR. Refusing to update. Resolve manually."
+fi
+
+# --- Fetch application code ---------------------------------------------------
+
+LOG "Fetching latest code"
+sudo -u diofinder git fetch --tags origin
+
+if [ -n "$REF" ]; then
+  # Explicit ref: a branch (tracked + fast-forwarded) or a tag/commit (detached).
+  sudo -u diofinder git fetch origin "$REF" || FAIL "Could not fetch ref '$REF'"
+  if sudo -u diofinder git ls-remote --heads origin "$REF" | grep -q .; then
+    LOG "Checking out branch $REF"
+    sudo -u diofinder git checkout -B "$REF" "origin/$REF" || FAIL "branch checkout failed"
+    sudo -u diofinder git pull --ff-only origin "$REF"     || FAIL "branch fast-forward failed"
+  else
+    LOG "Checking out ref $REF (tag/commit)"
+    sudo -u diofinder git checkout --quiet "$REF" || FAIL "checkout of '$REF' failed"
+  fi
+  TAG="$REF"
+else
+  if [ "$TARGET_VERSION" = "latest" ]; then
+    TAG=$(sudo -u diofinder git tag --sort=-v:refname | head -n1)
+    [ -n "$TAG" ] || FAIL "No tags found in repo"
+  else
+    TAG="$TARGET_VERSION"
+  fi
+  LOG "Updating to $TAG"
+  sudo -u diofinder git checkout --quiet "$TAG"
+fi
+
+# --- Refresh Python dependencies ----------------------------------------------
+
+LOG "Refreshing Python dependencies"
+sudo -u diofinder "$DIOFINDER_DIR/venv/bin/pip" install --quiet --upgrade \
+  -r "$DIOFINDER_DIR/requirements.txt"
+
+# --- Refresh wheels ------------------------------------------------------------
+# Wheels are pulled from the source repos' latest GitHub releases. A wheel
+# already present in vendor/wheels/ takes precedence (local testing path).
+# Failures here are non-fatal: the device keeps its installed wheels.
+
+VENDOR_WHEELS="$DIOFINDER_DIR/vendor/wheels"
+WHEEL_TMP=$(mktemp -d)
+trap 'rm -rf "$WHEEL_TMP"' EXIT
+
+# Print the download URL of the first release asset matching a glob.
+release_wheel_url() { # repo pattern
+  curl -fsSL "https://api.github.com/repos/$1/releases/latest" \
+  | python3 -c "
+import fnmatch, json, sys
+rel = json.load(sys.stdin)
+for a in rel.get('assets', []):
+    if fnmatch.fnmatch(a['name'], sys.argv[1]):
+        print(a['browser_download_url'])
+        break
+" "$2" 2>/dev/null
+}
+
+install_wheel() { # label repo pattern [pattern...]
+  local label=$1 repo=$2 whl url pat
+  shift 2
+  for pat in "$@"; do
+    whl=$(ls "$VENDOR_WHEELS"/$pat 2>/dev/null | sort -V | tail -n1 || true)
+    [ -n "$whl" ] && break
+  done
+  if [ -z "$whl" ]; then
+    for pat in "$@"; do
+      url=$(release_wheel_url "$repo" "$pat" || true)
+      [ -n "$url" ] && break
+    done
+    if [ -z "$url" ]; then
+      LOG "WARN: no $label wheel in vendor/wheels/ or $repo releases (keeping installed version)"
+      return 0
+    fi
+    whl="$WHEEL_TMP/$(basename "$url")"
+    if ! curl -fsSL "$url" -o "$whl"; then
+      LOG "WARN: $label wheel download failed (keeping installed version)"
+      return 0
+    fi
+  fi
+  LOG "Installing $label: $(basename "$whl")"
+  sudo -u diofinder "$DIOFINDER_DIR/venv/bin/pip" install --quiet \
+    --force-reinstall --no-deps "$whl" \
+    || LOG "WARN: $label wheel install failed (keeping installed version)"
+}
+
+PYTAG=$(sudo -u diofinder "$DIOFINDER_DIR/venv/bin/python" \
+  -c 'import sys; print(f"cp{sys.version_info[0]}{sys.version_info[1]}")')
+
+install_wheel "olive-solve"      mconsidine/olive-solve      "tetra3-*aarch64*.whl"
+# Prefer a wheel for this interpreter; fall back to abi3 (sycamore >= 0.11.2
+# ships a single abi3 wheel covering all Python >= 3.8)
+install_wheel "sycamore-extract" mconsidine/sycamore-extract \
+  "star_detect-*${PYTAG}*aarch64*.whl" "star_detect-*abi3*aarch64*.whl"
+
+# --- Refresh CLI wrapper scripts in /usr/local/bin ----------------------------
+# install.sh COPIES these wrappers into /usr/local/bin at image-build time (they
+# are not symlinks), so OTA must re-sync them or renamed release assets / new
+# flags never reach the device (e.g. diofinder-db-update pointing at an old DB
+# asset name). Each is written to a temp file and atomically renamed into place
+# so overwriting the *running* diofinder-update is safe (this process keeps its
+# original open file).
+LOG "Refreshing CLI wrapper scripts"
+for s in diofinder-update diofinder-db-update diofinder-ctl diofinder-bg-setup \
+         diofinder-bg-test diofinder-gadget-connect diofinder-set-time \
+         ap.sh station.sh; do
+  src="$DIOFINDER_DIR/scripts/$s"
+  [ -f "$src" ] || continue
+  tmp=$(mktemp "/usr/local/bin/.$s.XXXXXX") || continue
+  if cp "$src" "$tmp" && chmod 755 "$tmp"; then
+    mv -f "$tmp" "/usr/local/bin/$s"
+  else
+    rm -f "$tmp"
+    LOG "WARN: could not refresh /usr/local/bin/$s"
+  fi
+done
+
+# --- Record version & restart -------------------------------------------------
+
+echo "$TAG $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /var/lib/diofinder/version
+
+LOG "Restarting services"
+systemctl restart diofinder.service
+systemctl restart diofinder-webui.service
+
+LOG "Update to $TAG complete"

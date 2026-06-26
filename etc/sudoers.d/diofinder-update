@@ -1,0 +1,3 @@
+# Allow the diofinder user to run diofinder-update without a password,
+# and only that script. Used by the web UI's "Update" button.
+diofinder ALL=(root) NOPASSWD: /usr/local/bin/diofinder-update

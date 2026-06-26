@@ -1,5 +1,5 @@
 #!/bin/bash
-# Switch the eFinder's Wi-Fi from access-point mode to station (client) mode.
+# Switch the diofinder's Wi-Fi from access-point mode to station (client) mode.
 #
 # Usage:
 #   sudo station.sh                     # scan for networks and choose interactively
@@ -7,10 +7,10 @@
 #
 # After this script:
 #   * The Pi joins the named Wi-Fi network as a client.
-#   * The 'efinder-ap' profile is deactivated (but kept; you can switch
+#   * The 'diofinder-ap' profile is deactivated (but kept; you can switch
 #     back with sudo /usr/local/bin/ap.sh).
 #   * The Pi gets an IP from your router's DHCP. mDNS still advertises
-#     efinder.local, so 'ssh efinder@efinder.local' should work after
+#     diofinder.local, so 'ssh diofinder@diofinder.local' should work after
 #     ~10 seconds.
 #
 # Tip: run this over the USB tether (10.55.0.1) -- the USB connection
@@ -34,7 +34,7 @@ if [ $# -eq 0 ]; then
   # Collect unique SSIDs (non-empty, exclude our own AP).
   mapfile -t SSIDS < <(
     nmcli -t -f SSID,SIGNAL dev wifi list 2>/dev/null \
-      | grep -v '^efinder-' \
+      | grep -v '^diofinder-' \
       | grep -v '^:' \
       | grep -v '^$' \
       | sort -t: -k2 -rn \
@@ -76,7 +76,7 @@ To switch back to AP mode:
 EOF
   exit 1
 fi
-PROFILE="efinder-station"
+PROFILE="diofinder-station"
 
 # WPA2 requires 8+ chars; empty is allowed (open network).
 if [ -n "$NEW_PASS" ] && [ ${#NEW_PASS} -lt 8 ]; then
@@ -129,8 +129,8 @@ fi
 
 # We want station to be the autoconnecting profile from now on. Demote AP
 # to manual-only so it doesn't auto-grab the radio at next boot.
-if nmcli -t -f NAME con show | grep -qx "efinder-ap"; then
-  nmcli con modify "efinder-ap" autoconnect no
+if nmcli -t -f NAME con show | grep -qx "diofinder-ap"; then
+  nmcli con modify "diofinder-ap" autoconnect no
 fi
 
 # Activate.
@@ -145,8 +145,8 @@ if ! nmcli con up "$PROFILE"; then
   echo "  - Network requires more than WPA2-PSK auth" >&2
   echo "" >&2
   echo "Returning to AP mode so you can re-tether and try again..." >&2
-  nmcli con modify "efinder-ap" autoconnect yes 2>/dev/null || true
-  nmcli con up efinder-ap >/dev/null 2>&1 || true
+  nmcli con modify "diofinder-ap" autoconnect yes 2>/dev/null || true
+  nmcli con up diofinder-ap >/dev/null 2>&1 || true
   exit 1
 fi
 
@@ -160,13 +160,13 @@ done
 
 cat <<EOF
 
-eFinder Wi-Fi is now in STATION mode.
+diofinder Wi-Fi is now in STATION mode.
 
   Network: $NEW_SSID
   IP:      ${IP:-(none yet -- check 'ip -4 addr show wlan0')}
 
-Other devices on the same network can reach the eFinder at:
-  ssh efinder@efinder.local
+Other devices on the same network can reach the diofinder at:
+  ssh diofinder@diofinder.local
 or directly at the IP above.
 
 The USB tether (10.55.0.1) is still active in parallel; you can keep

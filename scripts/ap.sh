@@ -1,14 +1,14 @@
 #!/bin/bash
-# Switch the eFinder's Wi-Fi to access-point mode.
+# Switch the diofinder's Wi-Fi to access-point mode.
 #
 # Usage:
-#   sudo ap.sh                  # use the existing efinder-ap profile
+#   sudo ap.sh                  # use the existing diofinder-ap profile
 #   sudo ap.sh SSID PASSWORD    # change SSID/password and activate
 #
 # Connect from your phone or laptop:
 #   1. Look for the SSID printed below in your Wi-Fi list.
 #   2. Connect with the password printed below.
-#   3. ssh efinder@10.42.0.1   (or efinder.local once mDNS resolves)
+#   3. ssh diofinder@10.42.0.1   (or diofinder.local once mDNS resolves)
 #
 # Run via sudo. Reports the active SSID and password before and after
 # so you know exactly what to look for.
@@ -20,7 +20,7 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-PROFILE="efinder-ap"
+PROFILE="diofinder-ap"
 
 # If user provided SSID and password, update the profile first.
 if [ $# -ge 1 ]; then
@@ -92,16 +92,16 @@ IP=$(ip -4 addr show wlan0 2>/dev/null | awk '/inet / {print $2; exit}')
 
 cat <<EOF
 
-eFinder Wi-Fi is now in ACCESS POINT mode.
+diofinder Wi-Fi is now in ACCESS POINT mode.
 
   SSID:     $SSID
   Password: $PSK
   IP:       ${IP:-(none yet)}
 
 Connect a device to that SSID, then:
-  ssh efinder@10.42.0.1
+  ssh diofinder@10.42.0.1
 or:
-  ssh efinder@efinder.local   (if mDNS works on your client)
+  ssh diofinder@diofinder.local   (if mDNS works on your client)
 
 To switch to a real Wi-Fi network later:
   sudo /usr/local/bin/station.sh "MyWiFi" "MyPassword"

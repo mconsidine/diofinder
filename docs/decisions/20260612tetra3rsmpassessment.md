@@ -3,16 +3,16 @@
 **Date:** 2026-06-12  
 **Session name:** claude/assess-tetra3rs-performance-F6f17  
 **Session ID:** session_01U9c6UFBSawfSZMeMr8ZcJB  
-**Repo:** mconsidine/efinder_cli_tetra3rs_mp  
+**Repo:** mconsidine/diofinder_cli_tetra3rs_mp  
 **Branch:** claude/assess-tetra3rs-performance-F6f17  
-**File assessed:** `Solver/eFinder_tetra3rs_mp.py` (1297 lines, version 6.6-tetra3rs-mp-tb8)
+**File assessed:** `Solver/diofinder_tetra3rs_mp.py` (1297 lines, version 6.6-tetra3rs-mp-tb8)
 
 ---
 
 ## Purpose
 
-Assess whether `eFinder_tetra3rs_mp.py` is viable in terms of speed and efficiency as a
-replacement for the cedar-based implementation in `efinder_cli_new`, and identify any
+Assess whether `diofinder_tetra3rs_mp.py` is viable in terms of speed and efficiency as a
+replacement for the cedar-based implementation in `diofinder_cli_new`, and identify any
 features present in the cedar version that are missing here.
 
 ---
@@ -78,14 +78,14 @@ Rust centroid extraction and plate solving in-process via `tetra3rs`.
 ## Feature parity check status
 
 ### Goal
-Verify that all features recently added to `mconsidine/efinder_cli_new` (cedar-based)
+Verify that all features recently added to `mconsidine/diofinder_cli_new` (cedar-based)
 are present in this tetra3rs implementation.
 
 ### Outcome
 **Incomplete — blocked by MCP access scope.**
 
-The GitHub MCP server for this session was scoped to `mconsidine/efinder_cli_tetra3rs_mp`
-only. `mconsidine/efinder_cli_new` could not be read. An attempt was made to expand scope
+The GitHub MCP server for this session was scoped to `mconsidine/diofinder_cli_tetra3rs_mp`
+only. `mconsidine/diofinder_cli_new` could not be read. An attempt was made to expand scope
 via web UI settings; the user was pursuing resolution in a parallel session at close.
 
 ### Known gap identified from README vs code inspection
@@ -107,7 +107,7 @@ All other commands in the README diagnostic table (`:PS#`, `:GV#`, `:GS#`, `:GK#
    and a corresponding `get_altitude` handler. This is in the README and hardware BOM
    but absent from the code.
 
-2. **Complete cedar feature parity check** — once MCP access to `efinder_cli_new` is
+2. **Complete cedar feature parity check** — once MCP access to `diofinder_cli_new` is
    available, diff the two implementations systematically and port any missing features.
 
 ### Short-term performance improvements
@@ -131,10 +131,10 @@ All other commands in the README diagnostic table (`:PS#`, `:GV#`, `:GS#`, `:GK#
 
 ## Session actions taken
 
-- Read and analysed `Solver/eFinder_tetra3rs_mp.py` in full
+- Read and analysed `Solver/diofinder_tetra3rs_mp.py` in full
 - Read `README.md` and cross-referenced documented LX200 commands against implementation
 - Identified `:GA#` as the one documented command with no implementation
-- Attempted to expand MCP repo scope to access `efinder_cli_new`; blocked by session
+- Attempted to expand MCP repo scope to access `diofinder_cli_new`; blocked by session
   configuration; user pursuing resolution separately
 - No code changes were committed in this session
 
@@ -142,7 +142,7 @@ All other commands in the README diagnostic table (`:PS#`, `:GV#`, `:GS#`, `:GK#
 
 ## Next session checklist
 
-- [ ] Confirm `mconsidine/efinder_cli_new` is in MCP allowlist
+- [ ] Confirm `mconsidine/diofinder_cli_new` is in MCP allowlist
 - [ ] Diff cedar vs tetra3rs implementations — identify all feature gaps
 - [ ] Implement `:GA#` ADXL343 altitude command
 - [ ] Implement any additional features found in cedar diff

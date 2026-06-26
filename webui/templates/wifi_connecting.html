@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}eFinder — Connecting{% endblock %}
+{% block title %}diofinder — Connecting{% endblock %}
 {% block content %}
 
 <div class="card" style="max-width:520px; margin:0 auto;">
@@ -62,7 +62,7 @@ async function checkStatus() {
       document.getElementById('countdown-bar').style.width = '100%';
       setMsg('Connected to “' + (d.ssid || TARGET_SSID) + '” — IP: ' + d.ip);
       showResult(
-        '<p class="hint">eFinder is now reachable on your network via <strong>efinder.local</strong>.</p>' +
+        '<p class="hint">diofinder is now reachable on your network via <strong>diofinder.local</strong>.</p>' +
         '<div class="actions">' +
         '<a href="/wifi" class="btn btn-primary">Wi-Fi settings</a>' +
         '<a href="/" class="btn">Dashboard</a>' +
@@ -97,7 +97,7 @@ async function restoreAP() {
   }
   setBarColor('#550000');
   document.getElementById('countdown-bar').style.width = '0%';
-  setMsg('AP mode restored. Reconnect to the eFinder Wi-Fi network.');
+  setMsg('AP mode restored. Reconnect to the diofinder Wi-Fi network.');
   showResult(
     '<div class="actions"><a href="/wifi" class="btn">Wi-Fi settings</a>' +
     '<a href="/" class="btn">Dashboard</a></div>'

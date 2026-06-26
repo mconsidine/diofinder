@@ -2,7 +2,7 @@
 """
 Pure-logic unit tests for the offline auto-tune candidate selection /
 merit function (`comms_proc._auto_tune_select` / `_auto_tune_cost`). No
-hardware, no solver — comms_proc imports only efinder-internal + stdlib
+hardware, no solver — comms_proc imports only diofinder-internal + stdlib
 modules; star_detect is stubbed defensively.
 
 Run:
@@ -23,7 +23,7 @@ if "star_detect" not in sys.modules:
     _stub.set_num_threads = lambda n: None
     sys.modules["star_detect"] = _stub
 
-from efinder.comms_proc import (
+from diofinder.comms_proc import (
     _auto_tune_select, _auto_tune_cost, _AT_BG_COST,
     _auto_tune_valid_samples, _auto_tune_row, _AT_SIGNAL_FLOOR,
 )

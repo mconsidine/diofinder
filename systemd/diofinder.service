@@ -1,0 +1,35 @@
+[Unit]
+Description=diofinder plate-solving telescope finder (olive)
+Documentation=https://github.com/mconsidine/eFinder_cli
+After=network.target
+
+[Service]
+Type=simple
+User=diofinder
+Group=diofinder
+WorkingDirectory=/opt/diofinder
+Environment=PYTHONUNBUFFERED=1
+Environment=DIOFINDER_CONFIG=/etc/diofinder/diofinder.conf
+
+# Create /run/diofinder owned by diofinder:diofinder for the maintenance
+# Unix socket.
+RuntimeDirectory=diofinder
+RuntimeDirectoryMode=0750
+
+# Clean up stale IPC left by an unclean exit before starting. The '-' prefix
+# makes a failure non-fatal (e.g. nothing to remove). The shell glob needs a
+# shell, so these run via /bin/sh -c.
+ExecStartPre=-/bin/sh -c 'rm -f /dev/shm/diofinder_frame_*'
+ExecStartPre=-/bin/sh -c 'rm -f /run/diofinder/maint.sock'
+
+ExecStart=/opt/diofinder/venv/bin/python -m diofinder.diofinder_main
+
+Restart=on-failure
+RestartSec=5
+
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/diofinder /etc/diofinder /run/diofinder
+
+[Install]
+WantedBy=multi-user.target

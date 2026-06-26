@@ -5,12 +5,12 @@ Solve a star-field image with sycamore extraction + olive-solve (tetra3-py).
 Pipeline: sycamore detect_stars (matched_filter gate) → solve_from_centroids.
 
 Usage (on device):
-  sudo /opt/efinder/venv/bin/python3 tests/solve_image.py --image /path/to/image.jpg
+  sudo /opt/diofinder/venv/bin/python3 tests/solve_image.py --image /path/to/image.jpg
 
   # Explicit database:
   python3 tests/solve_image.py --image image.jpg --db /path/to/database.npz
 
-Defaults are read from /etc/efinder/efinder.conf when present.
+Defaults are read from /etc/diofinder/diofinder.conf when present.
 """
 
 import argparse
@@ -18,7 +18,7 @@ import pathlib
 import sys
 import time
 
-sys.path.insert(0, '/opt/efinder')
+sys.path.insert(0, '/opt/diofinder')
 
 
 def main():
@@ -35,16 +35,16 @@ def main():
 
     # Load config if available; fall back to defaults
     try:
-        from efinder.config import load_config
+        from diofinder.config import load_config
         cfg = load_config()
         db_path  = pathlib.Path(cfg.solver_db if cfg.solver_db.startswith('/') else
-                                f'/var/lib/efinder/{cfg.solver_db}.npz')
+                                f'/var/lib/diofinder/{cfg.solver_db}.npz')
         fov      = args.fov      or cfg.fov_deg
         fov_err  = args.fov_err  or cfg.fov_max_error_deg
         timeout  = args.timeout  or cfg.solve_timeout_ms
         sigma    = args.sigma    or cfg.detect_sigma
     except Exception:
-        db_path  = pathlib.Path('/var/lib/efinder/default_database.npz')
+        db_path  = pathlib.Path('/var/lib/diofinder/default_database.npz')
         fov      = args.fov     or 13.5
         fov_err  = args.fov_err or 1.0
         timeout  = args.timeout or 1500
@@ -71,7 +71,7 @@ def main():
         _sd.set_num_threads(2)
     except ImportError:
         sys.exit('ERROR: sycamore star_detect not installed '
-                 '(run from the efinder venv)')
+                 '(run from the diofinder venv)')
 
     # Load tetra3 database
     print(f'Database : {db_path}')
@@ -81,7 +81,7 @@ def main():
     try:
         import tetra3
     except ImportError:
-        sys.exit('ERROR: tetra3 not installed (run from the efinder venv)')
+        sys.exit('ERROR: tetra3 not installed (run from the diofinder venv)')
 
     t0 = time.monotonic()
     t3 = tetra3.Tetra3(str(db_path))

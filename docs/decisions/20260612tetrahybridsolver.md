@@ -1,6 +1,6 @@
 # 2026-06-12 — Tetra Hybrid Solver: Decisions, Assessments, Actions, Recommendations
 
-**Session name:** assess-efinder-improvements  
+**Session name:** assess-diofinder-improvements  
 **Session ID:** `018v3BTHEGGxUVhCeyERTJD2`  
 **Session URL:** https://claude.ai/code/session_018v3BTHEGGxUVhCeyERTJD2  
 **Branch:** `combo`  
@@ -57,7 +57,7 @@ database was generated at exactly **14.0° FOV** while the camera's actual
 FOV is **13.497°**. With ±0.1° tolerance the search window is 13.4–13.6°,
 missing all 14.0° database patterns. With ±1.0° the solve succeeds in ~495ms.
 
-**Fix applied** (`efinder/solver_proc.py`):
+**Fix applied** (`diofinder/solver_proc.py`):
 ```python
 # Before
 fov_max_error_deg=calibrator.get_fov_max_error(),
@@ -82,7 +82,7 @@ providing almost no speedup over blind (~495ms blind vs ~483ms "seeded").
 At 5fps the telescope moves far less than 0.1° between frames. With
 `hint_uncertainty_deg=0.1` seeded solves drop to **~11ms**.
 
-**Fix applied** (`efinder/solver_proc.py`):
+**Fix applied** (`diofinder/solver_proc.py`):
 ```python
 hint_uncertainty_deg=0.1,
 ```
@@ -95,7 +95,7 @@ slew rates without requiring a code change.
 
 ## Assessment: db.solve() vs solve_from_centroids
 
-**Finding:** The older `efinder_cli_tetra3rs_mp` repo used `db.solve()` with
+**Finding:** The older `diofinder_cli_tetra3rs_mp` repo used `db.solve()` with
 `ra_hint_deg`/`dec_hint_deg`/`search_radius_deg=5.0` and achieved ~6ms
 seeded solves. This API **does not exist** in the current tetra3rs version —
 only `solve_from_centroids` is available.
@@ -157,7 +157,7 @@ The reason tetra3rs required QEMU was that Python extension wheels
 
 | File | Change |
 |---|---|
-| `efinder/solver_proc.py` | Hybrid cedar extraction for tetra backend; `fov_max_error_deg` fix; `hint_uncertainty_deg` 5.0→0.1 |
+| `diofinder/solver_proc.py` | Hybrid cedar extraction for tetra backend; `fov_max_error_deg` fix; `hint_uncertainty_deg` 5.0→0.1 |
 | `.github/workflows/vendor-binaries.yml` | Native ARM64 runner for tetra3rs build |
 | `tests/bench_tetra_hints.py` | New: hint_uncertainty_deg sweep benchmark |
 | `tests/bench_cedar_vs_tetra.py` | New: side-by-side cedar vs tetra hybrid timing |
@@ -182,7 +182,7 @@ The reason tetra3rs required QEMU was that Python extension wheels
    rather than `14.0` so the calibrator's tight window remains valid for
    tetra3rs without the `max()` workaround.
 
-2. **Make `hint_uncertainty_deg` configurable** — add to `efinder.conf` as
+2. **Make `hint_uncertainty_deg` configurable** — add to `diofinder.conf` as
    `tetra3rs_hint_uncertainty_deg: 0.1` so it can be adjusted for faster
    mounts without code changes.
 

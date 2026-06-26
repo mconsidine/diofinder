@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Session name** | peaceful-gates-b2pv2 — "Background estimation & subtraction across the eFinder repos" |
+| **Session name** | peaceful-gates-b2pv2 — "Background estimation & subtraction across the diofinder repos" |
 | **Session id** | `01SA11ppqKuFYvhqyfm3c2vy` |
 | **Timestamp (UTC)** | 2026-06-12T13:21:56Z |
 | **Dev branch** | `claude/peaceful-gates-b2pv2` |
@@ -49,14 +49,14 @@
   (this session's, PR #18) and `claude/vigilant-wright-d9ndN` (another session,
   pending). Decision: **keep the merged version as the base**, harvest the new
   operator tooling from vigilant-wright (maint-socket commands, the
-  `efinder-bg-setup`/`efinder-bg-test` scripts, the `webui/templates/bgtest.html`
+  `diofinder-bg-setup`/`diofinder-bg-test` scripts, the `webui/templates/bgtest.html`
   page), then **discard** the vigilant-wright branch.
 - **D5.** **Land the top-hat properly** (not drop it): once sycamore ships a
   cedar-removed `0.9.0` with `tophat_radius`, vendor it and make diofinder
   consistent.
 
 ## 4. Actions completed (merged to `olive` via PR #18, commit `12b27c8`)
-- Added `efinder/bg_cache.py` (`BackgroundCache`): routes detection through
+- Added `diofinder/bg_cache.py` (`BackgroundCache`): routes detection through
   per-frame `row_percentile`/`line_median`/`top_hat` and/or the temporal cache;
   includes a `HAS_TOPHAT` capability probe that degrades to `line_median` on
   older sycamore wheels.
@@ -82,7 +82,7 @@
 ## 6. Open items / next steps (in order)
 1. **(sycamore first)** Ship sycamore `main` as **`v0.9.0`** with the top-hat and
    cedar removed; tag `v0.9.0` so `build.yml` publishes the wheel as a Release.
-2. **Drop `gate_mode="matched_filter"` from `efinder/bg_cache.py`** (both call
+2. **Drop `gate_mode="matched_filter"` from `diofinder/bg_cache.py`** (both call
    sites, ≈ lines 186/197). **Must land on `olive` before/with the new wheel** —
    the cedar-removed wheel has no `gate_mode`; passing it raises `TypeError` on
    every frame.

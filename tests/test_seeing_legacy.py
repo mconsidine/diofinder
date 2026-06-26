@@ -7,8 +7,8 @@ import os
 import tempfile
 import unittest
 
-import efinder.seeing as seeing
-from efinder.config import Config
+import diofinder.seeing as seeing
+from diofinder.config import Config
 
 
 class TestLegacyPreset(unittest.TestCase):

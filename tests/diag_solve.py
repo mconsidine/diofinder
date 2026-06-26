@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-eFinder full-pipeline diagnostic.
+diofinder full-pipeline diagnostic.
 
 Tests the complete sycamore extraction + olive-solve pipeline with per-step
 timing.  No external server required.
@@ -13,17 +13,17 @@ Two paths are timed for each image:
 
 Usage:
   # Loop over installed test images:
-  sudo /opt/efinder/venv/bin/python3 tests/diag_solve.py
+  sudo /opt/diofinder/venv/bin/python3 tests/diag_solve.py
 
   # Live frame from running daemon:
-  sudo /opt/efinder/venv/bin/python3 tests/diag_solve.py --live-shm
+  sudo /opt/diofinder/venv/bin/python3 tests/diag_solve.py --live-shm
 
   # Single image, custom sigma:
-  sudo /opt/efinder/venv/bin/python3 tests/diag_solve.py \\
+  sudo /opt/diofinder/venv/bin/python3 tests/diag_solve.py \\
       --image /path/to/image.png --sigma 7.0
 
   # Extended timeout when normal fails:
-  sudo /opt/efinder/venv/bin/python3 tests/diag_solve.py --extended-timeout
+  sudo /opt/diofinder/venv/bin/python3 tests/diag_solve.py --extended-timeout
 """
 
 import argparse
@@ -31,14 +31,14 @@ import pathlib
 import sys
 import time
 
-sys.path.insert(0, '/opt/efinder')
+sys.path.insert(0, '/opt/diofinder')
 
 PASS = "\033[32mPASS\033[0m"
 FAIL = "\033[31mFAIL\033[0m"
 WARN = "\033[33mWARN\033[0m"
 INFO = "\033[34mINFO\033[0m"
 
-TEST_IMAGES_DIR = pathlib.Path('/opt/efinder/test-images')
+TEST_IMAGES_DIR = pathlib.Path('/opt/diofinder/test-images')
 
 
 def tag(label, msg): print(f"  [{label}] {msg}")
@@ -50,7 +50,7 @@ ap = argparse.ArgumentParser(description=__doc__,
                               formatter_class=argparse.RawDescriptionHelpFormatter)
 ap.add_argument('--image',    metavar='PATH', help='Image file to solve (JPG/PNG)')
 ap.add_argument('--live-shm', action='store_true',
-                help='Read frame from live efinder daemon SHM')
+                help='Read frame from live diofinder daemon SHM')
 ap.add_argument('--fov',     type=float, help='FOV estimate in degrees')
 ap.add_argument('--fov-err', type=float, help='FOV max error in degrees')
 ap.add_argument('--timeout', type=int,   help='Solve timeout in ms')
@@ -63,7 +63,7 @@ ap.add_argument('--match-runtime', action='store_true',
                 help='Reproduce the LIVE solver pipeline: read detect_bin, '
                      'kernel_sigma, noise_mode, bg_mode, max_axis_ratio and '
                      'extractor_backend from config (or a debug bundle\'s '
-                     'effective_params.json via EFINDER_CONFIG) instead of the '
+                     'effective_params.json via DIOFINDER_CONFIG) instead of the '
                      'historical bin=1 / sycamore-default diagnostic path.')
 ap.add_argument('--bin', type=int, choices=(1, 2, 4),
                 help='Detection binning (overrides config / --match-runtime)')
@@ -82,7 +82,7 @@ args = ap.parse_args()
 # ── Optional: hydrate everything from a downloaded debug bundle ────────────────
 # Makes the diagnostic fully self-contained and reproducible on ANY machine — it
 # uses the knobs the solver actually applied (the calibrated FOV tolerance and
-# any live shared_cfg drift, which efinder.conf alone does not capture) and the
+# any live shared_cfg drift, which diofinder.conf alone does not capture) and the
 # exact captured frames.
 _BUNDLE_EFF = {}
 _BUNDLE_FRAMES = []      # list of (label, path)
@@ -91,16 +91,16 @@ if args.bundle:
     _bp = pathlib.Path(args.bundle)
     if not _bp.exists():
         print(f'  [FAIL] bundle not found: {_bp}'); sys.exit(1)
-    _bundle_tmp = _tf.TemporaryDirectory(prefix='efinder_bundle_')  # kept alive
+    _bundle_tmp = _tf.TemporaryDirectory(prefix='diofinder_bundle_')  # kept alive
     try:
         with _zf.ZipFile(str(_bp)) as _zfh:
             _zfh.extractall(_bundle_tmp.name)
     except Exception as e:
         print(f'  [FAIL] could not read bundle {_bp.name}: {e}'); sys.exit(1)
     _root = pathlib.Path(_bundle_tmp.name)
-    _conf = _root / 'efinder.conf'
+    _conf = _root / 'diofinder.conf'
     if _conf.exists():
-        _os.environ['EFINDER_CONFIG'] = str(_conf)   # Stage 0 load_config picks it up
+        _os.environ['DIOFINDER_CONFIG'] = str(_conf)   # Stage 0 load_config picks it up
     _effp = _root / 'effective_params.json'
     if _effp.exists():
         try:
@@ -117,10 +117,10 @@ if args.bundle:
 sep('Stage 0: Config & imports')
 
 try:
-    from efinder.config import load_config
+    from diofinder.config import load_config
     cfg     = load_config()
     db_path = pathlib.Path(cfg.solver_db if cfg.solver_db.startswith('/')
-                           else f'/var/lib/efinder/{cfg.solver_db}.npz')
+                           else f'/var/lib/diofinder/{cfg.solver_db}.npz')
     fov     = args.fov     or cfg.fov_deg
     fov_err = args.fov_err or cfg.fov_max_error_deg
     timeout = args.timeout or cfg.solve_timeout_ms
@@ -148,7 +148,7 @@ try:
     tag(PASS, cfg.summary())
 except Exception as e:
     tag(WARN, f'Config unavailable ({e}); using defaults')
-    db_path = pathlib.Path('/var/lib/efinder/default_database.npz')
+    db_path = pathlib.Path('/var/lib/diofinder/default_database.npz')
     fov     = args.fov     or 13.5
     fov_err = args.fov_err or 1.0
     timeout = args.timeout or 1500
@@ -161,7 +161,7 @@ except Exception as e:
     match_radius = match_threshold = None
 
 # A debug bundle is the source of truth for what the LIVE solver actually used:
-# the calibrated FOV tolerance + any shared_cfg drift that efinder.conf misses.
+# the calibrated FOV tolerance + any shared_cfg drift that diofinder.conf misses.
 if _BUNDLE_EFF:
     _sp = _BUNDLE_EFF.get('solver_params') or {}
     _mp = _BUNDLE_EFF.get('match_params') or {}
@@ -258,7 +258,7 @@ if args.bundle:
 elif args.live_shm:
     try:
         from multiprocessing import shared_memory, resource_tracker as _rt
-        from efinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
+        from diofinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
     except ImportError as e:
         tag(FAIL, f'Cannot import frame_slots: {e}'); sys.exit(1)
     found = False
@@ -276,7 +276,7 @@ elif args.live_shm:
         except Exception:
             continue
     if not found:
-        tag(FAIL, 'No live SHM slots found — is the efinder daemon running?')
+        tag(FAIL, 'No live SHM slots found — is the diofinder daemon running?')
         sys.exit(1)
 
 elif args.image:

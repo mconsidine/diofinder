@@ -56,14 +56,14 @@ scripts call `sys.exit(1)` if the import fails.
 
 ## Actions Taken
 
-### Core Python — efinder package
+### Core Python — diofinder package
 
 | File | Change |
 |------|--------|
-| `efinder/config.py` | Removed `extract_backend` and `sycamore_gate_mode` fields; updated `detect_sigma` and `cpu_solver` comments; removed `backend=` from `summary()` |
-| `efinder/efinder_main.py` | Removed `extract_backend` and `sycamore_gate_mode` from `shared_cfg` dict init; updated module docstring |
-| `efinder/solver_proc.py` | Made sycamore required (hard fail); removed `_backend`/`_gate` variables and all conditional branching; hardcoded `gate_mode="matched_filter"`, `dtype=np.float64`, coordinate swap |
-| `efinder/comms_proc.py` | Removed `set_extract_backend` handler; changed `solver_backend` status field to hardcoded `"sycamore"` |
+| `diofinder/config.py` | Removed `extract_backend` and `sycamore_gate_mode` fields; updated `detect_sigma` and `cpu_solver` comments; removed `backend=` from `summary()` |
+| `diofinder/diofinder_main.py` | Removed `extract_backend` and `sycamore_gate_mode` from `shared_cfg` dict init; updated module docstring |
+| `diofinder/solver_proc.py` | Made sycamore required (hard fail); removed `_backend`/`_gate` variables and all conditional branching; hardcoded `gate_mode="matched_filter"`, `dtype=np.float64`, coordinate swap |
+| `diofinder/comms_proc.py` | Removed `set_extract_backend` handler; changed `solver_backend` status field to hardcoded `"sycamore"` |
 
 ### Web UI
 
@@ -146,7 +146,7 @@ same session).
 
 3. **sigma default is 7.0** for sycamore matched_filter. The previous "9 for
    olive" annotation has been removed everywhere. If field tests show
-   under/over-detection, adjust `detect_sigma` in `efinder.conf` or via the
+   under/over-detection, adjust `detect_sigma` in `diofinder.conf` or via the
    Config page — no code change needed.
 
 4. **`mconsidine/testrepo`** — two additional workflow files in that repo
@@ -156,8 +156,8 @@ same session).
 
 5. **FOV calibration** — if switching hardware or lenses, reset with:
    ```bash
-   sudo sed -i 's/^fov_calibrated:.*/fov_calibrated: false/' /etc/efinder/efinder.conf
-   sudo systemctl restart efinder
+   sudo sed -i 's/^fov_calibrated:.*/fov_calibrated: false/' /etc/diofinder/diofinder.conf
+   sudo systemctl restart diofinder
    ```
 
 ---

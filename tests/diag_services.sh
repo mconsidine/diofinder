@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# eFinder service & file health check (olive backend).
+# diofinder service & file health check (olive backend).
 # Run as root (or with sudo) for full journal and process info.
 #
 # Usage:
@@ -16,22 +16,22 @@ warn() { echo -e "  ${YELLOW}WARN${NC}  $*"; }
 info() { echo -e "  ${CYAN}INFO${NC}  $*"; }
 sep()  { echo; echo -e "${BOLD}=== $* ===${NC}"; }
 
-CONF="${EFINDER_CONFIG:-/etc/efinder/efinder.conf}"
+CONF="${DIOFINDER_CONFIG:-/etc/diofinder/diofinder.conf}"
 
 # ---------------------------------------------------------------------------
 sep "Systemd service"
-state=$(systemctl is-active "efinder" 2>/dev/null || echo "unknown")
-enabled=$(systemctl is-enabled "efinder" 2>/dev/null || echo "unknown")
+state=$(systemctl is-active "diofinder" 2>/dev/null || echo "unknown")
+enabled=$(systemctl is-enabled "diofinder" 2>/dev/null || echo "unknown")
 case "$state" in
-    active)   pass "efinder: active  (enabled=$enabled)" ;;
-    inactive) warn "efinder: inactive (enabled=$enabled)" ;;
-    failed)   fail "efinder: FAILED  (enabled=$enabled)" ;;
-    *)        warn "efinder: state=$state  enabled=$enabled" ;;
+    active)   pass "diofinder: active  (enabled=$enabled)" ;;
+    inactive) warn "diofinder: inactive (enabled=$enabled)" ;;
+    failed)   fail "diofinder: FAILED  (enabled=$enabled)" ;;
+    *)        warn "diofinder: state=$state  enabled=$enabled" ;;
 esac
 
 # ---------------------------------------------------------------------------
 sep "Maintenance socket"
-MAINT_SOCK="${EFINDER_MAINT_SOCKET:-/run/efinder/maint.sock}"
+MAINT_SOCK="${DIOFINDER_MAINT_SOCKET:-/run/diofinder/maint.sock}"
 if [ -S "$MAINT_SOCK" ]; then
     pass "$MAINT_SOCK exists"
     if command -v python3 &>/dev/null; then
@@ -65,23 +65,23 @@ finally:
         info "maint status: $status_out"
     fi
 else
-    warn "$MAINT_SOCK not found (efinder daemon is not running)"
+    warn "$MAINT_SOCK not found (diofinder daemon is not running)"
 fi
 
 # ---------------------------------------------------------------------------
 sep "Shared memory frame buffers"
 found=0
 for i in 0 1 2; do
-    shm="/dev/shm/efinder_frame_$i"
+    shm="/dev/shm/diofinder_frame_$i"
     if [ -f "$shm" ]; then
         sz=$(stat -c%s "$shm" 2>/dev/null || echo "?")
-        pass "efinder_frame_$i  ($sz bytes)"
+        pass "diofinder_frame_$i  ($sz bytes)"
         found=$((found + 1))
     else
-        warn "efinder_frame_$i: not present"
+        warn "diofinder_frame_$i: not present"
     fi
 done
-[ "$found" -eq 0 ] && fail "No SHM buffers found — efinder daemon is not running"
+[ "$found" -eq 0 ] && fail "No SHM buffers found — diofinder daemon is not running"
 
 # ---------------------------------------------------------------------------
 sep "Database file (olive-solve tetra3-py)"
@@ -93,7 +93,7 @@ else
 fi
 # Expand to absolute path if needed
 if [[ "$solver_db" != /* ]]; then
-    solver_db="/var/lib/efinder/${solver_db}.npz"
+    solver_db="/var/lib/diofinder/${solver_db}.npz"
 fi
 info "solver_db = $solver_db"
 
@@ -106,7 +106,7 @@ else
 fi
 
 # Verify database loads correctly
-PYTHON="${EFINDER_PYTHON:-/opt/efinder/venv/bin/python3}"
+PYTHON="${DIOFINDER_PYTHON:-/opt/diofinder/venv/bin/python3}"
 if [ ! -x "$PYTHON" ]; then
     PYTHON=$(command -v python3 2>/dev/null || echo "")
 fi
@@ -142,13 +142,13 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-sep "efinder processes"
-procs=$(ps aux 2>/dev/null | grep -E '(efinder|solver_proc|camera_proc|comms_proc)' \
+sep "diofinder processes"
+procs=$(ps aux 2>/dev/null | grep -E '(diofinder|solver_proc|camera_proc|comms_proc)' \
         | grep -v grep | grep -v 'diag_services' || true)
 if [ -n "$procs" ]; then
     echo "$procs"
 else
-    warn "No efinder processes found"
+    warn "No diofinder processes found"
 fi
 
 # ---------------------------------------------------------------------------
@@ -161,9 +161,9 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-sep "Recent journal: efinder (last 50 lines)"
-journalctl -u efinder --no-pager -n 50 2>/dev/null \
-    || journalctl -u efinder -n 50 2>/dev/null \
-    || warn "No journal for efinder (not a systemd unit or insufficient privileges)"
+sep "Recent journal: diofinder (last 50 lines)"
+journalctl -u diofinder --no-pager -n 50 2>/dev/null \
+    || journalctl -u diofinder -n 50 2>/dev/null \
+    || warn "No journal for diofinder (not a systemd unit or insufficient privileges)"
 
 echo

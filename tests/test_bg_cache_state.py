@@ -26,8 +26,8 @@ def _load_bg_cache():
         sd.compute_row_medians_py = lambda *a, **k: None
         sd.compute_block_medians_py = lambda *a, **k: None
         sys.modules["star_detect"] = sd
-    path = os.path.join(os.path.dirname(__file__), "..", "efinder", "bg_cache.py")
-    spec = importlib.util.spec_from_file_location("efinder_bg_cache_under_test", path)
+    path = os.path.join(os.path.dirname(__file__), "..", "diofinder", "bg_cache.py")
+    spec = importlib.util.spec_from_file_location("diofinder_bg_cache_under_test", path)
     mod = importlib.util.module_from_spec(spec)
     # Register before exec so @dataclass introspection can resolve the module.
     sys.modules[spec.name] = mod

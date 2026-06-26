@@ -7,7 +7,7 @@
 | **Session name** | admiring-franklin |
 | **Session URL** | https://claude.ai/code/session_01Tr9CeW1WjGgWYXVTjCaEmc |
 | **Branch** | `claude/admiring-franklin-VQXnN` |
-| **Repo** | `mconsidine/efinder-combo` |
+| **Repo** | `mconsidine/diofinder-combo` |
 
 ---
 
@@ -36,19 +36,19 @@ view.
 ### 2. CPU affinity correction
 
 **Assessment**: The IMU thread is a daemon thread started inside the launcher
-process (`efinder_main.py`).  Without pinning the launcher, the IMU thread
+process (`diofinder_main.py`).  Without pinning the launcher, the IMU thread
 floated across all four cores — defeating the CPU isolation strategy.
 
 **Decision**: Pin the launcher process to `cpu_comms` (CPU 1) immediately
 after `load_config()`.
 
-**Implementation** (`efinder/efinder_main.py`):
+**Implementation** (`diofinder/diofinder_main.py`):
 ```python
 cfg = load_config()
 os.sched_setaffinity(0, {cfg.cpu_comms})
 ```
 
-**Also fixed**: Stale defaults in `etc/efinder.conf.default`:
+**Also fixed**: Stale defaults in `etc/diofinder.conf.default`:
 - `cpu_solver: 3` → `2`
 - `detect_sigma: 8.0` → `9.0`
 - `detect_use_binned: false` → `true`
@@ -58,7 +58,7 @@ os.sched_setaffinity(0, {cfg.cpu_comms})
 | CPU | Role |
 |---|---|
 | 0 | Linux kernel, IRQs, sshd, NetworkManager |
-| 1 | `efinder_main` launcher + IMU thread · `comms_proc` · `efinder-webui` |
+| 1 | `diofinder_main` launcher + IMU thread · `comms_proc` · `diofinder-webui` |
 | 2 | `solver_proc` + `cedar-detect-server` |
 | 3 | `camera_proc` alone |
 
@@ -88,7 +88,7 @@ scope is stationary.
 
 **Decision**: Implement IMU-propagated hint (Option C) as a proof of concept.
 
-**Algorithm** (`efinder/solver_proc.py`, `_imu_propagate_hint()`):
+**Algorithm** (`diofinder/solver_proc.py`, `_imu_propagate_hint()`):
 ```
 q_delta = q_imu_now ⊗ conj(q_imu_at_last_solve)   # body rotation since last solve
 q_hint  = q_delta ⊗ q_last_sky                      # apply to sky quaternion
@@ -141,18 +141,18 @@ during a session.
 - ZIP bundling: single archive named `YYYYMMDDHHMMSSMMM.zip` (sweep start
   timestamp); `ZipFile.testzip()` integrity check before deleting PNGs
 - `ZIP_STORED` compression (PNG already compressed; deflate adds overhead)
-- Output dir: wherever `test.png` lives (`/var/lib/efinder` default)
+- Output dir: wherever `test.png` lives (`/var/lib/diofinder` default)
 - Optional 2×2 software binning via `--binning`
 
 **ZIP diagnostic contents** (added in this session):
 - `capture_info.txt` — sweep parameters, hostname, Pi model, OS, frame
   pipeline explanation, live daemon status from maint socket
-- `efinder.conf` — verbatim copy of `/etc/efinder/efinder.conf` at capture
+- `diofinder.conf` — verbatim copy of `/etc/diofinder/diofinder.conf` at capture
   time
 
 **Transfer command** (printed by script at end):
 ```bash
-scp efinder@efinder.local:/var/lib/efinder/YYYYMMDDHHMMSSMMM.zip .
+scp diofinder@diofinder.local:/var/lib/diofinder/YYYYMMDDHHMMSSMMM.zip .
 ```
 
 ---
@@ -173,7 +173,7 @@ scp efinder@efinder.local:/var/lib/efinder/YYYYMMDDHHMMSSMMM.zip .
 1. Run `diag_detect.py --sigma-sweep` — check actual extracted star counts
 2. If < 8 stars at sigma=9, lower sigma on the Camera page (try 6–7)
 3. If ≥ 8 stars but `NO_MATCH`: check FOV estimate, run
-   `efinder-ctl calibration reset`
+   `diofinder-ctl calibration reset`
 4. Capture frames with `diag_camera.py` for off-device analysis
 
 ---
@@ -192,7 +192,7 @@ All changes committed to `claude/admiring-franklin-VQXnN`:
   ZIP extra files, frame pipeline note, scp transfer instructions; added
   arcsinh stretch note
 - **`tests/diag_camera.py`**: Added `_build_info_txt()` and
-  `_query_daemon_status()`; bundle `capture_info.txt` + `efinder.conf` in
+  `_query_daemon_status()`; bundle `capture_info.txt` + `diofinder.conf` in
   every ZIP; print scp command at end
 
 ---

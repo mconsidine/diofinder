@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Pure-logic unit tests for seeing override storage, merge, and lineage
-classification (factory / tuned / custom). efinder.seeing is dependency-free,
+classification (factory / tuned / custom). diofinder.seeing is dependency-free,
 so these run without numpy / star_detect / picamera2.
 
 Run:
@@ -16,7 +16,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from efinder import seeing
+from diofinder import seeing
 
 
 class _FakeCfg:

@@ -1,0 +1,3 @@
+# Allow the diofinder web UI to switch Wi-Fi modes without a password prompt.
+diofinder ALL=(ALL) NOPASSWD: /usr/local/bin/ap.sh
+diofinder ALL=(ALL) NOPASSWD: /usr/local/bin/station.sh *

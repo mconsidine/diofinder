@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-diag_camera.py — Camera exposure/gain sweep diagnostic for eFinder.
+diag_camera.py — Camera exposure/gain sweep diagnostic for diofinder.
 
 Captures one frame for every combination of exposure and gain in the
 specified ranges, with optional 2×2 software binning.  Individual frames are
@@ -20,13 +20,13 @@ output directory, making it easy to transfer off the device.
 
 The ZIP always contains two extra files for diagnostic purposes:
   capture_info.txt  — sweep parameters, system info, and live daemon status
-  efinder.conf      — copy of /etc/efinder/efinder.conf at capture time
+  diofinder.conf      — copy of /etc/diofinder/diofinder.conf at capture time
 
-Files are written to the directory where test.png lives (/var/lib/efinder
+Files are written to the directory where test.png lives (/var/lib/diofinder
 by default), or the current working directory if test.png is not found.
 
 Usage:
-    sudo /opt/efinder/venv/bin/python3 tests/diag_camera.py [options]
+    sudo /opt/diofinder/venv/bin/python3 tests/diag_camera.py [options]
 
 Examples:
     # Default sweep (exposures 0.05–0.30 s step 0.05, gains 15–40 step 5)
@@ -44,7 +44,7 @@ Examples:
     # Override frame size or output directory
     sudo .../diag_camera.py --width 480 --height 380 --output-dir /tmp/frames
 
-Requires: picamera2, numpy, Pillow  (all present in the efinder venv)
+Requires: picamera2, numpy, Pillow  (all present in the diofinder venv)
 Must run as root (or a member of the 'video' group) on the Pi.
 """
 
@@ -76,7 +76,7 @@ logging.basicConfig(
 
 def _find_output_dir() -> Path:
     """Return the directory where test.png lives, or cwd."""
-    for d in [Path("/var/lib/efinder"), Path.cwd(), Path("/opt/efinder")]:
+    for d in [Path("/var/lib/diofinder"), Path.cwd(), Path("/opt/diofinder")]:
         if (d / "test.png").exists():
             return d
     return Path.cwd()
@@ -112,11 +112,11 @@ def _bin2x2(frame: np.ndarray) -> np.ndarray:
 
 
 def _query_daemon_status() -> str:
-    """Query the efinder maint socket for live status. Returns formatted string."""
+    """Query the diofinder maint socket for live status. Returns formatted string."""
     try:
         s = socket.socket(socket.AF_UNIX)
         s.settimeout(2.0)
-        s.connect("/run/efinder/maint.sock")
+        s.connect("/run/diofinder/maint.sock")
         s.sendall(b'{"cmd":"status","args":{}}\n')
         buf = b""
         while b"\n" not in buf:
@@ -137,7 +137,7 @@ def _build_info_txt(args, exposures, gains, width, height,
     lines = []
 
     lines += [
-        "eFinder camera diagnostic sweep — capture info",
+        "diofinder camera diagnostic sweep — capture info",
         "=" * 52,
         f"Sweep timestamp : {sweep_ts}",
         f"Captured        : {saved}/{total} frames in {elapsed:.1f} s",
@@ -154,7 +154,7 @@ def _build_info_txt(args, exposures, gains, width, height,
         "(2028×1520) and the ISP scales the result to the requested size.",
         "The full sensor area (full FOV) is always used — this is NOT a crop.",
         "Captured PNGs are raw 8-bit grayscale Y-plane, identical to what the",
-        "efinder solver receives.  No display stretch is applied.",
+        "diofinder solver receives.  No display stretch is applied.",
         "",
     ]
 
@@ -175,13 +175,13 @@ def _build_info_txt(args, exposures, gains, width, height,
         pass
     lines.append("")
 
-    # efinder config
-    conf_path = Path("/etc/efinder/efinder.conf")
-    lines += ["efinder.conf", "-" * 52]
+    # diofinder config
+    conf_path = Path("/etc/diofinder/diofinder.conf")
+    lines += ["diofinder.conf", "-" * 52]
     if conf_path.exists():
         lines.append(conf_path.read_text())
     else:
-        lines.append("(not found — /etc/efinder/efinder.conf does not exist)")
+        lines.append("(not found — /etc/diofinder/diofinder.conf does not exist)")
     lines.append("")
 
     # live daemon status
@@ -255,9 +255,9 @@ def main():
     ap.add_argument("--binning",    action="store_true",
                     help="Apply 2×2 software binning (halves width and height)")
     ap.add_argument("--width",      type=int, default=None,
-                    help="Frame width in pixels (default: from efinder config or 960)")
+                    help="Frame width in pixels (default: from diofinder config or 960)")
     ap.add_argument("--height",     type=int, default=None,
-                    help="Frame height in pixels (default: from efinder config or 760)")
+                    help="Frame height in pixels (default: from diofinder config or 760)")
     ap.add_argument("--warmup",     type=int, default=3,
                     help="Frames to discard after each settings change (default: 3)")
     ap.add_argument("--output-dir", type=Path, default=None,
@@ -277,8 +277,8 @@ def main():
     cfg = None
     if width is None or height is None:
         try:
-            sys.path.insert(0, "/opt/efinder")
-            from efinder.config import load_config
+            sys.path.insert(0, "/opt/diofinder")
+            from diofinder.config import load_config
             cfg = load_config()
             if width  is None: width  = cfg.frame_width
             if height is None: height = cfg.frame_height
@@ -309,7 +309,7 @@ def main():
                  if args.binning else f"{width}×{height}")
 
     print("=" * 60)
-    print(" eFinder camera diagnostic sweep")
+    print(" diofinder camera diagnostic sweep")
     print("=" * 60)
     log.info("Frame size:      %s", img_dims)
     log.info("Exposures (%d):  %s s",
@@ -327,7 +327,7 @@ def main():
     try:
         from picamera2 import Picamera2
     except ImportError:
-        log.error("picamera2 not found — run on the Pi using the efinder venv")
+        log.error("picamera2 not found — run on the Pi using the diofinder venv")
         sys.exit(1)
 
     try:
@@ -454,7 +454,7 @@ def main():
 
         info_txt  = _build_info_txt(args, exposures, gains, width, height,
                                     sweep_ts, elapsed, saved, total)
-        conf_path = Path("/etc/efinder/efinder.conf")
+        conf_path = Path("/etc/diofinder/diofinder.conf")
 
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as zf:
             for p in saved_paths:
@@ -462,7 +462,7 @@ def main():
             zf.writestr("capture_info.txt", info_txt)
             zf.writestr("camera_settings.txt", cam_settings)
             if conf_path.exists():
-                zf.write(conf_path, arcname="efinder.conf")
+                zf.write(conf_path, arcname="diofinder.conf")
 
         # Verify the archive is intact before deleting the source files
         with zipfile.ZipFile(zip_path, "r") as zf:
@@ -472,12 +472,12 @@ def main():
         else:
             for p in saved_paths:
                 p.unlink()
-            log.info("ZIP OK (%d files + capture_info.txt + efinder.conf, %.1f MB)"
+            log.info("ZIP OK (%d files + capture_info.txt + diofinder.conf, %.1f MB)"
                      " — individual PNGs deleted",
                      len(saved_paths),
                      zip_path.stat().st_size / 1_048_576)
             log.info("Archive: %s", zip_path)
-        log.info("Transfer with:  scp efinder@efinder.local:%s .", zip_path)
+        log.info("Transfer with:  scp diofinder@diofinder.local:%s .", zip_path)
     else:
         log.warning("No frames captured — no ZIP created")
 

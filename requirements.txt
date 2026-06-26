@@ -1,4 +1,4 @@
-# eFinder Python dependencies installed via pip wheels.
+# diofinder Python dependencies installed via pip wheels.
 #
 # Heavy compiled libraries (numpy, scipy, Pillow, flask, picamera2)
 # come from apt and are visible to the venv via --system-site-packages.

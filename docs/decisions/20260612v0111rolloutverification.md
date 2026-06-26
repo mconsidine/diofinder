@@ -14,7 +14,7 @@ verification and cross-repo decisions that touch it.
   (2026-06-10 10:42 UTC); Vendor Sycamore run vendored the cp313 aarch64
   wheel into diofinder `olive` (`ce26d41`); diofinder release v0.0.20 built
   green (2026-06-10 10:51 UTC). Remaining step is on-device:
-  `efinder-update` / image install, then the handoff's verification list
+  `diofinder-update` / image install, then the handoff's verification list
   (incl. the predicted top_hat ≈100 ms → ~40–60 ms at bin=2).
 - Local cross-build of this crate verified from the tag via diofinder's new
   `build/local/build-sycamore-wheel.sh` (19 s on x86; aarch64 ELF confirmed).

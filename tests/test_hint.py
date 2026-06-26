@@ -19,7 +19,7 @@ import pathlib
 import sys
 import time
 
-sys.path.insert(0, '/opt/efinder')
+sys.path.insert(0, '/opt/diofinder')
 
 
 # ---------------------------------------------------------------------------
@@ -109,18 +109,18 @@ def main():
 
     # Load config when available; fall back to safe defaults
     try:
-        from efinder.config import load_config
+        from diofinder.config import load_config
         cfg = load_config()
         db_path = pathlib.Path(
             cfg.solver_db if cfg.solver_db.startswith('/')
-            else f'/var/lib/efinder/{cfg.solver_db}.npz'
+            else f'/var/lib/diofinder/{cfg.solver_db}.npz'
         )
         fov     = args.fov     or cfg.fov_deg
         fov_err = args.fov_err or cfg.fov_max_error_deg
         timeout = args.timeout or cfg.solve_timeout_ms
         sigma   = args.sigma   or cfg.detect_sigma
     except Exception:
-        db_path = pathlib.Path('/var/lib/efinder/default_database.npz')
+        db_path = pathlib.Path('/var/lib/diofinder/default_database.npz')
         fov     = args.fov     or 13.5
         fov_err = args.fov_err or 1.0
         timeout = args.timeout or 1500
@@ -133,14 +133,14 @@ def main():
         import tetra3
         import numpy as np
     except ImportError as e:
-        sys.exit(f'ERROR: {e} — run from the efinder venv')
+        sys.exit(f'ERROR: {e} — run from the diofinder venv')
 
     try:
         import star_detect as _sd
         _sd.set_num_threads(2)
     except ImportError as e:
         sys.exit(f'ERROR: sycamore star_detect not installed: {e} — '
-                 'run from the efinder venv')
+                 'run from the diofinder venv')
 
     if not db_path.exists():
         sys.exit(f'ERROR: database not found: {db_path}')

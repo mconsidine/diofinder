@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% block title %}eFinder Configuration{% endblock %}
+{% block title %}diofinder Configuration{% endblock %}
 {% block content %}
 <h2>Configuration</h2>
 
 <div style="margin-bottom:12px; font-size:0.9rem; color:#882200;">
   <code>{{ path }}</code>
   &mdash; read-only view. SSH in to edit, then
-  <code>sudo systemctl restart efinder</code>.
+  <code>sudo systemctl restart diofinder</code>.
 </div>
 
 {% if not cfg_ok %}

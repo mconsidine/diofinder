@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Update eFinder{% endblock %}
+{% block title %}Update diofinder{% endblock %}
 {% block content %}
 <h2>Update</h2>
 <p>Current version: <strong>{{ version }}</strong></p>
@@ -13,7 +13,7 @@
 <div class="card" style="margin-bottom:1rem;">
   <h3 style="margin:0 0 10px 0; font-size:1rem;">Latest release</h3>
   <form method="post" action="{{ url_for('update_page') }}"
-        onsubmit="return confirm('Update eFinder to the latest release? The service will be briefly unavailable.');">
+        onsubmit="return confirm('Update diofinder to the latest release? The service will be briefly unavailable.');">
     <button type="submit" class="btn btn-primary">Update to latest</button>
   </form>
 </div>
@@ -23,12 +23,12 @@
   <p style="font-size:0.85rem; margin:0 0 10px 0;">
     Track a development branch or a specific tag instead of the latest release
     &mdash; e.g. <code>claude/olive-bg-solve-rate</code> or <code>v0.0.15-dev</code>.
-    Runs <code>efinder-update --ref &lt;name&gt;</code>.
+    Runs <code>diofinder-update --ref &lt;name&gt;</code>.
     <br><strong>Tip:</strong> copy-paste the exact name — <code>l</code> (ell)
     and <code>1</code> (one) are easy to confuse on a phone keyboard.
   </p>
   <form method="post" action="{{ url_for('update_page') }}"
-        onsubmit="return confirm('Update eFinder to ' + (this.ref.value || '(empty!)') + '? The service will be briefly unavailable.');">
+        onsubmit="return confirm('Update diofinder to ' + (this.ref.value || '(empty!)') + '? The service will be briefly unavailable.');">
     <input type="text" name="ref" placeholder="branch or tag name"
            pattern="[A-Za-z0-9][A-Za-z0-9._/-]*" required
            style="width:16rem; max-width:80%;">

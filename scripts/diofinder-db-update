@@ -1,0 +1,117 @@
+#!/bin/bash
+# diofinder solver-database updater.
+# Downloads the diofinder_13deg.npz star database published on
+# mconsidine/astro_databases releases, verifies its SHA-256 against the
+# release manifest, installs it over the database named by solver_db in
+# /etc/diofinder/diofinder.conf (backing up the old one), and restarts the
+# service. The database is built from the merged Gaia DR3 + Hipparcos
+# catalog (63k stars to G=8); olive-solve loads it directly.
+#
+# Usage:
+#   sudo /usr/local/bin/diofinder-db-update            # latest release
+#   sudo /usr/local/bin/diofinder-db-update v2026.06   # specific tag
+
+set -euo pipefail
+
+REPO=mconsidine/astro_databases
+ASSET=diofinder_13deg.npz
+CONF=/etc/diofinder/diofinder.conf
+TAG="${1:-latest}"
+
+LOG() { echo "[db-update] $*"; }
+FAIL() { echo "[db-update] ERROR: $*" >&2; exit 1; }
+
+[ "$EUID" -eq 0 ] || FAIL "must run as root"
+
+if [ "$TAG" = "latest" ]; then
+  BASE="https://github.com/$REPO/releases/latest/download"
+else
+  BASE="https://github.com/$REPO/releases/download/$TAG"
+fi
+
+# Resolve the installed database path the same way the solver does:
+# bare solver_db names live under /var/lib/diofinder/<name>.npz.
+DB_STEM=$(awk -F': *' '$1=="solver_db"{v=$2} END{print v}' "$CONF" 2>/dev/null || true)
+DB_STEM="${DB_STEM:-default_database}"
+case "$DB_STEM" in
+  /*) DB_PATH="$DB_STEM" ;;
+  *)  DB_PATH="/var/lib/diofinder/${DB_STEM}.npz" ;;
+esac
+
+TMPDIR=$(mktemp -d)
+trap 'rm -rf "$TMPDIR"' EXIT
+
+LOG "Downloading $ASSET ($TAG) from $REPO..."
+curl -fsSL "$BASE/$ASSET" -o "$TMPDIR/$ASSET" \
+  || FAIL "download failed: $BASE/$ASSET"
+
+LOG "Verifying SHA-256 against release manifest..."
+if curl -fsSL "$BASE/manifest.json" -o "$TMPDIR/manifest.json"; then
+  WANT=$(python3 -c "
+import json, sys
+m = json.load(open('$TMPDIR/manifest.json'))
+print(m['outputs']['diofinder']['sha256'])
+" 2>/dev/null) || WANT=""
+  if [ -n "$WANT" ]; then
+    GOT=$(sha256sum "$TMPDIR/$ASSET" | cut -d' ' -f1)
+    [ "$GOT" = "$WANT" ] || FAIL "SHA-256 mismatch (got $GOT, manifest says $WANT)"
+    LOG "SHA-256 OK ($GOT)"
+  else
+    LOG "WARNING: manifest has no diofinder hash; skipping verification"
+  fi
+else
+  LOG "WARNING: no manifest.json on release; skipping verification"
+fi
+
+if [ -f "$DB_PATH" ]; then
+  LOG "Backing up $DB_PATH -> $DB_PATH.bak"
+  cp -f "$DB_PATH" "$DB_PATH.bak"
+fi
+
+install -m 644 -o diofinder -g diofinder "$TMPDIR/$ASSET" "$DB_PATH"
+LOG "Installed $(du -h "$DB_PATH" | cut -f1) database at $DB_PATH"
+
+
+# --- Optional deep (G<=8.5) database for the Bad-seeing preset -------------
+# Downloaded when the release carries it; non-fatal if absent. The seeing
+# preset uses it only when star_db_deep in diofinder.conf points at the file.
+DEEP_ASSET=diofinder_13deg_mag85.npz
+DEEP_PATH=/var/lib/diofinder/$DEEP_ASSET
+if curl -fsSL "$BASE/$DEEP_ASSET" -o "$TMPDIR/$DEEP_ASSET" 2>/dev/null; then
+  WANT_D=$(python3 -c "import json;m=json.load(open('$TMPDIR/manifest.json'));print(m['outputs'].get('diofinder_mag85',{}).get('sha256',''))" 2>/dev/null || true)
+  GOT_D=$(sha256sum "$TMPDIR/$DEEP_ASSET" | cut -d' ' -f1)
+  if [ -n "$WANT_D" ] && [ "$GOT_D" != "$WANT_D" ]; then
+    LOG "WARNING: deep database SHA-256 mismatch; skipping deep install"
+  else
+    install -m 644 "$TMPDIR/$DEEP_ASSET" "$DEEP_PATH"
+    LOG "Installed deep database at $DEEP_PATH"
+    grep -q "^star_db_deep: *[^ ]" "$CONF" || LOG "NOTE: set star_db_deep: $DEEP_PATH in $CONF to enable the Bad-preset deep DB"
+  fi
+else
+  LOG "No deep database asset in this release (skipping)"
+fi
+
+# Refresh the star-names catalog from the same release (optional; powers the
+# brightest-star label on the Camera page). Verified against the manifest if
+# present; failures here are non-fatal.
+NAMES_PATH=/var/lib/diofinder/star_names.csv
+if curl -fsSL "$BASE/star_names.csv" -o "$TMPDIR/star_names.csv" 2>/dev/null; then
+  NWANT=$(python3 -c "
+import json
+m = json.load(open('$TMPDIR/manifest.json'))
+print(m['outputs'].get('star_names', {}).get('sha256', ''))
+" 2>/dev/null) || NWANT=""
+  NGOT=$(sha256sum "$TMPDIR/star_names.csv" | cut -d' ' -f1)
+  if [ -n "$NWANT" ] && [ "$NWANT" != "$NGOT" ]; then
+    LOG "WARNING: star_names.csv SHA-256 mismatch; keeping existing catalog"
+  else
+    install -m 644 -o diofinder -g diofinder "$TMPDIR/star_names.csv" "$NAMES_PATH"
+    LOG "Installed star-names catalog at $NAMES_PATH"
+  fi
+else
+  LOG "No star_names.csv on this release; leaving any existing catalog in place"
+fi
+
+LOG "Restarting diofinder service..."
+systemctl restart diofinder
+LOG "Done. Previous database kept at $DB_PATH.bak"

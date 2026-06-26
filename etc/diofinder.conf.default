@@ -1,0 +1,218 @@
+# diofinder configuration
+# Lines are key:value, # for comments. Blank lines ignored.
+# Reload after edits with:  sudo systemctl restart diofinder
+# Environment overrides:    DIOFINDER_<KEY> wins over this file.
+
+# ---- Camera ----
+frame_width: 960
+frame_height: 760
+exposure_s: 0.2
+gain: 5.0
+
+# Full sensor readout (forces full-FOV ISP downscale; see CLAUDE.md).
+sensor_full_width: 4056
+sensor_full_height: 3040
+
+# libcamera tuning profile. The shipped imx477_finder.json (installed by
+# install.sh from diofinder's tuning/ dir) is the scientific profile with two
+# detection-targeted changes: DPC off (it deletes 1-2 px faint stars) and an
+# asinh companding gamma so faint stars survive the 12->8-bit reduction;
+# black_level kept. NR / sharpening / AWB are already disabled at runtime by
+# camera_proc's controls regardless of the tuning. Set to imx477_scientific.json
+# or the standard imx477.json to compare (restart required). Use 'pisp' instead
+# of 'vc4' on a Pi 5; set empty to use the default tuning.
+camera_tuning_file: /usr/share/libcamera/ipa/rpi/vc4/imx477_finder.json
+
+# Auto-exposure: a controller in comms_proc nudges exposure toward
+# auto_exposure_target_stars (within min/max) every ~5 s, backing off when
+# the frame saturates. Toggle live from the Camera page or:
+#   diofinder-ctl raw '{"cmd":"auto_exposure_set","args":{"enabled":true}}'
+# auto_exposure_enabled defaults ON. auto_exposure_target_stars and
+# auto_exposure_max_s are live-mutable (changed by seeing presets / Camera page
+# without a restart); auto_exposure_min_s is the fixed floor.
+auto_exposure_enabled: true
+auto_exposure_target_stars: 20
+auto_exposure_min_s: 0.05
+auto_exposure_max_s: 1.0
+
+# Optical properties.
+#
+# fov_deg is the camera's horizontal field of view in degrees. This image
+# ships PRE-CALIBRATED for the standard 25 mm lens + IMX477 full-sensor mode
+# (13.64°, see the plate-scale derivation in CLAUDE.md), so the solver runs the
+# tight fov_calibrated_max_error_deg tolerance from the first frame instead of
+# relearning over ~30 solves. While fov_calibrated is false the solver uses the
+# (now also tightened) fov_max_error_deg as the tolerance window.
+#
+# IF YOU USE DIFFERENT OPTICS (other focal length / camera), the shipped FOV is
+# wrong and the tight tolerance will reject every solve — reset calibration:
+#   sudo sed -i 's/^fov_calibrated:.*/fov_calibrated: false/' /etc/diofinder/diofinder.conf
+#   sudo systemctl restart diofinder
+# (or the Config page → Reset). The solver will then relearn the real FOV.
+fov_deg: 13.64
+arcsec_per_pixel: 51.15
+fov_calibrated: true
+fov_calibrated_stddev: 0.05
+fov_calibrated_max_error_deg: 0.1
+
+# Distortion coefficient. 0.0 = no estimate (solver fits it per-solve).
+# Updated automatically once the calibrator converges on a stable value.
+distortion: 0.0
+
+# ---- Observer location ----
+# Latitude/longitude are normally set automatically when SkySafari (or
+# any LX200 client) connects -- it sends :St / :Sg with its GPS-derived
+# location. The values get persisted here so the next session has them
+# even before a client connects. Manual override:
+#   diofinder-ctl polar set-latitude 44.5
+latitude_deg: 0.0
+longitude_deg: 0.0
+
+# ---- Star detection (sycamore star_detect extractor) ----
+detect_sigma: 5.0
+
+# Detection binning: 2 = 2x2-binned (~2-3x faster, lower noise; centroids stay
+# full-res), 1 = full-res. Restart to apply (the temporal cache is built at one
+# binning).
+detect_bin: 2
+
+# Per-frame background compensation mode:
+#   row_percentile  — cheapest; 25th-percentile of cache-line-sampled pixels
+#                     per row. Good for clean dark-sky frames.
+#   line_median     — true per-row median; more robust to sensor row-noise,
+#                     vignetting, and light-pollution gradients along rows.
+#   top_hat         — morphological white top-hat (image − opening); removes
+#                     2-D vignetting / sky-glow / gradients that per-row modes
+#                     can't see. Requires sycamore >= 0.9.0; degrades to
+#                     line_median on older wheels. Opt-in; tune
+#                     detect_tophat_radius to your rig before enabling.
+#   block_percentile — bilinear interp of per-tile medians (tile detect_bg_block_size,
+#                     0→32); cheap 2-D gradient removal. The "bad" seeing preset
+#                     selects this. Cache-compatible on sycamore >= 0.12.
+#                     (sycamore >= 0.10.0)
+#   column_percentile / row_column_percentile — per-column / separable 2-D
+#                     percentile floors (sycamore >= 0.10.0; force per-frame).
+#   uniform_mean    — 25x25 sliding-window mean (detect_uniform_filter_size,
+#                     0→25); the exact tetra3/olive-solve default pipeline.
+#                     Pair with detect_noise_mode: global_rms. (sycamore >= 0.11.0)
+detect_bg_mode: row_percentile
+
+# Matched-filter kernel sigma (px); 1.5 ≈ a focused HQ Camera PSF. Widen toward
+# 2.5 for poor seeing / bloated stars. Requires sycamore >= 0.12 (capability-
+# probed; silently ignored on older wheels). Range 1.0–4.0.
+detect_kernel_sigma: 1.5
+# Trail / elongation rejection: 0 disables (treated as infinite axis ratio),
+# otherwise 1.5–10.0. Rejects satellite/aircraft streaks; loosen in bad seeing.
+detect_max_axis_ratio: 0.0
+# Per-window local noise estimate in the matched filter (sycamore >= 0.12;
+# capability-probed). true = more robust to spatially varying noise.
+detect_local_noise: true
+
+# Structuring-element radius (pixels) for the top_hat mode.
+# Must exceed the largest star radius or the opening will eat star flux.
+# Typical value: 12 (≈2× a well-focused PSF on the HQ Camera + 25 mm lens).
+detect_tophat_radius: 12
+
+# Tile side (px) for block_percentile; 0 = sycamore default (32).
+detect_bg_block_size: 0
+# Sliding-window side (px) for uniform_mean; 0 = sycamore default (25).
+detect_uniform_filter_size: 0
+# Noise estimator: mad (robust default) or global_rms (tetra3-compatible).
+detect_noise_mode: mad
+
+# Temporal background cache: median-stack recent frames into a per-row model.
+# Gives sqrt(N) noise reduction and free hot-pixel rejection. Set false if
+# the per-frame bookkeeping proves too costly on a very low-power setup.
+bg_cache_enabled: true
+bg_cache_stack: 8
+bg_cache_refresh_s: 5.0
+bg_cache_slew_deg: 0.5
+bg_cache_max_age_s: 60.0
+# Consecutive solve failures that invalidate the temporal cache when no IMU is
+# reporting motion (solver-derived slew detection). 0 disables.
+bg_cache_fail_invalidate: 3
+
+# ---- Tracking mode (experimental, opt-in) ----
+# After tracking_lock_frames consecutive confident full-frame solves, switch
+# star DETECTION to small ROI windows around the previous frame's star
+# positions (saves the dominant ~6 ms full-frame extraction). The recovered
+# centroids are still plate-solved by the ordinary solver under a tight
+# attitude hint -- this is ROI detection + tight-hint solving, NOT verify-only
+# (olive-solve has no verify-only API; see diofinder/tracking.py). The solver
+# falls back to full-frame on slew, too few recovered stars, or a failed solve.
+# Default OFF pending on-sky validation. tracking_enabled / tracking_window_px /
+# tracking_min_recover are live-toggleable via solver_params_set (diofinder-ctl);
+# tracking_lock_frames is config-only (restart to change).
+tracking_enabled: false
+tracking_window_px: 48
+tracking_lock_frames: 3
+tracking_min_recover: 5
+
+# ---- Seeing presets ----
+# One-tap Good/Bad night tuning (toggle on the Status or Config page). "good"
+# = steady dark skies (tight kernel, low sigma, fast). "bad" = poor seeing /
+# light pollution (wider kernel, block background, looser trail rejection,
+# longer exposure + solve budget, optional deeper database). Applying a preset
+# overwrites the individual detection/solve/exposure keys it controls; you can
+# still fine-tune any of them afterward.
+seeing_mode: good
+
+# ---- Solver (olive-solve tetra3-py) ----
+# solver_db: bare name -> /var/lib/diofinder/<name>.npz
+#            absolute path -> used as-is
+solver_db: default_database
+# Optional deeper-magnitude database for the "bad" seeing preset. Leave empty
+# to keep presets on the standard db. Set to a bare name or absolute path that
+# exists on disk (see the astro_databases release pattern in the README).
+star_db_deep: /var/lib/diofinder/diofinder_13deg_mag85.npz
+# Remembered standard database (set automatically the first time a seeing
+# preset switches to the deep db; "standard" resolves here first).
+star_db_standard:
+# fov_max_error_deg is the loose (uncalibrated / post-reset) FOV search
+# tolerance. The lens FOV is fixed and known (13.64°), so this is tightened
+# from the old 1.0° to 0.3° — a narrower largest-edge match window means fewer
+# catalogue candidates per image pattern and a faster blind solve. (Once
+# fov_calibrated is true the solver uses fov_calibrated_max_error_deg instead.)
+fov_max_error_deg: 0.3
+min_centroids: 8
+max_solve_stars: 50
+solve_timeout_ms: 1500
+match_threshold: 0.00001
+match_radius: 0.01
+
+# ---- Boresight offset (pixel coordinates) ----
+# Updated automatically by the alignment workflow (SkySafari sync).
+# Defaults are image center.
+boresight_y: 380.0
+boresight_x: 480.0
+
+# ---- Comms ----
+lx200_port: 4060
+lx200_client_timeout_s: 30.0
+
+# ---- CPU affinity (Pi Zero 2W: 4 cores) ----
+# 0=comms+webui+IMU (I/O bound, shares with kernel/IRQs)
+# 1=solver auxiliary   2=solver primary   3=camera + solver secondary
+cpu_camera: 3
+cpu_solver: 2
+cpu_solver_aux: 1
+cpu_comms: 0
+
+# ---- Solver-hang watchdog ----
+# A comms_proc thread restarts the service if the solver stops publishing
+# solutions (it publishes every frame, including dark ones) for longer than
+# watchdog_timeout_s. Set watchdog_enabled false to disable.
+watchdog_enabled: true
+watchdog_timeout_s: 30.0
+
+# ---- Diagnostics ----
+# Set save_solved_frames or save_failed_frames to true to write PNG captures
+# to failed_frames_dir. Files are named <YYYYMMDDTHHMMSS_mmm>_<label>.png
+# and can be replayed with tests/solve_image.py --image <path>
+save_solved_frames: false
+save_failed_frames: false
+failed_frames_dir: /var/lib/diofinder/captures
+log_solve_stats_every_n: 50
+
+# ---- Shutdown ----
+shutdown_grace_s: 2.0

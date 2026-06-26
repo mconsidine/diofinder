@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stage locally-built wheels into vendor/wheels/ for a local image build or
 # on-device testing. Wheels are NOT committed to git (vendor/wheels/ is
-# gitignored): CI and efinder-update pull wheels from the source repos'
+# gitignored): CI and diofinder-update pull wheels from the source repos'
 # GitHub releases, and a wheel staged here overrides that download.
 #
 # Usage:

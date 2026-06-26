@@ -103,7 +103,7 @@ def _import_solver_libs():
             "  python3 tests/replay_corpus.py --help",
             "",
             "To run the full harness, install the wheels on a box that has them",
-            "(the on-device Pi venv at /opt/efinder/venv/ works).",
+            "(the on-device Pi venv at /opt/diofinder/venv/ works).",
         ]
         _die("\n".join(lines))
 
@@ -111,7 +111,7 @@ def _import_solver_libs():
 
 
 # ---------------------------------------------------------------------------
-# Capability probing (mirrors efinder/bg_cache.py exactly)
+# Capability probing (mirrors diofinder/bg_cache.py exactly)
 # ---------------------------------------------------------------------------
 
 def _probe_capabilities(sd) -> Dict[str, bool]:
@@ -214,19 +214,19 @@ def _discover_frames(corpus_dir: Path, limit: Optional[int]) -> List[Tuple[Path,
 def _resolve_presets(preset_names: List[str]) -> Dict[str, Dict[str, Any]]:
     """Return {name: preset_dict} from SEEING_PRESETS for the requested names.
 
-    Imports efinder.seeing.SEEING_PRESETS so the harness always stays in sync
+    Imports diofinder.seeing.SEEING_PRESETS so the harness always stays in sync
     with the daemon's preset table.  Falls back to an embedded copy if the
-    efinder package is not installed (dev-box use)."""
+    diofinder package is not installed (dev-box use)."""
     try:
         import sys as _sys
-        # Add the repo root to sys.path if efinder is not installed globally
+        # Add the repo root to sys.path if diofinder is not installed globally
         _repo = Path(__file__).resolve().parent.parent
         if str(_repo) not in _sys.path:
             _sys.path.insert(0, str(_repo))
-        from efinder.seeing import SEEING_PRESETS
+        from diofinder.seeing import SEEING_PRESETS
     except ImportError:
         # Last-resort fallback: hard-coded copy of the preset table.
-        # This will drift — the canonical source is efinder/seeing.py.
+        # This will drift — the canonical source is diofinder/seeing.py.
         SEEING_PRESETS = {
             "good": dict(
                 detect_sigma=5.0,
@@ -257,9 +257,9 @@ def _resolve_presets(preset_names: List[str]) -> Dict[str, Dict[str, Any]]:
         }
         import warnings
         warnings.warn(
-            "efinder package not found; using built-in preset table copy.\n"
-            "  Install the efinder package or run from the repo root so that\n"
-            "  efinder/seeing.py is importable.",
+            "diofinder package not found; using built-in preset table copy.\n"
+            "  Install the diofinder package or run from the repo root so that\n"
+            "  diofinder/seeing.py is importable.",
             stacklevel=2,
         )
 
@@ -274,7 +274,7 @@ def _resolve_presets(preset_names: List[str]) -> Dict[str, Dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------------
-# Config defaults (mirrors efinder/config.py — used when preset lacks a key)
+# Config defaults (mirrors diofinder/config.py — used when preset lacks a key)
 # ---------------------------------------------------------------------------
 
 _CFG_DEFAULTS = dict(
@@ -626,9 +626,9 @@ def _apply_winner(winner: Dict[str, Any], presets: Dict[str, Any],
     tuned seeing override (source=replay) for apply_mode.
     """
     try:
-        from efinder.maint import call as maint_call
+        from diofinder.maint import call as maint_call
     except Exception as e:
-        _die(f"--apply needs efinder.maint (on-device, daemon running): {e}")
+        _die(f"--apply needs diofinder.maint (on-device, daemon running): {e}")
 
     preset = presets[winner["preset"]]
     sigma = winner["sigma"] if winner["sigma"] is not None else _cfg(preset, "detect_sigma")
@@ -684,8 +684,8 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python3 tests/replay_corpus.py --corpus /var/lib/efinder/captures \\
-      --database /var/lib/efinder/default_database.npz
+  python3 tests/replay_corpus.py --corpus /var/lib/diofinder/captures \\
+      --database /var/lib/diofinder/default_database.npz
 
   python3 tests/replay_corpus.py --corpus corpus/ --presets good \\
       --bg-modes row_percentile,block_percentile --csv results.csv
@@ -709,14 +709,14 @@ See tests/corpus/README.md for the full labeling convention.
     )
     parser.add_argument(
         "--database",
-        default="/var/lib/efinder/default_database.npz",
+        default="/var/lib/diofinder/default_database.npz",
         help="Path to tetra3 .npz solver database "
-             "(default: /var/lib/efinder/default_database.npz).",
+             "(default: /var/lib/diofinder/default_database.npz).",
     )
     parser.add_argument(
         "--presets", default="good,bad",
         help="Comma-separated list of seeing presets to run "
-             "(default: 'good,bad'). Must match keys in efinder.seeing.SEEING_PRESETS.",
+             "(default: 'good,bad'). Must match keys in diofinder.seeing.SEEING_PRESETS.",
     )
     parser.add_argument(
         "--bg-modes", default="",
@@ -825,15 +825,15 @@ See tests/corpus/README.md for the full labeling convention.
     # Load database
     db_path = args.database
     if not os.path.exists(db_path):
-        # Try expanding bare name as /var/lib/efinder/<name>.npz
-        candidate = f"/var/lib/efinder/{db_path}.npz"
+        # Try expanding bare name as /var/lib/diofinder/<name>.npz
+        candidate = f"/var/lib/diofinder/{db_path}.npz"
         if os.path.exists(candidate):
             db_path = candidate
         else:
             _die(
                 f"Solver database not found: {args.database}\n"
                 "  Pass --database /path/to/db.npz or copy a database from the Pi.\n"
-                "  On the Pi, databases live in /var/lib/efinder/*.npz."
+                "  On the Pi, databases live in /var/lib/diofinder/*.npz."
             )
 
     # Effective solve parameters (CLI override -> config default), echoed for

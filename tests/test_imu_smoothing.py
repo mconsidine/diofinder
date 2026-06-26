@@ -1,6 +1,6 @@
 """Unit tests for the IMU alpha-beta pointing filter (LX200 jitter fix).
 
-Covers the pure alpha-beta math in efinder.imu_math and the stateful
+Covers the pure alpha-beta math in diofinder.imu_math and the stateful
 _imu_predict_smoothed wrapper in comms_proc (snap / cache / smooth / re-anchor).
 No hardware required.
 """
@@ -9,8 +9,8 @@ import random
 
 import pytest
 
-from efinder import comms_proc
-from efinder.imu_math import alpha_beta_step, wrap180
+from diofinder import comms_proc
+from diofinder.imu_math import alpha_beta_step, wrap180
 
 A, B, DT = 0.25, 0.05, 0.05  # match comms_proc._IMU_AB_ALPHA / _BETA, 20 Hz
 

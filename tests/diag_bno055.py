@@ -8,15 +8,15 @@ linear accel, gravity vector, gyroscope, magnetometer, temperature,
 calibration status, self-test result, and system status.
 
 Usage:
-    sudo /opt/efinder/venv/bin/python3 tests/diag_bno055.py
+    sudo /opt/diofinder/venv/bin/python3 tests/diag_bno055.py
     sudo .../diag_bno055.py --address 0x29      # alternate I2C address
     sudo .../diag_bno055.py --bus 3              # different I2C bus
     sudo .../diag_bno055.py --samples 20         # more live samples
     sudo .../diag_bno055.py --interval 0.5       # faster sampling
-    sudo .../diag_bno055.py --mode imuplus       # match the efinder daemon mode
+    sudo .../diag_bno055.py --mode imuplus       # match the diofinder daemon mode
     sudo .../diag_bno055.py --no-mode-change     # leave the sensor in whatever mode it is
 
-Note: the efinder daemon uses IMUPLUS (accel + gyro, no magnetometer) to
+Note: the diofinder daemon uses IMUPLUS (accel + gyro, no magnetometer) to
 avoid magnetic interference from telescope motors.  This script defaults
 to NDOF (full 9-DOF fusion) so all outputs are exercised.
 """
@@ -64,7 +64,7 @@ MAG_ID_EXPECTED     = 0x32
 GYR_ID_EXPECTED     = 0x0F
 
 OPR_CONFIG          = 0x00
-OPR_IMUPLUS         = 0x08   # accel + gyro fusion, no mag (efinder daemon mode)
+OPR_IMUPLUS         = 0x08   # accel + gyro fusion, no mag (diofinder daemon mode)
 OPR_NDOF            = 0x0C   # full 9-DOF fusion (default for this script)
 
 OPR_NAMES = {
@@ -345,7 +345,7 @@ def main():
         import smbus2
     except ImportError:
         print("ERROR: smbus2 not installed.")
-        print("       /opt/efinder/venv/bin/pip install smbus2")
+        print("       /opt/diofinder/venv/bin/pip install smbus2")
         sys.exit(1)
 
     # ---- I2C address(es) to probe -------------------------------------------
@@ -428,7 +428,7 @@ def main():
             print("       Re-run without --mode imuplus to see full 9-DOF output.")
         elif cur_mode == OPR_NDOF:
             print(f"\nNote: NDOF mode active — all 9 DOF fused.  "
-                  f"(The efinder daemon uses IMUPLUS to avoid motor interference.)")
+                  f"(The diofinder daemon uses IMUPLUS to avoid motor interference.)")
 
         # ---- live samples ----------------------------------------------------
         if args.samples > 0:
