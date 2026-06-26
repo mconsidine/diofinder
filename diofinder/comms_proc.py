@@ -1847,9 +1847,59 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 frames = int(args.get("frames", 16) or 16)
             except (ValueError, TypeError):
                 frames = 16
-            reply = _call_solver(SOLVER_OP_DARK_CAPTURE, {"frames": frames},
-                                 ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
-                                 timeout_s=max(30.0, frames * 0.6 + 10.0))
+            # Optional fixed capture point. A hot-pixel mask should cover the
+            # *worst case* the finder will actually run at (hot pixels scale
+            # with both exposure and gain), so the web UI captures at a long
+            # exposure + the gain ceiling regardless of the live setting and
+            # then restores. When neither is supplied we capture at whatever
+            # the camera is currently set to (legacy behaviour).
+            def _opt_float(key):
+                v = args.get(key, None)
+                if v in (None, ""):
+                    return None
+                try:
+                    return float(v)
+                except (ValueError, TypeError):
+                    return None
+            want_s = _opt_float("exposure_s")
+            want_g = _opt_float("gain")
+
+            snap_s = snap_g = None
+            ae_was = None
+            if want_s is not None or want_g is not None:
+                snap = _call_camera(CAMERA_OP_GET_EXPOSURE, {},
+                                    ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+                snap_s = (float(snap.result.get("exposure_s", ctx.cfg.exposure_s))
+                          if (snap and snap.ok) else ctx.cfg.exposure_s)
+                snap_g = (float(snap.result.get("gain", ctx.cfg.gain))
+                          if (snap and snap.ok) else ctx.cfg.gain)
+                # Pause auto-exposure so it doesn't fight the fixed point.
+                ae_was = bool(ctx.shared_cfg.get("auto_exposure_enabled",
+                                                 ctx.cfg.auto_exposure_enabled))
+                ctx.shared_cfg["auto_exposure_enabled"] = False
+                if want_s is not None:
+                    _call_camera(CAMERA_OP_SET_EXPOSURE, {"exposure_s": want_s},
+                                 ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+                if want_g is not None:
+                    _call_camera(CAMERA_OP_SET_GAIN, {"gain": want_g},
+                                 ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+                # Let the new setting flush through a few frames before stacking.
+                settle_s = want_s if want_s is not None else (snap_s or 0.5)
+                time.sleep(max(0.5, 2.0 * settle_s))
+
+            try:
+                reply = _call_solver(SOLVER_OP_DARK_CAPTURE, {"frames": frames},
+                                     ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
+                                     timeout_s=max(30.0, frames * 0.6 + 10.0))
+            finally:
+                if snap_s is not None:
+                    _call_camera(CAMERA_OP_SET_EXPOSURE, {"exposure_s": snap_s},
+                                 ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+                if snap_g is not None:
+                    _call_camera(CAMERA_OP_SET_GAIN, {"gain": snap_g},
+                                 ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+                if ae_was is not None:
+                    ctx.shared_cfg["auto_exposure_enabled"] = ae_was
             if reply is None:
                 return MaintResponse(ok=False, error="solver did not respond")
             if not reply.ok:

@@ -175,8 +175,10 @@ snapshot — state, model age, model kind row/block, served-cached vs fallback
 counters), `solve_centroids` (plate-solve a caller-supplied centroid list on
 the live solver's resident database — no second DB, used by
 `diag_background --solve` and the web-UI background A/B), and the hot-pixel
-trio: `dark_capture {"frames":N}` (cap the lens; median-stacks N frames into a
-mask saved at `/var/lib/diofinder/hot_pixel_mask.npz`), `hot_pixel_status`, and
+trio: `dark_capture {"frames":N, "exposure_s"?, "gain"?}` (cap the lens;
+median-stacks N frames into a mask saved at
+`/var/lib/diofinder/hot_pixel_mask.npz`; optional `exposure_s`/`gain` capture at
+a fixed worst-case point with snapshot-and-restore), `hot_pixel_status`, and
 `hot_pixel_clear`.
 
 1. Add an `if cmd == "my_command":` branch anywhere in the function.
@@ -620,9 +622,15 @@ capture and repairs masked pixels (8-neighbor mean, precomputed neighbor index
 arrays, pure vectorized numpy, <1 ms) before each detection. This gives
 hot-pixel rejection during slews, when the temporal cache is offline.
 
-* `dark_capture {"frames": N}` → solver grabs N SHM frames ~0.3 s apart,
-  median-stacks, flags pixels exceeding `median + 5·(1.4826·MAD)`, saves
-  `/var/lib/diofinder/hot_pixel_mask.npz` (indices + shape + count), loads it.
+* `dark_capture {"frames": N, "exposure_s"?, "gain"?}` → solver grabs N SHM
+  frames ~0.3 s apart, median-stacks, flags pixels exceeding
+  `median + 5·(1.4826·MAD)`, saves `/var/lib/diofinder/hot_pixel_mask.npz`
+  (indices + shape + count), loads it. When `exposure_s`/`gain` are supplied,
+  comms snapshots the live exposure/gain, pauses auto-exposure, captures at the
+  requested **fixed worst-case** point, then restores (try/finally). The web UI
+  buttons pass `0.9 s` + `gain 16` (the auto-exposure ceiling) so the mask is a
+  conservative superset covering every shorter/lower-gain operating setting.
+  Omitting both keeps the legacy behaviour (capture at the live setting).
 * The solver loads the mask at startup if present.
 * `hot_pixel_status` (count, mtime, loaded) and `hot_pixel_clear`.
 * Camera page: "Capture dark frame" button (warns to cap the lens) + status.

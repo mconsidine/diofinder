@@ -498,7 +498,21 @@ def hotpixel_capture():
         frames = int(request.form.get("frames", 16))
     except (ValueError, TypeError):
         frames = 16
-    r = _safe_call("dark_capture", {"frames": frames}, timeout=60.0)
+    # Optional fixed worst-case capture point (exposure + gain). When the form
+    # supplies these, the daemon snapshots the live setting, captures at the
+    # requested point, and restores — so the mask covers the worst case the
+    # finder will run at regardless of the current exposure/gain.
+    args = {"frames": frames}
+    for key in ("exposure_s", "gain"):
+        val = request.form.get(key, "")
+        if val:
+            try:
+                args[key] = float(val)
+            except (ValueError, TypeError):
+                pass
+    # Stretching the camera to a long exposure + settle takes longer than the
+    # default; give the call extra head-room.
+    r = _safe_call("dark_capture", args, timeout=90.0)
     if not r.ok:
         return r.error, 500
     nxt = request.form.get("next", "")
