@@ -1,4 +1,4 @@
-"""Unit tests for the "Keith" seeing preset and the tetra3 extractor backend.
+"""Unit tests for the "Legacy" seeing preset and the tetra3 extractor backend.
 
 Pure-Python: no numpy / star_detect / tetra3 import required (seeing.py is
 dependency-free), so this runs anywhere.
@@ -11,20 +11,20 @@ import efinder.seeing as seeing
 from efinder.config import Config
 
 
-class TestKeithPreset(unittest.TestCase):
+class TestLegacyPreset(unittest.TestCase):
     def setUp(self):
         self.cfg = Config()
 
-    def test_keith_is_a_valid_mode(self):
-        self.assertIn("keith", seeing.VALID_MODES)
-        self.assertTrue(seeing.is_valid_mode("keith"))
+    def test_legacy_is_a_valid_mode(self):
+        self.assertIn("legacy", seeing.VALID_MODES)
+        self.assertTrue(seeing.is_valid_mode("legacy"))
 
-    def test_keith_selects_the_tetra3_backend(self):
-        p = seeing.apply_preset("keith", self.cfg)
+    def test_legacy_selects_the_tetra3_backend(self):
+        p = seeing.apply_preset("legacy", self.cfg)
         self.assertEqual(p["extractor_backend"], "tetra3")
 
     def test_good_and_bad_reset_the_backend_to_sycamore(self):
-        # Toggling away from Keith must restore the sycamore extractor, or the
+        # Toggling away from Legacy must restore the sycamore extractor, or the
         # tetra3 backend would "bleed" into the next preset.
         for mode in ("good", "bad"):
             self.assertEqual(
@@ -39,8 +39,8 @@ class TestKeithPreset(unittest.TestCase):
         for ks in keysets[1:]:
             self.assertEqual(ks, keysets[0])
 
-    def test_keith_matches_astrokeith_baseline(self):
-        p = seeing.apply_preset("keith", self.cfg)
+    def test_legacy_matches_astrolegacy_baseline(self):
+        p = seeing.apply_preset("legacy", self.cfg)
         self.assertEqual(p["detect_sigma"], 2.0)
         self.assertEqual(p["detect_noise_mode"], "global_rms")
         self.assertEqual(p["detect_bg_mode"], "uniform_mean")
@@ -49,21 +49,21 @@ class TestKeithPreset(unittest.TestCase):
         self.assertEqual(p["match_radius"], 0.01)
         self.assertEqual(p["match_threshold"], 1e-5)
 
-    def test_no_drift_immediately_after_applying_keith(self):
-        applied = seeing.apply_preset("keith", self.cfg)
+    def test_no_drift_immediately_after_applying_legacy(self):
+        applied = seeing.apply_preset("legacy", self.cfg)
         live = {k: v for k, v in applied.items() if k != "star_db"}
-        drift = seeing.drift_from_preset("keith", self.cfg, live)
+        drift = seeing.drift_from_preset("legacy", self.cfg, live)
         self.assertEqual(drift, {})
 
-    def test_override_roundtrip_on_keith(self):
+    def test_override_roundtrip_on_legacy(self):
         tmp = tempfile.mktemp(suffix=".json")
         try:
-            seeing.save_override("keith", {"detect_sigma": 3.0}, path=tmp)
-            self.assertIsNotNone(seeing.get_override("keith", tmp))
-            _, used = seeing.merged_preset("keith", self.cfg,
+            seeing.save_override("legacy", {"detect_sigma": 3.0}, path=tmp)
+            self.assertIsNotNone(seeing.get_override("legacy", tmp))
+            _, used = seeing.merged_preset("legacy", self.cfg,
                                            use_override=True, path=tmp)
             self.assertTrue(used)
-            self.assertTrue(seeing.clear_override("keith", tmp))
+            self.assertTrue(seeing.clear_override("legacy", tmp))
         finally:
             if os.path.exists(tmp):
                 os.remove(tmp)

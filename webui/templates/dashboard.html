@@ -56,7 +56,7 @@
     <div style="margin-bottom:14px;">
       <label for="qs-backend" class="label">Star detector</label>
       <p class="hint" style="margin:2px 0 4px 0;">
-        <strong>Default</strong> is recommended. <strong>Keith</strong>
+        <strong>Default</strong> is recommended. <strong>Legacy</strong>
         reproduces AstroKeith's classic pipeline.
       </p>
       <form method="post" action="{{ url_for('solver_params_set') }}" style="display:inline;">
@@ -64,7 +64,7 @@
         <select name="extractor_backend" id="qs-backend"
                 onchange="this.form.submit()">
           <option value="sycamore" {{ 'selected' if _eb == 'sycamore' }}>Default (Sycamore)</option>
-          <option value="tetra3"   {{ 'selected' if _eb == 'tetra3' }}>Keith (AstroKeith)</option>
+          <option value="tetra3"   {{ 'selected' if _eb == 'tetra3' }}>Legacy (AstroKeith)</option>
         </select>
         <noscript><button type="submit" class="btn">Apply</button></noscript>
       </form>
@@ -183,20 +183,20 @@
         <input type="hidden" name="mode" value="bad">
         <input type="hidden" name="next" value="dashboard">
         <button type="submit" id="btn-seeing-bad" class="btn"
-                style="{{ 'background:#cc6600;color:#fff;' if smode == 'bad' else '' }}">Bad</button>
+                style="{{ 'background:#cc6600;color:#fff;' if smode == 'bad' else '' }}">Light-pollution</button>
       </form>
       <form method="post" action="{{ url_for('seeing_set') }}" style="display:inline;margin-left:4px;">
-        <input type="hidden" name="mode" value="keith">
+        <input type="hidden" name="mode" value="legacy">
         <input type="hidden" name="next" value="dashboard">
-        <button type="submit" id="btn-seeing-keith" class="btn"
-                style="{{ 'background:#7755cc;color:#fff;' if smode == 'keith' else '' }}">Keith</button>
+        <button type="submit" id="btn-seeing-legacy" class="btn"
+                style="{{ 'background:#7755cc;color:#fff;' if smode == 'legacy' else '' }}">Legacy</button>
       </form>
       <span id="seeing-drift" class="hint" style="margin-left:8px;"></span>
     </div>
     <p class="hint" style="margin-top:6px;">
-      <strong>Good</strong>: steady dark skies (tight kernel, fast). <strong>Bad</strong>:
+      <strong>Good</strong>: steady dark skies (tight kernel, fast). <strong>Light-pollution</strong>:
       poor seeing / light pollution (wider kernel, block background, longer
-      exposure + solve budget). <strong>Keith</strong>: AstroKeith's exact
+      exposure + solve budget). <strong>Legacy</strong>: AstroKeith's exact
       eFinder_cli extractor (tetra3, no matched filter) — a baseline for
       comparison. Fine-tune individual values on the
       <a href="{{ url_for('config_page') }}">Config</a> page.
@@ -204,7 +204,7 @@
     {% if seeing and seeing.presets %}
     <div class="table-scroll" style="margin-top:6px;">
       <table class="preset-table">
-        <thead><tr><th>key</th><th class="col-eff">effective</th><th>good</th><th>bad</th><th>keith</th></tr></thead>
+        <thead><tr><th>key</th><th class="col-eff">effective</th><th>good</th><th>bad</th><th>legacy</th></tr></thead>
         <tbody>
           {% for key in seeing.presets.good.keys() %}
           <tr>
@@ -212,7 +212,7 @@
             <td class="col-eff">{{ seeing.effective.get(key, '') if seeing.effective else '' }}</td>
             <td>{{ seeing.presets.good[key] }}</td>
             <td>{{ seeing.presets.bad[key] }}</td>
-            <td>{{ seeing.presets.keith[key] if seeing.presets.keith else '' }}</td>
+            <td>{{ seeing.presets.legacy[key] if seeing.presets.legacy else '' }}</td>
           </tr>
           {% endfor %}
         </tbody>
@@ -272,7 +272,7 @@
         <select id="tune-mode">
           <option value="">no (just apply live + persist)</option>
           <option value="good">good</option>
-          <option value="bad">bad</option>
+          <option value="bad">light-pollution</option>
         </select>
       </label>
       <button id="tune-apply" class="btn">Apply winner</button>
@@ -380,10 +380,10 @@ async function refreshSeeing() {
     const mode = d.result.mode;
     const good  = document.getElementById('btn-seeing-good');
     const bad   = document.getElementById('btn-seeing-bad');
-    const keith = document.getElementById('btn-seeing-keith');
+    const legacy = document.getElementById('btn-seeing-legacy');
     if (good) good.style.cssText = (mode === 'good') ? 'background:#1166ff;color:#fff;' : '';
     if (bad)  bad.style.cssText  = (mode === 'bad')  ? 'background:#cc6600;color:#fff;' : '';
-    if (keith) keith.style.cssText = (mode === 'keith') ? 'background:#7755cc;color:#fff;' : '';
+    if (legacy) legacy.style.cssText = (mode === 'legacy') ? 'background:#7755cc;color:#fff;' : '';
     const drift = d.result.drift || {};
     const n = Object.keys(drift).length;
     const el = document.getElementById('seeing-drift');

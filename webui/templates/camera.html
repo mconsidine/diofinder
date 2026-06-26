@@ -120,17 +120,17 @@
       <input type="hidden" name="mode" value="bad">
       <input type="hidden" name="next" value="camera_page">
       <button type="submit" class="btn"
-              style="{{ 'background:#cc6600;color:#fff;' if smode == 'bad' else '' }}">Bad</button>
+              style="{{ 'background:#cc6600;color:#fff;' if smode == 'bad' else '' }}">Light-pollution</button>
     </form>
     <form method="post" action="{{ url_for('seeing_set') }}" style="display:inline;margin-left:4px;">
-      <input type="hidden" name="mode" value="keith">
+      <input type="hidden" name="mode" value="legacy">
       <input type="hidden" name="next" value="camera_page">
       <button type="submit" class="btn"
-              style="{{ 'background:#7755cc;color:#fff;' if smode == 'keith' else '' }}">Keith</button>
+              style="{{ 'background:#7755cc;color:#fff;' if smode == 'legacy' else '' }}">Legacy</button>
     </form>
     {% if seeing and not seeing.deep_db_configured %}
       <p class="hint" style="margin-top:6px;">
-        No deep database configured (<code>star_db_deep</code>); the Bad preset
+        No deep database configured (<code>star_db_deep</code>); the Light-pollution preset
         stays on the standard database.
       </p>
     {% endif %}
@@ -208,8 +208,8 @@
       <select id="at-mode">
         <option value="">current</option>
         <option value="good">good</option>
-        <option value="bad">bad</option>
-        <option value="keith">keith</option>
+        <option value="bad">light-pollution</option>
+        <option value="legacy">legacy</option>
       </select>
     </label>
     <label style="margin-left:8px;">
@@ -237,7 +237,7 @@
             <code>sycamore</code> (matched filter + temporal cache) or
             <code>tetra3</code> (AstroKeith's <code>get_centroids_from_image</code>).
             Flips only the extractor, holding the solve params constant — for a
-            clean A/B against the Keith preset. Applies live; Apply &amp; save
+            clean A/B against the Legacy preset. Applies live; Apply &amp; save
             persists.
           </p>
           {% set _eb = solver_params.extractor_backend or 'sycamore' %}
@@ -677,7 +677,7 @@ function _atRender(res) {
         lines.push('⚠ target NOT met (' + r.target_matches + ' matches) — ' +
                    'showing the best-effort settings, not a confident solve.');
         lines.push('  Too few matches on this sky. Try: raise exposure / gain,');
-        lines.push('  improve focus, or switch to the Bad seeing preset, then');
+        lines.push('  improve focus, or switch to the Light-pollution seeing preset, then');
         lines.push('  re-run. Commit only once it reports "target met".');
       }
       if (r.photometric) lines.push('exposure: ' + r.photometric.exposure_s +

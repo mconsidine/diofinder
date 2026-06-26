@@ -64,14 +64,14 @@ SEEING_PRESETS: Dict[str, Dict[str, Any]] = {
         auto_exposure_max_gain=16.0,
         star_db="deep",
     ),
-    # "Keith" — an exact re-creation of the AstroKeith eFinder_cli "original"
+    # "Legacy" — an exact re-creation of the AstroKeith eFinder_cli "original"
     # pipeline (tetra3 get_centroids_from_image: local_mean background +
     # global-RMS noise + sigma=2, no matched filter, no temporal cache),
     # routed through the olive-solve tetra3 extractor backend rather than
     # sycamore. This is the BASELINE to improve upon, not the recommended
     # default. detect_kernel_sigma / detect_bg_mode are ignored by the tetra3
     # backend but kept here so a toggle back to good/bad fully re-tunes.
-    "keith": dict(
+    "legacy": dict(
         extractor_backend="tetra3",
         detect_sigma=2.0,
         detect_kernel_sigma=1.5,
@@ -111,7 +111,7 @@ PRESET_RATIONALE: Dict[str, str] = {
     "star_db": "standard vs. deeper-magnitude database.",
 }
 
-VALID_MODES = ("good", "bad", "keith")
+VALID_MODES = ("good", "bad", "legacy")
 
 
 def is_valid_mode(mode: str) -> bool:
