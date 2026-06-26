@@ -1142,3 +1142,16 @@ bash build/check-tree.sh
 - **IMU hint frame mismatch**: the attitude hint propagation assumes the IMU
   body axes ≈ camera axes. A badly-rotated IMU mount will widen the effective
   search window but will not cause solve failures (`strict_hint=False`).
+
+---
+
+## License
+
+diofinder is licensed under the **GNU General Public License v3.0** — see
+[`LICENSE`](LICENSE). You may use, study, share, and modify it; distributed
+copies and modified versions must remain GPL-3.0 and carry their source.
+
+Bundled and inspirational components retain their own licenses (Apache-2.0,
+MIT, and the GPL-3.0 of AstroKeith's eFinder_cli, which inspired this project
+but is **not** incorporated). See [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md)
+for the full attribution and license inventory.
