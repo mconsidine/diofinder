@@ -527,5 +527,9 @@ document.getElementById('debug-btn').addEventListener('click', function() {
 })();
 </script>
 
+<p class="version-badge"
+   style="text-align:center; opacity:0.6; margin-top:18px; font-size:0.85em;">
+  Software version: {{ version if version else 'unknown' }}
+</p>
 {% endif %}
 {% endblock %}
