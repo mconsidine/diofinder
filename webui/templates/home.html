@@ -2,12 +2,6 @@
 {% block title %}diofinder Home{% endblock %}
 {% block content %}
 
-<p class="hint" style="margin:0 0 10px 0;">
-  Preview of the merged Home page (live view + pointing + everyday controls).
-  The old <a href="{{ url_for('dashboard') }}">Status</a> and
-  <a href="{{ url_for('camera_page') }}">Camera</a> pages are unchanged for now.
-</p>
-
 {% if not status_ok %}
   <div class="alert alert-error"><strong>Daemon not reachable:</strong> {{ status_error }}</div>
 {% endif %}
