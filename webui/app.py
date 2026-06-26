@@ -1070,7 +1070,7 @@ _CONFIG_SECTIONS = [
     ]),
     ("Seeing", [
         ("seeing_mode",  "Seeing mode",  "Good/Bad night preset (toggle above)."),
-        ("star_db_deep", "Deep database", "Optional deeper-magnitude database for the Bad preset; empty = unset."),
+        ("star_db_deep", "Deep database", "Optional deeper-magnitude database for the Light-pollution preset; empty = unset."),
     ]),
     ("Plate Solving (olive-solve)", [
         ("solver_db",        "Star database",      "Path to a tetra3 .npz database compatible with olive-solve."),
@@ -1802,12 +1802,12 @@ def _bgrun_worker(n_frames, max_seconds, solve_frames):
         exposure_s = exd.get("exposure_s")
         gain = exd.get("gain")
         # The sweep extracts with sycamore; when the live solver is on the
-        # tetra3/Keith backend this A/B does NOT represent it (tetra3 ignores
+        # tetra3/Legacy backend this A/B does NOT represent it (tetra3 ignores
         # bg_mode and the matched filter). Flag it loudly.
         backend_warn = (
-            "NOTE: live extractor_backend=tetra3 (Keith) — this A/B uses "
+            "NOTE: live extractor_backend=tetra3 (Legacy) — this A/B uses "
             "sycamore and does NOT reflect the live pipeline. Use "
-            "diag_solve.py --bundle to evaluate Keith." if backend == "tetra3"
+            "diag_solve.py --bundle to evaluate Legacy." if backend == "tetra3"
             else "")
         try:
             sd.set_num_threads(2)

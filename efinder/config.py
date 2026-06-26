@@ -99,7 +99,7 @@ class Config:
     #   "tetra3"   — AstroKeith's exact eFinder_cli extractor via the olive-solve
     #                tetra3 get_centroids_from_image (local_mean bg + global-RMS
     #                noise + sigma threshold, no matched filter, no temporal
-    #                cache). Used by the "Keith" seeing preset as a baseline.
+    #                cache). Used by the "Legacy" seeing preset as a baseline.
     # The tetra3 backend is capability-probed at runtime; if the installed
     # olive-solve wheel lacks the extractor feature, detection falls back to
     # sycamore and logs a warning.

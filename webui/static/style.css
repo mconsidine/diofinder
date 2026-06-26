@@ -313,7 +313,7 @@ pre.logs, pre.config {
 }
 .config-modified { background: #150000; }
 
-/* Preset comparison tables (seeing Good/Bad/Keith). Unlike .config-table these
+/* Preset comparison tables (seeing Good/Bad/Legacy). Unlike .config-table these
    stay a real table and scroll horizontally on a phone instead of collapsing
    each cell into an unlabeled block. Wrap in <div class="table-scroll">. */
 .table-scroll {

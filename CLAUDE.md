@@ -151,7 +151,7 @@ The maintenance socket is the internal RPC bus used by the web UI and
 Notable commands beyond the basics: `solver_params_get`/`solver_params_set`
 (sigma 0–20, kernel_sigma 1.0–4.0, max_axis_ratio 0=off/1.5–10.0, local_noise,
 bg mode/sizes, noise mode, `extractor_backend` sycamore/tetra3 (independent of
-the Keith preset — flip just the extractor for a clean A/B), min_centroids,
+the Legacy preset — flip just the extractor for a clean A/B), min_centroids,
 max_solve_stars 4–200,
 fov_max_error_deg 0.05–5.0 (the loose blind-solve search tolerance; the
 calibrated tight tolerance is owned by the calibration machinery),
@@ -303,19 +303,19 @@ New keys (this release):
 | `auto_exposure_enabled` | `true` | **Flipped to ON** this release. |
 | `watchdog_enabled` | `true` | Solver-hang watchdog (comms thread). |
 | `watchdog_timeout_s` | `30.0` | Staleness before the solver is declared hung. |
-| `extractor_backend` | `sycamore` | Centroid extractor: `sycamore` (matched filter + bg_cache) or `tetra3` (AstroKeith's olive-solve `get_centroids_from_image`). Live-mutable; set by the Keith preset. |
+| `extractor_backend` | `sycamore` | Centroid extractor: `sycamore` (matched filter + bg_cache) or `tetra3` (AstroKeith's olive-solve `get_centroids_from_image`). Live-mutable; set by the Legacy preset. |
 
 ---
 
 ## Seeing presets
 
 `efinder/seeing.py` holds three flat preset tables — `SEEING_PRESETS["good"]`,
-`["bad"]`, and `["keith"]`. Each key in a preset is *also* an individually
+`["bad"]`, and `["legacy"]`. Each key in a preset is *also* an individually
 adjustable config key, so applying a preset is exactly equivalent to setting
 each by hand. All three presets carry the **same key set** so a toggle fully
 re-tunes the pipeline (including resetting `extractor_backend`).
 
-**"Keith" preset / `tetra3` extractor backend.** Keith is an exact re-creation
+**"Legacy" preset / `tetra3` extractor backend.** Legacy is an exact re-creation
 of the AstroKeith `eFinder_cli` `original`-branch pipeline: it sets
 `extractor_backend="tetra3"`, which routes detection through the olive-solve
 binding's `get_centroids_from_image_fast` (local_mean background + global-RMS
@@ -325,7 +325,7 @@ hot-pixel — `downsample=1`, `min_area=5`, `max_area=100`) instead of sycamore 
 swap, unlike sycamore). It is **capability-probed** in `solver_proc` via
 `hasattr(solver_t3, "get_centroids_from_image_fast")` — if the installed
 olive-solve wheel was built without the `extractor` feature (it is on by
-default), detection falls back to sycamore and warns once. Keith is the
+default), detection falls back to sycamore and warns once. Legacy is the
 **baseline to improve upon**, not the recommended default.
 
 **Diagnostics / runtime reproduction.** Live solves and the diagnostic scripts
@@ -583,9 +583,9 @@ The Background A/B (`_bgrun_worker`) reads the **live effective** detection
 params (`solver_params_get` → sigma/kernel_sigma/noise_mode/max_axis_ratio) and
 the real exposure/gain, not the config file, and stamps them into the report —
 so "A/B matches" reflects the live sycamore pipeline. It is **sycamore-only**:
-when `extractor_backend=tetra3` (Keith) the A/B does not represent the live
+when `extractor_backend=tetra3` (Legacy) the A/B does not represent the live
 extractor and says so (banner + report `*** NOTE ***`); use `diag_solve.py
---bundle` to evaluate Keith.
+--bundle` to evaluate Legacy.
 
 ### Hindsight tuning from a saved burst
 
