@@ -37,9 +37,15 @@ class _FakeCfg:
     def __init__(self, **kw):
         self.solver_db = "default_database"
         self.star_db_deep = ""
+        # Cover every key the seeing presets carry so the default _FakeCfg
+        # matches the "good" preset exactly (zero drift); a missing key would
+        # read back None and register as spurious drift.
+        self.extractor_backend = "sycamore"
         self.detect_sigma = 5.0
         self.detect_kernel_sigma = 1.5
         self.detect_bg_mode = "row_percentile"
+        self.detect_noise_mode = "mad"
+        self.detect_uniform_filter_size = 0
         self.detect_max_axis_ratio = 0.0
         self.min_centroids = 8
         self.match_radius = 0.01
@@ -256,6 +262,11 @@ class MaintSeeingDispatchTests(unittest.TestCase):
         self._orig_call_solver = comms._call_solver
         comms._call_solver = lambda op, args, q, rq, timeout_s=5.0: \
             _FakeReply(ok=True, result={"db": args.get("db")})
+        # Fake _call_camera too: seeing_get queries live exposure/gain (for the
+        # lineage check) via the camera queue, which is None in this fake ctx.
+        self._orig_call_camera = comms._call_camera
+        comms._call_camera = lambda op, args, q, rq, timeout_s=5.0: \
+            _FakeReply(ok=True, result={"exposure_s": 0.2, "gain": 5.0})
 
         class _Ctx:
             def __init__(self, cfg):
@@ -275,6 +286,7 @@ class MaintSeeingDispatchTests(unittest.TestCase):
 
     def tearDown(self):
         self.comms._call_solver = self._orig_call_solver
+        self.comms._call_camera = self._orig_call_camera
         self.comms.cfg_mod.save_keys = self._orig_save
 
     def _call(self, cmd, args=None):
