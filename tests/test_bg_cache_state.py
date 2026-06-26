@@ -19,13 +19,25 @@ from types import SimpleNamespace
 
 
 def _load_bg_cache():
-    if "star_detect" not in sys.modules:
+    # Ensure star_detect exposes the FULL cached API before bg_cache is loaded.
+    # Augment rather than replace: another test (e.g. test_auto_exposure) may
+    # have already installed a thinner star_detect stub, and if it lacks
+    # detect_stars_with_cache / compute_row_medians_py then bg_cache's
+    # module-level HAS_CACHE probes False, BackgroundCache disables itself, and
+    # note_motion / note_solve_result early-return — silently breaking the slew
+    # state tests when the suite runs in order.
+    sd = sys.modules.get("star_detect")
+    if sd is None:
         sd = types.ModuleType("star_detect")
-        sd.detect_stars = lambda *a, **k: []
-        sd.detect_stars_with_cache = lambda *a, **k: []
-        sd.compute_row_medians_py = lambda *a, **k: None
-        sd.compute_block_medians_py = lambda *a, **k: None
         sys.modules["star_detect"] = sd
+    if not hasattr(sd, "detect_stars"):
+        sd.detect_stars = lambda *a, **k: []
+    if not hasattr(sd, "detect_stars_with_cache"):
+        sd.detect_stars_with_cache = lambda *a, **k: []
+    if not hasattr(sd, "compute_row_medians_py"):
+        sd.compute_row_medians_py = lambda *a, **k: None
+    if not hasattr(sd, "compute_block_medians_py"):
+        sd.compute_block_medians_py = lambda *a, **k: None
     path = os.path.join(os.path.dirname(__file__), "..", "diofinder", "bg_cache.py")
     spec = importlib.util.spec_from_file_location("diofinder_bg_cache_under_test", path)
     mod = importlib.util.module_from_spec(spec)
