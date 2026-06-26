@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-eFinder sycamore extraction + solve timing benchmark.
+diofinder sycamore extraction + solve timing benchmark.
 
 Times sycamore star_detect extraction on a sky frame, then runs a blind solve
 and a hint solve (olive-solve / tetra3) and reports extraction speed, star
@@ -18,18 +18,18 @@ This is the same swap performed by solver_proc.py in production.
 
 Usage:
   # File on disk:
-  sudo /opt/efinder/venv/bin/python3 tests/bench_extractor_compare.py \\
-      --image /var/lib/efinder/captures/capture_20260101_123456.png
+  sudo /opt/diofinder/venv/bin/python3 tests/bench_extractor_compare.py \\
+      --image /var/lib/diofinder/captures/capture_20260101_123456.png
 
   # Live frame from running daemon:
-  sudo /opt/efinder/venv/bin/python3 tests/bench_extractor_compare.py --live-shm
+  sudo /opt/diofinder/venv/bin/python3 tests/bench_extractor_compare.py --live-shm
 
   # More reps, custom sigma and FOV:
-  sudo /opt/efinder/venv/bin/python3 tests/bench_extractor_compare.py \\
+  sudo /opt/diofinder/venv/bin/python3 tests/bench_extractor_compare.py \\
       --image img.png --reps 10 --sigma 7.0
 
   # Override solver parameters:
-  sudo /opt/efinder/venv/bin/python3 tests/bench_extractor_compare.py \\
+  sudo /opt/diofinder/venv/bin/python3 tests/bench_extractor_compare.py \\
       --image img.png --fov 14.0 --fov-err 1.5 --timeout 3000
 """
 
@@ -37,7 +37,7 @@ import argparse
 import sys
 import time
 
-sys.path.insert(0, '/opt/efinder')
+sys.path.insert(0, '/opt/diofinder')
 
 PASS = "\033[32mPASS\033[0m"
 FAIL = "\033[31mFAIL\033[0m"
@@ -58,7 +58,7 @@ ap = argparse.ArgumentParser(description=__doc__,
 ap.add_argument('--image',    metavar='PNG',
                 help='Path to a sky PNG/JPG to use as the test frame')
 ap.add_argument('--live-shm', action='store_true',
-                help='Read from live efinder_frame_0 SHM (daemon must be running)')
+                help='Read from live diofinder_frame_0 SHM (daemon must be running)')
 ap.add_argument('--reps',     type=int, default=5,
                 help='Timed repetitions per extractor (default 5)')
 ap.add_argument('--sigma',    type=float, help='Override detect_sigma')
@@ -74,8 +74,8 @@ args = ap.parse_args()
 sep('Stage 0: Config & library imports')
 
 try:
-    from efinder.config import load_config
-    from efinder.calibration import FovCalibrator
+    from diofinder.config import load_config
+    from diofinder.calibration import FovCalibrator
     cfg        = load_config()
     shared_cfg = {}
     cal        = FovCalibrator(cfg, shared_cfg)
@@ -103,7 +103,7 @@ except ImportError as e:
 try:
     import tetra3 as _t3
     db_path = (cfg.solver_db if cfg.solver_db.startswith('/')
-               else f'/var/lib/efinder/{cfg.solver_db}.npz')
+               else f'/var/lib/diofinder/{cfg.solver_db}.npz')
     t3 = _t3.Tetra3(db_path)
     tag(PASS, f'tetra3 (olive-solve)  db={db_path}')
 except Exception as e:
@@ -127,7 +127,7 @@ raw_frame = None
 if args.live_shm:
     try:
         from multiprocessing import shared_memory, resource_tracker as _rt
-        from efinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
+        from diofinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
         for i in range(NUM_BUFFERS):
             try:
                 shm = shared_memory.SharedMemory(name=f'{SHM_PREFIX}_{i}', create=False)
@@ -141,7 +141,7 @@ if args.live_shm:
             except Exception:
                 continue
         if raw_frame is None:
-            tag(FAIL, 'No live SHM found — is efinder running?')
+            tag(FAIL, 'No live SHM found — is diofinder running?')
             sys.exit(1)
     except Exception as e:
         tag(FAIL, f'SHM attach failed: {e}'); sys.exit(1)

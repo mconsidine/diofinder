@@ -6,7 +6,7 @@ This is a developer-box tool, NOT installed on the Pi. Given a directory of
 solved-frame PNGs (e.g. the captures written when save_solved_frames=true,
 copied off the device), it extracts star centroids and runs tetra3rs'
 calibrate_camera to fit the SIP distortion, then prints a radial-k-equivalent
-coefficient and the config line to set in efinder.conf.
+coefficient and the config line to set in diofinder.conf.
 
 Why off-device: the calibration fit is heavier than the Pi Zero 2W wants to do
 live, and tetra3rs (the pip package with calibrate_camera) is a dev-box
@@ -141,7 +141,7 @@ def main():
 
     # Pull a radial-k-equivalent out of the result. tetra3rs returns SIP
     # polynomial coefficients; the dominant low-order radial term is the most
-    # useful single number for efinder.conf's scalar `distortion` field.
+    # useful single number for diofinder.conf's scalar `distortion` field.
     radial_k = _extract_radial_k(result)
     rms = getattr(result, "rms_arcsec", None) or _maybe(result, "rms")
 
@@ -154,9 +154,9 @@ def main():
         print(f"  {result!r}")
     else:
         print(f"  radial-k equivalent: {radial_k:.6f}")
-        print("\nSet this on the device in /etc/efinder/efinder.conf:")
+        print("\nSet this on the device in /etc/diofinder/diofinder.conf:")
         print(f"    distortion: {radial_k:.6f}")
-        print("Then: sudo systemctl restart efinder")
+        print("Then: sudo systemctl restart diofinder")
 
 
 def _maybe(obj, name):

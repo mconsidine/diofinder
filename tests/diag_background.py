@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-eFinder background-mode A/B diagnostic.
+diofinder background-mode A/B diagnostic.
 
 Compares the sycamore background-subtraction modes through the exact extraction
 call the daemon uses (matched_filter gate), on a real frame:
@@ -22,14 +22,14 @@ Decision guidance (see sycamore-extract/ARCHITECTURE.md):
 
 Usage:
   # Live frame from running daemon:
-  sudo /opt/efinder/venv/bin/python3 tests/diag_background.py
+  sudo /opt/diofinder/venv/bin/python3 tests/diag_background.py
 
   # Saved capture, custom sigma, stress the gradient case:
-  sudo /opt/efinder/venv/bin/python3 tests/diag_background.py \\
-      --image /var/lib/efinder/captures/frame.png --inject-gradient 40
+  sudo /opt/diofinder/venv/bin/python3 tests/diag_background.py \\
+      --image /var/lib/diofinder/captures/frame.png --inject-gradient 40
 
   # Also solve each mode on the live daemon (memory-safe; daemon must be up):
-  sudo /opt/efinder/venv/bin/python3 tests/diag_background.py --solve
+  sudo /opt/diofinder/venv/bin/python3 tests/diag_background.py --solve
 """
 
 import argparse
@@ -37,7 +37,7 @@ import pathlib
 import sys
 import time
 
-sys.path.insert(0, '/opt/efinder')
+sys.path.insert(0, '/opt/diofinder')
 
 PASS = "\033[32mPASS\033[0m"
 FAIL = "\033[31mFAIL\033[0m"
@@ -78,7 +78,7 @@ args = ap.parse_args()
 # ── Stage 0: Config & imports ────────────────────────────────────────────
 sep('Stage 0: Config & library imports')
 try:
-    from efinder.config import load_config
+    from diofinder.config import load_config
     cfg = load_config()
     sigma = args.sigma if args.sigma is not None else cfg.detect_sigma
     min_c = cfg.min_centroids
@@ -162,7 +162,7 @@ if args.image:
 else:
     try:
         from multiprocessing import shared_memory, resource_tracker as _rt
-        from efinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
+        from diofinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
         for i in range(NUM_BUFFERS):
             try:
                 shm = shared_memory.SharedMemory(
@@ -270,9 +270,9 @@ base_pts = results['row_percentile'][0]
 solve_results = {}
 if args.solve:
     try:
-        from efinder.maint import call as _maint_call
+        from diofinder.maint import call as _maint_call
     except Exception as e:
-        tag(FAIL, f'--solve needs efinder.maint ({e})'); _maint_call = None
+        tag(FAIL, f'--solve needs diofinder.maint ({e})'); _maint_call = None
 
     def solve_mode(pts):
         if _maint_call is None:

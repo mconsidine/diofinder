@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-eFinder centroid-extraction diagnostic.
+diofinder centroid-extraction diagnostic.
 
 Tests sycamore star_detect extraction in isolation: timing, star count, and
 sigma sensitivity.  No external server required.
@@ -14,14 +14,14 @@ Stages
 
 Usage:
   # Live frame from running daemon:
-  sudo /opt/efinder/venv/bin/python3 tests/diag_detect.py
+  sudo /opt/diofinder/venv/bin/python3 tests/diag_detect.py
 
   # Saved capture, custom sigma:
-  sudo /opt/efinder/venv/bin/python3 tests/diag_detect.py \\
+  sudo /opt/diofinder/venv/bin/python3 tests/diag_detect.py \\
       --image /path/to/frame.png --sigma 7.0
 
   # Sigma sweep:
-  sudo /opt/efinder/venv/bin/python3 tests/diag_detect.py --sigma-sweep
+  sudo /opt/diofinder/venv/bin/python3 tests/diag_detect.py --sigma-sweep
 """
 
 import argparse
@@ -29,7 +29,7 @@ import pathlib
 import sys
 import time
 
-sys.path.insert(0, '/opt/efinder')
+sys.path.insert(0, '/opt/diofinder')
 
 PASS = "\033[32mPASS\033[0m"
 FAIL = "\033[31mFAIL\033[0m"
@@ -57,11 +57,11 @@ args = ap.parse_args()
 sep('Stage 0: Config & library imports')
 
 try:
-    from efinder.config import load_config
+    from diofinder.config import load_config
     cfg     = load_config()
     db_raw  = cfg.solver_db
     db_path = pathlib.Path(db_raw if db_raw.startswith('/')
-                           else f'/var/lib/efinder/{db_raw}.npz')
+                           else f'/var/lib/diofinder/{db_raw}.npz')
     sigma   = args.sigma if args.sigma is not None else cfg.detect_sigma
     min_c   = cfg.min_centroids
     max_c   = cfg.max_solve_stars
@@ -69,7 +69,7 @@ try:
     tag(PASS, cfg.summary())
 except Exception as e:
     tag(WARN, f'Config unavailable ({e}); using defaults')
-    db_path = pathlib.Path('/var/lib/efinder/default_database.npz')
+    db_path = pathlib.Path('/var/lib/diofinder/default_database.npz')
     sigma   = args.sigma if args.sigma is not None else 7.0
     min_c   = 8
     max_c   = 50
@@ -136,7 +136,7 @@ if args.image:
 else:
     try:
         from multiprocessing import shared_memory, resource_tracker as _rt
-        from efinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
+        from diofinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
         for i in range(NUM_BUFFERS):
             try:
                 shm = shared_memory.SharedMemory(name=f'{SHM_PREFIX}_{i}', create=False)

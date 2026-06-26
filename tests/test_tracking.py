@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Pure-logic unit tests for efinder/tracking.py::roi_detect.
+Pure-logic unit tests for diofinder/tracking.py::roi_detect.
 
 Hardware-free: tracking.py imports only numpy, and the per-window detector is
 injected as a stub, so these tests run without sycamore (star_detect),
@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import numpy as np
 
-from efinder import tracking
+from diofinder import tracking
 
 
 def _make_frame(h=200, w=200, stars=()):

@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}eFinder{% endblock %}</title>
+  <title>{% block title %}diofinder{% endblock %}</title>
   <script>
     // Apply the saved interface mode (default: novice) to <html> *before* the
     // stylesheet paints, so expert-only elements never flash in novice mode.
     (function () {
       var m = 'novice';
       try {
-        if (localStorage.getItem('efinderUiMode') === 'expert') m = 'expert';
+        if (localStorage.getItem('diofinderUiMode') === 'expert') m = 'expert';
       } catch (e) {}
       document.documentElement.classList.add('mode-' + m);
     })();
@@ -19,7 +19,7 @@
 </head>
 <body>
   <header>
-    <h1><a href="{{ url_for('dashboard') }}">eFinder</a></h1>
+    <h1><a href="{{ url_for('dashboard') }}">diofinder</a></h1>
     <nav>
       <a href="{{ url_for('dashboard') }}">Status</a>
       <a href="{{ url_for('camera_page') }}">Camera</a>
@@ -54,7 +54,7 @@
       var html = document.documentElement;
       html.classList.remove('mode-novice', 'mode-expert');
       html.classList.add('mode-' + m);
-      try { localStorage.setItem('efinderUiMode', m); } catch (e) {}
+      try { localStorage.setItem('diofinderUiMode', m); } catch (e) {}
       _applyModeButtons(m);
     }
     _applyModeButtons(

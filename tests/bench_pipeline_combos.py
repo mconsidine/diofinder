@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-eFinder pipeline-combination benchmark.
+diofinder pipeline-combination benchmark.
 
 Times both sycamore-extract + olive-solve paths on the same sky frame so you
 can compare total latency, extractor speed, and solve reliability in one run.
@@ -36,22 +36,22 @@ can compare total latency, extractor speed, and solve reliability in one run.
 
 Usage:
   # Daemon stopped, using a saved capture:
-  sudo /opt/efinder/venv/bin/python3 tests/bench_pipeline_combos.py \\
-      --image /var/lib/efinder/captures/capture_20260101_123456.png
+  sudo /opt/diofinder/venv/bin/python3 tests/bench_pipeline_combos.py \\
+      --image /var/lib/diofinder/captures/capture_20260101_123456.png
 
   # Live frame from running daemon:
-  sudo /opt/efinder/venv/bin/python3 tests/bench_pipeline_combos.py --live-shm
+  sudo /opt/diofinder/venv/bin/python3 tests/bench_pipeline_combos.py --live-shm
 
   # Extra reps, hint sweep:
-  sudo /opt/efinder/venv/bin/python3 tests/bench_pipeline_combos.py \\
+  sudo /opt/diofinder/venv/bin/python3 tests/bench_pipeline_combos.py \\
       --image img.png --reps 10 --hint-sweep
 
   # Sigma sweep:
-  sudo /opt/efinder/venv/bin/python3 tests/bench_pipeline_combos.py \\
+  sudo /opt/diofinder/venv/bin/python3 tests/bench_pipeline_combos.py \\
       --image img.png --sigma-sweep
 
   # Override solver parameters:
-  sudo /opt/efinder/venv/bin/python3 tests/bench_pipeline_combos.py \\
+  sudo /opt/diofinder/venv/bin/python3 tests/bench_pipeline_combos.py \\
       --image img.png --fov 14.0 --fov-err 1.5 --timeout 3000
 """
 
@@ -59,7 +59,7 @@ import argparse
 import sys
 import time
 
-sys.path.insert(0, '/opt/efinder')
+sys.path.insert(0, '/opt/diofinder')
 
 PASS = "\033[32mPASS\033[0m"
 FAIL = "\033[31mFAIL\033[0m"
@@ -80,7 +80,7 @@ ap = argparse.ArgumentParser(description=__doc__,
 ap.add_argument('--image',    metavar='PNG',
                 help='Path to a sky PNG/JPG to use as the test frame')
 ap.add_argument('--live-shm', action='store_true',
-                help='Read from live efinder_frame_0 SHM (daemon must be running)')
+                help='Read from live diofinder_frame_0 SHM (daemon must be running)')
 ap.add_argument('--reps',     type=int, default=5,
                 help='Timed repetitions per path (default 5)')
 ap.add_argument('--timeout',  type=int,   help='Solve timeout in ms (overrides config)')
@@ -110,8 +110,8 @@ args = ap.parse_args()
 sep('Stage 0: Config & library imports')
 
 try:
-    from efinder.config import load_config
-    from efinder.calibration import FovCalibrator
+    from diofinder.config import load_config
+    from diofinder.calibration import FovCalibrator
     cfg        = load_config()
     shared_cfg = {}
     cal        = FovCalibrator(cfg, shared_cfg)
@@ -143,7 +143,7 @@ try:
         db_path = args.db_override
     else:
         db_path = (cfg.solver_db if cfg.solver_db.startswith('/')
-                   else f'/var/lib/efinder/{cfg.solver_db}.npz')
+                   else f'/var/lib/diofinder/{cfg.solver_db}.npz')
     t3 = _t3.Tetra3(db_path)
     tag(PASS, f'tetra3 (olive-solve)  db={db_path}'
               f'{"  (override)" if args.db_override else ""}')
@@ -170,7 +170,7 @@ _zip_tmp = None      # keep the TemporaryDirectory alive until the process exits
 if args.live_shm:
     try:
         from multiprocessing import shared_memory, resource_tracker as _rt
-        from efinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
+        from diofinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
         for i in range(NUM_BUFFERS):
             try:
                 shm = shared_memory.SharedMemory(name=f'{SHM_PREFIX}_{i}', create=False)
@@ -184,7 +184,7 @@ if args.live_shm:
             except Exception:
                 continue
         if raw_frame is None:
-            tag(FAIL, 'No live SHM found — is efinder running?')
+            tag(FAIL, 'No live SHM found — is diofinder running?')
             sys.exit(1)
     except Exception as e:
         tag(FAIL, f'SHM attach failed: {e}'); sys.exit(1)

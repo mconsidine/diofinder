@@ -2,7 +2,7 @@
 
 | Field | Value |
 |---|---|
-| **Session name** | peaceful-gates-b2pv2 — "Background estimation & subtraction across the eFinder repos" |
+| **Session name** | peaceful-gates-b2pv2 — "Background estimation & subtraction across the diofinder repos" |
 | **Session id** | `01SA11ppqKuFYvhqyfm3c2vy` |
 | **Timestamp (UTC)** | 2026-06-12T13:21:56Z |
 | **Repo** | **eFinder_cli** — role: ASSESSED READ-ONLY (no code changes made) |

@@ -44,4 +44,4 @@ DB_MIN_FOV="${DB_MIN_FOV:-}" \
     "$VENV/bin/python" "$REPO_ROOT/build/generate_database.py"
 
 ls -lh "$OUT_DIR/solver_database.npz"
-echo "Install on the Pi at /var/lib/efinder/solver_database.npz"
+echo "Install on the Pi at /var/lib/diofinder/solver_database.npz"

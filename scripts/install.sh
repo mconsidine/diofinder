@@ -1,5 +1,5 @@
 #!/bin/bash
-# eFinder install script.
+# diofinder install script.
 #
 # Installs the sycamore star_detect wheel and olive-solve's tetra3-py wheel
 # (Rust, fully in-process plate solver). No external gRPC server dependency.
@@ -8,32 +8,32 @@
 #
 #   * "fresh"  : run by a user on a freshly flashed Trixie Lite SD card.
 #   * "chroot" : run inside qemu-aarch64 chroot during image build.
-#                Source staged at /tmp/efinder-src/. EFINDER_CHROOT=1.
+#                Source staged at /tmp/diofinder-src/. DIOFINDER_CHROOT=1.
 #
 # Chroot-mode optional env:
-#   EFINDER_SOLVER_DB  Path (inside the chroot) to a pre-generated tetra3
+#   DIOFINDER_SOLVER_DB  Path (inside the chroot) to a pre-generated tetra3
 #                      .npz database. Staged by build-image.sh from the
 #                      output of the 'Generate tetra3 star database' step
 #                      in release.yml (runs on x86_64, not QEMU aarch64).
 #                      If absent, the image ships without a database and the
-#                      user must set solver_db in efinder.conf before use.
+#                      user must set solver_db in diofinder.conf before use.
 
 set -euo pipefail
 
 # --- Config ------------------------------------------------------------------
-EFINDER_USER="efinder"
-EFINDER_HOME="/home/${EFINDER_USER}"
-EFINDER_DIR="/opt/efinder"
-# OTA clone URL: overridable via EFINDER_REPO_URL (the image build passes the
+DIOFINDER_USER="diofinder"
+DIOFINDER_HOME="/home/${DIOFINDER_USER}"
+DIOFINDER_DIR="/opt/diofinder"
+# OTA clone URL: overridable via DIOFINDER_REPO_URL (the image build passes the
 # real repo from GitHub's context). The default is the canonical repo and only
 # applies to a bare `bash install.sh` fresh install.
-REPO_URL="${EFINDER_REPO_URL:-https://github.com/mconsidine/diofinder.git}"
-TARGET_VERSION="${EFINDER_VERSION:-latest}"
-# Branch/tag the image's /opt/efinder should track for OTA (empty = skip git
+REPO_URL="${DIOFINDER_REPO_URL:-https://github.com/mconsidine/diofinder.git}"
+TARGET_VERSION="${DIOFINDER_VERSION:-latest}"
+# Branch/tag the image's /opt/diofinder should track for OTA (empty = skip git
 # provisioning of a copied tree). Set by the image build from github.ref_name.
-GIT_REF="${EFINDER_GIT_REF:-}"
-IN_CHROOT="${EFINDER_CHROOT:-0}"
-SRC_STAGED="/tmp/efinder-src"
+GIT_REF="${DIOFINDER_GIT_REF:-}"
+IN_CHROOT="${DIOFINDER_CHROOT:-0}"
+SRC_STAGED="/tmp/diofinder-src"
 
 LOG()  { echo "==> $*"; }
 WARN() { echo "WARNING: $*" >&2; }
@@ -53,23 +53,23 @@ else
   LOG "Running in fresh-install mode version=$TARGET_VERSION"
 fi
 
-# --- Create efinder user -----------------------------------------------------
+# --- Create diofinder user -----------------------------------------------------
 
-if ! id -u "$EFINDER_USER" >/dev/null 2>&1; then
-  LOG "Creating user $EFINDER_USER"
-  useradd -m -s /bin/bash "$EFINDER_USER"
-  echo "${EFINDER_USER}:12345678" | chpasswd
-  usermod -aG video,gpio,i2c,dialout,sudo,netdev,systemd-journal "$EFINDER_USER" || true
+if ! id -u "$DIOFINDER_USER" >/dev/null 2>&1; then
+  LOG "Creating user $DIOFINDER_USER"
+  useradd -m -s /bin/bash "$DIOFINDER_USER"
+  echo "${DIOFINDER_USER}:12345678" | chpasswd
+  usermod -aG video,gpio,i2c,dialout,sudo,netdev,systemd-journal "$DIOFINDER_USER" || true
 fi
 
 # --- Hostname ----------------------------------------------------------------
 
-LOG "Setting hostname to efinder"
-echo "efinder" > /etc/hostname
+LOG "Setting hostname to diofinder"
+echo "diofinder" > /etc/hostname
 if grep -q "^127\.0\.1\.1" /etc/hosts; then
-  sed -i $'s/^127\.0\.1\.1.*/127.0.1.1\tefinder/' /etc/hosts
+  sed -i $'s/^127\.0\.1\.1.*/127.0.1.1\tdiofinder/' /etc/hosts
 else
-  printf "127.0.1.1\tefinder\n" >> /etc/hosts
+  printf "127.0.1.1\tdiofinder\n" >> /etc/hosts
 fi
 
 # --- WiFi regulatory domain --------------------------------------------------
@@ -130,72 +130,72 @@ EOF
 # --- Application code --------------------------------------------------------
 
 if [ "$IN_CHROOT" = "1" ]; then
-  if [ ! -d "$EFINDER_DIR" ]; then
-    LOG "Copying staged source $SRC_STAGED -> $EFINDER_DIR"
-    mkdir -p "$EFINDER_DIR"
-    cp -r "$SRC_STAGED/." "$EFINDER_DIR/"
-    chown -R "$EFINDER_USER:$EFINDER_USER" "$EFINDER_DIR"
+  if [ ! -d "$DIOFINDER_DIR" ]; then
+    LOG "Copying staged source $SRC_STAGED -> $DIOFINDER_DIR"
+    mkdir -p "$DIOFINDER_DIR"
+    cp -r "$SRC_STAGED/." "$DIOFINDER_DIR/"
+    chown -R "$DIOFINDER_USER:$DIOFINDER_USER" "$DIOFINDER_DIR"
   else
-    WARN "$EFINDER_DIR already exists; reusing"
+    WARN "$DIOFINDER_DIR already exists; reusing"
   fi
-  # Graft git metadata onto the copied tree so OTA (efinder-update / webui
+  # Graft git metadata onto the copied tree so OTA (diofinder-update / webui
   # Update) works on the imaged device. Best-effort: a copy without this still
   # runs, it just can't self-update. Skipped silently if no ref/network.
-  if [ -n "$GIT_REF" ] && [ ! -d "$EFINDER_DIR/.git" ] && command -v git >/dev/null 2>&1; then
-    LOG "Provisioning git clone at $EFINDER_DIR (origin=$REPO_URL ref=$GIT_REF)"
-    cd "$EFINDER_DIR"
-    sudo -u "$EFINDER_USER" git init -q
-    sudo -u "$EFINDER_USER" git remote add origin "$REPO_URL"
-    sudo -u "$EFINDER_USER" git config remote.origin.fetch \
+  if [ -n "$GIT_REF" ] && [ ! -d "$DIOFINDER_DIR/.git" ] && command -v git >/dev/null 2>&1; then
+    LOG "Provisioning git clone at $DIOFINDER_DIR (origin=$REPO_URL ref=$GIT_REF)"
+    cd "$DIOFINDER_DIR"
+    sudo -u "$DIOFINDER_USER" git init -q
+    sudo -u "$DIOFINDER_USER" git remote add origin "$REPO_URL"
+    sudo -u "$DIOFINDER_USER" git config remote.origin.fetch \
       "+refs/heads/*:refs/remotes/origin/*"
-    if sudo -u "$EFINDER_USER" git fetch --depth 1 --tags origin "$GIT_REF" 2>/dev/null \
-       && sudo -u "$EFINDER_USER" git fetch --depth 1 origin 2>/dev/null; then
+    if sudo -u "$DIOFINDER_USER" git fetch --depth 1 --tags origin "$GIT_REF" 2>/dev/null \
+       && sudo -u "$DIOFINDER_USER" git fetch --depth 1 origin 2>/dev/null; then
       # Reset the working tree to the fetched ref (identical to the copy for a
-      # CI build) so `git status` is clean and efinder-update's guard passes.
-      if sudo -u "$EFINDER_USER" git checkout -f -B "$GIT_REF" "origin/$GIT_REF" 2>/dev/null \
-         || sudo -u "$EFINDER_USER" git checkout -f "$GIT_REF" 2>/dev/null \
-         || sudo -u "$EFINDER_USER" git checkout -f FETCH_HEAD 2>/dev/null; then
-        # Trust the efinder-owned repo for root (efinder-update's guard).
-        git config --system --add safe.directory "$EFINDER_DIR" 2>/dev/null || true
-        LOG "git: $EFINDER_DIR tracks $GIT_REF — OTA enabled"
+      # CI build) so `git status` is clean and diofinder-update's guard passes.
+      if sudo -u "$DIOFINDER_USER" git checkout -f -B "$GIT_REF" "origin/$GIT_REF" 2>/dev/null \
+         || sudo -u "$DIOFINDER_USER" git checkout -f "$GIT_REF" 2>/dev/null \
+         || sudo -u "$DIOFINDER_USER" git checkout -f FETCH_HEAD 2>/dev/null; then
+        # Trust the diofinder-owned repo for root (diofinder-update's guard).
+        git config --system --add safe.directory "$DIOFINDER_DIR" 2>/dev/null || true
+        LOG "git: $DIOFINDER_DIR tracks $GIT_REF — OTA enabled"
       else
         WARN "git: checkout of $GIT_REF failed; OTA disabled on this image"
-        rm -rf "$EFINDER_DIR/.git"
+        rm -rf "$DIOFINDER_DIR/.git"
       fi
     else
       WARN "git: could not fetch $GIT_REF from $REPO_URL; OTA disabled (offline build?)"
-      rm -rf "$EFINDER_DIR/.git"
+      rm -rf "$DIOFINDER_DIR/.git"
     fi
   fi
 else
-  if [ ! -d "$EFINDER_DIR/.git" ]; then
-    LOG "Cloning eFinder code to $EFINDER_DIR"
+  if [ ! -d "$DIOFINDER_DIR/.git" ]; then
+    LOG "Cloning diofinder code to $DIOFINDER_DIR"
     # --no-single-branch so the clone can later fetch ANY branch for OTA
-    # (efinder-update --ref BRANCH), not just the default.
-    git clone --depth 1 --no-single-branch "$REPO_URL" "$EFINDER_DIR"
-    chown -R "$EFINDER_USER:$EFINDER_USER" "$EFINDER_DIR"
-    git config --system --add safe.directory "$EFINDER_DIR" 2>/dev/null || true
+    # (diofinder-update --ref BRANCH), not just the default.
+    git clone --depth 1 --no-single-branch "$REPO_URL" "$DIOFINDER_DIR"
+    chown -R "$DIOFINDER_USER:$DIOFINDER_USER" "$DIOFINDER_DIR"
+    git config --system --add safe.directory "$DIOFINDER_DIR" 2>/dev/null || true
   fi
-  cd "$EFINDER_DIR"
+  cd "$DIOFINDER_DIR"
   if [ "$TARGET_VERSION" != "latest" ]; then
     LOG "Checking out $TARGET_VERSION"
-    sudo -u "$EFINDER_USER" git fetch --tags origin
-    sudo -u "$EFINDER_USER" git checkout --quiet "$TARGET_VERSION"
+    sudo -u "$DIOFINDER_USER" git fetch --tags origin
+    sudo -u "$DIOFINDER_USER" git checkout --quiet "$TARGET_VERSION"
   fi
 fi
 
 # --- Python venv -------------------------------------------------------------
 
-if [ ! -d "$EFINDER_DIR/venv" ]; then
+if [ ! -d "$DIOFINDER_DIR/venv" ]; then
   LOG "Creating Python venv (with system site packages for picamera2)"
-  sudo -u "$EFINDER_USER" python3 -m venv \
-    --system-site-packages "$EFINDER_DIR/venv"
+  sudo -u "$DIOFINDER_USER" python3 -m venv \
+    --system-site-packages "$DIOFINDER_DIR/venv"
 fi
 
 LOG "Installing Python deps"
-sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install --upgrade pip \
+sudo -u "$DIOFINDER_USER" "$DIOFINDER_DIR/venv/bin/pip" install --upgrade pip \
   || FAIL "pip upgrade failed"
-sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install --upgrade \
+sudo -u "$DIOFINDER_USER" "$DIOFINDER_DIR/venv/bin/pip" install --upgrade \
   setuptools wheel \
   || FAIL "pip install setuptools wheel failed"
 
@@ -205,17 +205,17 @@ sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install --upgrade \
 # release.yml (downloaded from the olive-solve GitHub release) or locally
 # by build/local/vendor-wheels.sh.
 
-VENDOR_WHEELS_DIR="$EFINDER_DIR/vendor/wheels"
+VENDOR_WHEELS_DIR="$DIOFINDER_DIR/vendor/wheels"
 OLIVE_WHL=$(ls "$VENDOR_WHEELS_DIR"/tetra3-*aarch64*.whl 2>/dev/null | head -1 || true)
 if [ -z "$OLIVE_WHL" ]; then
   FAIL "No aarch64 tetra3-py wheel found in $VENDOR_WHEELS_DIR." \
   "Download one from the mconsidine/olive-solve GitHub release into vendor/wheels/ first."
 fi
 LOG "Installing olive-solve: $OLIVE_WHL"
-sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install "$OLIVE_WHL" \
+sudo -u "$DIOFINDER_USER" "$DIOFINDER_DIR/venv/bin/pip" install "$OLIVE_WHL" \
   || FAIL "olive-solve tetra3-py install failed"
 
-sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/python" -c "
+sudo -u "$DIOFINDER_USER" "$DIOFINDER_DIR/venv/bin/python" -c "
 import tetra3
 if not hasattr(tetra3.Tetra3, 'solve_from_image_fast'):
     raise RuntimeError('olive-solve wheel not active (solve_from_image_fast missing)')
@@ -228,9 +228,9 @@ print('olive-solve tetra3-py OK')
 SYCAMORE_WHL=$(ls "$VENDOR_WHEELS_DIR"/star_detect-*aarch64*.whl 2>/dev/null | head -1 || true)
 if [ -n "$SYCAMORE_WHL" ]; then
   LOG "Installing sycamore-extract: $SYCAMORE_WHL"
-  sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/pip" install "$SYCAMORE_WHL" \
+  sudo -u "$DIOFINDER_USER" "$DIOFINDER_DIR/venv/bin/pip" install "$SYCAMORE_WHL" \
     || WARN "sycamore-extract install failed (non-fatal; olive backend will be used)"
-  sudo -u "$EFINDER_USER" "$EFINDER_DIR/venv/bin/python" -c "
+  sudo -u "$DIOFINDER_USER" "$DIOFINDER_DIR/venv/bin/python" -c "
 import star_detect
 print('sycamore star_detect OK')
 " 2>/dev/null && LOG "sycamore star_detect verified" || WARN "sycamore star_detect import check failed (non-fatal)"
@@ -240,51 +240,51 @@ fi
 
 # --- Install star database ---------------------------------------------------
 # The database is generated on the x86_64 CI runner by release.yml and
-# staged into the chroot by build-image.sh as EFINDER_SOLVER_DB.
+# staged into the chroot by build-image.sh as DIOFINDER_SOLVER_DB.
 
-mkdir -p /var/lib/efinder
-chown "${EFINDER_USER}:${EFINDER_USER}" /var/lib/efinder 2>/dev/null || true
+mkdir -p /var/lib/diofinder
+chown "${DIOFINDER_USER}:${DIOFINDER_USER}" /var/lib/diofinder 2>/dev/null || true
 
 # Stamp the build version so a freshly burned (never-OTA'd) image reports its
-# real tag via `efinder-ctl version` / the web UI, in the same format
-# efinder-update writes. Prefer the explicit build tag (EFINDER_VERSION); fall
+# real tag via `diofinder-ctl version` / the web UI, in the same format
+# diofinder-update writes. Prefer the explicit build tag (DIOFINDER_VERSION); fall
 # back to `git describe` of the provisioned checkout (a shallow clone may only
 # yield a short sha, which is still better than the stale in-code default).
-_stamp_ver="${EFINDER_VERSION:-}"
+_stamp_ver="${DIOFINDER_VERSION:-}"
 case "$_stamp_ver" in
   ""|latest|main)
-    _stamp_ver="$(sudo -u "$EFINDER_USER" git -C "$EFINDER_DIR" describe \
+    _stamp_ver="$(sudo -u "$DIOFINDER_USER" git -C "$DIOFINDER_DIR" describe \
       --tags --always 2>/dev/null || echo unknown)" ;;
 esac
-echo "$_stamp_ver $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /var/lib/efinder/version
-chown "${EFINDER_USER}:${EFINDER_USER}" /var/lib/efinder/version 2>/dev/null || true
+echo "$_stamp_ver $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /var/lib/diofinder/version
+chown "${DIOFINDER_USER}:${DIOFINDER_USER}" /var/lib/diofinder/version 2>/dev/null || true
 LOG "Stamped image version: $_stamp_ver"
 
-SOLVER_DB="/var/lib/efinder/default_database.npz"
+SOLVER_DB="/var/lib/diofinder/default_database.npz"
 
 if [ ! -f "$SOLVER_DB" ]; then
-  if [ -n "${EFINDER_SOLVER_DB:-}" ] && [ -f "${EFINDER_SOLVER_DB}" ]; then
-    LOG "Installing pre-generated star database ($(du -sh "${EFINDER_SOLVER_DB}" | cut -f1))"
-    cp "${EFINDER_SOLVER_DB}" "$SOLVER_DB"
-    chown "${EFINDER_USER}:${EFINDER_USER}" "$SOLVER_DB"
+  if [ -n "${DIOFINDER_SOLVER_DB:-}" ] && [ -f "${DIOFINDER_SOLVER_DB}" ]; then
+    LOG "Installing pre-generated star database ($(du -sh "${DIOFINDER_SOLVER_DB}" | cut -f1))"
+    cp "${DIOFINDER_SOLVER_DB}" "$SOLVER_DB"
+    chown "${DIOFINDER_USER}:${DIOFINDER_USER}" "$SOLVER_DB"
     LOG "Star database installed at $SOLVER_DB"
   else
-    WARN "No star database provided; set solver_db in /etc/efinder/efinder.conf before first use"
+    WARN "No star database provided; set solver_db in /etc/diofinder/diofinder.conf before first use"
   fi
 fi
 
 # --- Install optional deep (mag 8.5) star database ---------------------------
-# Used by the "bad" seeing preset (star_db_deep in efinder.conf points here).
-# Staged into the chroot by build-image.sh as EFINDER_SOLVER_DB_DEEP. Optional;
+# Used by the "bad" seeing preset (star_db_deep in diofinder.conf points here).
+# Staged into the chroot by build-image.sh as DIOFINDER_SOLVER_DB_DEEP. Optional;
 # if absent, selecting Bad falls back to the standard DB at runtime.
 
-SOLVER_DB_DEEP="/var/lib/efinder/diofinder_13deg_mag85.npz"
+SOLVER_DB_DEEP="/var/lib/diofinder/diofinder_13deg_mag85.npz"
 
 if [ ! -f "$SOLVER_DB_DEEP" ]; then
-  if [ -n "${EFINDER_SOLVER_DB_DEEP:-}" ] && [ -f "${EFINDER_SOLVER_DB_DEEP}" ]; then
-    LOG "Installing deep star database ($(du -sh "${EFINDER_SOLVER_DB_DEEP}" | cut -f1))"
-    cp "${EFINDER_SOLVER_DB_DEEP}" "$SOLVER_DB_DEEP"
-    chown "${EFINDER_USER}:${EFINDER_USER}" "$SOLVER_DB_DEEP"
+  if [ -n "${DIOFINDER_SOLVER_DB_DEEP:-}" ] && [ -f "${DIOFINDER_SOLVER_DB_DEEP}" ]; then
+    LOG "Installing deep star database ($(du -sh "${DIOFINDER_SOLVER_DB_DEEP}" | cut -f1))"
+    cp "${DIOFINDER_SOLVER_DB_DEEP}" "$SOLVER_DB_DEEP"
+    chown "${DIOFINDER_USER}:${DIOFINDER_USER}" "$SOLVER_DB_DEEP"
     LOG "Deep star database installed at $SOLVER_DB_DEEP"
   else
     LOG "No deep star database provided; 'bad' seeing preset will use the standard DB"
@@ -293,14 +293,14 @@ fi
 
 # --- Install star-names catalog ----------------------------------------------
 # Downloaded from the astro_databases release by release.yml and staged into
-# the chroot by build-image.sh as EFINDER_STAR_NAMES. Optional; a missing
+# the chroot by build-image.sh as DIOFINDER_STAR_NAMES. Optional; a missing
 # catalog just disables the brightest-star label on the Camera page.
 
-STAR_NAMES="/var/lib/efinder/star_names.csv"
-if [ -n "${EFINDER_STAR_NAMES:-}" ] && [ -f "${EFINDER_STAR_NAMES}" ]; then
-  LOG "Installing star-names catalog ($(du -sh "${EFINDER_STAR_NAMES}" | cut -f1))"
-  cp "${EFINDER_STAR_NAMES}" "$STAR_NAMES"
-  chown "${EFINDER_USER}:${EFINDER_USER}" "$STAR_NAMES"
+STAR_NAMES="/var/lib/diofinder/star_names.csv"
+if [ -n "${DIOFINDER_STAR_NAMES:-}" ] && [ -f "${DIOFINDER_STAR_NAMES}" ]; then
+  LOG "Installing star-names catalog ($(du -sh "${DIOFINDER_STAR_NAMES}" | cut -f1))"
+  cp "${DIOFINDER_STAR_NAMES}" "$STAR_NAMES"
+  chown "${DIOFINDER_USER}:${DIOFINDER_USER}" "$STAR_NAMES"
 fi
 
 # --- Download solver test images (fresh install only) ------------------------
@@ -309,43 +309,43 @@ fi
 
 if [ "$IN_CHROOT" != "1" ]; then
   LOG "Downloading solver test images..."
-  mkdir -p "$EFINDER_DIR/test-images"
+  mkdir -p "$DIOFINDER_DIR/test-images"
   OLIVE_RAW="https://raw.githubusercontent.com/mconsidine/olive-solve/main/tetra3/tests/fixtures/sample_images"
   for img in orion_belt.jpg orion2.jpg pleiades.jpg orion_trees.jpg crappy.jpg; do
     wget -q "${OLIVE_RAW}/${img}" \
-         -O "$EFINDER_DIR/test-images/${img}" \
+         -O "$DIOFINDER_DIR/test-images/${img}" \
       && LOG "  ${img}" \
       || WARN "  Could not download: ${img} (non-fatal)"
   done
-  chown -R "$EFINDER_USER:$EFINDER_USER" "$EFINDER_DIR/test-images" || true
+  chown -R "$DIOFINDER_USER:$DIOFINDER_USER" "$DIOFINDER_DIR/test-images" || true
 fi
 
 # --- systemd units -----------------------------------------------------------
 
 LOG "Installing systemd units"
-install -m 644 "$EFINDER_DIR/systemd/efinder.service"             /etc/systemd/system/
-install -m 644 "$EFINDER_DIR/systemd/efinder-firstboot.service"   /etc/systemd/system/
-install -m 644 "$EFINDER_DIR/systemd/efinder-webui.service"       /etc/systemd/system/
-install -m 644 "$EFINDER_DIR/systemd/efinder-usb-gadget.service"  /etc/systemd/system/
-install -m 644 "$EFINDER_DIR/systemd/efinder-ensure-ap.service"   /etc/systemd/system/
+install -m 644 "$DIOFINDER_DIR/systemd/diofinder.service"             /etc/systemd/system/
+install -m 644 "$DIOFINDER_DIR/systemd/diofinder-firstboot.service"   /etc/systemd/system/
+install -m 644 "$DIOFINDER_DIR/systemd/diofinder-webui.service"       /etc/systemd/system/
+install -m 644 "$DIOFINDER_DIR/systemd/diofinder-usb-gadget.service"  /etc/systemd/system/
+install -m 644 "$DIOFINDER_DIR/systemd/diofinder-ensure-ap.service"   /etc/systemd/system/
 
-install -m 440 "$EFINDER_DIR/etc/sudoers.d/efinder-update" /etc/sudoers.d/efinder-update
-install -m 440 "$EFINDER_DIR/etc/sudoers.d/efinder-clock"  /etc/sudoers.d/efinder-clock
-install -m 440 "$EFINDER_DIR/etc/sudoers.d/efinder-wifi"   /etc/sudoers.d/efinder-wifi
+install -m 440 "$DIOFINDER_DIR/etc/sudoers.d/diofinder-update" /etc/sudoers.d/diofinder-update
+install -m 440 "$DIOFINDER_DIR/etc/sudoers.d/diofinder-clock"  /etc/sudoers.d/diofinder-clock
+install -m 440 "$DIOFINDER_DIR/etc/sudoers.d/diofinder-wifi"   /etc/sudoers.d/diofinder-wifi
 
 # Auto-activate the venv for interactive login (ssh) shells.
-install -m 644 "$EFINDER_DIR/etc/profile.d/efinder-venv.sh" /etc/profile.d/efinder-venv.sh
+install -m 644 "$DIOFINDER_DIR/etc/profile.d/diofinder-venv.sh" /etc/profile.d/diofinder-venv.sh
 
-install -m 755 "$EFINDER_DIR/scripts/efinder-update"          /usr/local/bin/
-install -m 755 "$EFINDER_DIR/scripts/efinder-db-update"       /usr/local/bin/
-install -m 755 "$EFINDER_DIR/scripts/efinder-ctl"             /usr/local/bin/
-install -m 755 "$EFINDER_DIR/scripts/efinder-bg-setup"        /usr/local/bin/efinder-bg-setup
-install -m 755 "$EFINDER_DIR/scripts/efinder-bg-test"         /usr/local/bin/efinder-bg-test
-install -m 755 "$EFINDER_DIR/scripts/ap.sh"                   /usr/local/bin/ap.sh
-install -m 755 "$EFINDER_DIR/scripts/station.sh"              /usr/local/bin/station.sh
-install -m 755 "$EFINDER_DIR/scripts/efinder-gadget-connect"  /usr/local/bin/efinder-gadget-connect
-install -m 755 "$EFINDER_DIR/scripts/efinder-set-time"        /usr/local/bin/efinder-set-time
-chmod 755 "$EFINDER_DIR/scripts/firstboot.sh"
+install -m 755 "$DIOFINDER_DIR/scripts/diofinder-update"          /usr/local/bin/
+install -m 755 "$DIOFINDER_DIR/scripts/diofinder-db-update"       /usr/local/bin/
+install -m 755 "$DIOFINDER_DIR/scripts/diofinder-ctl"             /usr/local/bin/
+install -m 755 "$DIOFINDER_DIR/scripts/diofinder-bg-setup"        /usr/local/bin/diofinder-bg-setup
+install -m 755 "$DIOFINDER_DIR/scripts/diofinder-bg-test"         /usr/local/bin/diofinder-bg-test
+install -m 755 "$DIOFINDER_DIR/scripts/ap.sh"                   /usr/local/bin/ap.sh
+install -m 755 "$DIOFINDER_DIR/scripts/station.sh"              /usr/local/bin/station.sh
+install -m 755 "$DIOFINDER_DIR/scripts/diofinder-gadget-connect"  /usr/local/bin/diofinder-gadget-connect
+install -m 755 "$DIOFINDER_DIR/scripts/diofinder-set-time"        /usr/local/bin/diofinder-set-time
+chmod 755 "$DIOFINDER_DIR/scripts/firstboot.sh"
 
 # --- libcamera tuning (finder-optimised IMX477) ------------------------------
 # DPC off (it deletes 1-2 px faint stars) + asinh companding gamma so faint
@@ -356,18 +356,18 @@ chmod 755 "$EFINDER_DIR/scripts/firstboot.sh"
 # Non-fatal if the libcamera path is absent (e.g. a non-Pi build host).
 LIBCAMERA_VC4=/usr/share/libcamera/ipa/rpi/vc4
 if [ -d "$LIBCAMERA_VC4" ]; then
-  install -m 644 "$EFINDER_DIR/tuning/imx477_finder.json" "$LIBCAMERA_VC4/imx477_finder.json"
+  install -m 644 "$DIOFINDER_DIR/tuning/imx477_finder.json" "$LIBCAMERA_VC4/imx477_finder.json"
   LOG "Installed finder libcamera tuning to $LIBCAMERA_VC4/imx477_finder.json"
 else
   WARN "libcamera vc4 tuning dir not found ($LIBCAMERA_VC4); skipping finder tuning install"
 fi
 
-chown -R "$EFINDER_USER:$EFINDER_USER" /var/lib/efinder
+chown -R "$DIOFINDER_USER:$DIOFINDER_USER" /var/lib/diofinder
 
-if [ ! -f /etc/efinder/efinder.conf ]; then
-  mkdir -p /etc/efinder
-  install -m 644 -o "$EFINDER_USER" -g "$EFINDER_USER" \
-    "$EFINDER_DIR/etc/efinder.conf.default" /etc/efinder/efinder.conf
+if [ ! -f /etc/diofinder/diofinder.conf ]; then
+  mkdir -p /etc/diofinder
+  install -m 644 -o "$DIOFINDER_USER" -g "$DIOFINDER_USER" \
+    "$DIOFINDER_DIR/etc/diofinder.conf.default" /etc/diofinder/diofinder.conf
 fi
 
 # --- Boot config / kernel options --------------------------------------------
@@ -400,9 +400,9 @@ if [ -f "$CONFIG_TXT" ]; then
   fi
 fi
 
-LOG "Writing /etc/modules-load.d/efinder-gadget.conf"
+LOG "Writing /etc/modules-load.d/diofinder-gadget.conf"
 mkdir -p /etc/modules-load.d
-cat > /etc/modules-load.d/efinder-gadget.conf << 'EOF'
+cat > /etc/modules-load.d/diofinder-gadget.conf << 'EOF'
 dwc2
 libcomposite
 u_serial
@@ -422,8 +422,8 @@ update-initramfs -u -k all \
 if [ -f "$CMDLINE_TXT" ]; then
   if ! grep -q "console=ttyGS0" "$CMDLINE_TXT"; then
     LOG "Adding console=ttyGS0,115200 to $CMDLINE_TXT"
-    [ -f "$CMDLINE_TXT.efinder-orig" ] \
-      || cp "$CMDLINE_TXT" "$CMDLINE_TXT.efinder-orig"
+    [ -f "$CMDLINE_TXT.diofinder-orig" ] \
+      || cp "$CMDLINE_TXT" "$CMDLINE_TXT.diofinder-orig"
     if grep -q "rootwait" "$CMDLINE_TXT"; then
       sed -i 's/rootwait/rootwait console=ttyGS0,115200/' "$CMDLINE_TXT"
     else
@@ -440,13 +440,13 @@ systemctl enable serial-getty@ttyGS0.service 2>/dev/null || \
 
 LOG "Enabling services"
 systemctl daemon-reload
-systemctl enable efinder.service \
-                 efinder-firstboot.service efinder-webui.service \
-                 efinder-usb-gadget.service efinder-ensure-ap.service
+systemctl enable diofinder.service \
+                 diofinder-firstboot.service diofinder-webui.service \
+                 diofinder-usb-gadget.service diofinder-ensure-ap.service
 
 if [ "$IN_CHROOT" != "1" ]; then
   LOG "Starting services"
-  systemctl start efinder.service efinder-webui.service || true
+  systemctl start diofinder.service diofinder-webui.service || true
 fi
 
 # --- Reboot ------------------------------------------------------------------

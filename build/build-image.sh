@@ -1,5 +1,5 @@
 #!/bin/bash
-# eFinder SD card image builder — olive branch.
+# diofinder SD card image builder — olive branch.
 #
 # Strategy:
 #   1. Download the official Raspberry Pi OS Trixie Lite image (or use
@@ -7,12 +7,12 @@
 #   2. Grow it by ~2 GB so we have room for our packages.
 #   3. Loop-mount, resize the root partition, fsck.
 #   4. Bind-mount /dev /proc /sys, copy qemu-aarch64-static into the rootfs.
-#   5. Stage our source tree under /tmp/efinder-src in the chroot.
+#   5. Stage our source tree under /tmp/diofinder-src in the chroot.
 #   6. Run install.sh in chroot mode.
 #   7. Unmount, sync, hand off to caller for compression.
 #
 # Database generation (x86_64 host, before chroot):
-#   If EFINDER_SOLVER_DB is already set to an existing .npz file, that
+#   If DIOFINDER_SOLVER_DB is already set to an existing .npz file, that
 #   database is used as-is (CI workflow pre-generates it this way).
 #   Otherwise build-image.sh generates it here using esa/tetra3 and
 #   hip_main.dat from the CDS Hipparcos archive, so local builds work
@@ -22,11 +22,11 @@
 # Run from the repo root as: sudo bash build/build-image.sh
 #
 # Environment:
-#   EFINDER_VERSION        Tag string for logging (default "main").
+#   DIOFINDER_VERSION        Tag string for logging (default "main").
 #   REPO                   owner/repo (default "mconsidine/diofinder").
-#   EFINDER_SOLVER_DB      Path to a pre-generated tetra3 .npz database.
+#   DIOFINDER_SOLVER_DB      Path to a pre-generated tetra3 .npz database.
 #                          If absent, the database is generated here.
-#   EFINDER_BUILD_DRY_RUN  If "1", skip the actual chroot install
+#   DIOFINDER_BUILD_DRY_RUN  If "1", skip the actual chroot install
 #                          (useful for testing the loop-mount/resize
 #                          parts on your Dell without spending an
 #                          hour on apt-get).
@@ -34,15 +34,15 @@
 set -euo pipefail
 
 REPO="${REPO:-mconsidine/diofinder}"
-EFINDER_VERSION="${EFINDER_VERSION:-main}"
-DRY_RUN="${EFINDER_BUILD_DRY_RUN:-0}"
+DIOFINDER_VERSION="${DIOFINDER_VERSION:-main}"
+DRY_RUN="${DIOFINDER_BUILD_DRY_RUN:-0}"
 
-# OTA provisioning: the clone URL + ref the image's /opt/efinder will track so
-# efinder-update (and the web UI Update button) work on imaged devices. In CI
+# OTA provisioning: the clone URL + ref the image's /opt/diofinder will track so
+# diofinder-update (and the web UI Update button) work on imaged devices. In CI
 # these come from the workflow (github repo + ref); for local builds they
-# default to the canonical repo, and EFINDER_GIT_REF defaults to the version.
-EFINDER_REPO_URL="${EFINDER_REPO_URL:-https://github.com/${REPO}.git}"
-EFINDER_GIT_REF="${EFINDER_GIT_REF:-}"
+# default to the canonical repo, and DIOFINDER_GIT_REF defaults to the version.
+DIOFINDER_REPO_URL="${DIOFINDER_REPO_URL:-https://github.com/${REPO}.git}"
+DIOFINDER_GIT_REF="${DIOFINDER_GIT_REF:-}"
 
 # Pin to "_latest" -- the user has accepted this trade-off (image
 # always uses the most recent published Trixie Lite at build time).
@@ -57,7 +57,7 @@ FAIL() { echo "ERROR: $*" >&2; exit 1; }
 [ "$EUID" -eq 0 ] || FAIL "Run as root (sudo bash $0)"
 
 # Verify we're at the repo root
-[ -d efinder ] || FAIL "must run from repo root (didn't find ./efinder/)"
+[ -d diofinder ] || FAIL "must run from repo root (didn't find ./diofinder/)"
 [ -f scripts/install.sh ] || FAIL "missing scripts/install.sh"
 [ -d webui ] || FAIL "missing ./webui/"
 [ -d systemd ] || FAIL "missing ./systemd/"
@@ -77,12 +77,12 @@ WORK="$(pwd)/build/output"
 mkdir -p "$WORK"
 
 # --- Pre: Generate tetra3 star database (x86_64 host) ------------------------
-# Skipped when EFINDER_SOLVER_DB already points at an existing file
+# Skipped when DIOFINDER_SOLVER_DB already points at an existing file
 # (the CI workflow pre-generates it and exports the variable before
 # calling this script). For local builds the generation runs here.
 
-if [ -n "${EFINDER_SOLVER_DB:-}" ] && [ -f "${EFINDER_SOLVER_DB}" ]; then
-  LOG "Using pre-generated database: $EFINDER_SOLVER_DB"
+if [ -n "${DIOFINDER_SOLVER_DB:-}" ] && [ -f "${DIOFINDER_SOLVER_DB}" ]; then
+  LOG "Using pre-generated database: $DIOFINDER_SOLVER_DB"
 else
   LOG "Generating tetra3 star database on host (takes ~20-40 min)..."
   command -v python3 >/dev/null 2>&1 \
@@ -102,8 +102,8 @@ else
   export SOLVER_DB_PATH="$WORK/solver_database"
   python3 build/generate_database.py \
     || FAIL "Database generation failed"
-  export EFINDER_SOLVER_DB="${SOLVER_DB_PATH}.npz"
-  LOG "Database ready: $EFINDER_SOLVER_DB ($(du -sh "$EFINDER_SOLVER_DB" | cut -f1))"
+  export DIOFINDER_SOLVER_DB="${SOLVER_DB_PATH}.npz"
+  LOG "Database ready: $DIOFINDER_SOLVER_DB ($(du -sh "$DIOFINDER_SOLVER_DB" | cut -f1))"
 fi
 
 cd "$WORK"
@@ -121,18 +121,18 @@ if [ ! -f base.img ]; then
   xz -d -k base.img.xz
 fi
 
-LOG "Copying base.img -> efinder.img"
-cp base.img efinder.img
+LOG "Copying base.img -> diofinder.img"
+cp base.img diofinder.img
 
 # --- 2. Grow the image --------------------------------------------------------
 
 LOG "Growing image by 2 GB"
-truncate -s +2G efinder.img
+truncate -s +2G diofinder.img
 
 # --- 3. Loop mount and grow root partition -----------------------------------
 
 LOG "Loop-mounting"
-LOOP=$(losetup -fP --show efinder.img)
+LOOP=$(losetup -fP --show diofinder.img)
 LOG "Got $LOOP"
 
 cleanup() {
@@ -178,7 +178,7 @@ if [ "$DRY_RUN" = "1" ]; then
   df -h "$ROOT" | tail -1
   cleanup
   trap - EXIT
-  LOG "Dry run complete; image at $WORK/efinder.img"
+  LOG "Dry run complete; image at $WORK/diofinder.img"
   exit 0
 fi
 
@@ -252,20 +252,20 @@ chmod +x "$ROOT/usr/sbin/policy-rc.d"
 
 # --- 5. Stage source tree into chroot ----------------------------------------
 
-LOG "Copying eFinder repo into chroot at /tmp/efinder-src"
-mkdir -p "$ROOT/tmp/efinder-src"
+LOG "Copying diofinder repo into chroot at /tmp/diofinder-src"
+mkdir -p "$ROOT/tmp/diofinder-src"
 SRC_DIR="$(cd "$WORK/../.." && pwd)"
 
 # Required directories
-for d in efinder webui systemd scripts etc tests; do
+for d in diofinder webui systemd scripts etc tests; do
   [ -d "$SRC_DIR/$d" ] || FAIL "missing source dir: $SRC_DIR/$d"
-  cp -r "$SRC_DIR/$d" "$ROOT/tmp/efinder-src/"
+  cp -r "$SRC_DIR/$d" "$ROOT/tmp/diofinder-src/"
 done
 
 # Required files
 for f in requirements.txt; do
   [ -f "$SRC_DIR/$f" ] || FAIL "missing source file: $SRC_DIR/$f"
-  cp "$SRC_DIR/$f" "$ROOT/tmp/efinder-src/"
+  cp "$SRC_DIR/$f" "$ROOT/tmp/diofinder-src/"
 done
 
 # vendor/ contains the pre-built tetra3-py aarch64 wheel committed by the
@@ -273,23 +273,23 @@ done
 # without any network fetch.
 if [ -d "$SRC_DIR/vendor" ]; then
   LOG "Staging vendor/ (pre-built tetra3-py wheel)"
-  cp -r "$SRC_DIR/vendor" "$ROOT/tmp/efinder-src/"
+  cp -r "$SRC_DIR/vendor" "$ROOT/tmp/diofinder-src/"
 else
   WARN "vendor/ not found; install.sh will fail (populate vendor/wheels/ from the source repos' releases first)"
 fi
 
 # Optional documentation
 for f in README.md TODO.md; do
-  [ -f "$SRC_DIR/$f" ] && cp "$SRC_DIR/$f" "$ROOT/tmp/efinder-src/" || true
+  [ -f "$SRC_DIR/$f" ] && cp "$SRC_DIR/$f" "$ROOT/tmp/diofinder-src/" || true
 done
 
 # Stage the star database (generated in the pre-step above, or passed
-# in by the caller via EFINDER_SOLVER_DB).
+# in by the caller via DIOFINDER_SOLVER_DB).
 CHROOT_DB_PATH=""
-if [ -n "${EFINDER_SOLVER_DB:-}" ] && [ -f "${EFINDER_SOLVER_DB}" ]; then
-  LOG "Staging star database ($(du -sh "${EFINDER_SOLVER_DB}" | cut -f1))"
+if [ -n "${DIOFINDER_SOLVER_DB:-}" ] && [ -f "${DIOFINDER_SOLVER_DB}" ]; then
+  LOG "Staging star database ($(du -sh "${DIOFINDER_SOLVER_DB}" | cut -f1))"
   mkdir -p "$ROOT/tmp/solver-db"
-  cp "${EFINDER_SOLVER_DB}" "$ROOT/tmp/solver-db/default_database.npz"
+  cp "${DIOFINDER_SOLVER_DB}" "$ROOT/tmp/solver-db/default_database.npz"
   CHROOT_DB_PATH="/tmp/solver-db/default_database.npz"
 else
   WARN "No star database available; image will ship without one"
@@ -297,24 +297,24 @@ fi
 
 # Stage the optional deep (mag 8.5) star database for the "bad" seeing preset
 # (downloaded from the astro_databases release by release.yml and passed in via
-# EFINDER_SOLVER_DB_DEEP). Optional; absence just means Bad uses the standard DB.
+# DIOFINDER_SOLVER_DB_DEEP). Optional; absence just means Bad uses the standard DB.
 CHROOT_DEEP_DB_PATH=""
-if [ -n "${EFINDER_SOLVER_DB_DEEP:-}" ] && [ -f "${EFINDER_SOLVER_DB_DEEP}" ]; then
-  LOG "Staging deep star database ($(du -sh "${EFINDER_SOLVER_DB_DEEP}" | cut -f1))"
+if [ -n "${DIOFINDER_SOLVER_DB_DEEP:-}" ] && [ -f "${DIOFINDER_SOLVER_DB_DEEP}" ]; then
+  LOG "Staging deep star database ($(du -sh "${DIOFINDER_SOLVER_DB_DEEP}" | cut -f1))"
   mkdir -p "$ROOT/tmp/solver-db"
-  cp "${EFINDER_SOLVER_DB_DEEP}" "$ROOT/tmp/solver-db/diofinder_13deg_mag85.npz"
+  cp "${DIOFINDER_SOLVER_DB_DEEP}" "$ROOT/tmp/solver-db/diofinder_13deg_mag85.npz"
   CHROOT_DEEP_DB_PATH="/tmp/solver-db/diofinder_13deg_mag85.npz"
 else
   WARN "No deep star database available; 'bad' seeing preset will use the standard DB"
 fi
 
 # Stage the star-names catalog (downloaded from the astro_databases release
-# by release.yml and passed in via EFINDER_STAR_NAMES). Optional.
+# by release.yml and passed in via DIOFINDER_STAR_NAMES). Optional.
 CHROOT_NAMES_PATH=""
-if [ -n "${EFINDER_STAR_NAMES:-}" ] && [ -f "${EFINDER_STAR_NAMES}" ]; then
-  LOG "Staging star-names catalog ($(du -sh "${EFINDER_STAR_NAMES}" | cut -f1))"
+if [ -n "${DIOFINDER_STAR_NAMES:-}" ] && [ -f "${DIOFINDER_STAR_NAMES}" ]; then
+  LOG "Staging star-names catalog ($(du -sh "${DIOFINDER_STAR_NAMES}" | cut -f1))"
   mkdir -p "$ROOT/tmp/star-names"
-  cp "${EFINDER_STAR_NAMES}" "$ROOT/tmp/star-names/star_names.csv"
+  cp "${DIOFINDER_STAR_NAMES}" "$ROOT/tmp/star-names/star_names.csv"
   CHROOT_NAMES_PATH="/tmp/star-names/star_names.csv"
 else
   WARN "No star-names catalog available; brightest-star naming disabled"
@@ -324,15 +324,15 @@ cat > "$ROOT/tmp/run-install.sh" << EOSH
 #!/bin/bash
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
-export EFINDER_CHROOT=1
-export EFINDER_VERSION="${EFINDER_VERSION}"
-export EFINDER_REPO_URL="${EFINDER_REPO_URL}"
-export EFINDER_GIT_REF="${EFINDER_GIT_REF}"
-${CHROOT_DB_PATH:+export EFINDER_SOLVER_DB="${CHROOT_DB_PATH}"}
-${CHROOT_DEEP_DB_PATH:+export EFINDER_SOLVER_DB_DEEP="${CHROOT_DEEP_DB_PATH}"}
-${CHROOT_NAMES_PATH:+export EFINDER_STAR_NAMES="${CHROOT_NAMES_PATH}"}
+export DIOFINDER_CHROOT=1
+export DIOFINDER_VERSION="${DIOFINDER_VERSION}"
+export DIOFINDER_REPO_URL="${DIOFINDER_REPO_URL}"
+export DIOFINDER_GIT_REF="${DIOFINDER_GIT_REF}"
+${CHROOT_DB_PATH:+export DIOFINDER_SOLVER_DB="${CHROOT_DB_PATH}"}
+${CHROOT_DEEP_DB_PATH:+export DIOFINDER_SOLVER_DB_DEEP="${CHROOT_DEEP_DB_PATH}"}
+${CHROOT_NAMES_PATH:+export DIOFINDER_STAR_NAMES="${CHROOT_NAMES_PATH}"}
 
-cd /tmp/efinder-src
+cd /tmp/diofinder-src
 bash scripts/install.sh
 EOSH
 chmod +x "$ROOT/tmp/run-install.sh"
@@ -348,7 +348,7 @@ LOG "Cleaning up chroot"
 rm -f "$ROOT/usr/sbin/policy-rc.d"
 rm -f "$ROOT/etc/resolv.conf"
 mv "$ROOT/etc/resolv.conf.bak" "$ROOT/etc/resolv.conf" 2>/dev/null || true
-rm -rf "$ROOT/tmp/efinder-src" "$ROOT/tmp/run-install.sh" "$ROOT/tmp/solver-db"
+rm -rf "$ROOT/tmp/diofinder-src" "$ROOT/tmp/run-install.sh" "$ROOT/tmp/solver-db"
 rm -f "$ROOT/usr/bin/qemu-aarch64-static"
 
 # Trim apt caches to reduce final image size
@@ -360,5 +360,5 @@ sync
 cleanup
 trap - EXIT
 
-LOG "Image ready at $WORK/efinder.img"
-ls -lh "$WORK/efinder.img"
+LOG "Image ready at $WORK/diofinder.img"
+ls -lh "$WORK/diofinder.img"

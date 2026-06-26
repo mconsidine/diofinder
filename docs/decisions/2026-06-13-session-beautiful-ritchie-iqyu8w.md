@@ -40,17 +40,17 @@ component swaps. (Full reasoning in `docs/technical-assessment.md`.)
 - **astro_databases** — deep G≤8.5 variant (`--variant deep`); released as
   **v2026.06.1** with `cedar_solve_13deg_mag85.npz` + `tetra3rs_13deg_mag85.bin`
   after the user generated the G≤9.0 source catalog locally.
-- **diofinder image v0.0.25** — seeing presets (`efinder/seeing.py`, Good/Bad
-  toggle, `seeing_set`/`seeing_get`, `efinder-ctl seeing`, webui); every preset
+- **diofinder image v0.0.25** — seeing presets (`diofinder/seeing.py`, Good/Bad
+  toggle, `seeing_set`/`seeing_get`, `diofinder-ctl seeing`, webui); every preset
   key individually live-tunable; previously-hardcoded `max_axis_ratio=inf` and
   config-only match params now live; `block_percentile` cache path; auto-exposure
   default ON; `save_failed_frames` implemented (100 MB cap); solver-hang
   watchdog; systemd `ExecStartPre` SHM cleanup; hot-pixel dark-capture mask
-  (`efinder/hot_pixel.py`); off-device `scripts/calibrate_lens.py`.
+  (`diofinder/hot_pixel.py`); off-device `scripts/calibrate_lens.py`.
 - **Node-24 GitHub Actions bumps** across all five repos (deadline 2026-06-16).
 - **Docs**: technical-assessment (3 revisions), current-state-and-actions,
   scripts-and-tests guide, decision-record dedupe (5 byte-identical removed).
-- **Deep-DB device plumbing**: `efinder-db-update` now also fetches the
+- **Deep-DB device plumbing**: `diofinder-db-update` now also fetches the
   `_mag85.npz` when present (SHA-verified); `star_db_deep` defaults to it.
 
 ### Seeing preset table (shipped; values are starting points pending on-sky A/B)
@@ -89,7 +89,7 @@ component swaps. (Full reasoning in `docs/technical-assessment.md`.)
    snapshotting the outgoing standard db into a new `star_db_standard` config key
    the first time the preset leaves it (commit `f36e537`). **On-device repair
    for already-poisoned confs:** set `solver_db: default_database` and add
-   `star_db_standard: default_database`, then `efinder-update --ref olive` to get
+   `star_db_standard: default_database`, then `diofinder-update --ref olive` to get
    the code that understands the new key. Verified working by the user.
 
 ---
@@ -105,13 +105,13 @@ this record:
    frames; deep-DB A/B (standard vs `_mag85` on marginal frames);
    `bench_pipeline_combos.py --live-shm`; auto-exposure convergence; watchdog
    fire/restart; dark-frame capture; run `calibrate_lens.py` on saved **solved**
-   frames and set `distortion:`. Tune `efinder/seeing.py` from the A/B data.
+   frames and set `distortion:`. Tune `diofinder/seeing.py` from the A/B data.
 2. **Watch first post-Node-24 workflow runs** in each repo (none have run since
    the bump; artifact actions crossed multiple majors — v7/v8 in the four libs,
    v5 in diofinder; one-line downgrade if v7 upload semantics surprise).
 3. **Bake the deep DB into the image** (optional) — `build-image.sh` stages one
    database via chroot; adding a second touches `release.yml` + `build-image.sh`
-   + `install.sh`. Today `efinder-db-update` covers it post-flash in one command.
+   + `install.sh`. Today `diofinder-db-update` covers it post-flash in one command.
 4. **Next-cycle, deferred:** olive-solve f32 kd-tree/vector math (est. 20–40%
    verification speedup, needs an on-device baseline first); astro_databases
    regen at the calibrated FOV (13.497° vs 10.5–14°) + retire the "13deg" label;

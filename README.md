@@ -1,4 +1,4 @@
-# eFinder — olive branch (Pi Zero 2W)
+# diofinder — olive branch (Pi Zero 2W)
 
 Plate-solving electronic finder for amateur telescopes. Runs on a Raspberry Pi
 Zero 2W with an Arducam 12 MP IMX477. Reports live pointing to SkySafari (or
@@ -28,7 +28,7 @@ boresight registration and a built-in three-point polar alignment assistant.
 13. [IMU dead-reckoning (optional)](#imu-dead-reckoning-optional)
 14. [Wi-Fi modes](#wi-fi-modes)
 15. [Configuration reference](#configuration-reference)
-16. [Maintenance CLI (`efinder-ctl`)](#maintenance-cli-efinder-ctl)
+16. [Maintenance CLI (`diofinder-ctl`)](#maintenance-cli-diofinder-ctl)
 17. [Updating (OTA)](#updating-ota)
 18. [Architecture](#architecture)
 19. [Diagnostic guide (SSH / PuTTY)](#diagnostic-guide-ssh--putty)
@@ -42,9 +42,9 @@ boresight registration and a built-in three-point polar alignment assistant.
 
 ## What it does
 
-The eFinder turns a Raspberry Pi Zero 2W into a self-contained plate-solving
+The diofinder turns a Raspberry Pi Zero 2W into a self-contained plate-solving
 "sky compass" that mounts to your telescope tube. Point the scope at any part
-of the sky. Within a second or two the eFinder has identified the star field,
+of the sky. Within a second or two the diofinder has identified the star field,
 calculated the telescope's precise RA/Dec, and is streaming that position to
 SkySafari in real time via the LX200 protocol.
 
@@ -57,12 +57,12 @@ SkySafari in real time via the LX200 protocol.
 - **sycamore matched-filter extraction + olive-solve (tetra3) solver**: fixed pipeline with
   matched-filter gate for robust star detection and in-process tetra3-py plate solving.
 - **Boresight calibration** via SkySafari's Sync command: centre a star, tap
-  Sync, and the eFinder stores the pixel offset. Persisted across reboots.
-- **FOV self-calibration**: after ~30 successful solves the eFinder commits
+  Sync, and the diofinder stores the pixel offset. Persisted across reboots.
+- **FOV self-calibration**: after ~30 successful solves the diofinder commits
   the median field-of-view and uses a tighter search window, improving speed
   and reliability.
 - **Polar alignment assistant**: rotate the mount in RA only at three positions.
-  The eFinder fits a great circle through the three plate-solve results, derives
+  The diofinder fits a great circle through the three plate-solve results, derives
   the true RA axis, and reports azimuth and altitude corrections.
 - **IMU dead-reckoning** (optional, BNO055): smooths SkySafari position updates
   between solves to < 1 ms latency. Self-calibrating. Hot-pluggable.
@@ -94,16 +94,16 @@ SkySafari in real time via the LX200 protocol.
 
 ## Quick start — flashing the image
 
-1. Download `efinder-sycamore-YYYYMMDD-vX.Y.Z.img.xz` from the
+1. Download `diofinder-sycamore-YYYYMMDD-vX.Y.Z.img.xz` from the
    [Releases](../../releases) page.
 2. Flash with **Raspberry Pi Imager** (choose "Use custom image"), **balena
    Etcher**, or `dd`:
    ```bash
-   xz -d efinder-sycamore-YYYYMMDD-vX.Y.Z.img.xz
-   sudo dd if=efinder-sycamore-YYYYMMDD-vX.Y.Z.img bs=4M status=progress oflag=sync of=/dev/sdX
+   xz -d diofinder-sycamore-YYYYMMDD-vX.Y.Z.img.xz
+   sudo dd if=diofinder-sycamore-YYYYMMDD-vX.Y.Z.img bs=4M status=progress oflag=sync of=/dev/sdX
    ```
 3. Insert and boot. First boot takes 30–90 s; the green LED steadies when the
-   eFinder application has started.
+   diofinder application has started.
 
 ### Install on an existing Pi OS Trixie Lite card
 
@@ -121,30 +121,30 @@ systemd unit files. Reboot after the first run.
 
 ## First boot and network access
 
-`efinder-firstboot.service` configures two always-available interfaces on every
+`diofinder-firstboot.service` configures two always-available interfaces on every
 boot:
 
 | Interface | IP address | How to reach it |
 |---|---|---|
 | **USB Ethernet gadget** | `10.55.0.1` | Connect the Pi's middle micro-USB port to your computer. No driver needed on macOS / Linux. |
-| **Wi-Fi access point** | `10.42.0.1` | Join SSID `efinder-XXXX` (last 4 hex digits of the Wi-Fi MAC). |
+| **Wi-Fi access point** | `10.42.0.1` | Join SSID `diofinder-XXXX` (last 4 hex digits of the Wi-Fi MAC). |
 
 **Default credentials:**
 
 | Service | Username | Password |
 |---|---|---|
-| SSH | `efinder` | `12345678` |
+| SSH | `diofinder` | `12345678` |
 | Wi-Fi AP | — | `12345678` |
 
 **Quick connectivity check:**
 
 ```
-http://efinder.local        Web UI
-ssh efinder@efinder.local   SSH (password: 12345678)
-ping efinder.local
+http://diofinder.local        Web UI
+ssh diofinder@diofinder.local   SSH (password: 12345678)
+ping diofinder.local
 ```
 
-mDNS hostname `efinder.local` works on macOS and Linux. Windows needs Bonjour.
+mDNS hostname `diofinder.local` works on macOS and Linux. Windows needs Bonjour.
 Android `.local` resolution varies — use the IP address directly if needed.
 
 > **USB serial device path differs by OS.** When tethered over USB, the Pi's
@@ -163,7 +163,7 @@ Android `.local` resolution varies — use the IP address directly if needed.
 1. Open **Settings → Telescope → Scope Setup**.
 2. **Telescope Brand** → Meade. **Mount Type** → LX-200 GPS.
 3. **Connection** → WiFi (TCP).
-4. Enter `efinder.local` or the IP address. **Port** → `4060`.
+4. Enter `diofinder.local` or the IP address. **Port** → `4060`.
 5. Enable **Set Time & Location** (sends your GPS position on connect —
    required for polar alignment decomposition).
 6. Tap **Done**, then **Connect**.
@@ -174,7 +174,7 @@ Android `.local` resolution varies — use the IP address directly if needed.
 2. Tap the star in SkySafari.
 3. Tap **Sync** (telescope icon → Sync).
 
-The eFinder records the pixel offset and writes it to config. Survives restarts.
+The diofinder records the pixel offset and writes it to config. Survives restarts.
 
 ---
 
@@ -193,14 +193,14 @@ The eFinder records the pixel offset and writes it to config. Survives restarts.
 | `:SC MM/DD/YY#` | Set date (syncs system clock) | `1Updating Planetary Data#` |
 | `:MS#` | Move to target (ignored) | `0` |
 | `:Q#` | Stop (ignored) | _(empty)_ |
-| `:GVP#` | Product name | `eFinder <version>#` |
-| `:GVN#` | Firmware version | `eFinder <version>#` |
+| `:GVP#` | Product name | `diofinder <version>#` |
+| `:GVN#` | Firmware version | `diofinder <version>#` |
 
 ---
 
 ## Web UI
 
-Open `http://efinder.local` from any browser on the same network.
+Open `http://diofinder.local` from any browser on the same network.
 
 ### Dashboard (`/`)
 
@@ -209,7 +209,7 @@ Auto-refreshes every 1.5 s. Shows:
 - **Pointing**: RA/Dec, star count, match count, solve time, peak pixel, FOV,
   roll. Status badge: SOLVED / TOO_FEW / NO_MATCH / TIMEOUT / DARK.
 - **Test / Live mode toggle**: switch to a static test image (if one is present
-  at `/var/lib/efinder/test.png`) or back to the live camera.
+  at `/var/lib/diofinder/test.png`) or back to the live camera.
 - **Focus**: Laplacian variance score at the last committed frame.
 - **Calibration**: FOV calibration state, committed FOV, statistics, and a
   **Recalibrate** button.
@@ -239,7 +239,7 @@ Live camera view with controls that take effect immediately (no page reload):
   Default 1500 ms.
 
 All controls auto-apply on change. Use **Persist** checkbox + **Apply & save**
-button to write values to `/etc/efinder/efinder.conf`.
+button to write values to `/etc/diofinder/diofinder.conf`.
 
 ### Polar alignment (`/polar`)
 
@@ -257,7 +257,7 @@ Browser-based Wi-Fi management. See [Wi-Fi modes](#wi-fi-modes).
 
 ### Configuration (`/config`)
 
-Structured read-only view of `/etc/efinder/efinder.conf`, grouped into sections
+Structured read-only view of `/etc/diofinder/diofinder.conf`, grouped into sections
 (Camera, Optics/FOV, Star Detection, Plate Solving, Boresight, Observer Location,
 Communications, CPU Affinity, Diagnostics, Shutdown). Each entry shows the
 current value, a one-line description, and an **edited** badge with the default
@@ -267,14 +267,14 @@ the daemon socket.
 
 ### Logs (`/logs`)
 
-Live `journalctl` tail for `efinder.service`.
+Live `journalctl` tail for `diofinder.service`.
 
 ### Update (`/update`)
 
-One-click `efinder-update`. Refreshes Python dependencies and the olive-solve
+One-click `diofinder-update`. Refreshes Python dependencies and the olive-solve
 (`tetra3`) and sycamore (`star_detect`) wheels from their latest GitHub releases
 (a wheel already in `vendor/wheels/` overrides the download), then restarts the
-service. Does not touch `efinder.conf`.
+service. Does not touch `diofinder.conf`.
 
 ### Health endpoint (`/healthz`)
 
@@ -295,14 +295,14 @@ observer latitude, gives the azimuth and altitude corrections to apply.
 ### Procedure (web UI)
 
 1. Ensure SkySafari is connected with **Set Time & Location** enabled (or set
-   latitude via `efinder-ctl polar set-latitude`). Confirm latitude is shown on
+   latitude via `diofinder-ctl polar set-latitude`). Confirm latitude is shown on
    the Polar page.
 2. Aim at an area with 20–30 visible stars. Click **Start Polar Alignment**.
 3. Wait for capture point 1 (green checkmark).
 4. Rotate 20–40° in RA only (do not touch declination).
 5. Click **Capture point 2**. Wait.
 6. Rotate another 20–40° in RA.
-7. Click **Capture point 3**. The eFinder shows azimuth error (E/W) and
+7. Click **Capture point 3**. The diofinder shows azimuth error (E/W) and
    altitude error (Up/Down).
 8. Make adjustments; repeat until total error < 0.1° (visual) or < 0.05°
    (unguided imaging).
@@ -310,11 +310,11 @@ observer latitude, gives the azimuth and altitude corrections to apply.
 ### Procedure (CLI)
 
 ```bash
-efinder-ctl polar set-latitude 44.5   # if not sent by SkySafari
-efinder-ctl polar start
+diofinder-ctl polar set-latitude 44.5   # if not sent by SkySafari
+diofinder-ctl polar start
 # rotate RA, then repeat until 3 points captured:
-efinder-ctl polar status
-efinder-ctl polar cancel              # abort if needed
+diofinder-ctl polar status
+diofinder-ctl polar cancel              # abort if needed
 ```
 
 ---
@@ -323,7 +323,7 @@ efinder-ctl polar cancel              # abort if needed
 
 A single **Good / Bad** toggle re-tunes the whole detection + solve pipeline
 for the night's conditions. It lives on the **Status** page and the **Config**
-page, and on the CLI as `efinder-ctl seeing {get|set good|set bad}`.
+page, and on the CLI as `diofinder-ctl seeing {get|set good|set bad}`.
 
 | Key | Good | Bad | Rationale |
 |---|---|---|---|
@@ -339,22 +339,22 @@ page, and on the CLI as `efinder-ctl seeing {get|set good|set bad}`.
 | `auto_exposure_max_s` | 0.5 | 1.0 | Allow longer exposures to reach faint stars. |
 | `star_db` | standard | deep | Use a deeper-magnitude catalog if one is configured. |
 
-Applying a preset writes every key live (and persists it to `efinder.conf`).
+Applying a preset writes every key live (and persists it to `diofinder.conf`).
 You can still fine-tune any individual value afterward on the Camera page; the
 Config page shows a **drift** note listing keys you have overridden since.
 
 ### Deeper database for the Bad preset
 
 The Bad preset asks for `star_db="deep"`. This only takes effect if you set
-`star_db_deep` in `efinder.conf` to a database that **exists on disk** —
+`star_db_deep` in `diofinder.conf` to a database that **exists on disk** —
 otherwise the preset stays on the standard `solver_db`, so a missing catalog
 never breaks solving. Build/download a deeper-magnitude tetra3 `.npz` (see the
 `astro_databases` release pattern) and point at it:
 
 ```
-star_db_deep: deep_database        # -> /var/lib/efinder/deep_database.npz
+star_db_deep: deep_database        # -> /var/lib/diofinder/deep_database.npz
 # or an absolute path:
-# star_db_deep: /var/lib/efinder/gaia_mag9.npz
+# star_db_deep: /var/lib/diofinder/gaia_mag9.npz
 ```
 
 The switch is done in-process by the solver (no second database is held in
@@ -367,11 +367,11 @@ the temporal background cache is offline. Build a hot-pixel mask once per rig:
 
 1. **Cap the lens.**
 2. On the **Camera** page click **Capture dark frame** (or
-   `efinder-ctl raw '{"cmd":"dark_capture","args":{"frames":16}}'`).
+   `diofinder-ctl raw '{"cmd":"dark_capture","args":{"frames":16}}'`).
 
 The solver median-stacks the dark frames, flags pixels above
 `median + 5·(1.4826·MAD)`, saves the mask to
-`/var/lib/efinder/hot_pixel_mask.npz`, and loads it immediately. From then on
+`/var/lib/diofinder/hot_pixel_mask.npz`, and loads it immediately. From then on
 each frame has its masked pixels replaced by the mean of their 8 neighbors
 before detection (sub-millisecond, vectorized). The mask is reloaded on every
 service start. Clear it from the Camera page or `hot_pixel_clear`.
@@ -432,10 +432,10 @@ bug that causes corrupt reads at the standard 100 kHz rate.
 | SDA | GPIO 2 (pin 3) |
 | SCL | GPIO 3 (pin 5) |
 
-Add the `efinder` user to the `i2c` group if not already done:
+Add the `diofinder` user to the `i2c` group if not already done:
 
 ```bash
-sudo usermod -aG i2c efinder
+sudo usermod -aG i2c diofinder
 ```
 
 ---
@@ -444,7 +444,7 @@ sudo usermod -aG i2c efinder
 
 ### AP mode (default)
 
-SSID `efinder-XXXX`, password `12345678`, gateway `10.42.0.1`.
+SSID `diofinder-XXXX`, password `12345678`, gateway `10.42.0.1`.
 
 ### Switching to station mode
 
@@ -474,17 +474,17 @@ via SSH or browser at `http://10.55.0.1/wifi`.
 
 ## Configuration reference
 
-Config lives in `/etc/efinder/efinder.conf` (`key: value` format).
+Config lives in `/etc/diofinder/diofinder.conf` (`key: value` format).
 
 ```bash
-sudo nano /etc/efinder/efinder.conf
-sudo systemctl restart efinder
+sudo nano /etc/diofinder/diofinder.conf
+sudo systemctl restart diofinder
 ```
 
 Any key can be overridden by environment variable for one-off testing:
 
 ```bash
-sudo EFINDER_EXPOSURE_S=0.5 systemctl restart efinder
+sudo DIOFINDER_EXPOSURE_S=0.5 systemctl restart diofinder
 ```
 
 ### Full reference
@@ -511,7 +511,7 @@ sudo EFINDER_EXPOSURE_S=0.5 systemctl restart efinder
 | `detect_max_axis_ratio` | `0.0` | Trail/elongation rejection. 0 = off, else 1.5–10.0. Full 2-D moments (sycamore ≥ 0.12). |
 | `detect_local_noise` | `true` | Per-window local noise in the matched filter. sycamore ≥ 0.12. |
 | `detect_tophat_radius` | `12` | Structuring-element radius (px) for top_hat mode. |
-| `solver_db` | `default_database` | tetra3 `.npz` database name (relative to `/var/lib/efinder/` or absolute path). |
+| `solver_db` | `default_database` | tetra3 `.npz` database name (relative to `/var/lib/diofinder/` or absolute path). |
 | `star_db_deep` | _(empty)_ | Optional deeper-magnitude db for the "bad" seeing preset; used only if the file exists. |
 | `seeing_mode` | `good` | Active Good/Bad seeing preset (see [Seeing presets](#seeing-presets)). |
 | `min_centroids` | `8` | Minimum detected stars required to attempt a solve. |
@@ -537,14 +537,14 @@ sudo EFINDER_EXPOSURE_S=0.5 systemctl restart efinder
 | `watchdog_timeout_s` | `30.0` | Staleness (s) before the solver is declared hung. |
 | `save_failed_frames` | `false` | Save PNG for every failed solve to `failed_frames_dir`. |
 | `save_solved_frames` | `false` | Save PNG for every successful solve to `failed_frames_dir`. |
-| `failed_frames_dir` | `/var/lib/efinder/captures` | Directory for saved frame PNGs. |
+| `failed_frames_dir` | `/var/lib/diofinder/captures` | Directory for saved frame PNGs. |
 | `log_solve_stats_every_n` | `50` | Print solve performance stats every N solves. |
 
 ### CPU affinity layout
 
 | CPU | Role |
 |---|---|
-| 0 | Linux kernel, IRQs, sshd, NetworkManager · `comms_proc` (LX200 + maint socket) · `efinder-webui` (Flask) · IMU thread (20 Hz I²C) — all I/O-bound, share CPU 0 with the kernel |
+| 0 | Linux kernel, IRQs, sshd, NetworkManager · `comms_proc` (LX200 + maint socket) · `diofinder-webui` (Flask) · IMU thread (20 Hz I²C) — all I/O-bound, share CPU 0 with the kernel |
 | 1 | `solver_proc` auxiliary core (third rayon core for star extraction) |
 | 2 | `solver_proc` primary — olive-solve tetra3-py in-process |
 | 3 | `camera_proc` (ISP DMA + SHM copy) · `solver_proc` rayon secondary thread pool |
@@ -555,74 +555,74 @@ kernel because both are I/O-bound.
 
 ---
 
-## Maintenance CLI (`efinder-ctl`)
+## Maintenance CLI (`diofinder-ctl`)
 
-Talks to the daemon over `/run/efinder/maint.sock`. Works while the solver
+Talks to the daemon over `/run/diofinder/maint.sock`. Works while the solver
 is running and does not require the web UI.
 
 ```bash
 # Status
-efinder-ctl ping
-efinder-ctl status                        # RA, Dec, backend, stars, solve_ms
+diofinder-ctl ping
+diofinder-ctl status                        # RA, Dec, backend, stars, solve_ms
 
 # Boresight
-efinder-ctl boresight show
-efinder-ctl boresight center
-efinder-ctl boresight set 380 480         # Y X
+diofinder-ctl boresight show
+diofinder-ctl boresight center
+diofinder-ctl boresight set 380 480         # Y X
 
 # Calibration
-efinder-ctl calibration status
-efinder-ctl calibration reset
+diofinder-ctl calibration status
+diofinder-ctl calibration reset
 
 # Exposure / gain
-efinder-ctl exposure get
-efinder-ctl exposure set 0.3
-efinder-ctl exposure set 0.3 --persist
-efinder-ctl gain set 15.0 --persist
+diofinder-ctl exposure get
+diofinder-ctl exposure set 0.3
+diofinder-ctl exposure set 0.3 --persist
+diofinder-ctl gain set 15.0 --persist
 
 # Polar alignment
-efinder-ctl polar start
-efinder-ctl polar status
-efinder-ctl polar cancel
-efinder-ctl polar set-latitude 44.5
+diofinder-ctl polar start
+diofinder-ctl polar status
+diofinder-ctl polar cancel
+diofinder-ctl polar set-latitude 44.5
 
 # Seeing preset (Good / Bad one-tap tuning)
-efinder-ctl seeing get
-efinder-ctl seeing set good
-efinder-ctl seeing set bad
+diofinder-ctl seeing get
+diofinder-ctl seeing set good
+diofinder-ctl seeing set bad
 
 # Solver parameters (no dedicated subcommand — use raw, or the Camera page)
-efinder-ctl raw '{"cmd":"solver_params_get","args":{}}'
-efinder-ctl raw '{"cmd":"solver_params_set","args":{"detect_sigma":4.0,"persist":true}}'
+diofinder-ctl raw '{"cmd":"solver_params_get","args":{}}'
+diofinder-ctl raw '{"cmd":"solver_params_set","args":{"detect_sigma":4.0,"persist":true}}'
 
 # Test / live mode
-efinder-ctl raw '{"cmd":"set_test_mode","args":{"enabled":false}}'
+diofinder-ctl raw '{"cmd":"set_test_mode","args":{"enabled":false}}'
 
 # Raw JSON (any command)
-efinder-ctl raw '{"cmd":"ping","args":{}}'
+diofinder-ctl raw '{"cmd":"ping","args":{}}'
 ```
 
 ---
 
 ## Updating (OTA)
 
-Release images are git-provisioned: `install.sh` makes `/opt/efinder` a real
+Release images are git-provisioned: `install.sh` makes `/opt/diofinder` a real
 git clone of this repo (with the build ref checked out), so over-the-air
-updates work on imaged devices. `efinder-update` is the supported path — it
+updates work on imaged devices. `diofinder-update` is the supported path — it
 fetches the target ref, refreshes Python deps and the olive-solve / sycamore
 wheels from their latest GitHub releases, records the version, and restarts
 both services.
 
 ```bash
-sudo /usr/local/bin/efinder-update            # latest tag
-sudo /usr/local/bin/efinder-update v0.0.25    # a specific tag/commit
-sudo /usr/local/bin/efinder-update --ref olive  # track a branch (git pull --ff-only)
+sudo /usr/local/bin/diofinder-update            # latest tag
+sudo /usr/local/bin/diofinder-update v0.0.25    # a specific tag/commit
+sudo /usr/local/bin/diofinder-update --ref olive  # track a branch (git pull --ff-only)
 ```
 
 The web UI **Update** page wraps the same script. To refresh only the star
-database, use `efinder-db-update` (see below).
+database, use `diofinder-db-update` (see below).
 
-If `/opt/efinder` is not a git repository (e.g. a hand-copied install where the
+If `/opt/diofinder` is not a git repository (e.g. a hand-copied install where the
 git graft failed), re-image with the latest release rather than patching files
 in place.
 
@@ -633,9 +633,9 @@ in place.
 ### Process topology
 
 ```
-┌─────────── efinder (systemd) ─────────────────────────────────────────────────┐
+┌─────────── diofinder (systemd) ─────────────────────────────────────────────────┐
 │                                                                                │
-│  efinder_main (launcher, exits after spawning workers)                         │
+│  diofinder_main (launcher, exits after spawning workers)                         │
 │    imu_thread (daemon thread, reads BNO055 at 20 Hz, writes shared_cfg)        │
 │                                                                                │
 │   ┌──────────────┐    ┌──────────────┐    ┌──────────────────────────────────┐ │
@@ -650,7 +650,7 @@ in place.
 └──────────┼────────────────────────────────────────────────────────────────────┘
            │ maint.sock
     ┌──────▼───────┐
-    │ efinder-webui│
+    │ diofinder-webui│
     │ Flask :80    │
     │ CPU 0        │
     └──────────────┘
@@ -734,44 +734,44 @@ Default sigma: 5. Speed: ~10–60 ms. Installed from `vendor/wheels/star_detect-
 
 | Unit | Description |
 |---|---|
-| `efinder.service` | Main daemon (camera + solver + comms). `Restart=always`. |
-| `efinder-webui.service` | Flask web UI on port 80. Survives an efinder restart. |
-| `efinder-firstboot.service` | Network setup — idempotent, runs every boot. |
-| `efinder-ensure-ap.service` | 60 s watchdog that restores AP mode if NetworkManager suppressed it. |
-| `efinder-usb-gadget.service` | USB Ethernet gadget setup. |
+| `diofinder.service` | Main daemon (camera + solver + comms). `Restart=always`. |
+| `diofinder-webui.service` | Flask web UI on port 80. Survives an diofinder restart. |
+| `diofinder-firstboot.service` | Network setup — idempotent, runs every boot. |
+| `diofinder-ensure-ap.service` | 60 s watchdog that restores AP mode if NetworkManager suppressed it. |
+| `diofinder-usb-gadget.service` | USB Ethernet gadget setup. |
 
 ---
 
 ## Diagnostic guide (SSH / PuTTY)
 
-This section covers diagnosing problems when the eFinder is not solving,
+This section covers diagnosing problems when the diofinder is not solving,
 crashing, or behaving unexpectedly. Connect via SSH (or PuTTY on Windows) and
 work through the stages below.
 
 ### 1. Connect to the device
 
 ```
-Host:     efinder.local  (or 10.55.0.1 via USB, or 10.42.0.1 via Wi-Fi AP)
+Host:     diofinder.local  (or 10.55.0.1 via USB, or 10.42.0.1 via Wi-Fi AP)
 Port:     22
-Username: efinder
+Username: diofinder
 Password: 12345678
 ```
 
 ### 2. Check service health
 
 ```bash
-sudo bash /opt/efinder/tests/diag_services.sh
+sudo bash /opt/diofinder/tests/diag_services.sh
 ```
 
 This comprehensive script checks:
-- `efinder` systemd service state
-- Maintenance socket `/run/efinder/maint.sock` — queries current status
-- Shared memory frame buffers `/dev/shm/efinder_frame_0/1/2`
+- `diofinder` systemd service state
+- Maintenance socket `/run/diofinder/maint.sock` — queries current status
+- Shared memory frame buffers `/dev/shm/diofinder_frame_0/1/2`
 - Solver database file presence and a live load test
 - Python library imports (`numpy`, `tetra3`, `picamera2`, `PIL`)
-- Process list (efinder procs)
+- Process list (diofinder procs)
 - Active configuration
-- Last 50 lines of the efinder journal
+- Last 50 lines of the diofinder journal
 
 Interpret the output:
 - `PASS` (green) = OK
@@ -781,13 +781,13 @@ Interpret the output:
 ### 3. Inspect live logs
 
 ```bash
-sudo journalctl -fu efinder
+sudo journalctl -fu diofinder
 ```
 
 Or look at recent history:
 
 ```bash
-sudo journalctl -u efinder -n 100 --no-pager
+sudo journalctl -u diofinder -n 100 --no-pager
 ```
 
 Key things to look for:
@@ -809,7 +809,7 @@ Key things to look for:
 python3 -c "
 import socket, json
 s = socket.socket(socket.AF_UNIX)
-s.connect('/run/efinder/maint.sock')
+s.connect('/run/diofinder/maint.sock')
 s.sendall(b'{\"cmd\":\"status\",\"args\":{}}\n')
 import sys; buf = b''
 while b'\n' not in buf: buf += s.recv(4096)
@@ -830,13 +830,13 @@ Key fields in the response:
 ### 5. Test extraction in isolation
 
 ```bash
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_detect.py
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_detect.py
 ```
 
 Options:
 ```bash
 # Use a saved PNG instead of the live SHM:
-sudo .../diag_detect.py --image /var/lib/efinder/test.png
+sudo .../diag_detect.py --image /var/lib/diofinder/test.png
 
 # Override sigma:
 sudo .../diag_detect.py --sigma 7.0
@@ -851,12 +851,12 @@ Use `--sigma-sweep` to find the optimal sigma for your sky conditions.
 ### 6. Test the full solve pipeline
 
 ```bash
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_solve.py --live-shm
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_solve.py --live-shm
 ```
 
 Options:
 ```bash
-sudo .../diag_solve.py --image /var/lib/efinder/test.png
+sudo .../diag_solve.py --image /var/lib/diofinder/test.png
 sudo .../diag_solve.py --reps 5
 sudo .../diag_solve.py --sigma 7.0 --timeout 2000
 ```
@@ -868,14 +868,14 @@ and timing breakdown per stage.
 ### 7. Check test mode
 
 ```bash
-sudo journalctl -u efinder -n 20 | grep -E "LIVE|TEST"
+sudo journalctl -u diofinder -n 20 | grep -E "LIVE|TEST"
 ```
 
 To force live mode without restarting:
 ```bash
 python3 -c "
 import socket
-s=socket.socket(socket.AF_UNIX); s.connect('/run/efinder/maint.sock')
+s=socket.socket(socket.AF_UNIX); s.connect('/run/diofinder/maint.sock')
 s.sendall(b'{\"cmd\":\"set_test_mode\",\"args\":{\"enabled\":false}}\n')
 "
 ```
@@ -885,28 +885,28 @@ Or use the web UI dashboard toggle.
 ### 8. Check shared memory buffers
 
 ```bash
-ls -la /dev/shm/efinder_frame_*
+ls -la /dev/shm/diofinder_frame_*
 ```
 
-Three files (`efinder_frame_0`, `1`, `2`) each ~730 KB means the daemon is
-running. If absent, efinder has crashed or not started.
+Three files (`diofinder_frame_0`, `1`, `2`) each ~730 KB means the daemon is
+running. If absent, diofinder has crashed or not started.
 
 ```bash
-sudo systemctl status efinder
-sudo systemctl start efinder
+sudo systemctl status diofinder
+sudo systemctl start diofinder
 ```
 
 ### 9. Check the solver database
 
 ```bash
-ls -lh /var/lib/efinder/default_database.npz
+ls -lh /var/lib/diofinder/default_database.npz
 ```
 
 Should be present (typically a few hundred MB). If absent, fetch it from the
 `astro_databases` release (SHA-256 verified):
 
 ```bash
-sudo /usr/local/bin/efinder-db-update   # downloads diofinder_13deg.npz
+sudo /usr/local/bin/diofinder-db-update   # downloads diofinder_13deg.npz
 ```
 
 ### 10. Query or set runtime parameters without a web browser
@@ -915,7 +915,7 @@ sudo /usr/local/bin/efinder-db-update   # downloads diofinder_13deg.npz
 # Get current solver parameters:
 python3 -c "
 import socket
-s=socket.socket(socket.AF_UNIX); s.connect('/run/efinder/maint.sock')
+s=socket.socket(socket.AF_UNIX); s.connect('/run/diofinder/maint.sock')
 s.sendall(b'{\"cmd\":\"solver_params_get\",\"args\":{}}\n')
 print(s.recv(4096).decode())
 "
@@ -924,11 +924,11 @@ print(s.recv(4096).decode())
 ### 11. Restart individual services
 
 ```bash
-sudo systemctl restart efinder          # restarts camera + solver + comms
-sudo systemctl restart efinder-webui    # restarts Flask UI only (solver keeps running)
+sudo systemctl restart diofinder          # restarts camera + solver + comms
+sudo systemctl restart diofinder-webui    # restarts Flask UI only (solver keeps running)
 ```
 
-The web UI (`efinder-webui`) runs independently of the solver. Restarting the
+The web UI (`diofinder-webui`) runs independently of the solver. Restarting the
 web UI does not interrupt active plate-solving.
 
 ### 12. Common problems and fixes
@@ -940,9 +940,9 @@ web UI does not interrupt active plate-solving.
 | Web UI shows stale layout after update | Browser cache | Hard-refresh (`Ctrl+Shift+R`) or open in incognito |
 | Always in test mode on startup | `test.png` found at startup | Use web UI toggle or `set_test_mode` maint cmd |
 | `TOO_FEW` on every frame | Low star count — exposure too short or sigma too high | Lower sigma (try 3–4) or increase exposure; use `diag_detect.py --sigma-sweep` |
-| `NO_MATCH` with plenty of stars | FOV estimate wrong or database mismatch | Reset calibration (`efinder-ctl calibration reset`), verify database |
+| `NO_MATCH` with plenty of stars | FOV estimate wrong or database mismatch | Reset calibration (`diofinder-ctl calibration reset`), verify database |
 | Solve time > 1.5 s constantly | Blind solve on first frame or after a solve gap | Normal on first frame; if persistent, check `solve_timeout_ms` |
-| `Sensor mode: output_size=(1332, 990)` in journal | `sensor=` hint not applied | Ensure camera_proc.py is up to date; restart efinder |
+| `Sensor mode: output_size=(1332, 990)` in journal | `sensor=` hint not applied | Ensure camera_proc.py is up to date; restart diofinder |
 
 ### 13. Can't solve even though stars are visible
 
@@ -955,7 +955,7 @@ are not necessarily the stars sycamore is extracting. Run the sigma sweep
 to see the raw star count at each threshold:
 
 ```bash
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_detect.py --sigma-sweep
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_detect.py --sigma-sweep
 ```
 
 This prints a table like:
@@ -974,7 +974,7 @@ page**. Try 3–4. The change takes effect immediately with no restart. Use
 
 #### Step 2 — understand the frame pipeline
 
-The IMX477 native sensor is 4056×3040. The eFinder configures libcamera with
+The IMX477 native sensor is 4056×3040. The diofinder configures libcamera with
 `sensor={"output_size": (4056, 3040)}` to force a full-array readout; the ISP
 then downscales 4× to 960×760. This gives an effective pixel pitch of 6.2 µm
 and a plate scale of ~51.15 arcsec/px, yielding a ~13.6° horizontal FOV with
@@ -985,7 +985,7 @@ Without this hint, libcamera silently selects the 1332×990 sub-mode (central
 `NO_MATCH` if `fov_deg` is set to 13.5°. Check the journal:
 
 ```bash
-sudo journalctl -u efinder | grep "Sensor mode"
+sudo journalctl -u diofinder | grep "Sensor mode"
 # Expected: Sensor mode: output_size=(4056, 3040)
 ```
 
@@ -997,10 +997,10 @@ to your actual optics. Then reset calibration so the solver uses the full
 1° tolerance window:
 
 ```bash
-efinder-ctl calibration reset
+diofinder-ctl calibration reset
 ```
 
-After a successful solve the eFinder self-calibrates the FOV and tightens the
+After a successful solve the diofinder self-calibrates the FOV and tightens the
 window automatically.
 
 #### Step 4 — capture frames for off-device analysis
@@ -1009,18 +1009,18 @@ If the problem is hard to diagnose live, collect a debug bundle from the web UI
 (**Update** page → **Collect debug ZIP**) or capture frames directly:
 
 ```bash
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/diag_camera.py \
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_camera.py \
     --exp-min 0.2 --exp-max 0.2 --gain-min 20 --gain-max 20
 ```
 
 Copy to your laptop:
 ```bash
-scp efinder@efinder.local:/var/lib/efinder/YYYYMMDDHHMMSSMMM.zip .
+scp diofinder@diofinder.local:/var/lib/diofinder/YYYYMMDDHHMMSSMMM.zip .
 ```
 
 #### Quick-reference: sigma adjustment from the web UI
 
-1. Open `http://efinder.local/camera`
+1. Open `http://diofinder.local/camera`
 2. Find the **Detection sigma** slider (default 5, range 0–20)
 3. Drag left or click `−` to lower it — change takes effect on the next frame
 4. Watch the dashboard for `stars` count to climb above 8
@@ -1034,7 +1034,7 @@ See `tests/README.md` for the full catalogue. All scripts require the venv
 Python and (for SHM access) root privileges:
 
 ```bash
-sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/<script>.py
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/<script>.py
 ```
 
 | Script | Purpose |
@@ -1073,7 +1073,7 @@ sudo /opt/efinder/venv/bin/python3 /opt/efinder/tests/<script>.py
 | `camera_proc` | ~60 MB |
 | `solver_proc` (olive-solve loaded) | ~180 MB |
 | `comms_proc` | ~25 MB |
-| `efinder-webui` (Flask) | ~35 MB |
+| `diofinder-webui` (Flask) | ~35 MB |
 | **Total** | **~300 MB** |
 
 With zram swap (~256 MB LZ4), the system operates comfortably within the
@@ -1091,8 +1091,8 @@ swapon --show   # should show /dev/zram0
 
 ```bash
 sudo apt-get install -y qemu-user-static binfmt-support
-sudo EFINDER_VERSION=dev bash build/build-image.sh
-# Output: build/output/efinder.img
+sudo DIOFINDER_VERSION=dev bash build/build-image.sh
+# Output: build/output/diofinder.img
 ```
 
 ### Wheel sourcing
@@ -1104,7 +1104,7 @@ repos' GitHub releases:
 - **Image builds**: `release.yml` fetches them into `vendor/wheels/` before
   `build-image.sh` runs. Pin versions with the `SYCAMORE_TAG` /
   `OLIVE_SOLVE_TAG` repository variables (unset = latest release).
-- **Existing devices**: `efinder-update` refreshes both wheels from the
+- **Existing devices**: `diofinder-update` refreshes both wheels from the
   latest releases during an OTA update.
 - **Local override**: a wheel placed in `vendor/wheels/` (e.g. via
   `build/local/vendor-wheels.sh`) takes precedence over the download.
@@ -1116,7 +1116,7 @@ each repo's release workflow builds and attaches the aarch64 wheels.
 
 ```bash
 pip install -r requirements.txt
-EFINDER_MAINT_SOCK=/tmp/efinder-dev.sock python webui/app.py
+DIOFINDER_MAINT_SOCK=/tmp/diofinder-dev.sock python webui/app.py
 ```
 
 ### Static analysis

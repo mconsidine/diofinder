@@ -1,18 +1,18 @@
-# eFinder TODO
+# diofinder TODO
 
 Living document. Update as features land or get deferred.
 
 ## Major features
 
 ### Polar alignment helper
-✅ DONE. Three-point algorithm: user rotates mount in RA only, eFinder
+✅ DONE. Three-point algorithm: user rotates mount in RA only, diofinder
 captures three plate-solved positions (with dwell detection), fits a
 great circle through the points on the celestial sphere, derives the
 apparent RA axis, and decomposes the offset from the true pole into
 azimuth and altitude errors using the observer's latitude.
 
-Code: `efinder/polar.py` (math) and `efinder/polar_run.py` (state machine,
-lives in solver_proc). Maintenance commands: `efinder-ctl polar start|status|
+Code: `diofinder/polar.py` (math) and `diofinder/polar_run.py` (state machine,
+lives in solver_proc). Maintenance commands: `diofinder-ctl polar start|status|
 cancel|set-latitude`.
 
 SkySafari sends latitude via `:St#` on connect (requires "Set Time &
@@ -32,7 +32,7 @@ Possible future improvements:
 
 ### Web UI
 ✅ DONE. Flask app at `webui/app.py`, runs on port 80 via
-`efinder-webui.service`. Uses maintenance socket for all data — no
+`diofinder-webui.service`. Uses maintenance socket for all data — no
 state of its own. Pages:
 
 - `/`        dashboard: live RA/Dec, pointing, focus score, calibration,
@@ -43,9 +43,9 @@ state of its own. Pages:
 - `/bgtest`  background-mode A/B (with optional live-solver match rates)
 - `/polar`   step-by-step polar alignment workflow with live status
 - `/wifi`    AP/station switching
-- `/config`  read-only view of `/etc/efinder/efinder.conf` + seeing toggle
-- `/logs`    live journalctl tail for efinder.service
-- `/update`  trigger efinder-update in one click
+- `/config`  read-only view of `/etc/diofinder/diofinder.conf` + seeing toggle
+- `/logs`    live journalctl tail for diofinder.service
+- `/update`  trigger diofinder-update in one click
 - `/healthz` 200 OK ping endpoint
 
 Web UI uses `threaded=True` on Flask's dev server so slow solver
@@ -63,11 +63,11 @@ Future improvements:
 - Replace Flask dev server with gunicorn (probably never; single-user)
 
 ### Maintenance socket (Unix socket IPC)
-✅ DONE. Listens at `/run/efinder/maint.sock`. One daemon thread per
+✅ DONE. Listens at `/run/diofinder/maint.sock`. One daemon thread per
 connection so slow solver operations don't block concurrent callers.
 
-Protocol: newline-delimited JSON. Client library: `efinder/maint.py`.
-Dispatch table: `efinder/comms_proc.py::_handle_maint_command`.
+Protocol: newline-delimited JSON. Client library: `diofinder/maint.py`.
+Dispatch table: `diofinder/comms_proc.py::_handle_maint_command`.
 
 Supported commands: ping, version, status, boresight (show/center/set),
 calibration (status/reset), exposure (get/set/persist), gain (set/persist),
@@ -110,7 +110,7 @@ lens is capped or the sky is completely dark.
 
 ### CPU affinity
 ✅ DONE.
-- CPU 0: kernel/IRQs/system services + comms_proc + efinder-webui + IMU thread
+- CPU 0: kernel/IRQs/system services + comms_proc + diofinder-webui + IMU thread
   (all I/O bound; cpu_comms=0 in config.py)
 - CPU 1: solver_proc auxiliary core (third rayon core for star extraction;
   cpu_solver_aux=1)
@@ -139,11 +139,11 @@ tight 0.1° tolerance window for subsequent solves.
 ### Boresight calibration
 ✅ DONE. `:CM#` sync command records the pixel offset between the
 plate-solved star position and the reported boresight. Offset is
-persisted to `/etc/efinder/efinder.conf`.
+persisted to `/etc/diofinder/diofinder.conf`.
 
 ### Release image filename stamping
-✅ DONE. Release images named `efinder-sycamore-YYYYMMDD-vX.Y.Z.img.xz` (tagged
-builds) or `efinder-sycamore-YYYYMMDD.img.xz` (manual workflow dispatch). The
+✅ DONE. Release images named `diofinder-sycamore-YYYYMMDD-vX.Y.Z.img.xz` (tagged
+builds) or `diofinder-sycamore-YYYYMMDD.img.xz` (manual workflow dispatch). The
 build date is embedded at build time (see `.github/workflows/release.yml`).
 
 ---
@@ -151,10 +151,10 @@ build date is embedded at build time (see `.github/workflows/release.yml`).
 ## Tactical TODOs
 
 ### Dark frame and hot pixel calibration
-**DONE (hot-pixel half):** `efinder/hot_pixel.py` + `dark_capture` /
+**DONE (hot-pixel half):** `diofinder/hot_pixel.py` + `dark_capture` /
 `hot_pixel_status` / `hot_pixel_clear` maint commands + Camera-page button.
 The solver median-stacks a capped-lens dark capture, builds a mask
-(`median + 5·1.4826·MAD`), saves `/var/lib/efinder/hot_pixel_mask.npz`, and
+(`median + 5·1.4826·MAD`), saves `/var/lib/diofinder/hot_pixel_mask.npz`, and
 repairs masked pixels (8-neighbor mean) before each detection. Loaded at
 startup. This rejects hot pixels during slews when the temporal cache is off.
 
@@ -234,17 +234,17 @@ All three are already available to the web UI; this is a presentation-only
 change to `webui/templates/dashboard.html` (+ the `dashboard()` route passing
 `version` and a timestamp). Low risk.
 
-### Rebrand "efinder" → "diofinder" for this variant (deferred)
-Where `efinder` names *this* fork (not AstroKeith's upstream), migrate to
+### Rebrand "diofinder" → "diofinder" for this variant (deferred)
+Where `diofinder` names *this* fork (not AstroKeith's upstream), migrate to
 `diofinder`. End state:
 - SSH login `diofinder@diofinder.local` (hostname, user, mDNS),
 - Wi-Fi AP SSID `diofinder-XXXX`,
 - and the rest of the user-facing surface (web UI title, README).
 
-Wide, careful rename touching the systemd units (`efinder.service`,
-`efinder-webui.service`, …), install/image scripts, config paths
-(`/etc/efinder/`, `/var/lib/efinder/`, `/opt/efinder/`), the `efinder-ctl` /
-`efinder-update` CLIs, the maint socket path, and docs — with a migration story
+Wide, careful rename touching the systemd units (`diofinder.service`,
+`diofinder-webui.service`, …), install/image scripts, config paths
+(`/etc/diofinder/`, `/var/lib/diofinder/`, `/opt/diofinder/`), the `diofinder-ctl` /
+`diofinder-update` CLIs, the maint socket path, and docs — with a migration story
 for already-imaged devices (or simply "new images only"). **Do this only after
 the build/burn workflows are stable**, since it changes paths the workflows and
 OTA update depend on. Leave references to AstroKeith's upstream `eFinder_cli`
@@ -280,8 +280,8 @@ improvements would make it less confusing:
 - **SHM cleanup on crash**: if the launcher dies between `create=True`
   and the `finally` unlink, stale SHM blocks remain in `/dev/shm`.
   Re-running clears them via the unlink-before-create dance.
-  **DONE:** `efinder.service` now has `ExecStartPre=-/bin/sh -c 'rm -f …'`
-  lines removing stale `/dev/shm/efinder_frame_*` and the maint socket
+  **DONE:** `diofinder.service` now has `ExecStartPre=-/bin/sh -c 'rm -f …'`
+  lines removing stale `/dev/shm/diofinder_frame_*` and the maint socket
   (non-fatal `-` prefix) before each start.
 
 - **Vendor wheel freshness**: the olive-solve and sycamore-extract wheels

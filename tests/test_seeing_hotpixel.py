@@ -17,7 +17,7 @@ import unittest
 # Make the repo root importable when run directly.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Stub star_detect so importing efinder modules that reference it at import
+# Stub star_detect so importing diofinder modules that reference it at import
 # time (e.g. bg_cache) never fails in a sycamore-less environment. seeing.py
 # and hot_pixel.py don't import it, but we stub defensively.
 if "star_detect" not in sys.modules:
@@ -28,8 +28,8 @@ if "star_detect" not in sys.modules:
 
 import numpy as np
 
-from efinder import seeing
-from efinder import hot_pixel
+from diofinder import seeing
+from diofinder import hot_pixel
 
 
 class _FakeCfg:
@@ -240,9 +240,9 @@ class MaintSeeingDispatchTests(unittest.TestCase):
             t3 = types.ModuleType("tetra3")
             t3.Tetra3 = object
             sys.modules["tetra3"] = t3
-        from efinder.maint import MaintRequest
-        from efinder.config import Config
-        import efinder.comms_proc as comms
+        from diofinder.maint import MaintRequest
+        from diofinder.config import Config
+        import diofinder.comms_proc as comms
         self.comms = comms
         self.MaintRequest = MaintRequest
 

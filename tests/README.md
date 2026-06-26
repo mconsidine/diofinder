@@ -3,7 +3,7 @@
 All scripts require the venv Python.  Most need root for SHM access:
 
 ```bash
-sudo /opt/efinder/venv/bin/python3 tests/<script>.py [options]
+sudo /opt/diofinder/venv/bin/python3 tests/<script>.py [options]
 ```
 
 The solver backend is **olive-solve** (Rust, in-process tetra3-py wheel).
@@ -37,16 +37,16 @@ sudo bash tests/diag_services.sh
 ```
 
 Full system health check. Covers:
-- `efinder` systemd service state
-- Maintenance socket `/run/efinder/maint.sock` with live status query
+- `diofinder` systemd service state
+- Maintenance socket `/run/diofinder/maint.sock` with live status query
   (solved, stars, solve_ms, fov)
-- Shared memory frame buffers (`/dev/shm/efinder_frame_*`)
+- Shared memory frame buffers (`/dev/shm/diofinder_frame_*`)
 - Solver database (`solver_db` config key, defaults to
-  `/var/lib/efinder/default_database.npz`), including a live load test
+  `/var/lib/diofinder/default_database.npz`), including a live load test
 - Python library imports (`numpy`, `tetra3`, `picamera2`, `PIL`)
-- Process list (efinder, solver_proc, camera_proc, comms_proc)
+- Process list (diofinder, solver_proc, camera_proc, comms_proc)
 - Active configuration
-- Last 50 lines of the efinder journal
+- Last 50 lines of the diofinder journal
 
 Run this first when anything is broken.
 
@@ -92,7 +92,7 @@ directory, making it easy to transfer off the device.
   star count, last solve time)
 - `camera_settings.txt` — tuning file in use, sensor properties, every
   control's min/max/default, sensor modes, and the controls the sweep applied
-- `efinder.conf` — verbatim copy of `/etc/efinder/efinder.conf` at the time
+- `diofinder.conf` — verbatim copy of `/etc/diofinder/diofinder.conf` at the time
   of capture
 
 Captured PNGs are raw 8-bit grayscale Y-plane with no display stretch applied,
@@ -100,7 +100,7 @@ identical in content to what the solver receives during a live solve.
 
 ```bash
 # Transfer the archive to a laptop:
-scp efinder@efinder.local:/var/lib/efinder/YYYYMMDDHHMMSSMMM.zip .
+scp diofinder@diofinder.local:/var/lib/diofinder/YYYYMMDDHHMMSSMMM.zip .
 ```
 
 ---
@@ -116,7 +116,7 @@ sudo .../diag_bno055.py --address 0x29     # force alternate I2C address
 sudo .../diag_bno055.py --bus 3            # different I2C bus
 sudo .../diag_bno055.py --samples 20       # more live samples
 sudo .../diag_bno055.py --interval 0.5     # faster sampling
-sudo .../diag_bno055.py --mode imuplus     # match the efinder daemon mode (no mag)
+sudo .../diag_bno055.py --mode imuplus     # match the diofinder daemon mode (no mag)
 sudo .../diag_bno055.py --no-mode-change   # leave sensor in whatever mode it is
 ```
 
@@ -131,7 +131,7 @@ Prints (in order):
 5. **Live samples** — quaternion + |q| sanity check, Euler, raw/linear accel,
    gravity, gyroscope, magnetometer.
 
-The efinder daemon uses IMUPLUS (accel + gyro only, magnetometer disabled) to
+The diofinder daemon uses IMUPLUS (accel + gyro only, magnetometer disabled) to
 avoid magnetic interference from telescope motors. When the IMU is available,
 its quaternion is used to propagate the attitude hint between solves.
 
@@ -167,7 +167,7 @@ default is 5 (valid range 0–20); raise it if false positives appear. The solve
 Tests the complete extraction + solve pipeline with per-step timing.
 
 ```bash
-sudo .../diag_solve.py                           # test images in /opt/efinder/test-images
+sudo .../diag_solve.py                           # test images in /opt/diofinder/test-images
 sudo .../diag_solve.py --image /path/to/img.png  # single image
 sudo .../diag_solve.py --live-shm                # live daemon frame
 sudo .../diag_solve.py --reps 5
@@ -199,7 +199,7 @@ correct before a session.
 ```bash
 sudo .../solve_image.py --image /path/to/image.png
 sudo .../solve_image.py --image img.png --sigma 7.0
-sudo .../solve_image.py --image img.png --db /var/lib/efinder/mydb.npz
+sudo .../solve_image.py --image img.png --db /var/lib/diofinder/mydb.npz
 sudo .../solve_image.py --image img.png --fov 13.5 --fov-err 1.0 --timeout 3000
 sudo .../solve_image.py --image img.png --reps 5   # timing over multiple reps
 ```

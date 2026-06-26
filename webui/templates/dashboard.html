@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}eFinder Status{% endblock %}
+{% block title %}diofinder Status{% endblock %}
 {% block content %}
 
 {% if not status_ok %}
@@ -412,7 +412,7 @@ setInterval(refresh, 1500);
 
 // ── Debug bundle collection ──────────────────────────────────────────────────
 // POSTs to /debug/collect, which builds the bundle and streams it back as an
-// attachment (it also saves a copy to /var/lib/efinder). Shared by the expert
+// attachment (it also saves a copy to /var/lib/diofinder). Shared by the expert
 // Debug card and the novice Quick-setup card.
 async function collectDebugBundle(btn, st, label) {
   btn.disabled  = true;

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}eFinder Wi-Fi{% endblock %}
+{% block title %}diofinder Wi-Fi{% endblock %}
 {% block content %}
 
 <section class="grid">
@@ -26,10 +26,10 @@
       <form method="post" action="{{ url_for('wifi_ap') }}">
         <button type="submit" class="btn btn-primary">Switch to AP Mode</button>
       </form>
-      <p class="hint">Restores the eFinder's own Wi-Fi hotspot.</p>
+      <p class="hint">Restores the diofinder's own Wi-Fi hotspot.</p>
     {% else %}
       <p class="hint">
-        Devices connect to the eFinder hotspot directly.
+        Devices connect to the diofinder hotspot directly.
         Switch to station mode to join your home/observatory network.
       </p>
     {% endif %}

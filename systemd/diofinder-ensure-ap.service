@@ -1,0 +1,33 @@
+[Unit]
+Description=Ensure diofinder Wi-Fi AP is active if wlan0 has no other connection
+# Run after NM has started and after boot setup has created the AP profile.
+After=NetworkManager.service diofinder-firstboot.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+# Poll wlan0 for up to 60 seconds. This gives NM enough time to either:
+#   (a) autoconnect the diofinder-ap profile (AP mode), or
+#   (b) connect to a saved station network.
+# If wlan0 is still idle after 60 s (station network unavailable, or AP
+# autoconnect was suppressed by a previous failure), force the AP up.
+# This makes the AP the automatic fallback in all conditions.
+ExecStart=/bin/bash -c '\
+  for i in $(seq 1 12); do \
+    sleep 5; \
+    ACTIVE=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null \
+             | awk -F: '"'"'$2=="wlan0"{print $1}'"'"'); \
+    if [ -n "$ACTIVE" ]; then \
+      logger -t diofinder-ensure-ap "wlan0 active on boot: $ACTIVE"; \
+      exit 0; \
+    fi; \
+  done; \
+  logger -t diofinder-ensure-ap "wlan0 idle after 60s -- activating diofinder-ap"; \
+  nmcli con modify diofinder-ap connection.autoconnect yes \
+    connection.autoconnect-retries 0 2>/dev/null || true; \
+  nmcli con up diofinder-ap >/dev/null 2>&1 \
+    || logger -t diofinder-ensure-ap "WARNING: could not activate diofinder-ap"'
+
+[Install]
+WantedBy=multi-user.target

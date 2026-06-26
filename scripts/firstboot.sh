@@ -1,5 +1,5 @@
 #!/bin/bash
-# eFinder boot-time setup.  Runs on EVERY boot via efinder-firstboot.service.
+# diofinder boot-time setup.  Runs on EVERY boot via diofinder-firstboot.service.
 #
 # All operations are idempotent — safe to repeat without side effects.
 # Removing the one-time 'firstboot.done' guard means:
@@ -7,21 +7,21 @@
 #     recreates it automatically.
 #   * There is no fragile marker file that can silently prevent recovery.
 #
-# The last-run timestamp is still written to /var/lib/efinder/firstboot.done
+# The last-run timestamp is still written to /var/lib/diofinder/firstboot.done
 # for diagnostics (journalctl, support), but it is NOT read as a gate.
 #
-# Wi-Fi AP activation is NOT done here; efinder-ensure-ap.service handles
+# Wi-Fi AP activation is NOT done here; diofinder-ensure-ap.service handles
 # that after NM has had time to try any station connections first.
 
 set -euo pipefail
 
-LOG()  { echo "[efinder-setup] $*"; }
-WARN() { echo "[efinder-setup] WARNING: $*" >&2; }
+LOG()  { echo "[diofinder-setup] $*"; }
+WARN() { echo "[diofinder-setup] WARNING: $*" >&2; }
 
-DONE_MARKER=/var/lib/efinder/firstboot.done
+DONE_MARKER=/var/lib/diofinder/firstboot.done
 
 LOG "Running boot-time setup"
-mkdir -p /var/lib/efinder /etc/efinder
+mkdir -p /var/lib/diofinder /etc/diofinder
 
 # --- Hardware sanity check ----------------------------------------------------
 
@@ -92,19 +92,19 @@ unset _i _state
 
 MAC=$(ip link show wlan0 2>/dev/null | awk '/ether/ {gsub(":",""); print $2; exit}')
 if [ -n "${MAC:-}" ]; then
-  AP_SSID="efinder-${MAC: -4}"
+  AP_SSID="diofinder-${MAC: -4}"
 else
-  AP_SSID="efinder"
+  AP_SSID="diofinder"
   WARN "Could not read wlan0 MAC; using SSID $AP_SSID"
 fi
 AP_PASS="12345678"
 
-if ! nmcli -t -f NAME con show | grep -qx "efinder-ap"; then
+if ! nmcli -t -f NAME con show | grep -qx "diofinder-ap"; then
   LOG "Creating Wi-Fi AP profile: SSID=$AP_SSID"
   nmcli con add \
     type wifi \
     ifname wlan0 \
-    con-name efinder-ap \
+    con-name diofinder-ap \
     autoconnect yes \
     ssid "$AP_SSID" \
     wifi.mode ap \
@@ -124,7 +124,7 @@ fi
 # Ensure NM will always retry the AP connection. autoconnect-retries=0
 # means retry indefinitely; without this NM stops trying after a few
 # failures and will not retry until manually prompted, even across reboots.
-nmcli con modify efinder-ap \
+nmcli con modify diofinder-ap \
   connection.autoconnect yes \
   connection.autoconnect-retries 0 \
   2>/dev/null || WARN "Could not set AP autoconnect-retries (non-fatal)"
@@ -132,12 +132,12 @@ nmcli con modify efinder-ap \
 # Explicitly activate the AP now. NM was already running when the profile
 # was created so it may have missed the startup autoconnect sweep. Calling
 # `nmcli con up` here avoids a 30-90 s delay waiting for NM's retry timer
-# or efinder-ensure-ap's polling loop. This is a no-op if it is already up.
+# or diofinder-ensure-ap's polling loop. This is a no-op if it is already up.
 if ! nmcli -t -f NAME,DEVICE con show --active 2>/dev/null \
      | awk -F: '$2=="wlan0"{exit 0} END{exit 1}'; then
   LOG "Activating AP profile on wlan0"
-  nmcli -w 30 con up efinder-ap \
-    || WARN "Could not bring up AP immediately (efinder-ensure-ap will retry)"
+  nmcli -w 30 con up diofinder-ap \
+    || WARN "Could not bring up AP immediately (diofinder-ensure-ap will retry)"
 else
   LOG "wlan0 already has an active connection — leaving it"
 fi
@@ -156,8 +156,8 @@ unset _gov
 
 # --- Filesystem setup ---------------------------------------------------------
 
-mkdir -p /var/lib/efinder/captures
-chown -R efinder:efinder /var/lib/efinder 2>/dev/null || true
+mkdir -p /var/lib/diofinder/captures
+chown -R diofinder:diofinder /var/lib/diofinder 2>/dev/null || true
 
 # --- I2C clock speed ----------------------------------------------------------
 # The BCM2835/BCM2711 I2C master has a hardware bug: it releases SCL before a
@@ -175,11 +175,11 @@ fi
 # --- Regenerate tetra3rs database if missing (upgrade/recovery path) ---------
 # Normally baked into the image by install.sh. This fallback runs if the file
 # was somehow lost (e.g. manual deletion, failed image build).
-TETRA3RS_DB=/var/lib/efinder/efinder-tetra-database.bin
-if [ ! -f "$TETRA3RS_DB" ] && [ -x /opt/efinder/venv/bin/python ]; then
-  if /opt/efinder/venv/bin/python -c "import tetra3rs" 2>/dev/null; then
+TETRA3RS_DB=/var/lib/diofinder/diofinder-tetra-database.bin
+if [ ! -f "$TETRA3RS_DB" ] && [ -x /opt/diofinder/venv/bin/python ]; then
+  if /opt/diofinder/venv/bin/python -c "import tetra3rs" 2>/dev/null; then
     LOG "tetra3rs database missing — regenerating..."
-    if /opt/efinder/venv/bin/python -c "
+    if /opt/diofinder/venv/bin/python -c "
 import sys
 try:
     import tetra3rs
@@ -190,13 +190,13 @@ try:
         epoch_proper_motion_year=2026,
         verification_stars_per_fov=100,
     )
-    db.save_to_file('/var/lib/efinder/efinder-tetra-database.bin')
+    db.save_to_file('/var/lib/diofinder/diofinder-tetra-database.bin')
     print('tetra3rs database: stars=%d patterns=%d' % (db.num_stars, db.num_patterns))
 except Exception as e:
     print('tetra3rs db generation failed: %s' % e, file=sys.stderr)
     sys.exit(1)
 "; then
-      chown efinder:efinder "$TETRA3RS_DB" 2>/dev/null || true
+      chown diofinder:diofinder "$TETRA3RS_DB" 2>/dev/null || true
       LOG "tetra3rs database regenerated"
     else
       WARN "tetra3rs database generation failed; tetra backend unavailable"

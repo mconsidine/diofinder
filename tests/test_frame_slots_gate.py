@@ -7,7 +7,7 @@ tests run without any camera or extractor — pure multiprocessing primitives.
 import threading
 import time
 
-from efinder.frame_slots import FrameSlots
+from diofinder.frame_slots import FrameSlots
 
 
 def test_first_frame_returns_with_seq():

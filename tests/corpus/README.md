@@ -9,13 +9,13 @@ anecdote.
 
 ## Where frames come from
 
-The efinder daemon saves frames automatically when:
+The diofinder daemon saves frames automatically when:
 
 - `save_failed_frames: true` — saves frames that produced TooFew / NoMatch
   status (label `failed_TooFew`, `failed_NoMatch`)
 - `save_solved_frames: true` — saves successfully solved frames (label `solved`)
 
-Saved frames live at `/var/lib/efinder/captures/` on the Pi, named:
+Saved frames live at `/var/lib/diofinder/captures/` on the Pi, named:
 
 ```
 {YYYYMMDDTHHMMSS_mmm}_{label}.png
@@ -24,13 +24,13 @@ Saved frames live at `/var/lib/efinder/captures/` on the Pi, named:
 Copy them off the device with:
 
 ```bash
-scp efinder@efinder.local:/var/lib/efinder/captures/*.png tests/corpus/
+scp diofinder@diofinder.local:/var/lib/diofinder/captures/*.png tests/corpus/
 ```
 
 Or into a labeled subdirectory:
 
 ```bash
-scp efinder@efinder.local:/var/lib/efinder/captures/\*solved\*.png \
+scp diofinder@diofinder.local:/var/lib/diofinder/captures/\*solved\*.png \
     tests/corpus/clear_dark/
 ```
 
@@ -117,12 +117,12 @@ sense for your test campaign.
 # Full run on this corpus, both presets
 python3 tests/replay_corpus.py \
     --corpus tests/corpus/ \
-    --database /var/lib/efinder/default_database.npz
+    --database /var/lib/diofinder/default_database.npz
 
 # Quick run: first 20 frames, good preset only, write CSV
 python3 tests/replay_corpus.py \
     --corpus tests/corpus/ \
-    --database /var/lib/efinder/default_database.npz \
+    --database /var/lib/diofinder/default_database.npz \
     --presets good \
     --limit 20 \
     --csv /tmp/results.csv
@@ -130,7 +130,7 @@ python3 tests/replay_corpus.py \
 # Sweep background modes across both presets
 python3 tests/replay_corpus.py \
     --corpus tests/corpus/ \
-    --database /var/lib/efinder/default_database.npz \
+    --database /var/lib/diofinder/default_database.npz \
     --bg-modes row_percentile,block_percentile,uniform_mean \
     --csv /tmp/bg_sweep.csv
 ```

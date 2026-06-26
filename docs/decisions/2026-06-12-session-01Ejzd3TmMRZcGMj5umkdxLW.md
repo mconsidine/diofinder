@@ -18,7 +18,7 @@ documentation and UI into sync with the expanded feature set.
 
 ## Changes Made
 
-### 1. `efinder/config.py` — three new config keys
+### 1. `diofinder/config.py` — three new config keys
 
 ```
 camera_tuning_file:      str  = "/usr/share/libcamera/ipa/rpi/vc4/imx477_scientific.json"
@@ -38,7 +38,7 @@ detect_noise_mode:       str  = "mad"
 
 ---
 
-### 2. `efinder/bg_cache.py` — extended detection routing
+### 2. `diofinder/bg_cache.py` — extended detection routing
 
 **`CACHE_COMPATIBLE_MODES`** frozenset established:
 ```python
@@ -64,7 +64,7 @@ Per-frame routing passes the correct keyword for each mode:
 
 ---
 
-### 3. `efinder/comms_proc.py` — extended maint socket API
+### 3. `diofinder/comms_proc.py` — extended maint socket API
 
 `valid_modes` tuple expanded to all 7 modes:
 ```python
@@ -83,14 +83,14 @@ Per-frame routing passes the correct keyword for each mode:
 
 ---
 
-### 4. `efinder/solver_proc.py` — reads all new keys from `shared_cfg`
+### 4. `diofinder/solver_proc.py` — reads all new keys from `shared_cfg`
 
 All three new keys read with fallback to `cfg` defaults and passed to
 `bg_cache.detect()`.
 
 ---
 
-### 5. `efinder/camera_proc.py` — IMX477 scientific tuning + ISP controls
+### 5. `diofinder/camera_proc.py` — IMX477 scientific tuning + ISP controls
 
 **Decision on tuning file fallback**: If the configured tuning file path
 doesn't exist on the filesystem, log a `WARNING` and fall back to the default
@@ -188,7 +188,7 @@ correct. The gaps identified and fixed were documentation/UI only:
   when 2-D gradient removal is needed but cache compatibility is desired
   (note: block_percentile is still per-frame only).
 - The scientific tuning file path uses `vc4`; change to `pisp` via
-  `camera_tuning_file` in `efinder.conf` if deploying on Pi 5 hardware.
+  `camera_tuning_file` in `diofinder.conf` if deploying on Pi 5 hardware.
 - No capability probes exist in `bg_cache.py` for sycamore < 0.10.0 against
   `block_percentile`/`uniform_mean`/`column_percentile` — these will raise
   `TypeError` on old wheels. Add `HAS_BLOCK_PERCENTILE` / `HAS_UNIFORM_MEAN`

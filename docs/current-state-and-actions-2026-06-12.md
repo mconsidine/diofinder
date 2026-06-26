@@ -28,14 +28,14 @@ during the 0.12.0 transition and it now serves no wheel.
    presets (Bad exercises exactly the new non-default code paths); Good/Bad A/B on
    marginal frames; dark-frame hot-pixel capture; auto-exposure convergence;
    `bench_pipeline_combos.py --live-shm`; watchdog fire/restart; tune
-   `efinder/seeing.py` preset values from the A/B data; run
+   `diofinder/seeing.py` preset values from the A/B data; run
    `scripts/calibrate_lens.py` on saved solved frames and set `distortion:`.
 2. **Deep Gaia catalog (G≤9.0)** — in progress on the owner's Mac (runbook in the
    astro_databases README): download/merge, commit the `.bin` + `.dat.gz`, tag
    (e.g. `v2026.06.1`). CI then builds and attaches the `_mag85` deep databases.
-3. **Deep-DB device plumbing** — not yet wired: the image build/`efinder-update`
+3. **Deep-DB device plumbing** — not yet wired: the image build/`diofinder-update`
    fetch only the standard `.npz`. Until the `_mag85.npz` is on the device **and**
-   `star_db_deep` is set in `efinder.conf`, the Bad preset's database switch is a
+   `star_db_deep` is set in `diofinder.conf`, the Bad preset's database switch is a
    silent no-op. (Deferred by owner; Claude can wire it on request.)
 4. **Watch the first post-Node-24 workflow runs** in each repo. None have run
    yet (v0.0.25 was built before the bump merged). Artifact actions crossed

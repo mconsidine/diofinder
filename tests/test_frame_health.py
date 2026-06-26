@@ -1,7 +1,7 @@
-"""Unit tests for efinder.frame_health.assess (no hardware needed)."""
+"""Unit tests for diofinder.frame_health.assess (no hardware needed)."""
 import numpy as np
 
-from efinder import frame_health
+from diofinder import frame_health
 
 
 def _frame(fill, h=200, w=320):

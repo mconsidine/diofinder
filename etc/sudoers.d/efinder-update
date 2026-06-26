@@ -1,3 +1,0 @@
-# Allow the efinder user to run efinder-update without a password,
-# and only that script. Used by the web UI's "Update" button.
-efinder ALL=(root) NOPASSWD: /usr/local/bin/efinder-update

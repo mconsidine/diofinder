@@ -1,4 +1,0 @@
-# Allow the efinder daemon to update the system clock from SkySafari's
-# LX200 :SL/:SG/:SC time-sync commands (needed in field/AP mode where NTP
-# is not available).  Scoped to just this one helper script.
-efinder ALL=(root) NOPASSWD: /usr/local/bin/efinder-set-time

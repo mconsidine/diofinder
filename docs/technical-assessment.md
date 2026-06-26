@@ -87,8 +87,8 @@ verification speedup, needs on-device validation), gRPC `parallel` field.
 
 Implemented and merged to `olive` (PR #27 and successors):
 
-- **Seeing presets + Good/Bad toggle** (`efinder/seeing.py`, `seeing_set`/`seeing_get`
-  maint commands, dashboard/Config toggle, drift display, `efinder-ctl seeing`).
+- **Seeing presets + Good/Bad toggle** (`diofinder/seeing.py`, `seeing_set`/`seeing_get`
+  maint commands, dashboard/Config toggle, drift display, `diofinder-ctl seeing`).
   Every preset key individually live-tunable (`solver_params_set`,
   `match_params_set`); presets are exactly equivalent to setting keys by hand.
 - Trail rejection wired (`detect_max_axis_ratio`, 0=off; previously hardcoded inf).

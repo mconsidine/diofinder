@@ -5,8 +5,8 @@
 - **Hardware**: Raspberry Pi Zero 2W (quad-core Cortex-A53, 512 MB RAM)
 - **Camera**: Arducam IMX477 (12 MP Sony sensor, 1.55 µm pixel pitch, 4056×3040 array)
 - **OS**: Debian GNU/Linux 13 "Trixie" (Pi OS Trixie Lite)
-- **Python**: 3.11+, installed at `/opt/efinder/`
-- **Service**: `systemd` unit `efinder.service`, managed with `sudo systemctl {start,stop,restart,status} efinder`
+- **Python**: 3.11+, installed at `/opt/diofinder/`
+- **Service**: `systemd` unit `diofinder.service`, managed with `sudo systemctl {start,stop,restart,status} diofinder`
 - **Host serial tether**: the USB CDC-ACM serial device enumerates as
   `/dev/ttyACM0` on Linux but **`/dev/tty.usbmodem*`** on macOS (digits vary per
   port/session; `ls /dev/tty.usbmodem*` to find it). There is no `/dev/ttyACM0`
@@ -17,7 +17,7 @@
 ## Process architecture
 
 ```
-efinder_main.py (launcher, CPU 0)
+diofinder_main.py (launcher, CPU 0)
   │
   ├── camera_proc   (CPU 3)          — captures frames → shared memory
   ├── solver_proc   (CPUs 1+2+3)     — extracts stars, plate-solves
@@ -32,7 +32,7 @@ is far below one core), freeing CPU 1 as a third solver core. CPU affinity is se
 
 | Channel | Type | Direction | Purpose |
 |---------|------|-----------|-------|
-| `efinder_frame_{0,1,2}` | POSIX shared memory | camera → solver, webui | Raw 8-bit frames |
+| `diofinder_frame_{0,1,2}` | POSIX shared memory | camera → solver, webui | Raw 8-bit frames |
 | `FrameSlots` | `multiprocessing.Value` + lock | camera → solver | Ring-buffer slot index |
 | `latest_solution` | `Manager().dict()` | solver → comms | Most recent plate-solve result |
 | `shared_cfg` | `Manager().dict()` | main → all | Live-mutable settings |
@@ -42,7 +42,7 @@ is far below one core), freeing CPU 1 as a third solver core. CPU affinity is se
 | `solver_cmd_reply_q` | `mp.Queue` | solver → comms | Maintenance replies |
 | `camera_cmd_q` | `mp.Queue` | comms → camera | Exposure/gain commands |
 | `camera_cmd_reply_q` | `mp.Queue` | camera → comms | Camera replies |
-| `/run/efinder/maint.sock` | Unix domain socket | webui/ctl → comms | JSON maintenance API |
+| `/run/diofinder/maint.sock` | Unix domain socket | webui/ctl → comms | JSON maintenance API |
 
 ### `shared_cfg` keys and owners
 
@@ -120,8 +120,8 @@ and more robust against false positives.
 
 If you change the lens or camera mode, reset calibration:
 ```bash
-sudo sed -i 's/^fov_calibrated:.*/fov_calibrated: false/' /etc/efinder/efinder.conf
-sudo systemctl restart efinder
+sudo sed -i 's/^fov_calibrated:.*/fov_calibrated: false/' /etc/diofinder/diofinder.conf
+sudo systemctl restart diofinder
 ```
 
 Or use the **Config** page → calibration section → Reset button.
@@ -130,13 +130,13 @@ Or use the **Config** page → calibration section → Reset button.
 
 ## Adding an LX200 command
 
-All LX200 handling lives in `efinder/comms_proc.py::_handle_lx200_command`.
+All LX200 handling lives in `diofinder/comms_proc.py::_handle_lx200_command`.
 
 1. Add an `if cmd == ":XX":` (or `cmd.startswith(":XX")`) branch.
 2. Return a `bytes` object ending in `b"#"` per LX200 convention, or `b""` for
    commands that expect no reply (`:M*`, `:R*`, `:Q`).
 3. Update the docstring listing implemented commands.
-4. Test with `nc efinder.local 4060` (telnet/netcat) or add a simple test to `tests/diag_solve.py`.
+4. Test with `nc diofinder.local 4060` (telnet/netcat) or add a simple test to `tests/diag_solve.py`.
 
 There is no registration table — the function is a plain if/elif chain.
 
@@ -145,8 +145,8 @@ There is no registration table — the function is a plain if/elif chain.
 ## Adding a maintenance socket command
 
 The maintenance socket is the internal RPC bus used by the web UI and
-`efinder-ctl`. All commands are handled in
-`efinder/comms_proc.py::_handle_maint_command`.
+`diofinder-ctl`. All commands are handled in
+`diofinder/comms_proc.py::_handle_maint_command`.
 
 Notable commands beyond the basics: `solver_params_get`/`solver_params_set`
 (sigma 0–20, kernel_sigma 1.0–4.0, max_axis_ratio 0=off/1.5–10.0, local_noise,
@@ -158,7 +158,7 @@ calibrated tight tolerance is owned by the calibration machinery),
 solve_timeout_ms),
 `match_params_get`/`match_params_set` (match_radius 0.005–0.05, match_threshold
 1e-9–1e-3), `seeing_get`/`seeing_set` (apply the Good/Bad presets in
-`efinder/seeing.py`; `seeing_set {"mode":"good"|"bad"}` routes every preset key
+`diofinder/seeing.py`; `seeing_set {"mode":"good"|"bad"}` routes every preset key
 through the right channel — shared_cfg for live solver keys, a solver `set_db`
 command for the database switch — persists via `config.save_keys`, and
 invalidates the solver cache; `seeing_get` returns the mode, the preset table,
@@ -176,7 +176,7 @@ counters), `solve_centroids` (plate-solve a caller-supplied centroid list on
 the live solver's resident database — no second DB, used by
 `diag_background --solve` and the web-UI background A/B), and the hot-pixel
 trio: `dark_capture {"frames":N}` (cap the lens; median-stacks N frames into a
-mask saved at `/var/lib/efinder/hot_pixel_mask.npz`), `hot_pixel_status`, and
+mask saved at `/var/lib/diofinder/hot_pixel_mask.npz`), `hot_pixel_status`, and
 `hot_pixel_clear`.
 
 1. Add an `if cmd == "my_command":` branch anywhere in the function.
@@ -191,8 +191,8 @@ mask saved at `/var/lib/efinder/hot_pixel_mask.npz`), `hot_pixel_status`, and
    `_safe_call("my_command", args)`.
 
 To add solver-side handling, mirror the pattern in
-`efinder/solver_proc.py::_handle_solver_cmd` using the `SolverCmd` /
-`SolverCmdReply` dataclasses in `efinder/worker_cmds.py`.
+`diofinder/solver_proc.py::_handle_solver_cmd` using the `SolverCmd` /
+`SolverCmdReply` dataclasses in `diofinder/worker_cmds.py`.
 
 ---
 
@@ -229,10 +229,10 @@ since v0.9.0 — the `gate_mode` parameter was removed; passing it raises
 Wheels are not committed to git: `release.yml` downloads the sycamore and
 olive-solve wheels from their repos' GitHub releases at image-build time (pin
 with the `SYCAMORE_TAG` / `OLIVE_SOLVE_TAG` repo variables; unset = latest),
-and on-device `efinder-update` refreshes them from the latest releases. A
+and on-device `diofinder-update` refreshes them from the latest releases. A
 wheel placed manually in `vendor/wheels/` overrides the download.
 
-Detection is routed through `efinder/bg_cache.py::BackgroundCache`, not by calling
+Detection is routed through `diofinder/bg_cache.py::BackgroundCache`, not by calling
 `detect_stars` directly. This gives three composable background strategies, all
 toggleable from config (and live-overridable via `shared_cfg`):
 
@@ -281,9 +281,9 @@ to stress the glow case); the upstream extractor harness is
 
 ## Config file
 
-`/etc/efinder/efinder.conf` — key: value pairs, `#` for comments.
+`/etc/diofinder/diofinder.conf` — key: value pairs, `#` for comments.
 
-`efinder/config.py::load_config` reads the file, applies `EFINDER_<KEY>`
+`diofinder/config.py::load_config` reads the file, applies `DIOFINDER_<KEY>`
 environment overrides, and returns a `Config` dataclass. Unknown keys are
 logged and ignored. Missing file uses all defaults.
 
@@ -309,7 +309,7 @@ New keys (this release):
 
 ## Seeing presets
 
-`efinder/seeing.py` holds three flat preset tables — `SEEING_PRESETS["good"]`,
+`diofinder/seeing.py` holds three flat preset tables — `SEEING_PRESETS["good"]`,
 `["bad"]`, and `["legacy"]`. Each key in a preset is *also* an individually
 adjustable config key, so applying a preset is exactly equivalent to setting
 each by hand. All three presets carry the **same key set** so a toggle fully
@@ -342,8 +342,8 @@ those knobs (detect_bin, kernel_sigma, noise_mode, bg_mode, max_axis_ratio,
 override individually). `diag_solve.py --bundle <zip>` goes further: it replays a
 downloaded debug bundle **fully offline on any machine** — it reads the live
 knobs from the bundle's `effective_params.json` (the *calibrated* FOV tolerance
-+ shared_cfg drift that `efinder.conf` alone misses), points `EFINDER_CONFIG` at
-the bundle's `efinder.conf`, and solves the bundle's `frame_*_raw.png`. The
++ shared_cfg drift that `diofinder.conf` alone misses), points `DIOFINDER_CONFIG` at
+the bundle's `diofinder.conf`, and solves the bundle's `frame_*_raw.png`. The
 matching star database must be present locally (the bundle omits the `.npz`).
 
 * `seeing_set {"mode": "good"|"bad"}` (comms maint): writes every preset key to
@@ -355,7 +355,7 @@ matching star database must be present locally (the bundle omits the `.npz`).
   the user has individually overridden since applying a preset.
 * `star_db="deep"` resolves to `star_db_deep` only when that names a file that
   exists; otherwise it stays on the standard `solver_db`.
-* The toggle appears on the Status page and the Config page; `efinder-ctl
+* The toggle appears on the Status page and the Config page; `diofinder-ctl
   seeing {get|set good|set bad}` is the CLI equivalent.
 
 Every preset key is independently tunable through `solver_params_set`
@@ -369,7 +369,7 @@ optional, persisted, **sparse** layer between factory and live hand-edits:
 
 ```
 factory preset  (SEEING_PRESETS, immutable)
-   ⊕ saved override   (only the keys it changes; /var/lib/efinder/seeing_overrides.json)
+   ⊕ saved override   (only the keys it changes; /var/lib/diofinder/seeing_overrides.json)
    ⊕ live hand-edits  (shared_cfg drift)
    = active config
 ```
@@ -383,7 +383,7 @@ factory preset  (SEEING_PRESETS, immutable)
   override (default = the preset keys currently drifting from factory + the
   camera exposure/gain, mirroring auto_tune's sparseness; `source` defaults to
   `manual`). `seeing_override_clear` deletes it. Storage helpers live in
-  `efinder/seeing.py`
+  `diofinder/seeing.py`
   (`save_override`/`clear_override`/`get_override`/`load_overrides`, atomic
   JSON write), unit-tested in `tests/test_seeing_overrides.py`.
 * `auto_tune commit=true` saves the winner as the tuned mode's override
@@ -393,14 +393,14 @@ factory preset  (SEEING_PRESETS, immutable)
   if an override exists and every override key matches the effective config;
   **factory** if the effective config matches the factory preset; **custom**
   otherwise (hand-edits on top). The Config page shows a Factory/Tuned/Custom
-  badge plus Apply / Save-from-current / Clear controls; `efinder-ctl seeing
+  badge plus Apply / Save-from-current / Clear controls; `diofinder-ctl seeing
   {apply-override|save-override|clear-override}` is the CLI equivalent.
 
 ---
 
 ## Tracking mode (experimental, opt-in)
 
-A steady-state ROI tracking mode lives in `efinder/tracking.py` (pure numpy, no
+A steady-state ROI tracking mode lives in `diofinder/tracking.py` (pure numpy, no
 `star_detect`/`tetra3`/`picamera2` import — unit-tested in `tests/test_tracking.py`)
 and is wired into `solver_proc.solver_main` as a small **FULL ↔ TRACKING** state
 machine. **Default OFF** (`tracking_enabled: false`) pending on-sky validation.
@@ -471,9 +471,9 @@ they A/B-toggle live without a restart.
 
 ```bash
 # Toggle on and watch the state machine:
-efinder-ctl raw '{"cmd":"solver_params_set","args":{"tracking_enabled":true}}'
-efinder-ctl raw '{"cmd":"tracking_status"}'   # {enabled, state, frames_tracked, frames_full, recover_fail}
-efinder-ctl raw '{"cmd":"solver_params_set","args":{"tracking_enabled":false}}'
+diofinder-ctl raw '{"cmd":"solver_params_set","args":{"tracking_enabled":true}}'
+diofinder-ctl raw '{"cmd":"tracking_status"}'   # {enabled, state, frames_tracked, frames_full, recover_fail}
+diofinder-ctl raw '{"cmd":"solver_params_set","args":{"tracking_enabled":false}}'
 ```
 
 The `tracking_status` maint command (comms) → `SOLVER_OP_TRACKING_STATUS`
@@ -573,7 +573,7 @@ in `tests/test_auto_tune.py`.
   mirrors the commit path (shared_cfg + `config.save_keys` + camera exposure/gain
   + `save_override` source=`auto_tune` + cache invalidate) from the stored
   result; it errors if a sweep is running or no result exists.
-* CLI: `efinder-ctl auto-tune {start [--mode] [--commit] [--wait]|status|cancel}`.
+* CLI: `diofinder-ctl auto-tune {start [--mode] [--commit] [--wait]|status|cancel}`.
   Web UI: an "Auto-tune (current sky)" card on the Camera page (start/cancel +
   **Apply result** + progress poller via `/api/autotune`). The Camera page also
   live-syncs its sliders/selects (`/api/camera/state`) so auto-exposure,
@@ -591,7 +591,7 @@ extractor and says so (banner + report `*** NOTE ***`); use `diag_solve.py
 
 auto_tune is **live-only**. To find the best parameters *in hindsight* for an
 already-captured burst (the `bg_ab_*.zip` archives the Background A/B run writes
-to `/var/lib/efinder/bg_runs/`), there are two paths:
+to `/var/lib/diofinder/bg_runs/`), there are two paths:
 
 * **`tests/replay_corpus.py`** (off-device or on-device): the offline sweep.
   `--corpus` accepts a **directory of PNGs OR a `.zip`** (burst archives /
@@ -615,14 +615,14 @@ to `/var/lib/efinder/bg_runs/`), there are two paths:
 
 ## Hot-pixel mask
 
-`efinder/hot_pixel.py` builds a static hot-pixel mask from a capped-lens dark
+`diofinder/hot_pixel.py` builds a static hot-pixel mask from a capped-lens dark
 capture and repairs masked pixels (8-neighbor mean, precomputed neighbor index
 arrays, pure vectorized numpy, <1 ms) before each detection. This gives
 hot-pixel rejection during slews, when the temporal cache is offline.
 
 * `dark_capture {"frames": N}` → solver grabs N SHM frames ~0.3 s apart,
   median-stacks, flags pixels exceeding `median + 5·(1.4826·MAD)`, saves
-  `/var/lib/efinder/hot_pixel_mask.npz` (indices + shape + count), loads it.
+  `/var/lib/diofinder/hot_pixel_mask.npz` (indices + shape + count), loads it.
 * The solver loads the mask at startup if present.
 * `hot_pixel_status` (count, mtime, loaded) and `hot_pixel_clear`.
 * Camera page: "Capture dark frame" button (warns to cap the lens) + status.
@@ -638,14 +638,14 @@ including dark ones, so if the epoch stops advancing for `watchdog_timeout_s`
 restarts the unit. The watchdog **arms only after the first non-zero epoch**, so
 a slow boot / first DB load never trips it.
 
-`systemd/efinder.service` has `ExecStartPre=-/bin/sh -c 'rm -f …'` lines (the
+`systemd/diofinder.service` has `ExecStartPre=-/bin/sh -c 'rm -f …'` lines (the
 `-` prefix makes failure non-fatal) that remove stale
-`/dev/shm/efinder_frame_*` and `/run/efinder/maint.sock` before each start.
+`/dev/shm/diofinder_frame_*` and `/run/diofinder/maint.sock` before each start.
 
 `scripts/calibrate_lens.py` is an **off-device** helper (not installed on the
 Pi): point it at a directory of solved-frame PNGs and it runs `tetra3rs`
 `calibrate_camera` to fit SIP distortion and prints the `distortion:` value to
-set in `efinder.conf`.
+set in `diofinder.conf`.
 
 ---
 
@@ -653,19 +653,19 @@ set in `efinder.conf`.
 
 | Path | Contents |
 |------|---------|
-| `/opt/efinder/` | Installed Python package |
-| `/etc/efinder/efinder.conf` | Runtime configuration |
-| `/var/lib/efinder/` | Star databases (`.npz`), debug ZIPs, saved frames |
-| `/var/lib/efinder/hot_pixel_mask.npz` | Hot-pixel mask (from `dark_capture`) |
-| `/var/lib/efinder/seeing_overrides.json` | Saved Good/Bad seeing overrides (factory presets stay immutable) |
-| `/var/lib/efinder/star_names.csv` | Star naming catalog (from astro_databases release); powers the Camera-page "Centered star" label (names the cataloged star nearest the boresight). Optional — missing file disables naming. Refreshed by `efinder-db-update`. |
-| `/var/lib/efinder/captures/` | PNG captures when `save_failed_frames=true` (100 MB cap, oldest evicted) |
-| `/run/efinder/maint.sock` | Maintenance Unix socket |
-| `/var/lib/efinder/version` | Running release tag + ISO date. Stamped at image build (`install.sh`, from `EFINDER_VERSION`) and rewritten by `efinder-update`. The `version` maint command resolves it as: this file → `git describe` of `/opt/efinder` → in-code `cfg.version` (so a fresh burn reports its real tag instead of the stale default). |
-| `/usr/local/bin/efinder-ctl` | CLI wrapper for the maint socket |
-| `/usr/local/bin/efinder-update` | OTA update script (`--ref BRANCH` to track a branch; `webui Update` page wraps it). Images are git-provisioned by `install.sh` so OTA works on imaged devices. |
-| `/usr/local/bin/efinder-bg-setup` | Show/set background mode + sizes via the maint socket |
-| `/usr/local/bin/efinder-bg-test` | On-device background-mode A/B on saved/live frames; `--solve` adds live-solver match rates |
+| `/opt/diofinder/` | Installed Python package |
+| `/etc/diofinder/diofinder.conf` | Runtime configuration |
+| `/var/lib/diofinder/` | Star databases (`.npz`), debug ZIPs, saved frames |
+| `/var/lib/diofinder/hot_pixel_mask.npz` | Hot-pixel mask (from `dark_capture`) |
+| `/var/lib/diofinder/seeing_overrides.json` | Saved Good/Bad seeing overrides (factory presets stay immutable) |
+| `/var/lib/diofinder/star_names.csv` | Star naming catalog (from astro_databases release); powers the Camera-page "Centered star" label (names the cataloged star nearest the boresight). Optional — missing file disables naming. Refreshed by `diofinder-db-update`. |
+| `/var/lib/diofinder/captures/` | PNG captures when `save_failed_frames=true` (100 MB cap, oldest evicted) |
+| `/run/diofinder/maint.sock` | Maintenance Unix socket |
+| `/var/lib/diofinder/version` | Running release tag + ISO date. Stamped at image build (`install.sh`, from `DIOFINDER_VERSION`) and rewritten by `diofinder-update`. The `version` maint command resolves it as: this file → `git describe` of `/opt/diofinder` → in-code `cfg.version` (so a fresh burn reports its real tag instead of the stale default). |
+| `/usr/local/bin/diofinder-ctl` | CLI wrapper for the maint socket |
+| `/usr/local/bin/diofinder-update` | OTA update script (`--ref BRANCH` to track a branch; `webui Update` page wraps it). Images are git-provisioned by `install.sh` so OTA works on imaged devices. |
+| `/usr/local/bin/diofinder-bg-setup` | Show/set background mode + sizes via the maint socket |
+| `/usr/local/bin/diofinder-bg-test` | On-device background-mode A/B on saved/live frames; `--solve` adds live-solver match rates |
 | `/usr/local/bin/ap.sh` | Switch wlan0 to access-point mode |
 | `/usr/local/bin/station.sh` | Connect wlan0 to a station network |
 
@@ -676,10 +676,10 @@ set in `efinder.conf`.
 See `tests/README.md` for the full test catalogue. Quick smoke-test on device:
 
 ```bash
-cd /opt/efinder
+cd /opt/diofinder
 sudo bash tests/diag_services.sh                  # check all processes alive
 sudo python3 tests/diag_solve.py --live-shm       # one-shot solve with current image
 sudo python3 tests/bench_pipeline_combos.py --live-shm  # pipeline timing
 ```
 
-`EFINDER_LOGLEVEL=DEBUG sudo systemctl restart efinder` enables verbose logging.
+`DIOFINDER_LOGLEVEL=DEBUG sudo systemctl restart diofinder` enables verbose logging.

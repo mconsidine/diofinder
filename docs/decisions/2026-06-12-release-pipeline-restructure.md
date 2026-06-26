@@ -1,4 +1,4 @@
-# Decision record — release-pipeline restructure across the eFinder repos
+# Decision record — release-pipeline restructure across the diofinder repos
 
 - **Date:** 2026-06-12T14:47Z (session spanned 2026-06-10 — 2026-06-12)
 - **Session:** Claude Code session "pensive-allen", ID `session_01MBjXhx3TLxkk3WEkvHWqRX`
@@ -23,10 +23,10 @@ GitHub releases at image-build time; no binaries in git.
     `olive_solve_tag` / `sycamore_tag` / `db_tag` dispatch inputs (`79923de`).
   - Wheel patterns accept abi3 wheels (`star_detect-*aarch64*.whl`) after the cp313-only pattern
     caused the first v0.0.24 image to build without the extractor (`b8c8f8a`).
-- `efinder-update` (OTA): refreshes both wheels from the latest releases (interpreter-specific pattern
+- `diofinder-update` (OTA): refreshes both wheels from the latest releases (interpreter-specific pattern
   first, abi3 fallback); a wheel placed in `vendor/wheels/` overrides the download; all wheel-refresh
   failures are non-fatal so an update cannot break a working install.
-- New `efinder-db-update` device script: downloads `cedar_solve_13deg.npz` from an astro_databases
+- New `diofinder-db-update` device script: downloads `cedar_solve_13deg.npz` from an astro_databases
   release, verifies against the manifest, backs up and replaces the database named by `solver_db`,
   restarts the service (`b54de4f`).
 - Image builds use the Gaia-derived catalog/database (broad G band matches the unfiltered IMX477
@@ -57,7 +57,7 @@ GitHub releases at image-build time; no binaries in git.
    builds; the old aggregator's pathologies (cross-repo SHA bookkeeping, drifting build configs) are
    structurally avoided. diofinder pulls from three release URLs instead of one.
 6. **diofinder pulls everything at build time** — no binaries in git; `vendor/wheels/` survives only as
-   a gitignored staging dir so `install.sh`/chroot flow stayed untouched. OTA (`efinder-update`)
+   a gitignored staging dir so `install.sh`/chroot flow stayed untouched. OTA (`diofinder-update`)
    refreshes wheels from latest releases, deliberately non-fatally.
 7. **Branch-testing without fleet risk** — hyphenated tags (e.g. `v0.2.0-noext`) publish as
    prereleases everywhere, invisible to "latest"-following consumers; selected explicitly via dispatch
@@ -75,7 +75,7 @@ GitHub releases at image-build time; no binaries in git.
   current tetra3rs parser; G-band depth exactly 8.01; converter output survives the exact hip_main
   parser logic 63,491/63,491.
 - olive-solve loader verified to support the cedar-solve `.npz` schema (828-byte props branch) —
-  basis for `efinder-db-update` on existing devices.
+  basis for `diofinder-db-update` on existing devices.
 - Database A/B (hip vs Gaia): 41,394 → 63,154 stars kept; patterns ~950k in both (capped); lattice
   field density up ~20–30%; `cedar_solve_13deg.npz` 13.3 MB.
 - Post-release audit of the first green diofinder image (v0.0.24, first build): found it had silently
@@ -96,6 +96,6 @@ GitHub releases at image-build time; no binaries in git.
   use `TETRA3RS_REF` if the fork diverges.
 - **Derived-file discipline:** rerun `scripts/gaia_to_hip.py` whenever `gaia_hipp_merged.csv` changes
   (deterministic, byte-identical output for unchanged input).
-- **Existing devices** get the new database via `sudo efinder-db-update [tag]` (after an OTA update
+- **Existing devices** get the new database via `sudo diofinder-db-update [tag]` (after an OTA update
   delivers the script) or the documented curl one-liner against
   `releases/latest/download/cedar_solve_13deg.npz`.

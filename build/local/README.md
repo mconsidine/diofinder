@@ -41,7 +41,7 @@ git push origin olive
 
 # Regenerate the solver database when FOV parameters change:
 DB_MAX_FOV=14.0 build/local/build-database.sh
-scp build/local/out/solver_database.npz pi:/var/lib/efinder/
+scp build/local/out/solver_database.npz pi:/var/lib/diofinder/
 
 # Validate workflow YAML before pushing (this repo + siblings).
 # Anything after -- is passed to actionlint, e.g. to mute style-level

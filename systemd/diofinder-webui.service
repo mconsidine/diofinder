@@ -1,0 +1,35 @@
+[Unit]
+Description=diofinder web UI
+After=diofinder.service network.target
+Wants=diofinder.service
+
+[Service]
+Type=simple
+User=diofinder
+Group=diofinder
+WorkingDirectory=/opt/diofinder
+
+Environment=PYTHONUNBUFFERED=1
+Environment=DIOFINDER_CONFIG=/etc/diofinder/diofinder.conf
+Environment=FLASK_APP=webui.app
+
+# Bind to port 80 on all interfaces. Needs CAP_NET_BIND_SERVICE since
+# we run as the unprivileged diofinder user.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+ExecStart=/opt/diofinder/venv/bin/python -m webui.app
+
+Restart=on-failure
+RestartSec=5
+
+# The web UI runs the diofinder-update script via sudo. We don't grant
+# the diofinder user blanket sudo; instead a sudoers drop-in scoped to
+# just /usr/local/bin/diofinder-update is installed by install.sh.
+
+NoNewPrivileges=false   # need sudo to work (drops to it via sudoers rule)
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
