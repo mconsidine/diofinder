@@ -1,0 +1,118 @@
+{% extends "base.html" %}
+{% block title %}diofinder Utilities{% endblock %}
+{% block content %}
+
+<h2>Utilities</h2>
+<p class="hint" style="margin:0 0 14px 0;">
+  Everyday maintenance tools &mdash; safe to use without Expert mode. Tuning and
+  diagnostics live under the <strong>Expert</strong> view.
+</p>
+
+<section class="grid">
+
+  {# ---- Hot-pixel / dark frame ---- #}
+  <div class="card">
+    <h2>Dark frame (hot-pixel mask)</h2>
+    <p class="hint" style="margin:0 0 8px 0;">
+      Builds a map of stuck/hot sensor pixels so they aren't mistaken for stars.
+      <strong>Cap the lens</strong> (or close the cover) first, then capture.
+    </p>
+    {% if hotpix %}
+      <dl class="stats" style="margin-bottom:8px;">
+        <dt>Mask</dt>
+        <dd>
+          {% if hotpix.count and hotpix.count > 0 %}
+            {{ hotpix.count }} pixel(s){% if hotpix.loaded %} &middot; active{% endif %}
+          {% else %}
+            none captured yet
+          {% endif %}
+        </dd>
+      </dl>
+    {% endif %}
+    <form method="post" action="{{ url_for('hotpixel_capture') }}"
+          onsubmit="return confirm('Is the lens capped / covered? The dark frame must see NO light.');">
+      <input type="hidden" name="frames" value="16">
+      <input type="hidden" name="next" value="utilities">
+      <button type="submit" class="btn btn-primary">Capture dark frame</button>
+    </form>
+    {% if hotpix and hotpix.count and hotpix.count > 0 %}
+    <form method="post" action="{{ url_for('hotpixel_clear') }}" style="margin-top:6px;">
+      <input type="hidden" name="next" value="utilities">
+      <button type="submit" class="btn btn-warning">Clear mask</button>
+    </form>
+    {% endif %}
+  </div>
+
+  {# ---- Support archives ---- #}
+  <div class="card">
+    <h2>Save diagnostics</h2>
+    <p class="hint" style="margin:0 0 8px 0;">
+      Grab these files to email for support &mdash; they capture the current
+      frames, settings, and recent logs. Nothing is changed on the device.
+    </p>
+    <button id="util-debug-btn" class="btn btn-primary">Download debug bundle</button>
+    <span id="util-debug-status" style="margin-left:8px;font-size:0.85rem;color:#888;"></span>
+    <p style="margin:10px 0 0 0;">
+      <a class="btn" href="{{ url_for('bgtest_run_download') }}">Download last background test</a>
+    </p>
+  </div>
+
+  {# ---- Quick links ---- #}
+  <div class="card">
+    <h2>Other</h2>
+    <p style="margin:0 0 6px 0;">
+      <a class="btn" href="{{ url_for('update_page') }}">Software update</a>
+      <a class="btn" href="{{ url_for('wifi_page') }}" style="margin-left:4px;">Wi-Fi setup</a>
+    </p>
+    <p class="hint" style="margin:8px 0 0 0;">
+      Running version: <strong>{{ version if version else 'unknown' }}</strong>
+    </p>
+  </div>
+
+</section>
+
+<script>
+// Debug bundle: POST /debug/collect builds the ZIP and streams it back as a
+// download (a copy is also saved on the device). Self-contained here so the
+// Utilities page works without the dashboard script.
+(function () {
+  const btn = document.getElementById('util-debug-btn');
+  const st  = document.getElementById('util-debug-status');
+  if (!btn) return;
+  btn.addEventListener('click', async function () {
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = 'Collecting…';
+    st.textContent = '';
+    try {
+      const r = await fetch('/debug/collect', {method: 'POST'});
+      if (!r.ok) { st.textContent = 'Error: server returned ' + r.status; }
+      else {
+        const blob = await r.blob();
+        const n = new Date();
+        const ts = n.getFullYear().toString()
+          + String(n.getMonth() + 1).padStart(2, '0')
+          + String(n.getDate()).padStart(2, '0')
+          + String(n.getHours()).padStart(2, '0')
+          + String(n.getMinutes()).padStart(2, '0')
+          + String(n.getSeconds()).padStart(2, '0');
+        const fn = `diofinder_debug_${ts}.zip`;
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = fn;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(a.href);
+        st.textContent = '✓ ' + fn;
+      }
+    } catch (e) {
+      st.textContent = 'Error: ' + e.message;
+    }
+    btn.textContent = label;
+    btn.disabled = false;
+  });
+})();
+</script>
+
+{% endblock %}
