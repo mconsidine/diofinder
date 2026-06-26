@@ -69,6 +69,42 @@
     </p>
   </div>
 
+  {# ---- Current settings vs presets (read-only reference) ---- #}
+  {% if seeing and seeing.presets %}
+  <div class="card card-wide">
+    <h2>Current settings</h2>
+    <p class="hint" style="margin:0 0 8px 0;">
+      What's <strong>in use</strong> right now versus what each seeing preset
+      would set. Read-only &mdash; change these on the Status or Camera page.
+      {% if seeing.mode %}Active preset: <strong>{{ seeing.mode }}</strong>.{% endif %}
+    </p>
+    <div class="table-scroll">
+      <table class="preset-table">
+        <thead>
+          <tr>
+            <th>setting</th>
+            <th class="col-eff">in use</th>
+            <th>good</th>
+            <th>light-pollution</th>
+            <th>legacy</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for key in seeing.presets.good.keys() %}
+          <tr>
+            <td>{{ key }}</td>
+            <td class="col-eff">{{ seeing.effective.get(key, '') if seeing.effective else '' }}</td>
+            <td>{{ seeing.presets.good[key] }}</td>
+            <td>{{ seeing.presets.bad[key] }}</td>
+            <td>{{ seeing.presets.legacy[key] if seeing.presets.legacy else '' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
 </section>
 
 <script>
