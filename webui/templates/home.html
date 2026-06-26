@@ -20,6 +20,9 @@
     <p style="margin:4px 0;">
       <label><input type="checkbox" id="sub-toggle"> Detection view (background subtracted)</label>
     </p>
+    <p style="margin:4px 0;" class="expert-only">
+      <label><input type="checkbox" id="rotate-toggle"> Rotate view 180&deg; (display only)</label>
+    </p>
     <div class="live-view">
       <img id="live-frame" src="/frame.jpg" alt="Camera frame"
            style="max-width:100%; height:auto; display:block; background:#111;">
@@ -68,6 +71,17 @@
                  {{ 'checked' if exposure.auto_exposure_enabled }}>
           Auto-exposure (tracks the target star count)
         </label>
+      </form>
+      <form method="post" action="{{ url_for('tuning_set') }}" class="expert-only" style="margin-top:10px;">
+        <label>Tuning profile
+          <select name="profile">
+            <option value="finder" {{ 'selected' if tuning_profile == 'finder' }}>imx477_finder.json (image default)</option>
+            <option value="scientific" {{ 'selected' if tuning_profile == 'scientific' }}>imx477_scientific.json</option>
+            <option value="standard" {{ 'selected' if tuning_profile == 'standard' }}>imx477.json (standard)</option>
+          </select>
+        </label>
+        <button type="submit" class="btn">Apply &amp; save</button>
+        <span class="hint">restart required</span>
       </form>
     {% else %}
       <p class="muted">Daemon not reachable.</p>
@@ -146,6 +160,95 @@
     </form>
   </div>
 
+  {# ===================== EXPERT TIER ===================== #}
+
+  {# ---- Background mode (all 7) ---- #}
+  <div class="card expert-only">
+    <h2>Background mode (all)</h2>
+    {% if solver_params %}
+      <form method="post" action="{{ url_for('bgtest_set') }}">
+        <input type="hidden" name="next" value="home_page">
+        {% set bgm = solver_params.detect_bg_mode %}
+        <label>Mode
+          <select name="bg_mode">
+            <option value="row_percentile" {{ 'selected' if bgm == 'row_percentile' }}>row_percentile (default, fastest)</option>
+            <option value="line_median" {{ 'selected' if bgm == 'line_median' }}>line_median (robust row correction)</option>
+            <option value="column_percentile" {{ 'selected' if bgm == 'column_percentile' }}>column_percentile (vertical gradient)</option>
+            <option value="row_column_percentile" {{ 'selected' if bgm == 'row_column_percentile' }}>row_column_percentile (separable 2-D)</option>
+            <option value="block_percentile" {{ 'selected' if bgm == 'block_percentile' }}>block_percentile (2-D tiles, light pollution)</option>
+            <option value="uniform_mean" {{ 'selected' if bgm == 'uniform_mean' }}>uniform_mean (tetra3-compatible)</option>
+            <option value="top_hat" {{ 'selected' if bgm == 'top_hat' }}>top_hat (morphological, slowest)</option>
+          </select>
+        </label>
+        <button type="submit" class="btn">Apply &amp; save</button>
+      </form>
+      <p class="hint" style="margin-top:6px;">Full A/B + previews on the
+        <a href="{{ url_for('bgtest_page') }}">Background</a> page.</p>
+    {% else %}
+      <p class="muted">Daemon not reachable.</p>
+    {% endif %}
+  </div>
+
+  {# ---- Boresight ---- #}
+  <div class="card expert-only">
+    <h2>Boresight</h2>
+    {% if boresight %}
+      <dl class="stats">
+        <dt>X (pixels)</dt><dd>{{ "%.1f"|format(boresight.x) }}</dd>
+        <dt>Y (pixels)</dt><dd>{{ "%.1f"|format(boresight.y) }}</dd>
+      </dl>
+    {% endif %}
+    <form method="post" action="{{ url_for('boresight_center') }}">
+      <button type="submit" class="btn btn-primary">Reset to center</button>
+    </form>
+    <p class="hint">Use SkySafari &ldquo;Align&rdquo; on a known star for normal alignment.</p>
+  </div>
+
+  {# ---- Calibration ---- #}
+  <div class="card expert-only">
+    <h2>Calibration</h2>
+    {% if calibration %}
+      <dl class="stats">
+        <dt>State</dt><dd>{{ calibration.state }}</dd>
+        <dt>Committed FOV</dt>
+        <dd>{{ "%.4f"|format(calibration.committed_fov)|safe if calibration.committed_fov else "(not yet)" }} &deg;</dd>
+        <dt>Window</dt>
+        <dd>{{ calibration.window_filled }} / {{ calibration.window_size }}</dd>
+        {% if calibration.recent_median %}
+          <dt>Recent median</dt><dd>{{ "%.4f"|format(calibration.recent_median) }}&deg;</dd>
+        {% endif %}
+        {% if calibration.recent_stddev %}
+          <dt>Recent stddev</dt><dd>{{ "%.4f"|format(calibration.recent_stddev) }}&deg;</dd>
+        {% endif %}
+      </dl>
+      <form method="post" action="{{ url_for('calibration_reset') }}"
+            onsubmit="return confirm('Reset FOV calibration?');">
+        <button type="submit" class="btn btn-warning">Recalibrate</button>
+      </form>
+    {% else %}
+      <p class="muted">{{ cal_error or "no data" }}</p>
+    {% endif %}
+  </div>
+
+  {# ---- IMU ---- #}
+  <div class="card expert-only" id="imu-card">
+    <h2>IMU</h2>
+    {% if imu and imu.available %}
+      <p id="imu-status-text" {% if imu.active %}style="color:#ff1111; font-weight:500;"{% else %}class="hint"{% endif %}>
+        {% if imu.active %}Active &mdash; smoothing SkySafari updates{% else %}Detected &mdash; calibrating&hellip;{% endif %}
+      </p>
+      <dl class="stats">
+        <dt>Solves</dt><dd id="imu-n">{{ imu.calib_n }} / 3</dd>
+        <dt>R&sup2;</dt><dd id="imu-quality">{{ "%.2f"|format(imu.quality) }}</dd>
+        <dt>State</dt><dd id="imu-state">{{ "active" if imu.active else "calibrating" }}</dd>
+      </dl>
+      <p class="hint" style="margin-top:6px;">Refines <strong>SkySafari</strong> pointing between plate-solves only. To activate: move scope &ge;0.1&deg; between 3 successful solves.</p>
+    {% else %}
+      <p class="muted" id="imu-state">Not detected</p>
+      <p class="hint">Wire a BNO055 to I&sup2;C (GPIO&nbsp;2/3) for smoothed pointing between plate-solves.</p>
+    {% endif %}
+  </div>
+
 </section>
 
 <p class="version-badge" style="text-align:center; opacity:0.6; margin-top:18px; font-size:0.85em;">
@@ -222,8 +325,37 @@ async function refreshHome(){
       const se = document.getElementById('status');
       if (se){ const s = sol.status || 0; se.textContent = (_LBL[s] || ('code ' + s)); se.style.color = '#ff7700'; }
     }
+    // IMU (expert card)
+    const imu = d.status.result.imu;
+    if (imu){
+      const nEl = document.getElementById('imu-n'), qEl = document.getElementById('imu-quality'),
+            sEl = document.getElementById('imu-state'), stEl = document.getElementById('imu-status-text');
+      if (nEl) nEl.textContent = imu.calib_n + ' / 3';
+      if (qEl) qEl.textContent = (imu.quality != null ? imu.quality : 0).toFixed(2);
+      if (sEl) sEl.textContent = !imu.available ? 'Not detected' : (imu.active ? 'active' : 'calibrating');
+      if (stEl){
+        if (imu.active){ stEl.textContent = 'Active — smoothing SkySafari updates'; stEl.style.cssText = 'color:#ff1111;font-weight:500;'; stEl.className = ''; }
+        else if (imu.available){ stEl.textContent = 'Detected — calibrating…'; stEl.style.cssText = ''; stEl.className = 'hint'; }
+      }
+    }
   } catch(e) {}
 }
+
+// Rotate-180 live view (display only; never touches the solver).
+(function initRotate180(){
+  const ROT_KEY = 'diofinderRotate180';
+  const img = document.getElementById('live-frame');
+  const box = document.getElementById('rotate-toggle');
+  if (!img) return;
+  const apply = (on) => { img.style.transform = on ? 'rotate(180deg)' : ''; };
+  const on = localStorage.getItem(ROT_KEY) === '1';
+  if (box) box.checked = on;
+  apply(on);
+  if (box) box.addEventListener('change', function(){
+    localStorage.setItem(ROT_KEY, this.checked ? '1' : '0');
+    apply(this.checked);
+  });
+})();
 setInterval(refreshHome, 1250);
 refreshHome();
 </script>
