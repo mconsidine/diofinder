@@ -23,14 +23,11 @@
     <nav>
       <a href="{{ url_for('home_page') }}">Home</a>
       <a href="{{ url_for('focus_page') }}">Focus</a>
+      <a href="{{ url_for('utilities_page') }}">Settings</a>
       <a class="expert-only" href="{{ url_for('camera_page') }}">Advanced</a>
       <a class="expert-only" href="{{ url_for('bgtest_page') }}">Background</a>
-      <a href="{{ url_for('polar_page') }}">Polar</a>
-      <a href="{{ url_for('wifi_page') }}">Wi-Fi</a>
-      <a href="{{ url_for('config_page') }}">Config</a>
+      <a class="expert-only" href="{{ url_for('polar_page') }}">Polar</a>
       <a class="expert-only" href="{{ url_for('logs') }}">Logs</a>
-      <a href="{{ url_for('utilities_page') }}">Utilities</a>
-      <a href="{{ url_for('update_page') }}">Update</a>
     </nav>
     <div class="mode-toggle" role="group" aria-label="Interface mode">
       <span class="mode-toggle-label">View</span>

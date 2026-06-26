@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}diofinder Utilities{% endblock %}
+{% block title %}diofinder Settings{% endblock %}
 {% block content %}
 
-<h2>Utilities</h2>
+<h2>Settings</h2>
 <p class="hint" style="margin:0 0 14px 0;">
-  Everyday maintenance tools &mdash; safe to use without Expert mode. Tuning and
-  diagnostics live under the <strong>Expert</strong> view.
+  Setup &amp; maintenance &mdash; network, configuration, updates, and the
+  diagnostic tools. Live tuning lives under the <strong>Expert</strong> view.
 </p>
 
 <section class="grid">
@@ -57,12 +57,13 @@
     </p>
   </div>
 
-  {# ---- Quick links ---- #}
+  {# ---- Network, config & updates ---- #}
   <div class="card">
-    <h2>Other</h2>
+    <h2>Network, config &amp; updates</h2>
     <p style="margin:0 0 6px 0;">
-      <a class="btn" href="{{ url_for('update_page') }}">Software update</a>
-      <a class="btn" href="{{ url_for('wifi_page') }}" style="margin-left:4px;">Wi-Fi setup</a>
+      <a class="btn" href="{{ url_for('wifi_page') }}">Wi-Fi setup</a>
+      <a class="btn" href="{{ url_for('config_page') }}" style="margin-left:4px;">Configuration</a>
+      <a class="btn" href="{{ url_for('update_page') }}" style="margin-left:4px;">Software update</a>
     </p>
     <p class="hint" style="margin:8px 0 0 0;">
       Running version: <strong>{{ version if version else 'unknown' }}</strong>
