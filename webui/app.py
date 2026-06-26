@@ -166,24 +166,40 @@ def dashboard():
 
 @app.route("/home")
 def home_page():
-    """Phase-1 merged Home: live view + pointing + everyday controls on one
-    page. Stands alongside Status/Camera for A/B during the page merge."""
+    """Merged Home: live view + pointing + everyday controls (novice), with the
+    expert tier expanding to detection/background tuning, boresight, calibration
+    and IMU. Stands alongside Status/Camera during the page merge."""
     status   = _safe_call("status")
     seeing   = _safe_call("seeing_get")
     sparams  = _safe_call("solver_params_get")
     exposure = _safe_call("exposure_get")
     version  = _safe_call("version")
+    cal      = _safe_call("calibration_status")
     sol = (_format_solution(status.result["solution"])
            if status.ok and status.result else None)
+    try:
+        tuning_path = load_config().camera_tuning_file
+    except Exception:
+        tuning_path = ""
+    if "finder" in tuning_path:
+        tuning_profile = "finder"
+    elif "scientific" in tuning_path:
+        tuning_profile = "scientific"
+    else:
+        tuning_profile = "standard"
     return render_template(
         "home.html",
         status_ok=status.ok,
         status_error=status.error if not status.ok else None,
         solution=sol,
         boresight=(status.result.get("boresight") if status.ok else None),
+        calibration=(cal.result if cal.ok else None),
+        cal_error=cal.error if not cal.ok else None,
+        imu=(status.result.get("imu") if status.ok else None),
         seeing=(seeing.result if seeing.ok else None),
         solver_params=(sparams.result if sparams.ok else None),
         exposure=(exposure.result if exposure.ok else None),
+        tuning_profile=tuning_profile,
         test_mode=(status.result.get("test_mode", True) if status.ok else True),
         version=(version.result.get("version") if version.ok else None),
     )
