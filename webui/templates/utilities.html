@@ -16,6 +16,9 @@
     <p class="hint" style="margin:0 0 8px 0;">
       Builds a map of stuck/hot sensor pixels so they aren't mistaken for stars.
       <strong>Cap the lens</strong> (or close the cover) first, then capture.
+      Captured at a long exposure and high gain (0.9&nbsp;s, gain&nbsp;16) so the
+      mask covers every setting the finder uses; your live exposure/gain is
+      restored automatically afterward.
     </p>
     {% if hotpix %}
       <dl class="stats" style="margin-bottom:8px;">
@@ -32,6 +35,8 @@
     <form method="post" action="{{ url_for('hotpixel_capture') }}"
           onsubmit="return confirm('Is the lens capped / covered? The dark frame must see NO light.');">
       <input type="hidden" name="frames" value="16">
+      <input type="hidden" name="exposure_s" value="0.9">
+      <input type="hidden" name="gain" value="16">
       <input type="hidden" name="next" value="utilities">
       <button type="submit" class="btn btn-primary">Capture dark frame</button>
     </form>

@@ -178,10 +178,23 @@
       <p>Mask: <strong>{{ hotpix.count }}</strong> pixels
         {% if hotpix.loaded %}(loaded){% else %}(none){% endif %}</p>
     {% endif %}
+    <p class="hint" style="margin:0 0 8px">
+      Capture at a fixed worst-case point (long exposure + high gain) so the
+      mask covers every operating setting; the live exposure/gain is restored
+      after. Blank either field to capture at the current live setting instead.
+    </p>
     <form method="post" action="{{ url_for('hotpixel_capture') }}"
           onsubmit="return confirm('Lens capped? This captures dark frames.');">
       <label>Frames
         <input type="number" name="frames" value="16" min="2" max="64" step="1"
+               style="width:5em;">
+      </label>
+      <label style="margin-left:8px;">Exposure (s)
+        <input type="number" name="exposure_s" value="0.9" min="0.001" max="10"
+               step="0.05" style="width:5em;">
+      </label>
+      <label style="margin-left:8px;">Gain
+        <input type="number" name="gain" value="16" min="1" max="22" step="1"
                style="width:5em;">
       </label>
       <button type="submit" class="btn">Capture dark frame</button>
