@@ -476,16 +476,31 @@ def hotpixel_capture():
     r = _safe_call("dark_capture", {"frames": frames}, timeout=60.0)
     if not r.ok:
         return r.error, 500
-    return redirect(url_for("camera_page"))
+    nxt = request.form.get("next", "")
+    return redirect(url_for("utilities_page" if nxt == "utilities" else "camera_page"))
 
 
 @app.route("/hotpixel/clear", methods=["POST"])
 def hotpixel_clear():
-    """Clear the hot-pixel mask and redirect to the Camera page."""
+    """Clear the hot-pixel mask and redirect back (Camera or Utilities)."""
     r = _safe_call("hot_pixel_clear")
     if not r.ok:
         return r.error, 500
-    return redirect(url_for("camera_page"))
+    nxt = request.form.get("next", "")
+    return redirect(url_for("utilities_page" if nxt == "utilities" else "camera_page"))
+
+
+@app.route("/utilities")
+def utilities_page():
+    """Novice-safe maintenance utilities (no Expert mode required): capture a
+    dark frame, and grab support archives. Tuning/diagnostics stay in Expert."""
+    hotpix  = _safe_call("hot_pixel_status")
+    version = _safe_call("version")
+    return render_template(
+        "utilities.html",
+        hotpix=(hotpix.result if hotpix.ok else None),
+        version=(version.result.get("version") if version.ok else None),
+    )
 
 
 @app.route("/api/hotpixel")
