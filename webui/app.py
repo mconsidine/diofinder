@@ -496,10 +496,12 @@ def utilities_page():
     dark frame, and grab support archives. Tuning/diagnostics stay in Expert."""
     hotpix  = _safe_call("hot_pixel_status")
     version = _safe_call("version")
+    seeing  = _safe_call("seeing_get")
     return render_template(
         "utilities.html",
         hotpix=(hotpix.result if hotpix.ok else None),
         version=(version.result.get("version") if version.ok else None),
+        seeing=(seeing.result if seeing.ok else None),
     )
 
 
