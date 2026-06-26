@@ -134,6 +134,7 @@ def dashboard():
     cal    = _safe_call("calibration_status")
     seeing = _safe_call("seeing_get")
     sparams = _safe_call("solver_params_get")
+    version = _safe_call("version")
 
     sol = (_format_solution(status.result["solution"])
            if status.ok and status.result else None)
@@ -159,6 +160,7 @@ def dashboard():
         test_mode=(
             status.result.get("test_mode", True)
             if status.ok else True),
+        version=(version.result.get("version") if version.ok else None),
     )
 
 

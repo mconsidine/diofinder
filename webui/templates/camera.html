@@ -16,6 +16,13 @@
       </label>
       <span class="hint">&nbsp;shows what star detection sees, using the active bg mode</span>
     </p>
+    <p style="margin:4px 0;" class="expert-only">
+      <label>
+        <input type="checkbox" id="rotate-toggle">
+        Rotate view 180&deg; (display only)
+      </label>
+      <span class="hint">&nbsp;flips the live image only; detection &amp; solving are unaffected</span>
+    </p>
     <div class="live-view">
       <img id="live-frame" src="/frame.jpg" alt="Camera frame"
            style="max-width:100%; height:auto; display:block; background:#111;">
@@ -390,6 +397,24 @@
 </section>
 
 <script>
+// --- Rotate-180 live view (display only; never touches the solver) -----------
+// Pure client-side CSS transform on the <img>, persisted in localStorage. The
+// solver works on the raw shared-memory frame, so rotation is cosmetic only.
+(function initRotate180() {
+  const ROT_KEY = 'efinderRotate180';
+  const img = document.getElementById('live-frame');
+  const box = document.getElementById('rotate-toggle');
+  if (!img) return;
+  const apply = (on) => { img.style.transform = on ? 'rotate(180deg)' : ''; };
+  const on = localStorage.getItem(ROT_KEY) === '1';
+  if (box) box.checked = on;
+  apply(on);
+  if (box) box.addEventListener('change', function() {
+    localStorage.setItem(ROT_KEY, this.checked ? '1' : '0');
+    apply(this.checked);
+  });
+})();
+
 // --- Live frame + solve stats refresh ----------------------------------------
 const _STATUS_LABELS = {0:'waiting', 3:'timeout', 5:'too few stars'};
 async function refreshFrame() {
