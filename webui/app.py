@@ -164,6 +164,31 @@ def dashboard():
     )
 
 
+@app.route("/home")
+def home_page():
+    """Phase-1 merged Home: live view + pointing + everyday controls on one
+    page. Stands alongside Status/Camera for A/B during the page merge."""
+    status   = _safe_call("status")
+    seeing   = _safe_call("seeing_get")
+    sparams  = _safe_call("solver_params_get")
+    exposure = _safe_call("exposure_get")
+    version  = _safe_call("version")
+    sol = (_format_solution(status.result["solution"])
+           if status.ok and status.result else None)
+    return render_template(
+        "home.html",
+        status_ok=status.ok,
+        status_error=status.error if not status.ok else None,
+        solution=sol,
+        boresight=(status.result.get("boresight") if status.ok else None),
+        seeing=(seeing.result if seeing.ok else None),
+        solver_params=(sparams.result if sparams.ok else None),
+        exposure=(exposure.result if exposure.ok else None),
+        test_mode=(status.result.get("test_mode", True) if status.ok else True),
+        version=(version.result.get("version") if version.ok else None),
+    )
+
+
 @app.route("/api/status")
 def api_status():
     """JSON snapshot of daemon status and calibration state for auto-refresh."""
@@ -186,15 +211,28 @@ def boresight_center():
     return redirect(url_for("dashboard"))
 
 
+_NEXT_ENDPOINTS = {"dashboard", "camera_page", "home_page", "utilities_page"}
+
+
+def _redirect_next(default):
+    """Redirect to the form's `next` endpoint if it's an allow-listed page,
+    else to `default`. Lets shared control forms return to whichever page
+    (Status / Camera / Home) submitted them."""
+    nxt = request.form.get("next", "")
+    if nxt not in _NEXT_ENDPOINTS:
+        nxt = default
+    return redirect(url_for(nxt))
+
+
 @app.route("/testmode/set", methods=["POST"])
 def testmode_set():
-    """Toggle test-image vs. live-camera mode and redirect to dashboard."""
+    """Toggle test-image vs. live-camera mode; return to the submitting page."""
     raw     = request.form.get("enabled", "false").strip().lower()
     enabled = raw in ("true", "1", "yes")
     r = _safe_call("set_test_mode", {"enabled": enabled})
     if not r.ok:
         return r.error, 500
-    return redirect(url_for("dashboard"))
+    return _redirect_next("dashboard")
 
 
 # ---- Polar alignment --------------------------------------------------------
@@ -600,7 +638,7 @@ def autoexposure_set():
     r = _safe_call("auto_exposure_set", {"enabled": enabled, "persist": True})
     if not r.ok:
         return r.error, 500
-    return redirect(url_for("camera_page"))
+    return _redirect_next("camera_page")
 
 
 @app.route("/tuning/set", methods=["POST"])
@@ -633,7 +671,7 @@ def exposure_set():
                 return r.error, 400
         except ValueError:
             return "gain must be numeric", 400
-    return redirect(url_for("camera_page"))
+    return _redirect_next("camera_page")
 
 
 @app.route("/api/camera/state")

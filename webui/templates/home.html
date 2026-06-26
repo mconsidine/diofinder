@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+{% block title %}diofinder Home{% endblock %}
+{% block content %}
+
+<p class="hint" style="margin:0 0 10px 0;">
+  Preview of the merged Home page (live view + pointing + everyday controls).
+  The old <a href="{{ url_for('dashboard') }}">Status</a> and
+  <a href="{{ url_for('camera_page') }}">Camera</a> pages are unchanged for now.
+</p>
+
+{% if not status_ok %}
+  <div class="alert alert-error"><strong>Daemon not reachable:</strong> {{ status_error }}</div>
+{% endif %}
+
+<section class="grid">
+
+  {# ---- Live view + pointing (the "what's happening" hero) ---- #}
+  <div class="card card-wide">
+    <h2>Live view</h2>
+    <p style="margin:4px 0;">
+      <label><input type="checkbox" id="sub-toggle"> Detection view (background subtracted)</label>
+    </p>
+    <div class="live-view">
+      <img id="live-frame" src="/frame.jpg" alt="Camera frame"
+           style="max-width:100%; height:auto; display:block; background:#111;">
+    </div>
+    <p class="hint" id="live-ts" style="margin-top:4px;"></p>
+  </div>
+
+  <div class="card" id="solution-card">
+    <h2>Pointing</h2>
+    <div class="big-coords">
+      <div><span class="label">RA</span> <span id="ra">{{ solution.ra_str if solution and solution.solved else '—' }}</span></div>
+      <div><span class="label">Dec</span> <span id="dec">{{ solution.dec_str if solution and solution.solved else '—' }}</span></div>
+    </div>
+    <dl class="stats">
+      <dt>Centered star</dt><dd id="dash-star">{% if solution and solution.solved and solution.star_name %}{{ solution.star_name }}{% if solution.star_desig %} ({{ solution.star_desig }}){% endif %}{% else %}—{% endif %}</dd>
+      <dt>Stars</dt><dd id="stars">{{ solution.stars if solution else 0 }}</dd>
+      <dt>Matched</dt><dd id="matches">{{ solution.matches if solution and solution.solved else '—' }}</dd>
+      <dt>Solve time</dt><dd id="solve_ms">{% if solution and solution.solved %}{{ "%.0f"|format(solution.solve_ms) }} ms{% else %}—{% endif %}</dd>
+      <dt>Peak</dt><dd id="peak">{{ solution.peak if solution else 0 }}</dd>
+      <dt>FOV</dt><dd id="fov">{% if solution and solution.solved %}{{ "%.3f"|format(solution.fov_deg) }}&deg;{% else %}—{% endif %}</dd>
+      <dt>Roll</dt><dd id="roll">{% if solution and solution.solved %}{{ "%.1f"|format(solution.roll_deg) }}&deg;{% else %}—{% endif %}</dd>
+      <dt>Status</dt><dd id="status">{% if solution and solution.solved %}solved{% else %}—{% endif %}</dd>
+    </dl>
+  </div>
+
+  {# ---- Exposure ---- #}
+  <div class="card">
+    <h2>Exposure</h2>
+    {% if exposure %}
+      <form method="post" action="{{ url_for('exposure_set') }}">
+        <input type="hidden" name="next" value="home_page">
+        <label>Exposure (seconds)
+          <input type="number" step="any" min="0.001" max="10" name="exposure_s"
+                 value="{{ exposure.exposure_s }}" style="width:6em;"></label>
+        <label style="margin-left:8px;">Gain (1&ndash;64)
+          <input type="number" step="1" min="1" max="64" name="gain"
+                 value="{{ exposure.gain }}" style="width:5em;"></label>
+        <button type="submit" class="btn">Apply &amp; save</button>
+      </form>
+      <form method="post" action="{{ url_for('autoexposure_set') }}" style="margin-top:8px;">
+        <input type="hidden" name="next" value="home_page">
+        <input type="hidden" name="enabled"
+               value="{{ 'false' if exposure.auto_exposure_enabled else 'true' }}">
+        <label class="checkbox">
+          <input type="checkbox" onchange="this.form.submit()"
+                 {{ 'checked' if exposure.auto_exposure_enabled }}>
+          Auto-exposure (tracks the target star count)
+        </label>
+      </form>
+    {% else %}
+      <p class="muted">Daemon not reachable.</p>
+    {% endif %}
+  </div>
+
+  {# ---- Seeing ---- #}
+  <div class="card">
+    <h2>Seeing</h2>
+    {% set smode = seeing.mode if seeing else 'good' %}
+    <form method="post" action="{{ url_for('seeing_set') }}" style="display:inline;">
+      <input type="hidden" name="mode" value="good"><input type="hidden" name="next" value="home_page">
+      <button type="submit" class="btn" style="{{ 'background:#1166ff;color:#fff;' if smode == 'good' else '' }}">Good</button>
+    </form>
+    <form method="post" action="{{ url_for('seeing_set') }}" style="display:inline;margin-left:4px;">
+      <input type="hidden" name="mode" value="bad"><input type="hidden" name="next" value="home_page">
+      <button type="submit" class="btn" style="{{ 'background:#cc6600;color:#fff;' if smode == 'bad' else '' }}">Light-pollution</button>
+    </form>
+    <form method="post" action="{{ url_for('seeing_set') }}" style="display:inline;margin-left:4px;">
+      <input type="hidden" name="mode" value="legacy"><input type="hidden" name="next" value="home_page">
+      <button type="submit" class="btn" style="{{ 'background:#7755cc;color:#fff;' if smode == 'legacy' else '' }}">Legacy</button>
+    </form>
+  </div>
+
+  {# ---- Detection (detector + sigma + sky background) ---- #}
+  <div class="card">
+    <h2>Detection</h2>
+    {% set _eb    = (solver_params.extractor_backend if solver_params else None) or 'sycamore' %}
+    {% set _sigma = (solver_params.detect_sigma if solver_params else None) or 5.0 %}
+    {% set _bgm   = (solver_params.detect_bg_mode if solver_params else None) or 'row_percentile' %}
+    <div style="margin-bottom:8px;">
+      <span class="label">Star detector</span>
+      <form method="post" action="{{ url_for('solver_params_set') }}" style="display:inline;">
+        <input type="hidden" name="next" value="home_page">
+        <select name="extractor_backend" onchange="this.form.submit()">
+          <option value="sycamore" {{ 'selected' if _eb == 'sycamore' }}>Default (Sycamore)</option>
+          <option value="tetra3"   {{ 'selected' if _eb == 'tetra3' }}>Legacy (AstroKeith)</option>
+        </select>
+      </form>
+    </div>
+    <form method="post" action="{{ url_for('solver_params_set') }}" style="margin-bottom:8px;">
+      <input type="hidden" name="next" value="home_page">
+      <span class="label">Detection sensitivity</span>
+      <input type="number" name="detect_sigma" min="2" max="12" step="0.5"
+             value="{{ '%.1f'|format(_sigma|float) }}" style="width:5em;">
+      <span class="hint">sigma</span>
+      <button type="submit" class="btn">Apply</button>
+    </form>
+    <div>
+      <span class="label">Sky background</span>
+      <form method="post" action="{{ url_for('bgtest_set') }}" style="display:inline;">
+        <input type="hidden" name="next" value="home_page">
+        <select name="bg_mode" onchange="this.form.submit()">
+          <option value="row_percentile"   {{ 'selected' if _bgm == 'row_percentile' }}>Standard</option>
+          <option value="block_percentile" {{ 'selected' if _bgm == 'block_percentile' }}>Uneven sky / glow</option>
+          <option value="line_median"      {{ 'selected' if _bgm == 'line_median' }}>Vignetting</option>
+        </select>
+      </form>
+      {% if _bgm not in ('row_percentile', 'block_percentile', 'line_median') %}
+        <span class="hint">(advanced mode <code>{{ _bgm }}</code> set elsewhere)</span>
+      {% endif %}
+    </div>
+  </div>
+
+  {# ---- Camera mode ---- #}
+  <div class="card">
+    <h2>Mode</h2>
+    <span class="label">Camera:</span>
+    <form method="post" action="{{ url_for('testmode_set') }}" style="display:inline;margin-left:6px;">
+      <input type="hidden" name="enabled" value="true"><input type="hidden" name="next" value="home_page">
+      <button type="submit" class="btn" style="{{ 'background:#ff1111;color:#fff;' if test_mode else '' }}">Test</button>
+    </form>
+    <form method="post" action="{{ url_for('testmode_set') }}" style="display:inline;margin-left:4px;">
+      <input type="hidden" name="enabled" value="false"><input type="hidden" name="next" value="home_page">
+      <button type="submit" class="btn" style="{{ 'background:#ff1111;color:#fff;' if not test_mode else '' }}">Live</button>
+    </form>
+  </div>
+
+</section>
+
+<p class="version-badge" style="text-align:center; opacity:0.6; margin-top:18px; font-size:0.85em;">
+  Software version: {{ version if version else 'unknown' }}
+</p>
+
+<script>
+// One poller drives both the live image and the pointing readout (single
+// /api/status fetch per tick).
+function _pad2(n){ return String(n).padStart(2, '0'); }
+function formatHMS(h){
+  if (h < 0) h += 24; h = h % 24;
+  let hh = Math.floor(h), mm = Math.floor((h - hh) * 60),
+      ss = Math.round(((h - hh) * 60 - mm) * 60);
+  if (ss === 60){ ss = 0; mm++; } if (mm === 60){ mm = 0; hh = (hh + 1) % 24; }
+  return hh + 'h ' + _pad2(mm) + 'm ' + _pad2(ss) + 's';
+}
+function formatDMS(d){
+  const sign = d < 0 ? '-' : '+'; d = Math.abs(d);
+  let dd = Math.floor(d), mm = Math.floor((d - dd) * 60),
+      ss = Math.round(((d - dd) * 60 - mm) * 60);
+  if (ss === 60){ ss = 0; mm++; } if (mm === 60){ mm = 0; dd++; }
+  return sign + dd + '° ' + _pad2(mm) + '′ ' + _pad2(ss) + '″';
+}
+const _LBL = {0:'waiting', 3:'timeout', 5:'too few stars'};
+function _set(id, v){ const e = document.getElementById(id); if (e) e.textContent = v; }
+
+async function refreshHome(){
+  // Live frame
+  const img = document.getElementById('live-frame');
+  if (img){
+    const next = new Image();
+    next.onload = function(){
+      img.src = next.src; img.style.opacity = '1';
+      const e = document.getElementById('live-ts');
+      if (e){ e.textContent = 'Updated ' + new Date().toLocaleTimeString(); e.style.color = ''; }
+    };
+    next.onerror = function(){
+      img.style.opacity = '0.25';
+      const e = document.getElementById('live-ts');
+      if (e){ e.textContent = 'Frame unavailable — camera not running?'; e.style.color = '#ff7700'; }
+    };
+    const st = document.getElementById('sub-toggle');
+    next.src = '/frame.jpg?' + Date.now() + ((st && st.checked) ? '&sub=1' : '');
+  }
+  // Pointing / status
+  try {
+    const r = await fetch('/api/status');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d.status || !d.status.ok || !d.status.result) return;
+    const sol = d.status.result.solution || {};
+    if (sol.solved){
+      _set('ra', formatHMS(sol.ra_deg / 15)); _set('dec', formatDMS(sol.dec_deg));
+      _set('stars', sol.stars); _set('matches', sol.matches);
+      _set('solve_ms', sol.solve_ms != null ? sol.solve_ms.toFixed(0) + ' ms' : '—');
+      _set('peak', sol.peak);
+      _set('fov', sol.fov_deg != null ? sol.fov_deg.toFixed(3) + '°' : '—');
+      _set('roll', (sol.roll_deg || 0).toFixed(1) + '°');
+      const se = document.getElementById('status');
+      if (se){ se.textContent = 'solved'; se.style.color = '#44cc44'; }
+      let t = '—';
+      if (sol.star_name){
+        t = sol.star_name;
+        if (sol.star_desig) t += ' (' + sol.star_desig + ')';
+        if (sol.star_mag != null) t += ' · mag ' + sol.star_mag.toFixed(1);
+        if (sol.star_sep_deg != null && sol.star_sep_deg >= 1.0) t += ' · ' + sol.star_sep_deg.toFixed(1) + '° off';
+      }
+      _set('dash-star', t);
+    } else {
+      _set('ra', '—'); _set('dec', '—'); _set('matches', '—'); _set('solve_ms', '—');
+      _set('fov', '—'); _set('roll', '—'); _set('dash-star', '—');
+      _set('stars', sol.stars || 0); _set('peak', sol.peak || 0);
+      const se = document.getElementById('status');
+      if (se){ const s = sol.status || 0; se.textContent = (_LBL[s] || ('code ' + s)); se.style.color = '#ff7700'; }
+    }
+  } catch(e) {}
+}
+setInterval(refreshHome, 1250);
+refreshHome();
+</script>
+
+{% endblock %}
