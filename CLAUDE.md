@@ -249,6 +249,10 @@ The Jinja2 environment has a `log10` filter registered for log-scale sliders.
 
 ## Extraction
 
+See `docs/pipeline.md` for rendered flowcharts of the full detection→solve
+pipeline (the `extractor_backend` tetra3-vs-sycamore branch) and how the
+Seeing / Star-detection / Sky-background controls map onto the settings.
+
 Star extraction uses **sycamore** `star_detect` (matched-filter gate, hardcoded
 since v0.9.0 — the `gate_mode` parameter was removed; passing it raises
 `TypeError`).
