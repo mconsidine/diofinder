@@ -88,6 +88,54 @@ class AutoExposureDecisionTests(unittest.TestCase):
         self.assertIn("exposure_s", action)
         self.assertLess(action["exposure_s"], 0.2)
 
+    # --- low-contrast floor: never shed signal near the detection cliff ------
+    def test_overserved_holds_below_peak_floor(self):
+        # The bundle failure: match-rich (matches=20 >> target) but dim
+        # (peak=45 < floor). The old logic would shed gain/exposure and starve
+        # detection; the guard must HOLD instead.
+        action = _decide(solved=True, matches=20, target_matches=10,
+                         peak=45, cur_g=4.0, min_g=1.0, cur_s=0.5, min_s=0.05,
+                         peak_floor=70)
+        self.assertIsNone(action)
+
+    def test_overserved_still_reduces_above_peak_floor(self):
+        # Same abundance of matches but a bright frame -> shedding cost is safe.
+        action = _decide(solved=True, matches=20, target_matches=10,
+                         peak=150, cur_g=4.0, min_g=1.0, peak_floor=70)
+        self.assertIn("gain", action)
+        self.assertLess(action["gain"], 4.0)
+
+    def test_low_contrast_does_not_block_raising_when_starved(self):
+        # Dim AND starved -> the floor must not stop the ladder from raising.
+        action = _decide(solved=True, matches=2, target_matches=10,
+                         peak=40, cur_g=4.0, max_g=16.0, peak_floor=70)
+        self.assertIn("gain", action)
+        self.assertGreater(action["gain"], 4.0)
+
+    def test_low_contrast_suppresses_walk_back_toward_nominal(self):
+        # Settled (matches==target) but exposure above nominal and dim: the
+        # walk-toward-nominal reduction must be suppressed (it would starve
+        # detection before gain recovers).
+        action = _decide(solved=True, matches=10, target_matches=10,
+                         peak=50, cur_s=0.5, nominal_s=0.2, cur_g=4.0,
+                         max_g=16.0, peak_floor=70)
+        self.assertIsNone(action)
+
+    def test_dark_frame_peak_zero_does_not_trip_floor(self):
+        # peak==0 is a dark/mid-slew frame carrying no contrast info; it must
+        # not trip the floor. Over-served on the star proxy -> sheds cost.
+        action = _decide(solved=False, matches=0, stars=40, target_stars=20,
+                         peak=0, cur_g=4.0, min_g=1.0, peak_floor=70)
+        self.assertIn("gain", action)
+        self.assertLess(action["gain"], 4.0)
+
+    def test_saturation_overrides_low_contrast(self):
+        # Defensive: a clipped frame (peak>=250) is never "low contrast".
+        action = _decide(solved=True, matches=20, target_matches=10,
+                         peak=255, cur_g=4.0, peak_floor=70)
+        self.assertIn("gain", action)
+        self.assertLess(action["gain"], 4.0)
+
     # --- deadband + metric selection ----------------------------------------
     def test_deadband_is_noop(self):
         self.assertIsNone(_decide(solved=True, matches=10, target_matches=10))

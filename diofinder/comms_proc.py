@@ -203,11 +203,16 @@ _AE_GAIN_STEP = 1.5           # gain multiplier per ladder step
 _AE_MIN_EXP_DELTA_S = 0.005   # ignore sub-5 ms exposure moves (clamped / noise)
 _AE_STARVED_FRAC = 0.8        # metric below this fraction of target -> need more signal
 _AE_SPARE_FRAC = 1.5          # metric above this fraction of target -> shed cost
+_AE_PEAK_FLOOR = 70           # 8-bit peak below which the frame is near the
+                              # detection cliff: never shed signal here even when
+                              # match-rich (empirically solves span peak 36-247,
+                              # but reducing past ~peak 35 starves detection)
 
 
 def _auto_exposure_decision(*, solved, stars, matches, peak,
                             cur_s, cur_g, target_stars, target_matches,
-                            min_s, max_s, min_g, max_g, nominal_s=None):
+                            min_s, max_s, min_g, max_g, nominal_s=None,
+                            peak_floor=_AE_PEAK_FLOOR):
     """Pure decision step for the auto-exposure / gain controller.
 
     Returns a dict describing the new camera state — at most one of
@@ -225,6 +230,13 @@ def _auto_exposure_decision(*, solved, stars, matches, peak,
                         dark scene still needs integration time).
       * over-served  -> drop GAIN first; shorten exposure only at the gain floor.
       * saturated    -> back off, gain first (it costs only noise).
+      * low-contrast -> a frame whose ``peak`` is at/below ``peak_floor`` sits
+        near the detection cliff, where the abundance of matches is untrustworthy
+        (low contrast both inflates spurious matches and is one fluctuation away
+        from dropping below ``min_centroids``). Never shed signal here — hold
+        instead of reducing. This is the asymmetric partner of the saturation
+        guard and prevents the over-reduction failure observed on faint sky
+        (peak walked 84 -> 45 -> 29 until detection starved).
       * settled but exposure has drifted off ``nominal_s`` with gain headroom to
         compensate -> nudge exposure one step back toward nominal, letting the
         gain ladder restore brightness next cycle, so a temporary stretch never
@@ -250,6 +262,11 @@ def _auto_exposure_decision(*, solved, stars, matches, peak,
             return {"exposure_s": round(new_s, 4)}
         return None
 
+    # Low-contrast guard: a non-dark frame whose peak is below the floor is near
+    # the detection cliff. ``peak == 0`` carries no information (dark frame mid
+    # slew / exposure change), so it does not trip the guard.
+    low_contrast = 0 < peak < peak_floor
+
     # 2. Choose the metric + target. Matches drive the loop when we are solving;
     #    otherwise fall back to detected-star count.
     if solved and target_matches > 0:
@@ -270,8 +287,12 @@ def _auto_exposure_decision(*, solved, stars, matches, peak,
         return None                       # at the ceiling on both axes
 
     # 4. Over-served — gain back down first (noise), shorten exposure only at
-    #    the gain floor.
+    #    the gain floor. But never shed signal at low contrast: an abundance of
+    #    matches on a dim frame is one fluctuation from starving detection, so
+    #    hold the operating point instead of walking off the cliff.
     if metric > _AE_SPARE_FRAC * target:
+        if low_contrast:
+            return None
         if cur_g > min_g:
             new_g = max(min_g, cur_g / _AE_GAIN_STEP)
             if new_g != cur_g:
@@ -284,7 +305,10 @@ def _auto_exposure_decision(*, solved, stars, matches, peak,
     # 5. Settled — walk exposure back toward nominal when gain can compensate,
     #    so a starved episode that stretched exposure doesn't leave us with
     #    permanent latency. The gain ladder restores brightness next cycle.
-    if cur_s > nominal_s + _AE_MIN_EXP_DELTA_S and cur_g < max_g:
+    #    Suppressed at low contrast: shortening exposure there would starve
+    #    detection before the gain ladder gets a chance to recover.
+    if (cur_s > nominal_s + _AE_MIN_EXP_DELTA_S and cur_g < max_g
+            and not low_contrast):
         new_s = max(nominal_s, cur_s * _AE_EXP_DOWN)
         if cur_s - new_s >= _AE_MIN_EXP_DELTA_S:
             return {"exposure_s": round(new_s, 4)}
@@ -330,6 +354,9 @@ def _auto_exposure_loop(ctx, interval_s=5.0):
                 "auto_exposure_max_s", cfg.auto_exposure_max_s))
             max_g = float(ctx.shared_cfg.get(
                 "auto_exposure_max_gain", cfg.auto_exposure_max_gain))
+            peak_floor = float(ctx.shared_cfg.get(
+                "auto_exposure_peak_floor",
+                getattr(cfg, "auto_exposure_peak_floor", _AE_PEAK_FLOOR)))
             # Exposure anchor: the exposure the controller prefers to sit at and
             # trim around with gain. 0 -> use the configured/persisted exposure
             # (the last value a user or preset intentionally set; the loop never
@@ -345,7 +372,7 @@ def _auto_exposure_loop(ctx, interval_s=5.0):
                 target_stars=target_stars, target_matches=target_matches,
                 min_s=cfg.auto_exposure_min_s, max_s=max_s,
                 min_g=cfg.auto_exposure_min_gain, max_g=max_g,
-                nominal_s=nominal_s)
+                nominal_s=nominal_s, peak_floor=peak_floor)
             if not action:
                 continue
             ctx_qs = (ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
@@ -546,7 +573,10 @@ def _auto_tune_photometric(ctx, *, target_stars, target_matches,
             peak=sol.get("peak", 0), cur_s=cur_s, cur_g=cur_g,
             target_stars=target_stars, target_matches=target_matches,
             min_s=cfg.auto_exposure_min_s, max_s=max_s,
-            min_g=cfg.auto_exposure_min_gain, max_g=max_g)
+            min_g=cfg.auto_exposure_min_gain, max_g=max_g,
+            peak_floor=float(ctx.shared_cfg.get(
+                "auto_exposure_peak_floor",
+                getattr(cfg, "auto_exposure_peak_floor", _AE_PEAK_FLOOR))))
         if not action:
             break                              # settled
         t_set = time.monotonic()

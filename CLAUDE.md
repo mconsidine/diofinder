@@ -76,6 +76,7 @@ is far below one core), freeing CPU 1 as a third solver core. CPU affinity is se
 | `auto_exposure_target_matches` | int | comms (via `seeing_set`) | comms auto-exposure thread |
 | `auto_exposure_max_s` | float | comms (via `seeing_set`) | comms auto-exposure thread |
 | `auto_exposure_max_gain` | float | comms (via `seeing_set`) | comms auto-exposure thread |
+| `auto_exposure_peak_floor` | float | comms (via maint) | comms auto-exposure thread |
 | `imu_available` | bool | imu_thread | comms, webui |
 | `imu_q` | tuple (w,x,y,z) | imu_thread | comms |
 | `imu_t` | float | imu_thread | comms |
@@ -508,6 +509,15 @@ decision lives in `_auto_exposure_decision` (unit-tested in
   back toward nominal and lets the gain ladder restore brightness next cycle —
   so a starved episode never leaves permanent latency.
 * **Saturation** (`peak ≥ 250`) overrides everything and backs off (gain first).
+* **Low-contrast floor** (`auto_exposure_peak_floor`, default 70): the asymmetric
+  partner of the saturation guard. When the frame `peak` is below the floor the
+  controller **never sheds brightness** (no gain-down, no exposure-shorten) even
+  when match-rich — a dim frame is one fluctuation from dropping below
+  `min_centroids`, so it holds the operating point instead of walking off the
+  detection cliff. Empirically solves span peak 36–247 but reducing past ~peak 35
+  starves detection, so the floor parks the steady point with margin. `peak == 0`
+  (dark/mid-slew frame) carries no contrast info and does not trip it.
+  Live-mutable via `shared_cfg`.
 * Wide deadband (0.8×–1.5× of target) so it settles instead of oscillating;
   sub-5 ms exposure moves are ignored. At most one axis changes per cycle.
 * Bounds: `auto_exposure_min_s`/`max_s`, `auto_exposure_min_gain`/`max_gain`.
