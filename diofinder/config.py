@@ -27,7 +27,7 @@ DEFAULT_CONFIG_PATH = "/etc/diofinder/diofinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.11.8"
+    version: str = "0.11.9"
 
     # -------- Camera --------
     frame_width: int = 960
@@ -208,6 +208,12 @@ class Config:
     # -------- Comms --------
     lx200_port: int = 4060
     lx200_client_timeout_s: float = 30.0
+    # IMU pointing motion gate (degrees of physical rotation since the last
+    # solve). Below this the device is treated as stationary and :GR/:GD report
+    # the last solved RA/Dec instead of the IMU prediction — so a parked scope
+    # doesn't show gyro drift. The IMU prediction engages only for a real slew.
+    # Seeded into shared_cfg at comms startup; live-tunable there.
+    imu_pointing_gate_deg: float = 1.0
 
     # -------- CPU affinity --------
     # Pi Zero 2W: 4 cores.

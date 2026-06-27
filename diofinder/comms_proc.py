@@ -870,6 +870,17 @@ def _do_alignment(align_state, cfg, shared_cfg,
     return "M31 EX GAL MAG 3.5 SZ178.0'#"
 
 
+# Motion gate for the IMU pointing prediction (degrees of physical rotation
+# since the last solve). The IMU runs IMUPLUS (no magnetometer), so a parked
+# scope still shows slow gyro heading drift; projected to the sky that walks the
+# crosshair ~0.5 deg off a stationary mount between solves. Below this gate we
+# treat the device as stationary and report the authoritative last solved
+# position instead; the prediction engages only for a genuine slew. Gauged on
+# raw IMU delta (independent of the calibration transform). Live-tunable via
+# shared_cfg["imu_pointing_gate_deg"].
+_IMU_STATIONARY_GATE_DEG = 1.0
+
+
 def _imu_predict(shared_cfg):
     """Return (ra_deg, dec_deg) predicted from IMU rotation since last solve, or None if unavailable."""
     if not shared_cfg.get("imu_available", False):
@@ -892,6 +903,13 @@ def _imu_predict(shared_cfg):
     if C_flat is None or len(C_flat) != 6:
         return None
     r = quat_delta_rotvec(q_now, q_ref)
+    # IMU-delta-only motion gate: if the device has barely rotated since the last
+    # solve, the "motion" is gyro drift on a parked scope — report the solved
+    # position (return None) rather than walk the crosshair off it.
+    gate_deg = float(shared_cfg.get("imu_pointing_gate_deg",
+                                    _IMU_STATIONARY_GATE_DEG))
+    if math.degrees(math.sqrt(r[0]*r[0] + r[1]*r[1] + r[2]*r[2])) < gate_deg:
+        return None
     c = C_flat
     dr = c[0]*r[0] + c[1]*r[1] + c[2]*r[2]
     du = c[3]*r[0] + c[4]*r[1] + c[5]*r[2]
@@ -2155,6 +2173,12 @@ def comms_main(latest_solution, shared_cfg,
         format="comms %(levelname)s %(message)s",
     )
     _pin_to_cpu(cfg.cpu_comms)
+
+    # Seed the IMU pointing motion-gate from config so the .conf value is
+    # honored; setdefault leaves any live override in place.
+    shared_cfg.setdefault("imu_pointing_gate_deg",
+                          float(getattr(cfg, "imu_pointing_gate_deg",
+                                        _IMU_STATIONARY_GATE_DEG)))
 
     ctx = _MaintContext(
         cfg=cfg, latest_solution=latest_solution, shared_cfg=shared_cfg,

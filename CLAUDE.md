@@ -81,6 +81,7 @@ LX200-pointing consumers, and the calibration loop).
 | `auto_exposure_max_s` | float | comms (via `seeing_set`) | comms auto-exposure thread |
 | `auto_exposure_max_gain` | float | comms (via `seeing_set`) | comms auto-exposure thread |
 | `auto_exposure_peak_floor` | float | comms (via maint) | comms auto-exposure thread |
+| `imu_pointing_gate_deg` | float | comms (seed from cfg) | comms LX200 pointing (`_imu_predict`) |
 | `imu_available` | bool | imu_thread | comms, webui |
 | `imu_q` | tuple (w,x,y,z) | imu_thread | comms |
 | `imu_t` | float | imu_thread | comms |
