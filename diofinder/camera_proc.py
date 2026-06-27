@@ -25,6 +25,14 @@ from multiprocessing import shared_memory
 
 log = logging.getLogger("diofinder.camera")
 
+# IMX477 maximum *analog* gain. libcamera's imx477 driver tops out here
+# (gain register 1024/(1024-code)); any AnalogueGain request above this is
+# silently realized as digital gain — a pure brightness multiply with zero SNR
+# benefit. Clamp at the analog ceiling so the controller/UI can't ask for
+# pointless digital gain. The auto-exposure ladder ceiling is separate and
+# lower (auto_exposure_max_gain, default 16).
+MAX_ANALOG_GAIN = 22.26
+
 
 def _pin_to_cpu(cpu: int) -> None:
     try:
@@ -80,10 +88,10 @@ def _handle_camera_cmd(cmd, cam, current_state):
                 result={"exposure_s": new_s})
         if cmd.op == CAMERA_OP_SET_GAIN:
             new_g = float(cmd.args["gain"])
-            if not (1.0 <= new_g <= 64.0):
+            if not (1.0 <= new_g <= MAX_ANALOG_GAIN):
                 return CameraCmdReply(
                     request_id=cmd.request_id, ok=False,
-                    error=f"gain {new_g} out of range [1.0, 64.0]")
+                    error=f"gain {new_g} out of range [1.0, {MAX_ANALOG_GAIN}]")
             if cam is not None:
                 cam.set_controls({"AnalogueGain": new_g})
             current_state["gain"] = new_g
