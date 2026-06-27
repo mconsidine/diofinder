@@ -28,6 +28,10 @@ diofinder_main.py (launcher, CPU 0)
 comms/webui share CPU 0 with the kernel (both are I/O-bound; kernel+IRQ load
 is far below one core), freeing CPU 1 as a third solver core. CPU affinity is set with `os.sched_setaffinity`.
 
+See `docs/imu.md` for a rendered flowchart of how the BNO055 feeds
+position/motion info (the 20 Hz reader, the solve-hint / slew-detection /
+LX200-pointing consumers, and the calibration loop).
+
 ### Inter-process communication
 
 | Channel | Type | Direction | Purpose |
