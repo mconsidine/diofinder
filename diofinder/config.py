@@ -27,7 +27,7 @@ DEFAULT_CONFIG_PATH = "/etc/diofinder/diofinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.11.6"
+    version: str = "0.11.7"
 
     # -------- Camera --------
     frame_width: int = 960
@@ -73,6 +73,11 @@ class Config:
     # Exposure the controller anchors to and trims around with gain. 0 = use the
     # configured exposure_s (the last value a user/preset set). Live-mutable.
     auto_exposure_nominal_s: float = 0.0
+    # Contrast floor (8-bit peak): the controller will not shed brightness
+    # (lower gain / shorten exposure) once the frame peak is below this, even
+    # when match-rich — it sits too near the detection cliff. The asymmetric
+    # partner of the peak=250 saturation backoff. Live-mutable via shared_cfg.
+    auto_exposure_peak_floor: float = 70.0
 
     # Optical properties
     fov_deg: float = 13.64  # 25 mm + IMX477 full-sensor mode (see CLAUDE.md)
