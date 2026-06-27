@@ -256,7 +256,16 @@ class BackgroundCache:
                 self._update_slew(self._last_solved_quat)
         elif not solved:
             self._solve_fail_run += 1
-            if (self._fail_invalidate
+            # IMU-less ONLY: when the IMU is feeding, note_motion already detects
+            # real slews, so a run of solve failures is NOT evidence of an
+            # unsensed slew — on a stationary, faint-signal scene it just means
+            # the sky is hard. Invalidating the model there would drop the
+            # √N-noise-reduced cached background for *noisier* per-frame
+            # detection, making faint solves harder still (observed: cache stuck
+            # ~88% in fallback while failing on faint sky). The fail-streak net
+            # is for the no-IMU case, matching this method's stated purpose.
+            if (not self._imu_feeding
+                    and self._fail_invalidate
                     and self._solve_fail_run >= self._fail_invalidate
                     and self._model is not None
                     and not self._needs_rebuild.is_set()):
