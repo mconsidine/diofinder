@@ -110,6 +110,28 @@ let this be overridden for other camera modules without a code change.
 
 ---
 
+## Libcamera tuning
+
+The shipped default is **`imx477_finder.json`** (repo `tuning/`, installed to
+`/usr/share/libcamera/ipa/rpi/vc4/` by `install.sh`; `camera_tuning_file` in
+`etc/diofinder.conf.default` points at it). The `config.py` dataclass fallback
+is `imx477_scientific.json`, used only if the conf omits the key. Three profiles
+switch live via `tuning_set` (`finder`/`scientific`/`standard`; restart
+required); the Camera/Status pages and `diofinder-ctl` expose them.
+
+`imx477_finder.json` is **derived from `imx477_scientific.json`** with exactly
+two edits: `rpi.dpc` `strength: 0` (DPC deletes 1–2 px faint stars — its defect
+signature is identical to a faint star) and a steeper asinh `rpi.contrast`
+`gamma_curve` (companding so faint stars survive the 12→8-bit reduction). These
+two are the *only* detection-hostile stages that **no libcamera runtime control
+can disable**. Everything else is neutralized at runtime in `camera_proc.py`
+`_init_camera` (`AeEnable=False`, `AwbEnable=False`, `NoiseReductionMode=0`,
+`Sharpness=0`, `Saturation=0`), so `agc`/`awb`/denoise/`sharpen`/`ccm` need no
+tuning edit, and `black_level`/`geq` are benign and left as-is. Full
+stage-by-stage analysis: `docs/imx477-tuning-comparison.md`.
+
+---
+
 ## FOV calibration
 
 The solver accumulates a rolling window of 30 solved FOV measurements.
@@ -170,8 +192,9 @@ override layer — see Seeing presets), `auto_exposure_set` (toggle the comms-si
 auto-exposure controller),
 `auto_tune`/`auto_tune_status`/`auto_tune_cancel` (offline coordinate-search
 sweep — see the Auto-exposure / gain controller section),
-`tuning_set` (switch the libcamera tuning between `imx477_scientific.json` and
-`imx477.json`; restart required), `bg_cache_status` (live temporal-cache
+`tuning_set` (switch the libcamera tuning profile — `finder` (default) /
+`scientific` / `standard`; restart required — see **Libcamera tuning** below),
+`bg_cache_status` (live temporal-cache
 snapshot — state, model age, model kind row/block, served-cached vs fallback
 counters), `solve_centroids` (plate-solve a caller-supplied centroid list on
 the live solver's resident database — no second DB, used by
