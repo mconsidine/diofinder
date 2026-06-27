@@ -73,6 +73,26 @@ def _load_cfg_cached():
     return _cfg_cache["cfg"]
 
 
+def _tuning_profile():
+    """Active libcamera tuning profile name from the *effective* config.
+
+    Returns 'finder' / 'scientific' / 'standard', or '' when the path is blank
+    or unrecognised — never mislabel an unknown/failed lookup as 'standard'
+    (the old home/camera inline logic did, and home_page additionally called an
+    unimported load_config(), so its badge always fell through to 'standard')."""
+    try:
+        base = os.path.basename(_load_cfg_cached().camera_tuning_file or "")
+    except Exception:
+        return ""
+    if "finder" in base:
+        return "finder"
+    if "scientific" in base:
+        return "scientific"
+    if base == "imx477.json":
+        return "standard"
+    return ""
+
+
 def _format_solution(sol):
     """Reshape a raw latest_solution dict into a template-friendly form."""
     if not sol:
@@ -148,16 +168,7 @@ def home_page():
     cal      = _safe_call("calibration_status")
     sol = (_format_solution(status.result["solution"])
            if status.ok and status.result else None)
-    try:
-        tuning_path = load_config().camera_tuning_file
-    except Exception:
-        tuning_path = ""
-    if "finder" in tuning_path:
-        tuning_profile = "finder"
-    elif "scientific" in tuning_path:
-        tuning_profile = "scientific"
-    else:
-        tuning_profile = "standard"
+    tuning_profile = _tuning_profile()
     return render_template(
         "home.html",
         status_ok=status.ok,
@@ -611,17 +622,7 @@ def camera_page():
     solver_params = _safe_call("solver_params_get")
     hotpix        = _safe_call("hot_pixel_status")
     seeing        = _safe_call("seeing_get")
-    try:
-        from diofinder.config import load_config
-        tuning_path = load_config().camera_tuning_file
-    except Exception:
-        tuning_path = ""
-    if "finder" in tuning_path:
-        tuning_profile = "finder"
-    elif "scientific" in tuning_path:
-        tuning_profile = "scientific"
-    else:
-        tuning_profile = "standard"
+    tuning_profile = _tuning_profile()
     return render_template(
         "camera.html",
         exposure=(exposure.result if exposure.ok else None),
