@@ -1585,12 +1585,19 @@ def debug_collect():
                     continue
             return None
 
-        def _save_frame_pair(zf, idx, frame):
-            # Raw grayscale PNG
+        def _save_frame_pair(zf, idx, frame, with_display=True):
+            # Raw grayscale PNG — the solver's food; saved for EVERY frame so an
+            # offline diag_solve.py --bundle can measure a real solve rate and
+            # reconstruct the temporal background cache (needs >= the cache stack
+            # size of consecutive frames).
             raw_buf = io.BytesIO()
             Image.fromarray(frame, mode="L").save(raw_buf, format="PNG")
             zf.writestr(f"frame_{idx:02d}_raw.png", raw_buf.getvalue())
-            # Arcsinh-stretched display JPEG with boresight overlay
+            # Arcsinh-stretched display JPEG with boresight overlay. Large and
+            # human-only, so only the first few frames get one (keeps the bundle
+            # email-friendly).
+            if not with_display:
+                return
             sky   = float(np.median(frame))
             x     = np.clip(frame.astype(np.float32) - sky, 0.0, None)
             beta  = max(1.0, sky * 0.1)
@@ -1614,41 +1621,54 @@ def debug_collect():
             img.save(disp_buf, format="JPEG", quality=85)
             zf.writestr(f"frame_{idx:02d}_display.jpg", disp_buf.getvalue())
 
+        # How many frames to grab. A burst (not a single snapshot) is what makes
+        # the bundle diagnosable offline: solving is stochastic frame-to-frame,
+        # so a real solve RATE needs several frames, and replaying the sycamore
+        # temporal cache needs >= bg_cache_stack consecutive frames. Default 12
+        # (> the default stack of 8, with margin); override with ?frames=N.
+        try:
+            n_frames = int(request.args.get("frames")
+                           or request.form.get("frames") or 12)
+        except (ValueError, TypeError):
+            n_frames = 12
+        n_frames = max(1, min(30, n_frames))
+        # Cap the display JPGs (large, human-only) regardless of frame count.
+        n_display = min(2, n_frames)
+
         frames_saved = 0
         frame_imu = []   # per-frame IMU snapshot, sampled at capture time
-        import time as _time
-        first_frame = None
-        for attempt in range(2):
-            if attempt > 0:
-                # Wait long enough for the camera to deliver a genuinely new
-                # frame (exposure may be up to ~1 s, plus camera overhead).
-                _time.sleep(max(1.2, ecfg.exposure_s + 0.4))
+        import time as _time, hashlib
+        seen_hashes = set()
+        # Bounded wall-clock budget so a slow camera (long exposure) can't hang
+        # the download button: grab what we can, then stop.
+        per_frame_s = max(0.3, ecfg.exposure_s + 0.2)
+        deadline = _time.monotonic() + min(40.0, n_frames * per_frame_s + 5.0)
+        while frames_saved < n_frames and _time.monotonic() < deadline:
             f = _capture_frame()
             if f is not None:
-                # Skip second frame if it is identical to the first (can
-                # happen at slow frame rates when two SHM reads hit the
-                # same slot).
-                if attempt > 0 and first_frame is not None:
-                    import hashlib
-                    if hashlib.md5(f.tobytes()).digest() == hashlib.md5(first_frame.tobytes()).digest():
-                        f = None
-                if f is not None:
+                # Dedup identical SHM reads (slow frame rates re-read one slot);
+                # only genuinely new frames advance the burst.
+                h = hashlib.md5(f.tobytes()).digest()
+                if h not in seen_hashes:
+                    seen_hashes.add(h)
+                    idx = frames_saved + 1
                     try:
-                        _save_frame_pair(zf, attempt + 1, f)
+                        _save_frame_pair(zf, idx, f, with_display=(idx <= n_display))
                         frames_saved += 1
-                        if first_frame is None:
-                            first_frame = f
                         # Snapshot the IMU output as close to this frame as we
                         # can (maint round-trip; IMU runs at 20 Hz).
                         si = _safe_call("status")
                         frame_imu.append({
-                            "frame": f"frame_{attempt + 1:02d}",
+                            "frame": f"frame_{idx:02d}",
                             "wall_time": datetime.now().isoformat(timespec="milliseconds"),
                             "imu": (si.result.get("imu")
                                     if si.ok and si.result else None),
                         })
                     except Exception:
                         pass
+            if frames_saved < n_frames:
+                # Wait for the camera to deliver a genuinely new frame.
+                _time.sleep(per_frame_s)
 
         # ── System summary ───────────────────────────────────────────────────
         lines = [

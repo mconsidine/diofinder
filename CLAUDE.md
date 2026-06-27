@@ -348,6 +348,12 @@ knobs from the bundle's `effective_params.json` (the *calibrated* FOV tolerance
 + shared_cfg drift that `diofinder.conf` alone misses), points `DIOFINDER_CONFIG` at
 the bundle's `diofinder.conf`, and solves the bundle's `frame_*_raw.png`. The
 matching star database must be present locally (the bundle omits the `.npz`).
+`debug_collect` captures a **burst** of raw frames (default 12, `?frames=N`,
+clamped 1–30, bounded by a ~40 s wall-clock budget) — enough to measure a solve
+*rate* and to reconstruct the temporal background cache (needs ≥ `bg_cache_stack`
+consecutive frames), not just a single snapshot. Raw PNGs are saved for every
+frame; the large arcsinh **display JPGs are capped at the first 2** to keep the
+bundle email-friendly.
 
 * `seeing_set {"mode": "good"|"bad"}` (comms maint): writes every preset key to
   `shared_cfg` (live solver/auto-exposure keys), switches the solver database
