@@ -110,6 +110,20 @@ def test_fail_streak_invalidates_without_imu():
     assert c.state() is bc.CacheState.SLEWING
 
 
+def test_fail_streak_does_not_invalidate_with_imu():
+    """When the IMU is feeding, a run of solve failures must NOT invalidate the
+    model — note_motion owns slew detection, and dropping the cache on a
+    stationary faint-signal scene would replace the √N-reduced background with
+    noisier per-frame detection (the observed faint-sky fallback trap)."""
+    c = _make_cache()
+    c._model = _fake_model(c)
+    c.note_motion((1.0, 0.0, 0.0, 0.0))                 # IMU now feeding, still
+    for _ in range(c._fail_invalidate + 2):             # well past the threshold
+        c.note_solve_result(None, False)
+    assert not c._needs_rebuild.is_set()
+    assert c.state() is bc.CacheState.STEADY
+
+
 def test_slewing_flag_and_model_age():
     c = _make_cache()
     c._model = _fake_model(c)
