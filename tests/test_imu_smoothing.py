@@ -4,8 +4,10 @@ Covers the pure alpha-beta math in diofinder.imu_math and the stateful
 _imu_predict_smoothed wrapper in comms_proc (snap / cache / smooth / re-anchor).
 No hardware required.
 """
+import math
 import statistics
 import random
+import time
 
 import pytest
 
@@ -96,6 +98,56 @@ def test_smoothed_wrapper_snap_cache_smooth_reanchor(monkeypatch):
     monkeypatch.setattr(comms_proc, "_imu_predict", lambda c: None)
     assert comms_proc._imu_predict_smoothed(cfg) is None
     assert comms_proc._imu_filt_state == {}
+
+
+def _q_rot_x(deg):
+    """Quaternion (w,x,y,z) for a rotation of `deg` about the x axis."""
+    h = math.radians(deg) / 2.0
+    return (math.cos(h), math.sin(h), 0.0, 0.0)
+
+
+def _cfg_rotated(deg, gate=None):
+    """A shared_cfg dict that passes every _imu_predict precondition, with the
+    live quaternion rotated `deg` from the reference captured at the last solve.
+    Identity calibration (C maps rotvec component 0 -> RA, 1 -> Dec)."""
+    now = time.monotonic()
+    c = {
+        "imu_available": True,
+        "imu_calib_n": 3,
+        "imu_calib_quality": 0.95,
+        "imu_q": _q_rot_x(deg),
+        "imu_t": now,
+        "imu_ref_q": (1.0, 0.0, 0.0, 0.0),
+        "imu_ref_ra_deg": 100.0,
+        "imu_ref_dec_deg": 20.0,
+        "imu_ref_roll_deg": 0.0,
+        "imu_ref_t": now,
+        "imu_calib_C": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
+    }
+    if gate is not None:
+        c["imu_pointing_gate_deg"] = gate
+    return c
+
+
+def test_imu_predict_gates_out_stationary_drift():
+    # 0.3 deg of rotation since the solve (gyro drift on a parked scope) is
+    # below the default 1.0 deg gate -> report the solved position (None).
+    assert comms_proc._imu_predict(_cfg_rotated(0.3)) is None
+
+
+def test_imu_predict_engages_on_real_slew():
+    # 3 deg of rotation clears the gate -> prediction returned; RA advances by
+    # ~3 deg / cos(dec) from the reference, Dec unchanged.
+    out = comms_proc._imu_predict(_cfg_rotated(3.0))
+    assert out is not None
+    ra, dec = out
+    assert ra == pytest.approx(100.0 + 3.0 / math.cos(math.radians(20.0)), abs=0.1)
+    assert dec == pytest.approx(20.0, abs=0.05)
+
+
+def test_imu_predict_gate_is_tunable():
+    # Same 3 deg slew, but a 5 deg gate now treats it as stationary -> None.
+    assert comms_proc._imu_predict(_cfg_rotated(3.0, gate=5.0)) is None
 
 
 def test_smoothed_wrapper_resnaps_after_stale_gap(monkeypatch):
