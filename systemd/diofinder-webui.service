@@ -16,7 +16,15 @@ Environment=FLASK_APP=webui.app
 # Bind to port 80 on all interfaces. Needs CAP_NET_BIND_SERVICE since
 # we run as the unprivileged diofinder user.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+# Do NOT restrict CapabilityBoundingSet here. The web UI escalates to root via
+# sudo for a few allowlisted scripts (ap.sh / station.sh / diofinder-update).
+# A restricted bounding set strips CAP_SETUID/CAP_SETGID/CAP_AUDIT_WRITE from
+# those setuid-root children, so sudo fails with
+#   "sudo: unable to change to root gid: Operation not permitted"
+#   "sudo: error initializing audit plugin sudoers_audit"
+# and e.g. the Wi-Fi AP->station switch silently reverts to AP. The security
+# boundary is the scoped sudoers drop-ins (etc/sudoers.d/diofinder-*), not the
+# capability bounding set.
 
 ExecStart=/opt/diofinder/venv/bin/python -m webui.app
 
