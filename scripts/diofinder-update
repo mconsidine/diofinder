@@ -163,6 +163,31 @@ for s in diofinder-update diofinder-db-update diofinder-ctl diofinder-bg-setup \
   fi
 done
 
+# --- Refresh systemd units ----------------------------------------------------
+# install.sh copies these at image-build time, so (like the CLI wrappers above)
+# OTA must re-sync them or unit fixes never reach an existing device — e.g. the
+# webui CapabilityBoundingSet that strips CAP_SETUID/SETGID and breaks sudo.
+# Tolerant of a read-only /etc (a ProtectSystem sandbox, e.g. a webui-triggered
+# update): warn and continue rather than fail the whole update. daemon-reload
+# only when something actually changed.
+LOG "Refreshing systemd units"
+units_changed=0
+for u in "$DIOFINDER_DIR"/systemd/*.service; do
+  [ -f "$u" ] || continue
+  base=$(basename "$u")
+  if ! cmp -s "$u" "/etc/systemd/system/$base" 2>/dev/null; then
+    if install -m 644 "$u" "/etc/systemd/system/$base" 2>/dev/null; then
+      units_changed=1
+      LOG "  updated $base"
+    else
+      LOG "  WARN: could not refresh $base (read-only /etc?)"
+    fi
+  fi
+done
+if [ "$units_changed" = 1 ]; then
+  systemctl daemon-reload || LOG "WARN: daemon-reload failed"
+fi
+
 # --- Record version & restart -------------------------------------------------
 
 echo "$TAG $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /var/lib/diofinder/version
