@@ -344,6 +344,10 @@ New keys (this release):
 
 ## Seeing presets
 
+See `docs/skyglow-strategy.md` for a decision flowchart + lever reference on
+solving under light pollution / a sky gradient (which preset to start from and
+which knob to pull next).
+
 `diofinder/seeing.py` holds three flat preset tables — `SEEING_PRESETS["good"]`,
 `["bad"]`, and `["legacy"]`. Each key in a preset is *also* an individually
 adjustable config key, so applying a preset is exactly equivalent to setting
