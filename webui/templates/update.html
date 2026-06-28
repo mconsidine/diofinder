@@ -18,6 +18,20 @@
   </form>
 </div>
 
+<div class="card" style="margin-bottom:1rem;">
+  <h3 style="margin:0 0 10px 0; font-size:1rem;">Latest development build</h3>
+  <p style="font-size:0.85rem; margin:0 0 10px 0;">
+    The newest committed code on the default <code>olive</code> branch &mdash;
+    ahead of the latest tagged release (may be untested). Runs
+    <code>diofinder-update --ref olive</code>.
+  </p>
+  <form method="post" action="{{ url_for('update_page') }}"
+        onsubmit="return confirm('Update diofinder to the latest olive commit (development, may be untested)? The service will be briefly unavailable.');">
+    <input type="hidden" name="ref" value="olive">
+    <button type="submit" class="btn">Update to latest olive commit</button>
+  </form>
+</div>
+
 <div class="card">
   <h3 style="margin:0 0 10px 0; font-size:1rem;">Branch or tag (advanced)</h3>
   <p style="font-size:0.85rem; margin:0 0 10px 0;">
