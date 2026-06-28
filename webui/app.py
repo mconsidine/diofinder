@@ -908,6 +908,10 @@ def _scan_networks():
 
 _wifi_lock         = threading.Lock()
 _wifi_connect_proc = None
+# station.sh output is captured here so a failed AP->station switch is
+# diagnosable (the script prints WHY nmcli could not associate). The password
+# is never echoed by station.sh/nmcli, so the log is safe to surface.
+_WIFI_LOG = "/var/lib/diofinder/wifi-connect.log"
 
 
 @app.route("/wifi")
@@ -941,12 +945,31 @@ def wifi_station():
     with _wifi_lock:
         if _wifi_connect_proc and _wifi_connect_proc.poll() is None:
             _wifi_connect_proc.terminate()
+        # Capture stdout+stderr to a log instead of discarding them, so a failed
+        # switch (wrong key, out of range, sudo/PATH/nmcli error) is visible on
+        # the connecting page rather than just a silent revert to AP.
+        try:
+            out = open(_WIFI_LOG, "w")
+            out.write("# connecting to SSID: %s\n" % ssid)
+            out.flush()
+        except OSError:
+            out = subprocess.DEVNULL
         _wifi_connect_proc = subprocess.Popen(
             cmd,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=out, stderr=subprocess.STDOUT,
             start_new_session=True,
         )
     return redirect(url_for("wifi_connecting", ssid=ssid))
+
+
+@app.route("/api/wifi/log")
+def api_wifi_log():
+    """Tail of the last AP->station attempt's log (plain text; password-free)."""
+    try:
+        with open(_WIFI_LOG) as f:
+            return f.read()[-4000:], 200, {"Content-Type": "text/plain"}
+    except OSError:
+        return "", 200, {"Content-Type": "text/plain"}
 
 
 @app.route("/wifi/connecting")

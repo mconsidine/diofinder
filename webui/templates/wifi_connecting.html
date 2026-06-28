@@ -46,6 +46,22 @@ function showResult(html) {
   el.style.display = 'block';
 }
 
+// On failure, pull the captured station.sh log so the user sees WHY the switch
+// failed (wrong key, out of range, sudo/PATH/nmcli error) instead of guessing.
+async function appendLog() {
+  try {
+    const r = await fetch('/api/wifi/log');
+    const t = (await r.text()).trim();
+    if (!t) return;
+    const el = document.getElementById('result');
+    el.insertAdjacentHTML('beforeend',
+      '<details style="margin-top:0.6rem;"><summary class="hint">Connection log</summary>' +
+      '<pre style="white-space:pre-wrap; font-size:0.78rem; background:#140000; ' +
+      'padding:0.5rem; border-radius:4px; overflow:auto;"></pre></details>');
+    el.querySelector('pre').textContent = t;
+  } catch (e) { /* log not reachable during handoff — ignore */ }
+}
+
 function setBarColor(color) {
   document.getElementById('countdown-bar').style.background = color;
 }
@@ -82,6 +98,7 @@ async function checkStatus() {
         '”. Check the SSID and password.</p>' +
         '<div class="actions"><a href="/wifi" class="btn">Try again</a></div>'
       );
+      appendLog();
     }
   } catch (e) {
     // Network momentarily unreachable during Wi-Fi handoff — expected, keep waiting.
@@ -102,6 +119,7 @@ async function restoreAP() {
     '<div class="actions"><a href="/wifi" class="btn">Wi-Fi settings</a>' +
     '<a href="/" class="btn">Dashboard</a></div>'
   );
+  appendLog();
 }
 
 // Tick every second; poll status every 3 s.
