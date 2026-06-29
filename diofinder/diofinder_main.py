@@ -93,8 +93,19 @@ def main():
     _setup_logging()
     cfg = load_config()
     os.sched_setaffinity(0, {cfg.cpu_comms})
-    log.info("diofinder %s starting; launcher/IMU pinned to CPU %d; config: %s",
-             cfg.version, cfg.cpu_comms, cfg.summary())
+    # Prefer the stamped release tag (written by install.sh / diofinder-update to
+    # /var/lib/diofinder/version) over the in-code default, so the journal shows
+    # the actual running build. Falls back to cfg.version.
+    _release = cfg.version
+    try:
+        with open("/var/lib/diofinder/version") as _vf:
+            _stamp = _vf.read().split()[0].strip()
+            if _stamp:
+                _release = _stamp
+    except OSError:
+        pass
+    log.info("diofinder %s starting (code %s); launcher/IMU pinned to CPU %d; config: %s",
+             _release, cfg.version, cfg.cpu_comms, cfg.summary())
 
     test_image_path = _resolve_test_image(args)
     default_test_mode = args.test or (args.test_image is not None)

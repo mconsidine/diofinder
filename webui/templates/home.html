@@ -252,6 +252,18 @@
     {% endif %}
   </div>
 
+  {# ---- Diagnostics (12-frame debug burst) ---- #}
+  <div class="card expert-only">
+    <h2>Diagnostics</h2>
+    <p class="hint" style="margin:0 0 8px 0;">
+      Captures a <strong>12-frame burst</strong> of raw frames + the current
+      settings, logs, and solve state into a ZIP to email for support. Nothing
+      on the device is changed.
+    </p>
+    <button id="home-debug-btn" class="btn btn-primary">Download debug bundle</button>
+    <span id="home-debug-status" style="margin-left:8px;font-size:0.85rem;color:#888;"></span>
+  </div>
+
 </section>
 
 <p class="version-badge" style="text-align:center; opacity:0.6; margin-top:18px; font-size:0.85em;">
@@ -361,6 +373,47 @@ async function refreshHome(){
 })();
 setInterval(refreshHome, 1250);
 refreshHome();
+
+// Debug bundle: POST /debug/collect builds the 12-frame-burst ZIP and streams
+// it back as a download (a copy is also saved on the device).
+(function () {
+  const btn = document.getElementById('home-debug-btn');
+  const st  = document.getElementById('home-debug-status');
+  if (!btn) return;
+  btn.addEventListener('click', async function () {
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = 'Collecting… (~15 s)';
+    st.textContent = '';
+    try {
+      const r = await fetch('/debug/collect', {method: 'POST'});
+      if (!r.ok) { st.textContent = 'Error: server returned ' + r.status; }
+      else {
+        const blob = await r.blob();
+        const n = new Date();
+        const ts = n.getFullYear().toString()
+          + String(n.getMonth() + 1).padStart(2, '0')
+          + String(n.getDate()).padStart(2, '0')
+          + String(n.getHours()).padStart(2, '0')
+          + String(n.getMinutes()).padStart(2, '0')
+          + String(n.getSeconds()).padStart(2, '0');
+        const fn = `diofinder_debug_${ts}.zip`;
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = fn;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(a.href);
+        st.textContent = '✓ ' + fn;
+      }
+    } catch (e) {
+      st.textContent = 'Error: ' + e.message;
+    }
+    btn.textContent = label;
+    btn.disabled = false;
+  });
+})();
 </script>
 
 {% endblock %}
