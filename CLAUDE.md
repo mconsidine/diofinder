@@ -560,6 +560,15 @@ decision lives in `_auto_exposure_decision` (unit-tested in
   starves detection, so the floor parks the steady point with margin. `peak == 0`
   (dark/mid-slew frame) carries no contrast info and does not trip it.
   Live-mutable via `shared_cfg`.
+* **Raise debounce** (`_AE_RAISE_DEBOUNCE`, default 2; pure helper
+  `_ae_apply_raise_debounce`, unit-tested): a brightness *raise* (gain-up or
+  exposure-up) only takes effect after it has been the intended action for N
+  consecutive cycles; any non-raise (reduce/hold) resets the streak. This stops
+  the controller chasing a single transient dark frame (passing cloud / wind
+  smear) right after a good solving run — the oscillation seen on real sky.
+  Reductions and the saturation backoff are **not** debounced (act at once), and
+  once confirmed it keeps raising every cycle, so a genuine cold-start ramp is
+  delayed by at most one cycle.
 * Wide deadband (0.8×–1.5× of target) so it settles instead of oscillating;
   sub-5 ms exposure moves are ignored. At most one axis changes per cycle.
 * Bounds: `auto_exposure_min_s`/`max_s`, `auto_exposure_min_gain`/`max_gain`.

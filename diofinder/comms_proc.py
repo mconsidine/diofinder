@@ -207,6 +207,10 @@ _AE_PEAK_FLOOR = 70           # 8-bit peak below which the frame is near the
                               # detection cliff: never shed signal here even when
                               # match-rich (empirically solves span peak 36-247,
                               # but reducing past ~peak 35 starves detection)
+_AE_RAISE_DEBOUNCE = 2        # consecutive raise intents required before AE
+                              # actually raises brightness — so a single transient
+                              # dark frame (passing cloud / wind smear) right after
+                              # a good solving run doesn't bounce gain/exposure up
 
 
 def _auto_exposure_decision(*, solved, stars, matches, peak,
@@ -319,6 +323,31 @@ def _auto_exposure_decision(*, solved, stars, matches, peak,
     return None
 
 
+def _ae_apply_raise_debounce(action, cur_s, cur_g, raise_streak):
+    """Debounce brightness *raises* so AE doesn't chase a single transient dark
+    frame (passing cloud / wind smear) right after a good solving run.
+
+    A raise (gain-up or exposure-up) only takes effect once it has been the
+    intended action for ``_AE_RAISE_DEBOUNCE`` consecutive cycles; until then it
+    is held. Any non-raise action (reduce / hold) resets the streak. Reductions
+    and the saturation backoff are NOT debounced — only the starved→raise path,
+    which is the one that oscillates on transient dips. Once confirmed (streak
+    past the threshold) it keeps raising every cycle, so a genuine cold-start
+    ramp is delayed by at most one cycle, not slowed throughout.
+
+    Returns ``(effective_action, new_raise_streak)``.
+    """
+    is_raise = bool(action) and (
+        action.get("gain", cur_g) > cur_g
+        or action.get("exposure_s", cur_s) > cur_s)
+    if not is_raise:
+        return action, 0
+    raise_streak += 1
+    if raise_streak < _AE_RAISE_DEBOUNCE:
+        return None, raise_streak          # hold; wait for a confirming frame
+    return action, raise_streak
+
+
 def _auto_exposure_loop(ctx, interval_s=5.0):
     """Background controller: adjust exposure toward the target star count.
 
@@ -327,6 +356,7 @@ def _auto_exposure_loop(ctx, interval_s=5.0):
     reacts to frames from before its own last adjustment.
     """
     cfg = ctx.cfg
+    raise_streak = 0          # consecutive brightness-raise intents (debounce)
     while True:
         time.sleep(interval_s)
         try:
@@ -373,6 +403,10 @@ def _auto_exposure_loop(ctx, interval_s=5.0):
                 min_s=cfg.auto_exposure_min_s, max_s=max_s,
                 min_g=cfg.auto_exposure_min_gain, max_g=max_g,
                 nominal_s=nominal_s, peak_floor=peak_floor)
+            # Debounce raises so a single transient dark frame doesn't bounce
+            # brightness up (the cloud/wind oscillation). Reductions act at once.
+            action, raise_streak = _ae_apply_raise_debounce(
+                action, cur_s, cur_g, raise_streak)
             if not action:
                 continue
             ctx_qs = (ctx.camera_cmd_q, ctx.camera_cmd_reply_q)

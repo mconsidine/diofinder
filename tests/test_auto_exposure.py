@@ -23,7 +23,7 @@ if "star_detect" not in sys.modules:
     _stub.set_num_threads = lambda n: None
     sys.modules["star_detect"] = _stub
 
-from diofinder.comms_proc import _auto_exposure_decision
+from diofinder.comms_proc import _auto_exposure_decision, _ae_apply_raise_debounce
 
 
 def _decide(**overrides):
@@ -189,6 +189,40 @@ class AutoExposureDecisionTests(unittest.TestCase):
         # in place rather than starve the frame.
         self.assertIsNone(_decide(solved=True, matches=10, target_matches=10,
                                   cur_s=0.4, nominal_s=0.2, cur_g=16.0, max_g=16.0))
+
+
+class RaiseDebounceTests(unittest.TestCase):
+    # A single transient dark frame must not bounce brightness up; a sustained
+    # starvation still raises one cycle later. (cur_s=0.2, cur_g=4.0 baseline.)
+    def test_single_raise_is_held(self):
+        act, s = _ae_apply_raise_debounce({"gain": 8.0}, 0.2, 4.0, 0)
+        self.assertIsNone(act)
+        self.assertEqual(s, 1)
+
+    def test_second_consecutive_raise_acts(self):
+        act, s = _ae_apply_raise_debounce({"gain": 8.0}, 0.2, 4.0, 1)
+        self.assertEqual(act, {"gain": 8.0})
+        self.assertEqual(s, 2)
+
+    def test_exposure_up_counts_as_raise(self):
+        act, s = _ae_apply_raise_debounce({"exposure_s": 0.3}, 0.2, 4.0, 0)
+        self.assertIsNone(act)
+        self.assertEqual(s, 1)
+
+    def test_reduce_passes_through_and_resets(self):
+        act, s = _ae_apply_raise_debounce({"gain": 2.0}, 0.2, 4.0, 1)
+        self.assertEqual(act, {"gain": 2.0})
+        self.assertEqual(s, 0)
+
+    def test_none_resets_streak(self):
+        act, s = _ae_apply_raise_debounce(None, 0.2, 4.0, 1)
+        self.assertIsNone(act)
+        self.assertEqual(s, 0)
+
+    def test_sustained_raise_keeps_acting(self):
+        act, s = _ae_apply_raise_debounce({"gain": 8.0}, 0.2, 4.0, 2)
+        self.assertEqual(act, {"gain": 8.0})
+        self.assertEqual(s, 3)
 
 
 if __name__ == "__main__":
