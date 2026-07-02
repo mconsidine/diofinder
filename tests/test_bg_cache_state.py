@@ -38,6 +38,9 @@ def _load_bg_cache():
         sd.compute_row_medians_py = lambda *a, **k: None
     if not hasattr(sd, "compute_block_medians_py"):
         sd.compute_block_medians_py = lambda *a, **k: None
+    # Advertise the sycamore>=0.13 full-image cached path so the
+    # temporal_median tests exercise it (real wheels export this flag).
+    sd.HAS_BG_IMAGE = True
     path = os.path.join(os.path.dirname(__file__), "..", "diofinder", "bg_cache.py")
     spec = importlib.util.spec_from_file_location("diofinder_bg_cache_under_test", path)
     mod = importlib.util.module_from_spec(spec)
@@ -151,6 +154,61 @@ def test_build_model_noise_is_not_quantized():
     for v in (lo, hi):
         k = round(v / 1.4826)
         assert abs(v - 1.4826 * k) > 0.05, f"noise {v} still quantized"
+
+
+def test_temporal_median_builds_image_model_and_passes_it():
+    """temporal_median (sycamore>=0.13): the worker stores the binned temporal
+    median itself as the model, and steady detection hands it to the wheel via
+    bg_image= (not row/block offsets)."""
+    import numpy as np
+    c = _make_cache()
+    c._active_bg_mode = "temporal_median"
+    frames = [np.full((32, 32), 10, np.uint8) for _ in range(8)]
+    m = c._build_model(frames)
+    assert m.bg_image is not None
+    assert m.row_offsets is None and m.block_offsets is None
+    assert m.bg_image.shape == (16, 16)          # binned (bin=2) resolution
+    c._model = m
+    captured = {}
+
+    def fake_cached(img, row_offsets=None, noise=None, **kw):
+        captured.update(kw)
+        captured["noise"] = noise
+        return []
+
+    orig = bc.star_detect.detect_stars_with_cache
+    bc.star_detect.detect_stars_with_cache = fake_cached
+    try:
+        out = c.detect(np.zeros((32, 32), np.uint8), 8.0, "temporal_median",
+                       0, float("inf"))
+    finally:
+        bc.star_detect.detect_stars_with_cache = orig
+    assert out == []
+    assert captured.get("bg_image") is m.bg_image
+    assert captured.get("noise") == m.noise
+
+
+def test_temporal_median_perframe_degrades_to_block():
+    """During warm-up / slew (no model) temporal_median has no per-frame
+    equivalent; detection must degrade to block_percentile, never pass the
+    unknown mode string to the wheel."""
+    import numpy as np
+    c = _make_cache()                            # no model -> per-frame path
+    captured = {}
+
+    def fake_detect(img, **kw):
+        captured.update(kw)
+        return []
+
+    orig = bc.star_detect.detect_stars
+    bc.star_detect.detect_stars = fake_detect
+    try:
+        c.detect(np.zeros((32, 32), np.uint8), 5.0, "temporal_median",
+                 0, float("inf"), bg_block_size=16)
+    finally:
+        bc.star_detect.detect_stars = orig
+    assert captured.get("bg_mode") == "block_percentile"
+    assert captured.get("bg_block_size") == 16
 
 
 def test_fail_streak_does_not_invalidate_with_imu():

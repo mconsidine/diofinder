@@ -70,7 +70,8 @@ class SeeingPresetTests(unittest.TestCase):
         p = seeing.apply_preset("good", cfg)
         self.assertEqual(p["detect_sigma"], 5.0)
         self.assertEqual(p["detect_kernel_sigma"], 1.5)
-        self.assertEqual(p["detect_bg_mode"], "row_percentile")
+        # block_percentile since v0.11.15 (2-D gradients, cache-compatible).
+        self.assertEqual(p["detect_bg_mode"], "block_percentile")
         self.assertEqual(p["detect_max_axis_ratio"], 3.0)
         self.assertEqual(p["min_centroids"], 8)
         self.assertEqual(p["solve_timeout_ms"], 1500)

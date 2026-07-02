@@ -77,6 +77,10 @@ CACHE_HAS_LOCAL_NOISE = _supports("detect_stars_with_cache", "local_noise")
 HAS_BLOCK_MEDIANS = hasattr(star_detect, "compute_block_medians_py")
 CACHE_HAS_BLOCK_OFFSETS = _supports("detect_stars_with_cache", "block_offsets")
 HAS_BLOCK_CACHE = HAS_BLOCK_MEDIANS and CACHE_HAS_BLOCK_OFFSETS
+# sycamore >= 0.13: the full per-pixel cached model (the temporal median stack
+# subtracted directly). The wheel exports an explicit flag because native
+# functions don't support inspect.signature-based kwarg probing reliably.
+HAS_BG_IMAGE = HAS_CACHE and bool(getattr(star_detect, "HAS_BG_IMAGE", False))
 
 
 class CacheState(Enum):
@@ -89,10 +93,13 @@ class CacheState(Enum):
 class BgModel:
     """Immutable snapshot of the cached background (atomic swap).
 
-    Exactly one of row_offsets / block_offsets is populated depending on the
-    background mode the model was built for:
+    Exactly one of row_offsets / block_offsets / bg_image is populated
+    depending on the background mode the model was built for:
       * row_offsets   — per-row floor (row_percentile / line_median / top_hat)
       * block_offsets — 2-D block-median grid (block_percentile, sycamore>=0.12)
+      * bg_image      — the binned temporal median itself, subtracted per-pixel
+                        (temporal_median, sycamore>=0.13); removes gradients,
+                        vignetting AND fixed-pattern structure in one pass
     """
     noise: float
     h: int
@@ -103,6 +110,7 @@ class BgModel:
     row_offsets: Optional[np.ndarray] = None     # uint8, (h_det,)
     block_offsets: Optional[np.ndarray] = None   # uint8 2-D grid
     block_size: int = 0
+    bg_image: Optional[np.ndarray] = None        # uint8, (h_det, w_det)
     pose_quat: Optional[Tuple[float, float, float, float]] = None
 
 
@@ -367,10 +375,12 @@ class BackgroundCache:
 
             is_block_cache = (bg_mode == "block_percentile" and HAS_BLOCK_CACHE
                               and self.enabled)
+            is_image_cache = (bg_mode == "temporal_median" and HAS_BG_IMAGE
+                              and self.enabled)
 
             m = self._model
             force_perframe = (bg_mode not in CACHE_COMPATIBLE_MODES
-                              and not is_block_cache)
+                              and not is_block_cache and not is_image_cache)
             steady = (
                 not force_perframe
                 and self.enabled and self.state() is CacheState.STEADY and m is not None
@@ -378,14 +388,22 @@ class BackgroundCache:
                 and m.bin == self.bin
             )
             # The steady cached path needs a model of the matching kind.
+            if steady and is_image_cache and m.bg_image is None:
+                steady = False
             if steady and is_block_cache and m.block_offsets is None:
                 steady = False
-            if steady and not is_block_cache and m.row_offsets is None:
+            if (steady and not is_block_cache and not is_image_cache
+                    and m.row_offsets is None):
                 steady = False
 
             if steady:
                 kw = dict(sigma=sigma, bin=self.bin, max_axis_ratio=max_axis_ratio)
                 self._maybe_add_v12(kw, kernel_sigma, local_noise, cached=True)
+                if is_image_cache:
+                    kw["bg_image"] = m.bg_image
+                    self._n_cached += 1
+                    return star_detect.detect_stars_with_cache(
+                        image_u8, noise=m.noise, **kw)
                 if is_block_cache:
                     kw["block_offsets"] = m.block_offsets
                     if m.block_size:
@@ -412,6 +430,14 @@ class BackgroundCache:
                 kw["tophat_radius"] = int(tophat_radius)
             else:
                 kw["bg_mode"] = bg_mode
+        elif bg_mode == "temporal_median":
+            # No per-frame equivalent exists (the model IS temporal): during
+            # warm-up / slew / camera-settings refill — or on a wheel without
+            # bg_image support — degrade to the closest spatial mode.
+            kw["bg_mode"] = ("block_percentile" if HAS_BLOCK_MEDIANS
+                             else "line_median")
+            if kw["bg_mode"] == "block_percentile" and bg_block_size:
+                kw["bg_block_size"] = int(bg_block_size)
         else:
             kw["bg_mode"] = bg_mode
             if bg_mode == "block_percentile" and bg_block_size:
@@ -452,10 +478,13 @@ class BackgroundCache:
             "served_fallback": self._n_fallback,
             "frames_buffered": self._frame_count(),
             "slewing":     self._slewing,
-            "model_kind":  (("block" if m.block_offsets is not None else "row")
+            "model_kind":  (("image" if m.bg_image is not None
+                             else "block" if m.block_offsets is not None
+                             else "row")
                             if m else None),
             "active_bg_mode": self._active_bg_mode,
             "block_cache_supported": HAS_BLOCK_CACHE,
+            "bg_image_supported": HAS_BG_IMAGE,
         }
 
     # ----- worker ----------------------------------------------------------
@@ -527,8 +556,11 @@ class BackgroundCache:
             # on IMU-less units.
             pose_quat=self._last_imu_quat or self._last_solved_quat)
 
-        # Build a block-median grid when block_percentile is active and the
-        # wheel supports the cached block path; otherwise the per-row model.
+        # Model kind follows the active mode: the full per-pixel median for
+        # temporal_median (sycamore>=0.13), a block-median grid for
+        # block_percentile (sycamore>=0.12), otherwise the per-row model.
+        if self._active_bg_mode == "temporal_median" and HAS_BG_IMAGE:
+            return BgModel(bg_image=time_med, **common)
         if self._active_bg_mode == "block_percentile" and HAS_BLOCK_CACHE:
             bs = int(self._active_block_size) or 32
             block_offsets = star_detect.compute_block_medians_py(
@@ -540,9 +572,11 @@ class BackgroundCache:
 
 
 def _model_kind(bg_mode: str) -> str:
-    """Which cached-model kind a given bg_mode wants: 'block' (block_percentile
-    on a capable wheel) or 'row' (everything else that composes with the
-    cache)."""
+    """Which cached-model kind a given bg_mode wants: 'image' (temporal_median
+    on a sycamore>=0.13 wheel), 'block' (block_percentile on a capable wheel)
+    or 'row' (everything else that composes with the cache)."""
+    if bg_mode == "temporal_median" and HAS_BG_IMAGE:
+        return "image"
     if bg_mode == "block_percentile" and HAS_BLOCK_CACHE:
         return "block"
     return "row"

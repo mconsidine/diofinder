@@ -110,12 +110,12 @@ Plate scale (25 mm FL) = 6.2 × 206.265 / 25 = 51.15 arcsec/px
 FOV = 960 × 51.15 / 3600 = 13.64°
 ```
 
-The `sensor_full_width` / `sensor_full_height` config keys (default 4056×3040)
-let this be overridden for other camera modules without a code change.
-Setting them to **2028×1520** selects the IMX477's 2×2-binned *full-FOV* mode —
-same 13.64° FOV and plate scale after ISP scaling, ~4× less bandwidth, and a
-40 fps mode ceiling; an on-sky centroid-quality check is pending before it
-becomes the default.
+The `sensor_full_width` / `sensor_full_height` config keys select the sensor
+mode. **Default since v0.11.15 is 2028×1520 — the IMX477's 2×2-binned
+*full-FOV* mode**: same 13.64° FOV and plate scale after ISP scaling, ~4× less
+sensor/ISP/memory bandwidth, a 40 fps mode ceiling, and slightly better SNR
+from on-sensor binning. Set 4056×3040 to revert to the full-resolution readout
+(conf edit + restart; FOV calibration is unaffected either way).
 
 **Capture cadence:** `_init_camera` passes `buffer_count=2` and drops the RAW
 stream (`raw=None`, with a legacy fallback for older picamera2). With the
@@ -299,6 +299,7 @@ toggleable from config (and live-overridable via `shared_cfg`):
   - `block_percentile` — bilinear interpolation of per-tile medians, tile size `detect_bg_block_size` (default 0 → sycamore uses 32); removes 2-D spatial gradients cheaply (sycamore >= 0.10.0)
   - `uniform_mean` — 25×25 sliding-window mean via summed-area table; exact tetra3/olive-solve default pipeline; filter size `detect_uniform_filter_size` (default 0 → sycamore uses 25) (sycamore >= 0.11.0)
   - `top_hat` — morphological white top-hat; removes large-scale vignetting / sky-glow that per-row floors can't see; slow (~100 ms); structuring-element radius `detect_tophat_radius` (default 12); needs **sycamore >= 0.9.0** (degrades to `line_median` on older wheels)
+  - `temporal_median` — subtract the binned **temporal median stack itself** per-pixel (sycamore >= 0.13, probed via `HAS_BG_IMAGE`): gradients, vignetting AND per-pixel fixed-pattern structure removed in one pass — everything the stack knows, not a row/tile summary. Cache-only by nature; degrades to per-frame `block_percentile` during warm-up/slew or on older wheels
 
   The **noise estimator** is also selectable via `detect_noise_mode`:
   - `mad` — median absolute deviation (default, robust)
@@ -374,7 +375,9 @@ solving under light pollution / a sky gradient (which preset to start from and
 which knob to pull next).
 
 `diofinder/seeing.py` holds three flat preset tables — `SEEING_PRESETS["good"]`,
-`["bad"]`, and `["legacy"]`. Each key in a preset is *also* an individually
+`["bad"]`, and `["legacy"]`. Since v0.11.15 the **Good** preset (and the config
+default) uses `detect_bg_mode="block_percentile"` — cache-compatible and
+gradient-aware at similar cost to the old `row_percentile`. Each key in a preset is *also* an individually
 adjustable config key, so applying a preset is exactly equivalent to setting
 each by hand. All three presets carry the **same key set** so a toggle fully
 re-tunes the pipeline (including resetting `extractor_backend`).
@@ -645,12 +648,15 @@ in `tests/test_auto_tune.py`.
   (`row_percentile`, `block_percentile`) to keep the sweep bounded; others
   (`uniform_mean`, `column_percentile`, …) can be opted in via the `bg_modes`
   arg.
-* **Future work (TODO)**: `auto_tune` does **not** sweep `noise_mode`. Because
-  `uniform_mean` only matches its reference (tetra3/olive-solve) behaviour when
-  paired with `noise_mode="global_rms"`, it is scored but kept out of the
-  *default* sweep — evaluating it fairly would mean coupling `noise_mode` into
-  the search (a larger change). Add that pairing if/when the tetra3-reference
-  pipeline becomes a default tuning target.
+* **noise_mode pairing** (since v0.11.15): candidates with
+  `bg_mode="uniform_mean"` are swept **as the pair** `(uniform_mean,
+  global_rms)` — the only combination that matches the tetra3/olive-solve
+  reference pipeline — and a winning pair commits `detect_noise_mode` alongside
+  `detect_bg_mode` (both commit paths). Other modes keep the robust `mad`
+  default. `uniform_mean` still isn't in the *default* `bg_modes` sweep (opt in
+  via the `bg_modes` arg). `temporal_median` is deliberately **not sweepable**:
+  the eval op forces per-frame extraction, where it degrades to
+  block_percentile and would just re-measure that.
 * **commit=true** applies the winner live (`config.save_keys` + `shared_cfg` +
   `_invalidate_solver_cache`) **and** saves it as the tuned mode's override
   (`source="auto_tune"`), so the factory preset stays untouched and `seeing_get`

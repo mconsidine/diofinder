@@ -672,8 +672,19 @@ def _auto_tune_run(ctx, params):
             exp_s, gain = snap_s, snap_g
 
         # --- Phase 2: detection sweep ------------------------------------
+        # uniform_mean only matches its reference (tetra3/olive-solve) pipeline
+        # when paired with the global-RMS noise estimator, so sweep it as that
+        # pair; every other mode keeps the robust MAD default. The eval op
+        # accepts noise_mode per sample, so candidates carry it explicitly and
+        # the winner's pairing is committed alongside its bg_mode.
+        def _cand(bg, ks, sg):
+            c = {"bg_mode": bg, "kernel_sigma": ks, "sigma": sg}
+            if bg == "uniform_mean":
+                c["noise_mode"] = "global_rms"
+            return c
+
         candidates = [
-            {"bg_mode": bg, "kernel_sigma": ks, "sigma": sg}
+            _cand(bg, ks, sg)
             for bg in params["bg_modes"]
             for ks in params["kernel_values"]
             for sg in params["sigma_values"]
@@ -757,11 +768,19 @@ def _auto_tune_run(ctx, params):
                 "exposure_s": float(exp_s),
                 "gain": float(gain),
             }
-            for k in ("detect_sigma", "detect_kernel_sigma", "detect_bg_mode"):
-                ctx.shared_cfg[k] = updates[k]
+            # A winner swept as a (bg_mode, noise_mode) pair (uniform_mean +
+            # global_rms) must be committed as that pair.
+            if best.get("noise_mode"):
+                updates["detect_noise_mode"] = str(best["noise_mode"])
+            for k in ("detect_sigma", "detect_kernel_sigma", "detect_bg_mode",
+                      "detect_noise_mode"):
+                if k in updates:
+                    ctx.shared_cfg[k] = updates[k]
             ctx.cfg.detect_sigma = updates["detect_sigma"]
             ctx.cfg.detect_kernel_sigma = updates["detect_kernel_sigma"]
             ctx.cfg.detect_bg_mode = updates["detect_bg_mode"]
+            if "detect_noise_mode" in updates:
+                ctx.cfg.detect_noise_mode = updates["detect_noise_mode"]
             ctx.cfg.exposure_s = updates["exposure_s"]
             ctx.cfg.gain = updates["gain"]
             try:
@@ -1440,11 +1459,18 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 "detect_kernel_sigma": float(best["kernel_sigma"]),
                 "detect_bg_mode": str(best["bg_mode"]),
             }
-            for k in ("detect_sigma", "detect_kernel_sigma", "detect_bg_mode"):
-                ctx.shared_cfg[k] = updates[k]
+            # Winner swept as a (bg_mode, noise_mode) pair -> commit the pair.
+            if best.get("noise_mode"):
+                updates["detect_noise_mode"] = str(best["noise_mode"])
+            for k in ("detect_sigma", "detect_kernel_sigma", "detect_bg_mode",
+                      "detect_noise_mode"):
+                if k in updates:
+                    ctx.shared_cfg[k] = updates[k]
             ctx.cfg.detect_sigma = updates["detect_sigma"]
             ctx.cfg.detect_kernel_sigma = updates["detect_kernel_sigma"]
             ctx.cfg.detect_bg_mode = updates["detect_bg_mode"]
+            if "detect_noise_mode" in updates:
+                ctx.cfg.detect_noise_mode = updates["detect_noise_mode"]
             for cam_key, cam_op in (("exposure_s", CAMERA_OP_SET_EXPOSURE),
                                     ("gain", CAMERA_OP_SET_GAIN)):
                 val = photo.get(cam_key)
@@ -1584,7 +1610,8 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 mode = str(args["detect_bg_mode"]).strip().lower()
                 valid_modes = ("row_percentile", "line_median", "top_hat",
                                "column_percentile", "row_column_percentile",
-                               "block_percentile", "uniform_mean")
+                               "block_percentile", "uniform_mean",
+                               "temporal_median")
                 if mode not in valid_modes:
                     return MaintResponse(ok=False,
                                         error=f"detect_bg_mode must be one of "

@@ -32,7 +32,9 @@ SEEING_PRESETS: Dict[str, Dict[str, Any]] = {
         extractor_backend="sycamore",
         detect_sigma=5.0,
         detect_kernel_sigma=1.5,
-        detect_bg_mode="row_percentile",
+        # block_percentile since v0.11.15: cache-compatible (sycamore>=0.12)
+        # and removes 2-D gradients row_percentile can't see, at similar cost.
+        detect_bg_mode="block_percentile",
         detect_noise_mode="mad",
         detect_uniform_filter_size=0,
         detect_max_axis_ratio=3.0,

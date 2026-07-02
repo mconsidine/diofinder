@@ -9,15 +9,13 @@ frame_height: 760
 exposure_s: 0.2
 gain: 5.0
 
-# Full sensor readout (forces full-FOV ISP downscale; see CLAUDE.md).
-# Experiment: 2028 x 1520 selects the IMX477's 2x2-binned FULL-FOV mode —
-# identical 13.64 deg FOV and plate scale after the ISP scales to 960x760, but
-# ~4x less sensor/ISP/memory traffic (the Zero 2W is bandwidth-bound), a 40 fps
-# mode ceiling instead of 10, and on-sensor binning slightly improves SNR over
-# ISP downscaling. Needs an on-sky sanity check of centroid quality before
-# becoming the default; FOV calibration is unaffected. Restart to apply.
-sensor_full_width: 4056
-sensor_full_height: 3040
+# Sensor readout mode (full-FOV; see CLAUDE.md). Default since v0.11.15 is the
+# IMX477's 2x2-binned FULL-FOV mode 2028x1520 — identical 13.64 deg FOV and
+# plate scale after the ISP scales to 960x760, ~4x less sensor/ISP/memory
+# traffic, 40 fps mode ceiling, slightly better SNR from on-sensor binning.
+# Set 4056x3040 to revert to the full-resolution readout. Restart to apply.
+sensor_full_width: 2028
+sensor_full_height: 1520
 
 # libcamera tuning profile. The shipped imx477_finder.json (installed by
 # install.sh from diofinder's tuning/ dir) is the scientific profile with two
@@ -101,7 +99,13 @@ detect_bin: 2
 #   uniform_mean    — 25x25 sliding-window mean (detect_uniform_filter_size,
 #                     0→25); the exact tetra3/olive-solve default pipeline.
 #                     Pair with detect_noise_mode: global_rms. (sycamore >= 0.11.0)
-detect_bg_mode: row_percentile
+#   temporal_median — subtract the temporal median stack itself per-pixel
+#                     (gradients, vignetting AND fixed-pattern structure in one
+#                     pass). Steady-state only; falls back to block_percentile
+#                     per-frame during warm-up/slew. (sycamore >= 0.13.0)
+# block_percentile is the default since v0.11.15 (also the Good preset): it
+# removes 2-D gradients row_percentile can't see and stays cache-compatible.
+detect_bg_mode: block_percentile
 
 # Matched-filter kernel sigma (px); 1.5 ≈ a focused HQ Camera PSF. Widen toward
 # 2.5 for poor seeing / bloated stars. Requires sycamore >= 0.12 (capability-
