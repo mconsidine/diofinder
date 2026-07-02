@@ -112,6 +112,26 @@ FOV = 960 × 51.15 / 3600 = 13.64°
 
 The `sensor_full_width` / `sensor_full_height` config keys (default 4056×3040)
 let this be overridden for other camera modules without a code change.
+Setting them to **2028×1520** selects the IMX477's 2×2-binned *full-FOV* mode —
+same 13.64° FOV and plate scale after ISP scaling, ~4× less bandwidth, and a
+40 fps mode ceiling; an on-sky centroid-quality check is pending before it
+becomes the default.
+
+**Capture cadence:** `_init_camera` passes `buffer_count=2` and drops the RAW
+stream (`raw=None`, with a legacy fallback for older picamera2). With the
+still-configuration default of one buffer the sensor cannot expose frame N+1
+while frame N's buffer is held, so the frame period collapses to ~2× the
+exposure time (measured: 1.0 s exposure → 0.5 fps). Two buffers restore
+~1/exposure cadence — double the solve rate at long exposures — and dropping
+the unused RAW stream (~18.5 MB CMA per buffer at full res) more than pays for
+the second main buffer.
+
+**Camera-settings epoch:** every successful exposure/gain change bumps
+`shared_cfg["camera_settings_epoch"]` (single writer: camera_proc). The
+solver forwards it to `bg_cache.note_camera_settings`, which flushes the
+temporal frame stack and marks the model stale — frames captured at the old
+setting don't share the new pedestal, so a stack spanning an auto-exposure
+step (×1.5) would under-/over-subtract for up to two stack periods.
 
 ---
 
@@ -305,7 +325,12 @@ toggleable from config (and live-overridable via `shared_cfg`):
   `detect_stars_with_cache` (√N noise reduction + free hot-pixel rejection),
   falling back to per-frame detection during slew (IMU-driven) and warm-up. Set
   `bg_cache_enabled: false` to disable if its per-frame submit/stack bookkeeping
-  proves too costly. The temporal model is orthogonal to the per-frame mode and
+  proves too costly. The model's noise estimate is computed **in float**
+  end-to-end (median → bin → MAD); the earlier uint8 casts quantized it to
+  {0.5, 1.48, 2.97, …} — a 3× threshold jump between adjacent states, observed
+  live as `noise` flipping 0.50↔1.48 on faint sky. The stack is also **flushed
+  on any exposure/gain change** (`camera_settings_epoch` → `note_camera_settings`;
+  see the camera section) so mixed-pedestal frames never build a model. The temporal model is orthogonal to the per-frame mode and
   composes with `row_percentile`, `line_median`, and `top_hat`.
 
 A/B these on-device with `tests/diag_background.py` (e.g. `--inject-gradient 40`

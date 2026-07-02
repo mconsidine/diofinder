@@ -142,6 +142,7 @@ class BackgroundCache:
         # source drives motion at a time (IMU when present, else the solver).
         self._motion_ref_quat: Optional[Tuple[float, float, float, float]] = None
         self._imu_feeding = False
+        self._camera_epoch = None   # last seen camera_settings_epoch (adopt-first)
 
         # Lightweight counters for the bg_cache_status diagnostic.
         self._n_builds = 0      # temporal models built by the worker
@@ -189,6 +190,34 @@ class BackgroundCache:
             return
         with self._frame_buf_lock:
             self._frame_buf.append(np.array(frame_u8, dtype=np.uint8, copy=True))
+
+    def note_camera_settings(self, epoch):
+        """Called with shared_cfg['camera_settings_epoch'] (bumped by
+        camera_proc on every successful exposure/gain change).
+
+        Frames captured at the old setting no longer share the new frames'
+        background pedestal (sky background scales with gain x exposure), so a
+        stack spanning the change produces a model that under- or
+        over-subtracts by up to a full auto-exposure step (x1.5) for up to two
+        stack periods — spurious detections after a step up, lost stars after
+        a step down, which feeds the very auto-exposure hunting that caused
+        the step. Flush the buffer and mark the model stale; detection falls
+        back to per-frame (correct while brightness is unstable) until the
+        stack refills at the new setting.
+
+        The first observed epoch is adopted silently so a solver restart never
+        invalidates a healthy state.
+        """
+        if not self.enabled or epoch is None:
+            return
+        if self._camera_epoch is None:
+            self._camera_epoch = epoch
+            return
+        if epoch != self._camera_epoch:
+            self._camera_epoch = epoch
+            with self._frame_buf_lock:
+                self._frame_buf.clear()
+            self._needs_rebuild.set()
 
     def note_motion(self, quat):
         """Called with the latest IMU quaternion (w,x,y,z) or None."""
@@ -469,17 +498,26 @@ class BackgroundCache:
 
     def _build_model(self, frames: list) -> BgModel:
         h, w = frames[0].shape
-        time_med = np.median(np.stack(frames, axis=0), axis=0).astype(np.uint8)
+        # Median-stack in float and KEEP float through binning and the noise
+        # estimate. The previous uint8 casts (median -> u8, bin-mean -> u8)
+        # quantized the MAD to whole DN, so `noise` could only take the values
+        # {0.5, 1.48, 2.97, ...} — a 3x detection-threshold jump between
+        # adjacent states, observed live as noise flipping 0.50 <-> 1.48 on
+        # faint sky. Float MAD has sub-DN resolution; the estimator itself is
+        # unchanged, so calibrated sigma operating points keep their meaning
+        # (including the 0.5 floor).
+        time_med_f = np.median(np.stack(frames, axis=0), axis=0).astype(np.float32)
         if self.bin == 2:
-            tm = time_med[: (h // 2) * 2, : (w // 2) * 2]
-            time_med = tm.reshape(h // 2, 2, w // 2, 2).mean(
-                axis=(1, 3)).astype(np.uint8)
-        time_med = np.ascontiguousarray(time_med)
-        h_det, w_det = time_med.shape
-        patch = time_med[h_det // 3: 2 * h_det // 3, w_det // 3: 2 * w_det // 3]
-        flat = patch.astype(np.float32).ravel()
-        mad = np.median(np.abs(flat - np.median(flat)))
+            tm = time_med_f[: (h // 2) * 2, : (w // 2) * 2]
+            time_med_f = tm.reshape(h // 2, 2, w // 2, 2).mean(axis=(1, 3))
+        h_det, w_det = time_med_f.shape
+        patch = time_med_f[h_det // 3: 2 * h_det // 3,
+                           w_det // 3: 2 * w_det // 3].ravel()
+        mad = np.median(np.abs(patch - np.median(patch)))
         noise = max(0.5, 1.4826 * float(mad))
+        # u8 model image for the Rust offset builders (rounded, not truncated).
+        time_med = np.ascontiguousarray(
+            np.clip(np.rint(time_med_f), 0, 255).astype(np.uint8))
 
         common = dict(
             noise=noise, h=h, w=w, bin=self.bin,
