@@ -110,6 +110,49 @@ def test_fail_streak_invalidates_without_imu():
     assert c.state() is bc.CacheState.SLEWING
 
 
+def test_camera_epoch_change_flushes_and_invalidates():
+    """An exposure/gain change (camera_settings_epoch bump) must flush the
+    frame buffer and mark the model stale — frames captured at the old
+    setting don't share the new frames' background pedestal."""
+    import numpy as np
+    c = _make_cache()
+    c._model = _fake_model(c)
+    c.note_camera_settings(1)                    # first sight: adopt silently
+    c._frame_buf.append(np.zeros((4, 4), np.uint8))
+    assert c.state() is bc.CacheState.STEADY
+    c.note_camera_settings(1)                    # unchanged -> no-op
+    assert c.state() is bc.CacheState.STEADY
+    assert len(c._frame_buf) == 1
+    c.note_camera_settings(2)                    # exposure/gain changed
+    assert len(c._frame_buf) == 0                # stack flushed
+    assert c._needs_rebuild.is_set()
+    assert c.state() is bc.CacheState.SLEWING    # per-frame until refilled
+    c.note_camera_settings(None)                 # missing key -> no-op
+    assert c._camera_epoch == 2
+
+
+def test_build_model_noise_is_not_quantized():
+    """Regression for the 0.50 <-> 1.48 noise flip: the old uint8 casts
+    quantized the MAD to whole DN so noise could only be 1.4826*k (k int,
+    floored at 0.5). The float pipeline must resolve intermediate values and
+    respond monotonically to the frame noise level."""
+    import numpy as np
+    c = _make_cache()                            # bin=2
+    rng = np.random.default_rng(42)
+
+    def frames(sigma):
+        return [np.clip(rng.normal(30.0, sigma, (96, 96)), 0, 255)
+                .astype(np.uint8) for _ in range(8)]
+
+    lo = c._build_model(frames(6.0)).noise
+    hi = c._build_model(frames(12.0)).noise
+    assert hi > lo > 0.5
+    # Neither value may sit on the old integer-MAD lattice {1.4826*k}.
+    for v in (lo, hi):
+        k = round(v / 1.4826)
+        assert abs(v - 1.4826 * k) > 0.05, f"noise {v} still quantized"
+
+
 def test_fail_streak_does_not_invalidate_with_imu():
     """When the IMU is feeding, a run of solve failures must NOT invalidate the
     model — note_motion owns slew detection, and dropping the cache on a

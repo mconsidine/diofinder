@@ -789,6 +789,11 @@ def solver_main(slots, latest_solution, shared_cfg,
             bg_cache.submit_frame(frame_buf)
             if shared_cfg.get("imu_available", False):
                 bg_cache.note_motion(shared_cfg.get("imu_q"))
+            # Exposure/gain changed? Old-setting frames poison the stack: flush
+            # and rebuild at the new setting (adopt-first, so a solver restart
+            # never invalidates a healthy state).
+            bg_cache.note_camera_settings(
+                shared_cfg.get("camera_settings_epoch"))
 
             # float64: Rust extracts target_sky_coord as PyReadonlyArray2<f64>
             target_sky = None

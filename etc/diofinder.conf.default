@@ -10,6 +10,12 @@ exposure_s: 0.2
 gain: 5.0
 
 # Full sensor readout (forces full-FOV ISP downscale; see CLAUDE.md).
+# Experiment: 2028 x 1520 selects the IMX477's 2x2-binned FULL-FOV mode —
+# identical 13.64 deg FOV and plate scale after the ISP scales to 960x760, but
+# ~4x less sensor/ISP/memory traffic (the Zero 2W is bandwidth-bound), a 40 fps
+# mode ceiling instead of 10, and on-sensor binning slightly improves SNR over
+# ISP downscaling. Needs an on-sky sanity check of centroid quality before
+# becoming the default; FOV calibration is unaffected. Restart to apply.
 sensor_full_width: 4056
 sensor_full_height: 3040
 

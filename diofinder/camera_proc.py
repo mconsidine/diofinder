@@ -52,7 +52,20 @@ def _drain_cmd_queue(q):
     return cmds
 
 
-def _handle_camera_cmd(cmd, cam, current_state):
+def _bump_camera_epoch(shared_cfg):
+    """Advance the camera-settings epoch after a successful exposure/gain
+    change. bg_cache watches this: frames captured at the old setting no
+    longer share the new frames' background pedestal, so the temporal stack
+    must be flushed (single writer — this process — so read+write is safe)."""
+    if shared_cfg is not None:
+        try:
+            shared_cfg["camera_settings_epoch"] = (
+                shared_cfg.get("camera_settings_epoch", 0) + 1)
+        except Exception:
+            pass
+
+
+def _handle_camera_cmd(cmd, cam, current_state, shared_cfg=None):
     """Dispatch a CameraCmd. cam may be None (test mode); hardware ops are
     skipped when cam is None but state is still updated.
     """
@@ -81,6 +94,7 @@ def _handle_camera_cmd(cmd, cam, current_state):
                     ),
                 })
             current_state["exposure_s"] = new_s
+            _bump_camera_epoch(shared_cfg)
             log.info("exposure -> %.3fs%s", new_s,
                      "" if cam is not None else " (test mode, stored only)")
             return CameraCmdReply(
@@ -95,6 +109,7 @@ def _handle_camera_cmd(cmd, cam, current_state):
             if cam is not None:
                 cam.set_controls({"AnalogueGain": new_g})
             current_state["gain"] = new_g
+            _bump_camera_epoch(shared_cfg)
             log.info("gain -> %.1f%s", new_g,
                      "" if cam is not None else " (test mode, stored only)")
             return CameraCmdReply(
@@ -184,22 +199,46 @@ def _init_camera(cfg, current_state):
     # ~8.8° for a 25mm lens on the IMX477.
     full_sensor = (cfg.sensor_full_width, cfg.sensor_full_height)
     exp_us = int(current_state["exposure_s"] * 1_000_000)
-    config = cam.create_still_configuration(
-        main={"format": "YUV420",
-              "size": (cfg.frame_width, cfg.frame_height)},
-        sensor={"output_size": full_sensor},
-        controls={
-            "ExposureTime":        exp_us,
-            "AnalogueGain":        float(current_state["gain"]),
-            "AeEnable":            False,
-            "AwbEnable":           False,
-            "NoiseReductionMode":  0,
-            "Sharpness":           0.0,
-            "Saturation":          0.0,
-            "FrameDurationLimits": (exp_us, 1_000_000_000),
-        },
-    )
-    cam.configure(config)
+    _controls = {
+        "ExposureTime":        exp_us,
+        "AnalogueGain":        float(current_state["gain"]),
+        "AeEnable":            False,
+        "AwbEnable":           False,
+        "NoiseReductionMode":  0,
+        "Sharpness":           0.0,
+        "Saturation":          0.0,
+        "FrameDurationLimits": (exp_us, 1_000_000_000),
+    }
+    # buffer_count=2: with the still-configuration default of ONE buffer the
+    # sensor cannot expose frame N+1 while frame N's buffer is held, so the
+    # frame period collapses to ~2x the exposure time (measured on-device:
+    # 1.0 s exposure -> 0.5 fps, 0.2 s -> 2.1 fps). Two buffers restore
+    # ~1/exposure cadence — doubling the solve rate at long exposures.
+    # raw=None: nothing reads the RAW stream, and at full-res it costs
+    # ~18.5 MB of CMA per buffer; dropping it more than pays for the second
+    # main buffer. The sensor mode is still forced by the sensor= hint.
+    # Fallback keeps the raw stream for older picamera2 that may reject
+    # raw=None (mirrors the tuning_file fallback above).
+    try:
+        config = cam.create_still_configuration(
+            main={"format": "YUV420",
+                  "size": (cfg.frame_width, cfg.frame_height)},
+            raw=None,
+            buffer_count=2,
+            sensor={"output_size": full_sensor},
+            controls=_controls,
+        )
+        cam.configure(config)
+    except Exception as e:
+        log.info("raw=None/buffer_count config rejected (%s); "
+                 "falling back to legacy still configuration", e)
+        config = cam.create_still_configuration(
+            main={"format": "YUV420",
+                  "size": (cfg.frame_width, cfg.frame_height)},
+            sensor={"output_size": full_sensor},
+            controls=_controls,
+        )
+        cam.configure(config)
     cam.start()
     log.info("Camera started: %dx%d exp=%.3fs gain=%.1f",
              cfg.frame_width, cfg.frame_height,
@@ -247,7 +286,7 @@ def camera_main(slots, camera_cmd_q, camera_cmd_reply_q, cfg,
     try:
         while True:
             for cmd in _drain_cmd_queue(camera_cmd_q):
-                reply = _handle_camera_cmd(cmd, cam, current_state)
+                reply = _handle_camera_cmd(cmd, cam, current_state, shared_cfg)
                 try:
                     camera_cmd_reply_q.put_nowait(reply)
                 except Exception as e:
