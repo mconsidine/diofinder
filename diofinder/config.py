@@ -27,19 +27,22 @@ DEFAULT_CONFIG_PATH = "/etc/diofinder/diofinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.11.14"
+    version: str = "0.11.15"
 
     # -------- Camera --------
     frame_width: int = 960
     frame_height: int = 760
 
-    # Full sensor readout dimensions for the IMX477.  picamera2's
-    # create_still_configuration defaults to the smallest sensor sub-mode that
-    # can produce the requested output size (1332×990 for 960×760), which crops
-    # ~35% of the sensor and reduces FOV.  Specifying the full array forces the
-    # ISP to downscale from the complete sensor, restoring the expected FOV.
-    sensor_full_width: int = 4056
-    sensor_full_height: int = 3040
+    # Sensor readout mode hint for the IMX477. Without a hint picamera2 picks
+    # the smallest sensor sub-mode for a 960×760 output (1332×990), which crops
+    # ~35% of the sensor and shrinks the FOV. Default since v0.11.15 is the
+    # 2×2-binned FULL-FOV mode 2028×1520: identical 13.64° FOV and plate scale
+    # after the ISP scales to 960×760, ~4× less sensor/ISP/memory traffic (the
+    # Zero 2W is bandwidth-bound), a 40 fps mode ceiling instead of 10, and
+    # on-sensor binning slightly improves SNR over ISP downscaling. Set
+    # 4056×3040 to revert to the full-resolution readout (conf edit + restart).
+    sensor_full_width: int = 2028
+    sensor_full_height: int = 1520
 
     # Path to the libcamera IMX477 scientific tuning profile.  The scientific
     # profile disables all ISP processing (AGC, AWB, noise reduction, sharpening,
@@ -116,10 +119,12 @@ class Config:
     # (validate with the Background page Capture & A/B). Restart to apply.
     detect_bin: int = 2
 
-    # Per-frame background mode: "row_percentile" (default, cheapest),
-    # "line_median" (robust to per-row offset/vignetting), or "top_hat"
-    # (opt-in morphological 2-D gradient removal — needs sycamore >= 0.9.0).
-    detect_bg_mode: str = "row_percentile"
+    # Background mode. block_percentile (default since v0.11.15, matches the
+    # Good preset): 2-D per-tile median grid, cache-compatible, removes the
+    # gradients row_percentile can't see. Others: row_percentile, line_median,
+    # top_hat, column/row_column_percentile, uniform_mean, and temporal_median
+    # (sycamore >= 0.13: subtract the temporal median stack per-pixel).
+    detect_bg_mode: str = "block_percentile"
     # Matched-filter kernel sigma (px) passed to star_detect (sycamore >= 0.12).
     # 1.5 ≈ a well-focused HQ Camera PSF; widen toward 2.5 for bad seeing /
     # bloated stars. Capability-probed: ignored on older wheels.
