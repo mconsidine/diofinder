@@ -223,6 +223,23 @@ class HotPixelTests(unittest.TestCase):
         m.repair(frame)  # shape mismatch -> no-op
         self.assertTrue(np.array_equal(frame, before))
 
+    def test_implausibly_large_guard(self):
+        # 0.5% cap: a genuine mask (hundreds of px) passes; a sky-poisoned one
+        # (195k px on 760x960 observed live) is rejected on save AND on load.
+        self.assertFalse(hot_pixel.implausibly_large(435, (760, 960)))
+        self.assertTrue(hot_pixel.implausibly_large(195356, (760, 960)))
+        self.assertTrue(hot_pixel.implausibly_large(4000, (760, 960)))
+
+    def test_load_refuses_sky_poisoned_mask(self):
+        import numpy as np
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            path = os.path.join(td, "mask.npz")
+            big = hot_pixel.HotPixelMask(
+                indices=np.arange(50000, dtype=np.int64), shape=(760, 960))
+            big.save(path)
+            self.assertIsNone(hot_pixel.HotPixelMask.load(path))
+
     def test_capture_dark_mask(self):
         frames = [np.full((8, 8), 12, dtype=np.uint8) for _ in range(4)]
         for f in frames:

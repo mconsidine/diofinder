@@ -32,6 +32,31 @@ log = logging.getLogger("diofinder.hot_pixel")
 DEFAULT_MASK_PATH = "/var/lib/diofinder/hot_pixel_mask.npz"
 
 
+# A real dark-capture mask is a few hundred pixels even at worst-case
+# exposure/gain (observed: 260-435). A mask flagging a large fraction of the
+# frame means the "dark" capture SAW THE SKY (lens not capped): the global
+# threshold flags every star and the bright half of any gradient, and the
+# repair step then smears >100k pixels of every live frame — star counts still
+# look healthy but centroid geometry is corrupted and nothing plate-solves
+# (observed live: a 195,356-pixel mask, 27% of the frame, zero solves after).
+# Cap = 0.5% of the frame (~3,600 px at 960x760): ~7x headroom over any
+# legitimate mask, far below any sky-poisoned one.
+MAX_MASK_FRACTION = 0.005
+
+
+def implausibly_large(count: int, shape) -> bool:
+    """True when a mask is too big to be a genuine dark-capture result.
+
+    Absolute floor of 64 so the fractional rule can't misfire on the tiny
+    frames used in tests / ROIs; any real frame is ~0.7 Mpx where the 0.5%
+    rule (~3,600 px) dominates."""
+    try:
+        total = int(shape[0]) * int(shape[1])
+    except (TypeError, IndexError, ValueError):
+        return False
+    return total > 0 and count > max(64, MAX_MASK_FRACTION * total)
+
+
 def compute_hot_pixel_indices(stack: np.ndarray, k: float = 5.0) -> np.ndarray:
     """Return flat indices of hot pixels in a median-stacked dark frame.
 
@@ -148,6 +173,13 @@ class HotPixelMask:
             data = np.load(path)
             indices = data["indices"].astype(np.int64)
             shape = tuple(int(v) for v in data["shape"])
+            if implausibly_large(indices.size, shape):
+                log.warning(
+                    "Hot-pixel mask %s flags %d pixels (>%.1f%% of the frame) — "
+                    "almost certainly captured with the lens uncapped; IGNORING "
+                    "it. Recapture with the lens covered, or clear the mask.",
+                    path, indices.size, 100.0 * MAX_MASK_FRACTION)
+                return None
             return cls(indices=indices, shape=shape, mtime=os.path.getmtime(path))
         except Exception as e:
             log.warning("Could not load hot-pixel mask %s: %s", path, e)
