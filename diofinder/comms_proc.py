@@ -324,6 +324,42 @@ def _auto_exposure_decision(*, solved, stars, matches, peak,
     return None
 
 
+def _ae_apply_reversal_damping(action, cur_s, cur_g, last_dir):
+    """Halve the step (in log space) when AE reverses direction, so the ladder
+    converges into the deadband instead of limit-cycling across it.
+
+    Observed on-sky: gain ping-ponged 2.1 <-> 3.2 for minutes because the x1.5
+    gain step straddles the 0.8x-1.5x star-count deadband — at the low rung the
+    frame yields too few stars (raise), at the high rung too many (reduce), and
+    the full step never lands inside. On a direction reversal this replaces the
+    proposed step with its square root (x1.5 -> x1.22, x0.8 -> x0.89), each
+    reversal shrinking further, so the operating point walks geometrically into
+    the deadband. Same-direction moves (a genuine trend) keep full steps.
+
+    ``last_dir`` is +1 / -1 / 0: the direction of the last APPLIED change (0 =
+    none yet). Returns ``(action, new_last_dir)``; a held cycle (action None)
+    keeps ``last_dir`` unchanged. The saturation backoff must not be damped —
+    the caller skips this helper on saturated frames.
+    """
+    if not action:
+        return action, last_dir
+    new_g = action.get("gain", cur_g)
+    new_s = action.get("exposure_s", cur_s)
+    cur_dir = 1 if (new_g > cur_g or new_s > cur_s) else -1
+    if last_dir and cur_dir == -last_dir:
+        if "gain" in action:
+            damped = cur_g * math.sqrt(new_g / cur_g)
+            if round(damped, 2) == round(cur_g, 2):
+                return None, last_dir          # step too small to matter: hold
+            action = {"gain": round(damped, 2)}
+        else:
+            damped = cur_s * math.sqrt(new_s / cur_s)
+            if abs(damped - cur_s) < _AE_MIN_EXP_DELTA_S:
+                return None, last_dir
+            action = {"exposure_s": round(damped, 4)}
+    return action, cur_dir
+
+
 def _ae_apply_raise_debounce(action, cur_s, cur_g, raise_streak):
     """Debounce brightness *raises* so AE doesn't chase a single transient dark
     frame (passing cloud / wind smear) right after a good solving run.
@@ -358,6 +394,7 @@ def _auto_exposure_loop(ctx, interval_s=5.0):
     """
     cfg = ctx.cfg
     raise_streak = 0          # consecutive brightness-raise intents (debounce)
+    last_dir = 0              # direction of the last APPLIED change (damping)
     while True:
         time.sleep(interval_s)
         try:
@@ -408,6 +445,14 @@ def _auto_exposure_loop(ctx, interval_s=5.0):
             # brightness up (the cloud/wind oscillation). Reductions act at once.
             action, raise_streak = _ae_apply_raise_debounce(
                 action, cur_s, cur_g, raise_streak)
+            # Damp direction reversals so the ladder converges into the
+            # deadband instead of limit-cycling across it (gain 2.1<->3.2 seen
+            # on-sky). Saturation backoff is a safety action — never damped.
+            if sol.get("peak", 0) < _AE_PEAK_SATURATION:
+                action, last_dir = _ae_apply_reversal_damping(
+                    action, cur_s, cur_g, last_dir)
+            elif action:
+                last_dir = -1        # the backoff is an applied reduce
             if not action:
                 continue
             ctx_qs = (ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
@@ -960,7 +1005,9 @@ def _imu_motion_engaged(state, q_now, imu_t, ref_t,
     # slow motion clears quaternion quantization noise.
     rate = None
     for t_old, q_old in reversed(samples):
-        if imu_t - t_old >= baseline_s:
+        # 1 us slack: (t0 + baseline) - t0 can round a hair below baseline in
+        # float64, and an exact-equality miss here silently drops the sample.
+        if imu_t - t_old >= baseline_s - 1e-6:
             r = quat_delta_rotvec(q_now, q_old)
             ang = math.degrees(
                 math.sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]))
@@ -1237,6 +1284,12 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 result["released_at"] = released_at
             if git_desc:
                 result["git"] = git_desc
+            # Wheel versions travel with every version report: the wheels are
+            # refreshed independently of the code (image build / OTA / pip),
+            # and a stale olive-solve wheel has already masqueraded as an
+            # application regression once.
+            from diofinder.wheels import wheel_versions
+            result["wheels"] = wheel_versions()
             return MaintResponse(ok=True, result=result)
 
         if cmd == "status":

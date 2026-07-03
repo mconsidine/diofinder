@@ -291,6 +291,19 @@ with the `SYCAMORE_TAG` / `OLIVE_SOLVE_TAG` repo variables; unset = latest),
 and on-device `diofinder-update` refreshes them from the latest releases. A
 wheel placed manually in `vendor/wheels/` overrides the download.
 
+**Wheel versions are first-class diagnostics** (v0.11.18): `diofinder/wheels.py`
+reports the installed olive-solve (`tetra3`) and sycamore (`star_detect`)
+versions; they appear in the solver startup log, the `version` maint command
+(`wheels` key), the Home/Update pages, and every debug bundle's
+`effective_params.json`. `diofinder-update` prints a per-wheel refresh summary
+(old → new, or a loud "NOT refreshed" warning) both after the wheel step and as
+the final lines of the run — a silently stale wheel has masqueraded as an
+application regression before (v0.11.15 code + pre-v0.1.3 olive-solve = no
+blind-hint fallback = post-slew re-acquisition deadlock). The solve hint cone
+is `max(2°, 2.5×` the IMU-measured rotation`)` since v0.11.18: the delta is
+applied in the IMU body frame, so the hint error can reach ~2× the slew angle
+(measured 1.76×); the old 1.5× cone could exclude truth entirely.
+
 Detection is routed through `diofinder/bg_cache.py::BackgroundCache`, not by calling
 `detect_stars` directly. This gives three composable background strategies, all
 toggleable from config (and live-overridable via `shared_cfg`):
@@ -601,6 +614,14 @@ decision lives in `_auto_exposure_decision` (unit-tested in
   Reductions and the saturation backoff are **not** debounced (act at once), and
   once confirmed it keeps raising every cycle, so a genuine cold-start ramp is
   delayed by at most one cycle.
+* **Reversal damping** (pure helper `_ae_apply_reversal_damping`, v0.11.18,
+  unit-tested): when the ladder reverses direction, the proposed step is
+  replaced by its square root (×1.5 → ×1.22, and again on each subsequent
+  reversal), so the operating point converges geometrically into the deadband
+  instead of limit-cycling across it — the ×1.5 gain step straddles the
+  0.8×–1.5× star-count deadband when the two rungs land on opposite sides
+  (observed live: gain 2.1↔3.2 for minutes). Same-direction moves keep full
+  steps; the saturation backoff is never damped.
 * Wide deadband (0.8×–1.5× of target) so it settles instead of oscillating;
   sub-5 ms exposure moves are ignored. At most one axis changes per cycle.
 * Bounds: `auto_exposure_min_s`/`max_s`, `auto_exposure_min_gain`/`max_gain`.
@@ -720,7 +741,7 @@ hot-pixel rejection during slews, when the temporal cache is offline.
 
 * `dark_capture {"frames": N, "exposure_s"?, "gain"?}` → solver grabs N SHM
   frames ~0.3 s apart, median-stacks, flags pixels exceeding
-  `median + 5·(1.4826·MAD)`, saves `/var/lib/diofinder/hot_pixel_mask.npz`
+  `median + max(5·(1.4826·MAD), 3 DN)`, saves `/var/lib/diofinder/hot_pixel_mask.npz`
   (indices + shape + count), loads it. **Sanity guard** (`implausibly_large`,
   >0.5 % of the frame, abs floor 64): a capture that saw the sky (lens not
   capped) flags 100k+ pixels — the global threshold picks up every star and
@@ -728,7 +749,13 @@ hot-pixel rejection during slews, when the temporal cache is offline.
   geometry so nothing solves (observed live: 195,356-px mask, healthy star
   counts, zero solves). Such a mask is **refused on save** (clear error telling
   the user to cap the lens) and **ignored on load** (protects devices already
-  carrying one). When `exposure_s`/`gain` are supplied,
+  carrying one). The **3 DN threshold floor** (`MIN_THRESH_DN`, v0.11.18)
+  guards the opposite failure: a properly capped dark frame is so uniform that
+  MAD quantizes to 0, and a bare k·MAD threshold degenerates to "every pixel
+  above the median" (observed live: 345,278 px = 47% of the frame from a
+  correctly capped capture). With the floor a capped capture yields a normal
+  few-hundred-pixel mask, so when the guard trips the sensor genuinely saw
+  light. When `exposure_s`/`gain` are supplied,
   comms snapshots the live exposure/gain, pauses auto-exposure, captures at the
   requested **fixed worst-case** point, then restores (try/finally). The web UI
   buttons pass `0.9 s` + `gain 16` (the auto-exposure ceiling) so the mask is a

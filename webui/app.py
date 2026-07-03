@@ -184,6 +184,7 @@ def home_page():
         tuning_profile=tuning_profile,
         test_mode=(status.result.get("test_mode", True) if status.ok else True),
         version=(version.result.get("version") if version.ok else None),
+        wheels=(version.result.get("wheels") if version.ok else None),
     )
 
 
@@ -1083,6 +1084,7 @@ def update_page():
     return render_template(
         "update.html",
         version=(version.result.get("version") if version.ok else "unknown"),
+        wheels=(version.result.get("wheels") if version.ok else None),
         running=_running_commit(),
     )
 
@@ -1559,8 +1561,13 @@ def debug_collect():
             mp  = _safe_call("match_params_get")
             bgc = _safe_call("bg_cache_status")
             see = _safe_call("seeing_get")
+            ver = _safe_call("version")
             calres = cal.result if cal.ok and cal.result else {}
             eff = {
+                # Release + wheel versions: the wheels update independently of
+                # the code, and a stale olive-solve wheel has masqueraded as an
+                # application regression before. Now every bundle records them.
+                "version":       ver.result if ver.ok else {"error": ver.error},
                 "solver_params": sp.result if sp.ok else {"error": sp.error},
                 "match_params":  mp.result if mp.ok else {"error": mp.error},
                 "bg_cache":      bgc.result if bgc.ok else {"error": bgc.error},

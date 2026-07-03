@@ -269,6 +269,7 @@
 
 <p class="version-badge" style="text-align:center; opacity:0.6; margin-top:18px; font-size:0.85em;">
   Software version: {{ version if version else 'unknown' }}
+  {%- if wheels %} &middot; solver {{ wheels.olive_solve or '?' }} &middot; extractor {{ wheels.sycamore or '?' }}{% endif %}
 </p>
 
 <script>

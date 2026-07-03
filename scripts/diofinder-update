@@ -104,9 +104,26 @@ for a in rel.get('assets', []):
 " "$2" 2>/dev/null
 }
 
-install_wheel() { # label repo pattern [pattern...]
-  local label=$1 repo=$2 whl url pat
-  shift 2
+# Per-wheel refresh outcomes, reported loudly at the end of the run. A wheel
+# that silently stays stale can masquerade as an application regression (a
+# pre-June olive-solve wheel under current code produced a device-wide
+# no-solve that took a full bundle-replay investigation to attribute), so
+# "kept the installed version" must never scroll by unnoticed.
+WHEEL_SUMMARY=""
+
+wheel_note() { # label outcome
+  WHEEL_SUMMARY="${WHEEL_SUMMARY}  $1: $2\n"
+}
+
+installed_wheel_version() { # dist
+  sudo -u diofinder "$DIOFINDER_DIR/venv/bin/pip" show "$1" 2>/dev/null \
+    | awk '/^Version:/{print $2}'
+}
+
+install_wheel() { # label dist repo pattern [pattern...]
+  local label=$1 dist=$2 repo=$3 whl url pat before after
+  shift 3
+  before=$(installed_wheel_version "$dist")
   for pat in "$@"; do
     whl=$(ls "$VENDOR_WHEELS"/$pat 2>/dev/null | sort -V | tail -n1 || true)
     [ -n "$whl" ] && break
@@ -118,28 +135,51 @@ install_wheel() { # label repo pattern [pattern...]
     done
     if [ -z "$url" ]; then
       LOG "WARN: no $label wheel in vendor/wheels/ or $repo releases (keeping installed version)"
+      wheel_note "$label" "NOT refreshed (no wheel found / no network) — still ${before:-not installed}"
       return 0
     fi
     whl="$WHEEL_TMP/$(basename "$url")"
     if ! curl -fsSL "$url" -o "$whl"; then
       LOG "WARN: $label wheel download failed (keeping installed version)"
+      wheel_note "$label" "NOT refreshed (download failed) — still ${before:-not installed}"
       return 0
     fi
   fi
   LOG "Installing $label: $(basename "$whl")"
-  sudo -u diofinder "$DIOFINDER_DIR/venv/bin/pip" install --quiet \
-    --force-reinstall --no-deps "$whl" \
-    || LOG "WARN: $label wheel install failed (keeping installed version)"
+  if sudo -u diofinder "$DIOFINDER_DIR/venv/bin/pip" install --quiet \
+      --force-reinstall --no-deps "$whl"; then
+    after=$(installed_wheel_version "$dist")
+    if [ -n "$before" ] && [ "$after" = "$before" ]; then
+      wheel_note "$label" "OK — $after (already current)"
+    else
+      wheel_note "$label" "OK — ${before:-none} -> ${after:-?}"
+    fi
+  else
+    LOG "WARN: $label wheel install failed (keeping installed version)"
+    wheel_note "$label" "NOT refreshed (pip install failed) — still ${before:-not installed}"
+  fi
 }
 
 PYTAG=$(sudo -u diofinder "$DIOFINDER_DIR/venv/bin/python" \
   -c 'import sys; print(f"cp{sys.version_info[0]}{sys.version_info[1]}")')
 
-install_wheel "olive-solve"      mconsidine/olive-solve      "tetra3-*aarch64*.whl"
+install_wheel "olive-solve"      tetra3      mconsidine/olive-solve      "tetra3-*aarch64*.whl"
 # Prefer a wheel for this interpreter; fall back to abi3 (sycamore >= 0.11.2
 # ships a single abi3 wheel covering all Python >= 3.8)
-install_wheel "sycamore-extract" mconsidine/sycamore-extract \
+install_wheel "sycamore-extract" star_detect mconsidine/sycamore-extract \
   "star_detect-*${PYTAG}*aarch64*.whl" "star_detect-*abi3*aarch64*.whl"
+
+# Loud, unmissable wheel outcome — printed here AND repeated at the very end
+# of the run (the tail is what the webui update page shows last).
+LOG "Wheel refresh summary:"
+printf "%b" "$WHEEL_SUMMARY" | while IFS= read -r line; do [ -n "$line" ] && LOG "$line"; done
+case "$WHEEL_SUMMARY" in
+  *"NOT refreshed"*)
+    LOG "WARNING: one or more wheels were NOT refreshed. If this update was"
+    LOG "         meant to pick up solver/extractor fixes, re-run it with"
+    LOG "         working internet, or place wheels in $VENDOR_WHEELS/."
+    ;;
+esac
 
 # --- Refresh CLI wrapper scripts in /usr/local/bin ----------------------------
 # install.sh COPIES these wrappers into /usr/local/bin at image-build time (they
@@ -197,3 +237,12 @@ systemctl restart diofinder.service
 systemctl restart diofinder-webui.service
 
 LOG "Update to $TAG complete"
+# Repeat the wheel outcome as the final lines — the tail of this log is what
+# the webui update page (and a scrolled-back terminal) shows last.
+if [ -n "$WHEEL_SUMMARY" ]; then
+  LOG "Wheel refresh summary:"
+  printf "%b" "$WHEEL_SUMMARY" | while IFS= read -r line; do [ -n "$line" ] && LOG "$line"; done
+  case "$WHEEL_SUMMARY" in
+    *"NOT refreshed"*) LOG "WARNING: one or more wheels were NOT refreshed (see above)." ;;
+  esac
+fi
