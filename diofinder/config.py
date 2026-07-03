@@ -27,7 +27,7 @@ DEFAULT_CONFIG_PATH = "/etc/diofinder/diofinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.11.15"
+    version: str = "0.11.16"
 
     # -------- Camera --------
     frame_width: int = 960
@@ -210,15 +210,25 @@ class Config:
     boresight_y: float = 380.0   # frame_height / 2
     boresight_x: float = 480.0   # frame_width / 2
 
+    # -------- Star naming (display only) --------
+    # "Centered star" label: True (default) names the BRIGHTEST cataloged star
+    # within star_name_radius_deg of the boresight (fallback: nearest star when
+    # none is that close); False reverts to pure nearest-by-angle. Live-mutable
+    # via solver_params_set (expert toggle on the Advanced page).
+    star_name_brightest: bool = True
+    star_name_radius_deg: float = 2.0
+
     # -------- Comms --------
     lx200_port: int = 4060
     lx200_client_timeout_s: float = 30.0
-    # IMU pointing motion gate (degrees of physical rotation since the last
-    # solve). Below this the device is treated as stationary and :GR/:GD report
-    # the last solved RA/Dec instead of the IMU prediction — so a parked scope
-    # doesn't show gyro drift. The IMU prediction engages only for a real slew.
-    # Seeded into shared_cfg at comms startup; live-tunable there.
-    imu_pointing_gate_deg: float = 1.0
+    # IMU pointing motion gate, in degrees/second of measured rotation RATE.
+    # Below this the device is treated as stationary and :GR/:GD report the
+    # last solved RA/Dec (no gyro-drift wander on a parked scope); above it the
+    # IMU prediction engages — including for slow pans the old
+    # displacement-since-solve gate froze. Parked drift is ~0.01 deg/s; even a
+    # slow manual nudge is >0.1. Once moving, the prediction holds until the
+    # next solve re-anchors. Seeded into shared_cfg; live-tunable there.
+    imu_rate_gate_dps: float = 0.1
 
     # -------- CPU affinity --------
     # Pi Zero 2W: 4 cores.

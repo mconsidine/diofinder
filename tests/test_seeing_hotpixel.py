@@ -331,6 +331,14 @@ class MaintSeeingDispatchTests(unittest.TestCase):
         r = self._call("solver_params_set", {"detect_max_axis_ratio": 0.5})
         self.assertFalse(r.ok)
 
+    def test_solver_params_set_star_name_brightest(self):
+        r = self._call("solver_params_set", {"star_name_brightest": False})
+        self.assertTrue(r.ok, r.error)
+        self.assertIs(self.ctx.shared_cfg["star_name_brightest"], False)
+        r = self._call("solver_params_get", {})
+        self.assertTrue(r.ok, r.error)
+        self.assertIs(r.result["star_name_brightest"], False)
+
     def test_solver_params_set_tracking_keys(self):
         r = self._call("solver_params_set",
                        {"tracking_enabled": True, "tracking_window_px": 64,

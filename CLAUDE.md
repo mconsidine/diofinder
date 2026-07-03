@@ -81,7 +81,8 @@ LX200-pointing consumers, and the calibration loop).
 | `auto_exposure_max_s` | float | comms (via `seeing_set`) | comms auto-exposure thread |
 | `auto_exposure_max_gain` | float | comms (via `seeing_set`) | comms auto-exposure thread |
 | `auto_exposure_peak_floor` | float | comms (via maint) | comms auto-exposure thread |
-| `imu_pointing_gate_deg` | float | comms (seed from cfg) | comms LX200 pointing (`_imu_predict`) |
+| `imu_rate_gate_dps` | float | comms (seed from cfg) | comms LX200 pointing (rate gate in `_imu_predict`) |
+| `star_name_brightest` | bool | comms (via maint `solver_params_set`) | solver (centered-star naming) |
 | `imu_available` | bool | imu_thread | comms, webui |
 | `imu_q` | tuple (w,x,y,z) | imu_thread | comms |
 | `imu_t` | float | imu_thread | comms |
@@ -758,7 +759,7 @@ set in `diofinder.conf`.
 | `/var/lib/diofinder/` | Star databases (`.npz`), debug ZIPs, saved frames |
 | `/var/lib/diofinder/hot_pixel_mask.npz` | Hot-pixel mask (from `dark_capture`) |
 | `/var/lib/diofinder/seeing_overrides.json` | Saved Good/Bad seeing overrides (factory presets stay immutable) |
-| `/var/lib/diofinder/star_names.csv` | Star naming catalog (from astro_databases release); powers the Camera-page "Centered star" label (names the cataloged star nearest the boresight). Optional — missing file disables naming. Refreshed by `diofinder-db-update`. |
+| `/var/lib/diofinder/star_names.csv` | Star naming catalog (from astro_databases release); powers the "Centered star" label (default: the BRIGHTEST cataloged star within `star_name_radius_deg` (2°) of the boresight, falling back to nearest; the expert toggle `star_name_brightest=false` reverts to pure nearest). Optional — missing file disables naming. Refreshed by `diofinder-db-update`. |
 | `/var/lib/diofinder/captures/` | PNG captures when `save_failed_frames=true` (100 MB cap, oldest evicted) |
 | `/run/diofinder/maint.sock` | Maintenance Unix socket |
 | `/var/lib/diofinder/version` | Running release tag + ISO date. Stamped at image build (`install.sh`, from `DIOFINDER_VERSION`) and rewritten by `diofinder-update`. The `version` maint command resolves it as: this file → `git describe` of `/opt/diofinder` → in-code `cfg.version` (so a fresh burn reports its real tag instead of the stale default). |

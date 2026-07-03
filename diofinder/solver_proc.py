@@ -1159,14 +1159,25 @@ def solver_main(slots, latest_solution, shared_cfg,
                 dec_out = dec_target[0] if hasattr(dec_target, "__len__") else dec_target
 
             n_matches = soln.get("Matches", 0)
-            # Name the cataloged star nearest the boresight (display only).
-            # ra_out/dec_out is the boresight sky coordinate (target pixel).
+            # Name the "centered star" (display only). Default: the BRIGHTEST
+            # cataloged star within star_name_radius_deg of the boresight
+            # (falling back to plain nearest when none is that close) — the
+            # notable star beats a faint catalog entry a hair closer. The
+            # expert toggle star_name_brightest=false reverts to pure nearest.
             star = None
             if star_names is not None:
                 try:
-                    star = star_names.nearest(ra_out, dec_out, measured_fov)
+                    brightest = bool(shared_cfg.get(
+                        "star_name_brightest",
+                        getattr(cfg, "star_name_brightest", True)))
+                    if brightest:
+                        star = star_names.brightest_within(
+                            ra_out, dec_out,
+                            float(getattr(cfg, "star_name_radius_deg", 2.0)))
+                    if star is None:
+                        star = star_names.nearest(ra_out, dec_out, measured_fov)
                 except Exception as e:
-                    log.debug("Nearest-star lookup failed: %s", e)
+                    log.debug("Star-name lookup failed: %s", e)
             latest_solution.update(_filled_solution(
                 ra=ra_out, dec=dec_out,
                 roll=soln.get("Roll", 0.0), fov=measured_fov,

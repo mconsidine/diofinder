@@ -244,6 +244,18 @@
   <div class="card expert-only">
     <h2>Solver Parameters</h2>
     {% if solver_params %}
+      <form method="post" action="{{ url_for('solver_params_set') }}"
+            style="margin:0 0 10px;">
+        <input type="hidden" name="next" value="camera_page">
+        <input type="hidden" name="star_name_brightest"
+               value="{{ 'false' if solver_params.star_name_brightest else 'true' }}">
+        <label class="checkbox">
+          <input type="checkbox" onchange="this.form.submit()"
+                 {{ 'checked' if solver_params.star_name_brightest }}>
+          Centered star = brightest within 2&deg; of the boresight
+          <span class="hint">(off: nearest cataloged star, the original behaviour)</span>
+        </label>
+      </form>
       <form method="post" action="{{ url_for('solver_params_set') }}">
         <label class="expert-only">
           Extractor backend
