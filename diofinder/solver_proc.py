@@ -255,15 +255,19 @@ def _handle_solver_cmd(cmd, calibrator, polar,
             try:
                 mask = _hp.capture_dark_mask(state.read_frame, n, shape)
                 if _hp.implausibly_large(mask.count, shape):
-                    # Lens was NOT capped: the mask saw the sky. Saving it
-                    # would silently break every subsequent solve (observed:
-                    # a 195k-pixel mask -> healthy star counts, zero solves).
+                    # The mask saw light: lens not capped, or a light leak.
+                    # Saving it would silently break every subsequent solve
+                    # (observed: a 195k-pixel mask -> healthy star counts,
+                    # zero solves). MAD-collapse on a clean capped frame is
+                    # handled by MIN_THRESH_DN in hot_pixel.py, so by the
+                    # time this trips the capture genuinely saw light.
                     return SolverCmdReply(
                         request_id=cmd.request_id, ok=False,
                         error=(f"dark capture flagged {mask.count} pixels "
                                f"(~{100.0 * mask.count / (shape[0] * shape[1]):.0f}% "
-                               "of the frame) — that is sky, not hot pixels. "
-                               "Cap or cover the lens completely and retry. "
+                               "of the frame) — the sensor saw light, not hot "
+                               "pixels. Cap or cover the lens completely "
+                               "(check for light leaks) and retry. "
                                "The existing mask was left unchanged."))
                 mask.save(_hp.DEFAULT_MASK_PATH)
                 state.hot_pixel_mask = mask
@@ -508,9 +512,19 @@ def _imu_propagate_hint(last_sky_q, last_imu_q, shared_cfg):
     yh = wd*ys - xd*zs + yd*ws + zd*xs
     zh = wd*zs + xd*ys - yd*xs + zd*ws
 
-    # Uncertainty: 1.5× the measured rotation angle, floor 2°.
+    # Uncertainty: 2.5x the measured rotation angle, floor 2 deg. The delta is
+    # applied in the IMU BODY frame, not the camera frame, so the hint attitude
+    # error grows with the slew size in a mounting-dependent direction —
+    # measured on-sky: a 22.5 deg slew put the hint 39.5 deg from truth (1.76x),
+    # outside the old 1.5x cone. olive-solve >= 0.1.3 falls back to a blind
+    # pass when the hinted pass matches nothing, but on older wheels an
+    # out-of-cone hint is a hard NoMatch, and even on current wheels a cone
+    # that never contains truth just wastes the hinted pass. 2.5x keeps truth
+    # inside for any mounting (worst case is 2x when the IMU and camera frames
+    # are fully perpendicular). The real fix — conjugating the delta into the
+    # camera frame via the solve-pair mounting rotation — is future work.
     angle_deg = math.degrees(2.0 * math.acos(min(1.0, abs(wd))))
-    uncertainty_deg = max(2.0, angle_deg * 1.5)
+    uncertainty_deg = max(2.0, angle_deg * 2.5)
 
     return (wh, xh, yh, zh), uncertainty_deg
 
@@ -597,7 +611,10 @@ def solver_main(slots, latest_solution, shared_cfg,
         import tetra3 as _tetra3
         db_path = _solver_db_path(cfg.solver_db)
         solver_t3 = _tetra3.Tetra3(db_path)
-        log.info("olive-solve ready (db: %s)", db_path)
+        from diofinder.wheels import wheel_versions
+        _wv = wheel_versions()
+        log.info("olive-solve ready (wheel %s, db: %s)",
+                 _wv.get("olive_solve") or "unknown", db_path)
     except Exception as e:
         log.error("Failed to load olive-solve: %s", e)
         raise RuntimeError(f"olive-solve unavailable: {e}") from e
@@ -618,7 +635,8 @@ def solver_main(slots, latest_solution, shared_cfg,
         # import-time, dependency — this try owns the "missing wheel" error.
         # Must be bound before the log line below uses HAS_TOPHAT.
         from diofinder.bg_cache import BackgroundCache, HAS_TOPHAT, CacheState
-        log.info("sycamore star_detect ready (top_hat support: %s)", HAS_TOPHAT)
+        log.info("sycamore star_detect ready (wheel %s, top_hat support: %s)",
+                 _wv.get("sycamore") or "unknown", HAS_TOPHAT)
     except ImportError as e:
         log.error("sycamore star_detect not installed: %s", e)
         raise RuntimeError("sycamore star_detect unavailable") from e

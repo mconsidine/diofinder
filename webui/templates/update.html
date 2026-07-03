@@ -2,7 +2,8 @@
 {% block title %}Update diofinder{% endblock %}
 {% block content %}
 <h2>Update</h2>
-<p>Current version: <strong>{{ version }}</strong></p>
+<p>Current version: <strong>{{ version }}</strong>
+{%- if wheels %} &nbsp;<span class="hint">(wheels: olive-solve {{ wheels.olive_solve or 'missing' }}, sycamore {{ wheels.sycamore or 'missing' }})</span>{% endif %}</p>
 {% if running %}
 <p class="hint" style="margin-top:-6px;">Running commit: <code>{{ running }}</code></p>
 {% endif %}

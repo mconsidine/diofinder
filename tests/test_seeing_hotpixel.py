@@ -223,6 +223,35 @@ class HotPixelTests(unittest.TestCase):
         m.repair(frame)  # shape mismatch -> no-op
         self.assertTrue(np.array_equal(frame, before))
 
+    def test_clean_dark_frame_mad_collapse(self):
+        # A properly capped dark frame is so uniform that >50% of pixels share
+        # one value -> MAD quantizes to 0. Without the MIN_THRESH_DN floor the
+        # threshold degenerated to the bare median and flagged EVERY pixel one
+        # DN above it (observed live: 345,278 px = 47.3% of the frame from a
+        # correctly capped capture). Only genuine hot pixels may be flagged.
+        rng = np.random.default_rng(42)
+        stack = np.full((40, 40), 16, dtype=np.uint8)
+        dither = rng.random((40, 40)) < 0.4        # 40% of pixels read 17
+        stack[dither] += 1
+        stack[5, 5] = 40                            # genuine hot pixels
+        stack[20, 31] = 200
+        idx = hot_pixel.compute_hot_pixel_indices(stack, k=5.0)
+        flagged = set(idx.tolist())
+        self.assertEqual(flagged, {5 * 40 + 5, 20 * 40 + 31})
+
+    def test_threshold_floor_does_not_mask_noisy_frames(self):
+        # A frame with real noise (MAD well above the floor) keeps the k*MAD
+        # threshold: a pixel 3 DN over the median is noise there, not hot.
+        rng = np.random.default_rng(7)
+        stack = rng.normal(40.0, 4.0, (50, 50)).clip(0, 255).astype(np.uint8)
+        stack[10, 10] = 255
+        idx = hot_pixel.compute_hot_pixel_indices(stack, k=5.0)
+        flagged = set(idx.tolist())
+        self.assertIn(10 * 50 + 10, flagged)
+        # k*sigma ~ 5*4 = 20 DN: nothing within a few DN of the median flags,
+        # so the mask stays tiny on a noisy (but healthy) frame.
+        self.assertLess(len(flagged), 10)
+
     def test_implausibly_large_guard(self):
         # 0.5% cap: a genuine mask (hundreds of px) passes; a sky-poisoned one
         # (195k px on 760x960 observed live) is rejected on save AND on load.

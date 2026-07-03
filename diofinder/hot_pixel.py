@@ -39,8 +39,10 @@ DEFAULT_MASK_PATH = "/var/lib/diofinder/hot_pixel_mask.npz"
 # repair step then smears >100k pixels of every live frame — star counts still
 # look healthy but centroid geometry is corrupted and nothing plate-solves
 # (observed live: a 195,356-pixel mask, 27% of the frame, zero solves after).
-# Cap = 0.5% of the frame (~3,600 px at 960x760): ~7x headroom over any
-# legitimate mask, far below any sky-poisoned one.
+# A second failure mode produced the same signature from a PROPERLY capped
+# capture: MAD collapse on a clean dark frame (see MIN_THRESH_DN below) flagged
+# 47% of the frame. Cap = 0.5% of the frame (~3,600 px at 960x760): ~7x
+# headroom over any legitimate mask, far below either poisoned kind.
 MAX_MASK_FRACTION = 0.005
 
 
@@ -57,13 +59,24 @@ def implausibly_large(count: int, shape) -> bool:
     return total > 0 and count > max(64, MAX_MASK_FRACTION * total)
 
 
+# Minimum threshold offset above the median, in DN. A clean capped dark frame
+# is so uniform that >50% of its (uint8, median-stacked) pixels share one value,
+# so MAD collapses to 0 and a pure k*MAD threshold degenerates to "every pixel
+# above the median" — observed live: a properly capped capture flagged 345,278
+# pixels, 47.3% of the frame. Real hot pixels sit >=10 DN above the pedestal;
+# quantization dither sits within 1-2 DN. 3 DN cleanly separates the two.
+MIN_THRESH_DN = 3.0
+
+
 def compute_hot_pixel_indices(stack: np.ndarray, k: float = 5.0) -> np.ndarray:
     """Return flat indices of hot pixels in a median-stacked dark frame.
 
     A pixel is hot if its stacked value exceeds
-        median + k * (1.4826 * MAD)
+        median + max(k * (1.4826 * MAD), MIN_THRESH_DN)
     of the whole stacked frame. MAD is the median absolute deviation, so the
-    threshold is robust to the hot pixels themselves.
+    threshold is robust to the hot pixels themselves; the MIN_THRESH_DN floor
+    keeps the threshold sane when MAD quantizes to 0 on a very clean dark frame
+    (without it, everything above the median gets flagged — half the frame).
 
     ``stack`` is a 2-D array (the per-pixel median over N dark frames).
     Returns a 1-D int64 array of flat indices into ``stack``.
@@ -71,12 +84,7 @@ def compute_hot_pixel_indices(stack: np.ndarray, k: float = 5.0) -> np.ndarray:
     flat = stack.astype(np.float32).ravel()
     med = float(np.median(flat))
     mad = float(np.median(np.abs(flat - med)))
-    sigma = 1.4826 * mad
-    if sigma <= 0.0:
-        # Degenerate (flat) dark frame: flag only strict-greater outliers.
-        thresh = med
-        return np.where(flat > thresh)[0].astype(np.int64)
-    thresh = med + k * sigma
+    thresh = med + max(k * 1.4826 * mad, MIN_THRESH_DN)
     return np.where(flat > thresh)[0].astype(np.int64)
 
 

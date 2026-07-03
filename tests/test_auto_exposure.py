@@ -23,7 +23,9 @@ if "star_detect" not in sys.modules:
     _stub.set_num_threads = lambda n: None
     sys.modules["star_detect"] = _stub
 
-from diofinder.comms_proc import _auto_exposure_decision, _ae_apply_raise_debounce
+from diofinder.comms_proc import (_auto_exposure_decision,
+                                  _ae_apply_raise_debounce,
+                                  _ae_apply_reversal_damping)
 
 
 def _decide(**overrides):
@@ -223,6 +225,59 @@ class RaiseDebounceTests(unittest.TestCase):
         act, s = _ae_apply_raise_debounce({"gain": 8.0}, 0.2, 4.0, 2)
         self.assertEqual(act, {"gain": 8.0})
         self.assertEqual(s, 3)
+
+
+class ReversalDampingTests(unittest.TestCase):
+    """The x1.5 gain step straddling the star-count deadband produced a
+    persistent 2.1 <-> 3.2 limit cycle on-sky; direction reversals must take
+    progressively smaller steps so the ladder converges into the deadband."""
+
+    def test_same_direction_keeps_full_step(self):
+        act, d = _ae_apply_reversal_damping({"gain": 4.8}, 0.2, 3.2, last_dir=1)
+        self.assertEqual(act, {"gain": 4.8})
+        self.assertEqual(d, 1)
+
+    def test_first_move_is_undamped(self):
+        act, d = _ae_apply_reversal_damping({"gain": 4.8}, 0.2, 3.2, last_dir=0)
+        self.assertEqual(act, {"gain": 4.8})
+        self.assertEqual(d, 1)
+
+    def test_gain_reversal_takes_half_step(self):
+        # Previous applied change was a reduce; the proposed x1.5 raise from
+        # 2.1 (-> 3.2) is damped to sqrt(1.5) (~ 2.57).
+        act, d = _ae_apply_reversal_damping({"gain": 3.2}, 0.2, 2.1, last_dir=-1)
+        self.assertAlmostEqual(act["gain"], 2.1 * (3.2 / 2.1) ** 0.5, places=2)
+        self.assertEqual(d, 1)
+
+    def test_limit_cycle_converges_into_deadband(self):
+        # Reproduce the on-sky cycle: at gain <= 2.4 the frame is starved
+        # (raise), at gain >= 2.9 it is over-served (reduce). The full x1.5 /
+        # x(1/1.5) steps jump straight across [2.4, 2.9] forever; with damping
+        # the walk must land inside within a few reversals.
+        g, last = 2.1, 0
+        for _ in range(12):
+            if g <= 2.4:
+                proposed = {"gain": round(min(16.0, g * 1.5), 2)}
+            elif g >= 2.9:
+                proposed = {"gain": round(max(1.0, g / 1.5), 2)}
+            else:
+                break                     # settled inside the deadband
+            act, last = _ae_apply_reversal_damping(proposed, 0.2, g, last)
+            if act:
+                g = act["gain"]
+        self.assertTrue(2.4 < g < 2.9, f"never settled: gain={g}")
+
+    def test_exposure_reversal_damped_and_min_delta_respected(self):
+        # Exposure reversal: damped step below the 5 ms floor becomes a hold.
+        act, d = _ae_apply_reversal_damping(
+            {"exposure_s": 0.208}, 0.2, 4.0, last_dir=-1)
+        self.assertIsNone(act)
+        self.assertEqual(d, -1)          # held -> direction memory unchanged
+
+    def test_hold_passes_through(self):
+        act, d = _ae_apply_reversal_damping(None, 0.2, 4.0, last_dir=1)
+        self.assertIsNone(act)
+        self.assertEqual(d, 1)
 
 
 if __name__ == "__main__":
