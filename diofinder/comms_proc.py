@@ -25,6 +25,7 @@ Available maintenance commands:
 
 import datetime
 import itertools
+from collections import deque
 import json
 import logging
 import math
@@ -923,15 +924,57 @@ def _do_alignment(align_state, cfg, shared_cfg,
     return "M31 EX GAL MAG 3.5 SZ178.0'#"
 
 
-# Motion gate for the IMU pointing prediction (degrees of physical rotation
-# since the last solve). The IMU runs IMUPLUS (no magnetometer), so a parked
-# scope still shows slow gyro heading drift; projected to the sky that walks the
-# crosshair ~0.5 deg off a stationary mount between solves. Below this gate we
-# treat the device as stationary and report the authoritative last solved
-# position instead; the prediction engages only for a genuine slew. Gauged on
-# raw IMU delta (independent of the calibration transform). Live-tunable via
-# shared_cfg["imu_pointing_gate_deg"].
-_IMU_STATIONARY_GATE_DEG = 1.0
+# Rotation-RATE motion gate for the IMU pointing prediction. The IMU runs
+# IMUPLUS (no magnetometer), so a parked scope still shows slow gyro heading
+# drift; projected to the sky that walks the crosshair ~0.5 deg off a
+# stationary mount between solves. The old displacement-since-solve gate cured
+# that but froze the crosshair for SLOW pans too (each solve re-anchors the
+# reference, so sub-gate motion never engaged). Rate distinguishes the two
+# directly: parked drift is ~0.01 deg/s while even a slow manual pan is
+# >0.1 deg/s. Rate is measured over a >= _IMU_RATE_BASELINE_S window of the
+# samples observed at :GR/:GD poll time (quantization noise over a shorter
+# window would swamp slow pans). Once engaged, the prediction HOLDS until a
+# fresh solve re-anchors the reference after motion stops — otherwise the
+# report would jump back by the whole slew distance at the moment you stop.
+# Live-tunable via shared_cfg["imu_rate_gate_dps"].
+_IMU_RATE_GATE_DPS = 0.1
+_IMU_RATE_BASELINE_S = 0.8
+_imu_rate_state = {}     # samples: deque[(imu_t, quat)], engaged, moving_t
+
+
+def _imu_motion_engaged(state, q_now, imu_t, ref_t,
+                        rate_gate_dps=_IMU_RATE_GATE_DPS,
+                        baseline_s=_IMU_RATE_BASELINE_S):
+    """Rate-based stationary detector for the pointing prediction.
+
+    Feeds (imu_t, quat) samples into ``state`` and returns True while the
+    device is judged to be moving (or has moved and no solve has re-anchored
+    the reference yet). Pure on its inputs — unit-tested without hardware.
+    """
+    samples = state.setdefault("samples", deque())
+    if not samples or imu_t > samples[-1][0]:
+        samples.append((imu_t, tuple(q_now)))
+    while samples and imu_t - samples[0][0] > 4.0 * baseline_s:
+        samples.popleft()
+    # Newest sample at least baseline_s older than now: long enough that real
+    # slow motion clears quaternion quantization noise.
+    rate = None
+    for t_old, q_old in reversed(samples):
+        if imu_t - t_old >= baseline_s:
+            r = quat_delta_rotvec(q_now, q_old)
+            ang = math.degrees(
+                math.sqrt(r[0] * r[0] + r[1] * r[1] + r[2] * r[2]))
+            rate = ang / (imu_t - t_old)
+            break
+    if rate is not None and rate >= rate_gate_dps:
+        state["engaged"] = True
+        state["moving_t"] = imu_t
+    elif (state.get("engaged") and rate is not None
+            and ref_t and ref_t > state.get("moving_t", 0.0)):
+        # Motion has stopped AND a solve landed afterwards: the frozen solved
+        # position now equals where we are — disengage seamlessly.
+        state["engaged"] = False
+    return bool(state.get("engaged"))
 
 
 def _imu_predict(shared_cfg):
@@ -955,14 +998,15 @@ def _imu_predict(shared_cfg):
     C_flat = shared_cfg.get("imu_calib_C")
     if C_flat is None or len(C_flat) != 6:
         return None
+    # Rotation-rate motion gate: parked = report the solved position (None);
+    # moving (or moved with no re-anchoring solve yet) = predict. See
+    # _imu_motion_engaged for the full rationale.
+    rate_gate = float(shared_cfg.get("imu_rate_gate_dps", _IMU_RATE_GATE_DPS))
+    with _imu_filt_lock:
+        if not _imu_motion_engaged(_imu_rate_state, q_now, imu_t, ref_t,
+                                   rate_gate_dps=rate_gate):
+            return None
     r = quat_delta_rotvec(q_now, q_ref)
-    # IMU-delta-only motion gate: if the device has barely rotated since the last
-    # solve, the "motion" is gyro drift on a parked scope — report the solved
-    # position (return None) rather than walk the crosshair off it.
-    gate_deg = float(shared_cfg.get("imu_pointing_gate_deg",
-                                    _IMU_STATIONARY_GATE_DEG))
-    if math.degrees(math.sqrt(r[0]*r[0] + r[1]*r[1] + r[2]*r[2])) < gate_deg:
-        return None
     c = C_flat
     dr = c[0]*r[0] + c[1]*r[1] + c[2]*r[2]
     du = c[3]*r[0] + c[4]*r[1] + c[5]*r[2]
@@ -1576,6 +1620,9 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "detect_max_axis_ratio", ctx.cfg.detect_max_axis_ratio),
                 "detect_local_noise":   ctx.shared_cfg.get(
                     "detect_local_noise",   ctx.cfg.detect_local_noise),
+                "star_name_brightest":  ctx.shared_cfg.get(
+                    "star_name_brightest",
+                    getattr(ctx.cfg, "star_name_brightest", True)),
                 "min_centroids":       ctx.shared_cfg.get(
                     "min_centroids",       ctx.cfg.min_centroids),
                 "max_solve_stars":     ctx.shared_cfg.get(
@@ -1692,6 +1739,10 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 ln = bool(args["detect_local_noise"])
                 ctx.shared_cfg["detect_local_noise"] = ln
                 updates["detect_local_noise"] = ln
+            if "star_name_brightest" in args:
+                snb = bool(args["star_name_brightest"])
+                ctx.shared_cfg["star_name_brightest"] = snb
+                updates["star_name_brightest"] = snb
             if "min_centroids" in args:
                 try:
                     mc = int(args["min_centroids"])
@@ -2235,11 +2286,11 @@ def comms_main(latest_solution, shared_cfg,
     )
     _pin_to_cpu(cfg.cpu_comms)
 
-    # Seed the IMU pointing motion-gate from config so the .conf value is
+    # Seed the IMU pointing rate-gate from config so the .conf value is
     # honored; setdefault leaves any live override in place.
-    shared_cfg.setdefault("imu_pointing_gate_deg",
-                          float(getattr(cfg, "imu_pointing_gate_deg",
-                                        _IMU_STATIONARY_GATE_DEG)))
+    shared_cfg.setdefault("imu_rate_gate_dps",
+                          float(getattr(cfg, "imu_rate_gate_dps",
+                                        _IMU_RATE_GATE_DPS)))
 
     ctx = _MaintContext(
         cfg=cfg, latest_solution=latest_solution, shared_cfg=shared_cfg,

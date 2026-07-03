@@ -792,6 +792,9 @@ def solver_params_set():
     if "detect_local_noise" in request.form:
         pargs["detect_local_noise"] = request.form.get(
             "detect_local_noise", "false").strip().lower() in ("true", "1", "on")
+    if "star_name_brightest" in request.form:
+        pargs["star_name_brightest"] = request.form.get(
+            "star_name_brightest", "false").strip().lower() in ("true", "1", "on")
     if request.form.get("min_centroids"):
         try:
             pargs["min_centroids"] = int(request.form["min_centroids"])

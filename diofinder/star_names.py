@@ -60,6 +60,36 @@ class StarNames:
             raise ValueError(f"no usable rows in {path}")
         return cls(np.array(ra), np.array(dec), np.array(mag), names, desigs)
 
+    def brightest_within(self, ra_deg: float, dec_deg: float,
+                         radius_deg: float):
+        """Return the BRIGHTEST cataloged star within radius_deg, or None.
+
+        Preferred display behaviour: "the star the crosshair is on" is usually
+        the naked-eye-notable one, not whichever faint catalog entry happens to
+        sit a fraction of a degree closer. Magnitude decides; separation is
+        reported for context.
+        """
+        ra = math.radians(ra_deg)
+        dec = math.radians(dec_deg)
+        cos_dec = math.cos(dec)
+        b = np.array(
+            [cos_dec * math.cos(ra), cos_dec * math.sin(ra), math.sin(dec)]
+        )
+        cos_radius = math.cos(math.radians(radius_deg))
+        dots = self._xyz @ b
+        within = dots >= cos_radius
+        if not within.any():
+            return None
+        idx = np.nonzero(within)[0]
+        best = idx[np.argmin(self._mag[idx])]   # brightest = smallest mag
+        sep_deg = math.degrees(math.acos(min(1.0, max(-1.0, float(dots[best])))))
+        return {
+            "name": self._names[best],
+            "desig": self._desigs[best],
+            "mag": round(float(self._mag[best]), 2),
+            "sep_deg": round(sep_deg, 2),
+        }
+
     def nearest(self, ra_deg: float, dec_deg: float, fov_deg: float):
         """Return the cataloged star nearest the given pointing, or None.
 
