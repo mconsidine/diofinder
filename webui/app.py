@@ -1105,11 +1105,21 @@ def update_page():
             return "diofinder-update not installed", 500
         return render_template("update_running.html", ref=ref or "latest release")
     version = _safe_call("version")
+    # Shipped-default divergence: /etc conf persists across OTA updates, so
+    # settings can silently rot (old tuning profile, old background mode...).
+    # Show every key that differs from the shipped conf.default so stale
+    # values are at least VISIBLE next to the update button.
+    try:
+        from diofinder.conf_migrate import diff_from_default
+        conf_diffs = diff_from_default()
+    except Exception:
+        conf_diffs = []
     return render_template(
         "update.html",
         version=(version.result.get("version") if version.ok else "unknown"),
         wheels=(version.result.get("wheels") if version.ok else None),
         running=_running_commit(),
+        conf_diffs=conf_diffs,
     )
 
 

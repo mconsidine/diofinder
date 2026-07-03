@@ -86,7 +86,9 @@ LX200-pointing consumers, and the calibration loop).
 | `imu_available` | bool | imu_thread | comms, webui |
 | `imu_q` | tuple (w,x,y,z) | imu_thread | comms |
 | `imu_t` | float | imu_thread | comms |
-| `imu_ref_q/ra/dec/roll/t` | varies | solver (post-solve) | comms |
+| `imu_ref_q/ra/dec/roll/t` | varies | solver (post-solve) | comms (display); prediction reads the atomic `imu_ref` tuple |
+| `imu_ref` | tuple (q, ra, dec, roll, t) | solver (post-solve, single RPC) | comms LX200 pointing (tear-proof reference) |
+| `solver_busy_t` | float | solver (set_db load window) | comms watchdog (skips enforcement while fresh, 120 s bound) |
 | `imu_calib_n`, `imu_calib_quality`, `imu_calib_C` | varies | solver | comms |
 | `fov_deg` | float | solver (post-calibration) | comms, webui |
 

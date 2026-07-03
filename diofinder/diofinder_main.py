@@ -91,6 +91,20 @@ def main():
     args = parser.parse_args()
 
     _setup_logging()
+    # One-shot conf migrations BEFORE the config is read: rewrites keys that
+    # still carry an old default whose replacement was a correctness fix
+    # (never overrides a user-edited value; stamped with conf_version so it
+    # runs once). Covers OTA-updated devices whose /etc conf predates the
+    # tuning-profile / background-mode / FOV-recenter changes.
+    try:
+        from diofinder.conf_migrate import migrate as _conf_migrate
+        _applied = _conf_migrate()
+        if _applied:
+            logging.getLogger("diofinder.main").warning(
+                "conf migrated (%d keys): %s", len(_applied),
+                ", ".join(f"{k}={v}" for k, v in _applied.items()))
+    except Exception as _e:
+        logging.getLogger("diofinder.main").warning("conf migration failed: %s", _e)
     cfg = load_config()
     os.sched_setaffinity(0, {cfg.cpu_comms})
     # Prefer the stamped release tag (written by install.sh / diofinder-update to

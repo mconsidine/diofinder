@@ -387,6 +387,32 @@ def _ae_apply_raise_debounce(action, cur_s, cur_g, raise_streak):
     return action, raise_streak
 
 
+# Refcounted auto-exposure pause: dark_capture and auto_tune both need AE
+# quiet while they drive the camera. Snapshot/restore of the shared flag
+# clobbered under interleaving (one path could restore a stale False,
+# disabling AE until restart). The user-facing enable flag is untouched;
+# the loop simply holds while the pause count is non-zero.
+_ae_pause_lock = threading.Lock()
+_ae_pause_count = 0
+
+
+def _ae_pause():
+    global _ae_pause_count
+    with _ae_pause_lock:
+        _ae_pause_count += 1
+
+
+def _ae_resume():
+    global _ae_pause_count
+    with _ae_pause_lock:
+        _ae_pause_count = max(0, _ae_pause_count - 1)
+
+
+def _ae_paused() -> bool:
+    with _ae_pause_lock:
+        return _ae_pause_count > 0
+
+
 def _auto_exposure_loop(ctx, interval_s=5.0):
     """Background controller: adjust exposure toward the target star count.
 
@@ -401,8 +427,8 @@ def _auto_exposure_loop(ctx, interval_s=5.0):
     while True:
         time.sleep(interval_s)
         try:
-            if not ctx.shared_cfg.get("auto_exposure_enabled",
-                                      cfg.auto_exposure_enabled):
+            if _ae_paused() or not ctx.shared_cfg.get(
+                    "auto_exposure_enabled", cfg.auto_exposure_enabled):
                 continue
             sol = dict(ctx.latest_solution)
             age = time.monotonic() - sol.get("epoch_monotonic", 0.0)
@@ -702,10 +728,9 @@ def _auto_tune_run(ctx, params):
               if (snap and snap.ok) else cfg.exposure_s)
     snap_g = (float(snap.result.get("gain", cfg.gain))
               if (snap and snap.ok) else cfg.gain)
-    # Pause the always-on auto-exposure loop so it doesn't fight the sweep.
-    ae_was = bool(ctx.shared_cfg.get("auto_exposure_enabled",
-                                     cfg.auto_exposure_enabled))
-    ctx.shared_cfg["auto_exposure_enabled"] = False
+    # Pause the always-on auto-exposure loop so it doesn't fight the sweep
+    # (refcounted — safe against a concurrent dark_capture pause).
+    _ae_pause()
 
     def _restore_camera():
         _call_camera(CAMERA_OP_SET_EXPOSURE, {"exposure_s": snap_s},
@@ -878,7 +903,7 @@ def _auto_tune_run(ctx, params):
         _at_set(phase="error", message=str(e),
                 error=f"{type(e).__name__}: {e}")
     finally:
-        ctx.shared_cfg["auto_exposure_enabled"] = ae_was
+        _ae_resume()
         _at_set(running=False)
 
 
@@ -919,6 +944,14 @@ def _watchdog_loop(ctx, interval_s=5.0):
             continue
         if epoch != last_epoch:
             last_epoch = epoch
+            last_change_mono = now
+            continue
+        # Solver declared itself busy (database load blocks the solve loop,
+        # so the epoch legitimately stalls): don't enforce while the flag is
+        # fresh. Bounded at 120 s so a solver that dies mid-load still gets
+        # restarted.
+        busy_t = float(ctx.shared_cfg.get("solver_busy_t", 0.0) or 0.0)
+        if busy_t > 0.0 and now - busy_t < 120.0:
             last_change_mono = now
             continue
         stale_s = now - last_change_mono
@@ -2029,7 +2062,7 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             if db_token and db_token != ctx.cfg.solver_db:
                 reply = _call_solver(SOLVER_OP_SET_DB, {"db": db_token},
                                      ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
-                                     timeout_s=15.0)
+                                     timeout_s=60.0)
                 if reply is None:
                     return MaintResponse(ok=False,
                                          error="solver did not respond to set_db "
@@ -2133,7 +2166,6 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             want_g = _opt_float("gain")
 
             snap_s = snap_g = None
-            ae_was = None
             if want_s is not None or want_g is not None:
                 snap = _call_camera(CAMERA_OP_GET_EXPOSURE, {},
                                     ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
@@ -2141,10 +2173,6 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                           if (snap and snap.ok) else ctx.cfg.exposure_s)
                 snap_g = (float(snap.result.get("gain", ctx.cfg.gain))
                           if (snap and snap.ok) else ctx.cfg.gain)
-                # Pause auto-exposure so it doesn't fight the fixed point.
-                ae_was = bool(ctx.shared_cfg.get("auto_exposure_enabled",
-                                                 ctx.cfg.auto_exposure_enabled))
-                ctx.shared_cfg["auto_exposure_enabled"] = False
                 if want_s is not None:
                     _call_camera(CAMERA_OP_SET_EXPOSURE, {"exposure_s": want_s},
                                  ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
@@ -2155,6 +2183,10 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 settle_s = want_s if want_s is not None else (snap_s or 0.5)
                 time.sleep(max(0.5, 2.0 * settle_s))
 
+            # Pause AE for the whole capture (refcounted): an AE step mid
+            # dark-capture changes the pedestal within the stack at ANY
+            # operating point, not just the fixed worst-case one.
+            _ae_pause()
             try:
                 reply = _call_solver(SOLVER_OP_DARK_CAPTURE, {"frames": frames},
                                      ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
@@ -2166,8 +2198,7 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 if snap_g is not None:
                     _call_camera(CAMERA_OP_SET_GAIN, {"gain": snap_g},
                                  ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
-                if ae_was is not None:
-                    ctx.shared_cfg["auto_exposure_enabled"] = ae_was
+                _ae_resume()
             if reply is None:
                 return MaintResponse(ok=False, error="solver did not respond")
             if not reply.ok:

@@ -7,6 +7,22 @@
 {% if running %}
 <p class="hint" style="margin-top:-6px;">Running commit: <code>{{ running }}</code></p>
 {% endif %}
+{% if conf_diffs %}
+<details style="margin:10px 0;">
+  <summary>Settings differing from shipped defaults ({{ conf_diffs|length }})</summary>
+  <p class="hint">Your <code>/etc/diofinder/diofinder.conf</code> persists across
+  updates. Differences are usually deliberate (calibration, tuning you chose) —
+  but if a row surprises you, the shipped default is what a fresh image would
+  use. One-shot migrations already update old defaults that changed for
+  correctness reasons.</p>
+  <table>
+    <tr><th>key</th><th>this device</th><th>shipped default</th></tr>
+    {% for key, cur, dflt in conf_diffs %}
+    <tr><td><code>{{ key }}</code></td><td><code>{{ cur }}</code></td><td><code>{{ dflt }}</code></td></tr>
+    {% endfor %}
+  </table>
+</details>
+{% endif %}
 <p>This pulls code from GitHub, refreshes Python dependencies (including the
    sycamore wheel), and restarts the service. Downtime is usually under a
    minute.</p>

@@ -233,3 +233,9 @@ log_solve_stats_every_n: 50
 
 # ---- Shutdown ----
 shutdown_grace_s: 2.0
+
+# ---- Conf migrations ----
+# Stamped by diofinder/conf_migrate.py. Fresh images ship at the current
+# version so one-shot migrations (which fix OLD defaults that changed for
+# correctness reasons on OTA-updated devices) never run here. Do not edit.
+conf_version: 1
