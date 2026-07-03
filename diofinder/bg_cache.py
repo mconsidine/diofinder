@@ -296,9 +296,10 @@ class BackgroundCache:
         """
         if not self.enabled:
             return
+        if solved:
+            self._solve_fail_run = 0
         if solved and quat is not None:
             self._last_solved_quat = tuple(quat)
-            self._solve_fail_run = 0
             # Solver-derived motion only drives slew when there's no IMU: the
             # IMU is the higher-rate, authoritative source, and the two quats
             # live in different frames (mixing them produced garbage angles).
@@ -381,8 +382,11 @@ class BackgroundCache:
             # steady detection uses a matching model.
             prev_mode = self._active_bg_mode
             self._active_bg_mode = bg_mode
-            if bg_block_size:
+            if bg_block_size and int(bg_block_size) != self._active_block_size:
                 self._active_block_size = int(bg_block_size)
+                if self.enabled and _model_kind(bg_mode) == "block":
+                    # The served block grid was built at the old tile size.
+                    self._needs_rebuild.set()
             if self.enabled and _model_kind(prev_mode) != _model_kind(bg_mode):
                 self._needs_rebuild.set()
 
@@ -394,6 +398,13 @@ class BackgroundCache:
             m = self._model
             force_perframe = (bg_mode not in CACHE_COMPATIBLE_MODES
                               and not is_block_cache and not is_image_cache)
+            # The cached model's noise is a temporal MAD; it cannot express a
+            # different estimator. With noise_mode=global_rms the STEADY path
+            # would silently use MAD while the fallback path used global RMS —
+            # a detection-threshold discontinuity across cache states. Keep
+            # the estimator consistent by staying per-frame.
+            if noise_mode and noise_mode != "mad":
+                force_perframe = True
             steady = (
                 not force_perframe
                 and self.enabled and self.state() is CacheState.STEADY and m is not None

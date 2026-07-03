@@ -92,8 +92,14 @@ WHEEL_TMP=$(mktemp -d)
 trap 'rm -rf "$WHEEL_TMP"' EXIT
 
 # Print the download URL of the first release asset matching a glob.
-release_wheel_url() { # repo pattern
-  curl -fsSL "https://api.github.com/repos/$1/releases/latest" \
+# Honors OLIVE_SOLVE_TAG / SYCAMORE_TAG env pins (same variables release.yml
+# uses): unset = latest release. Without pins, updating to an OLDER code tag
+# still silently jumped the wheels to newest — the exact code/wheel mismatch
+# class the wheel summary exists to catch.
+release_wheel_url() { # repo pattern [tag]
+  local api="https://api.github.com/repos/$1/releases/latest"
+  [ -n "${3:-}" ] && api="https://api.github.com/repos/$1/releases/tags/$3"
+  curl -fsSL "$api" \
   | python3 -c "
 import fnmatch, json, sys
 rel = json.load(sys.stdin)
@@ -129,8 +135,14 @@ install_wheel() { # label dist repo pattern [pattern...]
     [ -n "$whl" ] && break
   done
   if [ -z "$whl" ]; then
+    local pin=""
+    case "$repo" in
+      *olive-solve*)      pin="${OLIVE_SOLVE_TAG:-}" ;;
+      *sycamore-extract*) pin="${SYCAMORE_TAG:-}" ;;
+    esac
+    [ -n "$pin" ] && LOG "$label wheel pinned to $pin (env)"
     for pat in "$@"; do
-      url=$(release_wheel_url "$repo" "$pat" || true)
+      url=$(release_wheel_url "$repo" "$pat" "$pin" || true)
       [ -n "$url" ] && break
     done
     if [ -z "$url" ]; then
@@ -237,6 +249,24 @@ systemctl restart diofinder.service
 systemctl restart diofinder-webui.service
 
 LOG "Update to $TAG complete"
+
+# Shipped-default divergence report: the /etc conf persists across updates,
+# so stale settings rot silently. One-shot migrations (conf_migrate, applied
+# at next service start) fix old correctness-critical defaults; everything
+# else is listed here so it is at least visible.
+sudo -u diofinder "$DIOFINDER_DIR/venv/bin/python" - <<'PYEOF' || true
+from diofinder.conf_migrate import diff_from_default, pending_migrations
+pend = pending_migrations()
+if pend:
+    print("conf migrations pending (applied at next service start):")
+    for key, cur, new, reason in pend:
+        print(f"  {key}: {cur if cur is not None else '<absent>'} -> {new}")
+diffs = diff_from_default()
+if diffs:
+    print(f"settings differing from shipped defaults ({len(diffs)}):")
+    for key, cur, dflt in diffs[:40]:
+        print(f"  {key}: {cur}   (default: {dflt})")
+PYEOF
 # Repeat the wheel outcome as the final lines — the tail of this log is what
 # the webui update page (and a scrolled-back terminal) shows last.
 if [ -n "$WHEEL_SUMMARY" ]; then

@@ -188,9 +188,10 @@ class _SolverState:
     by the dark-capture commands. read_frame() returns a fresh copy of the
     current SHM frame for dark capture.
     """
-    def __init__(self, solver_t3, cfg):
+    def __init__(self, solver_t3, cfg, db_path=None):
         self.solver_t3 = solver_t3
         self.cfg = cfg
+        self.db_path = db_path   # currently-loaded database (set_db fallback)
         self.hot_pixel_mask = None
         self.read_frame = None   # set by solver_main
         # Tracking-mode observability (written by solver_main each frame, read
@@ -233,13 +234,41 @@ def _handle_solver_cmd(cmd, calibrator, polar,
             if not os.path.exists(db_path):
                 return SolverCmdReply(request_id=cmd.request_id, ok=False,
                                       error=f"database not found: {db_path}")
+            # Busy flag: the load blocks the solve loop, so the publish epoch
+            # stalls — a slow SD-card load past watchdog_timeout_s (30 s) used
+            # to restart the whole unit mid-switch. The watchdog skips
+            # enforcement while this timestamp is fresh.
+            if shared_cfg is not None:
+                shared_cfg["solver_busy_t"] = time.monotonic()
+            prev_db_path = None
             try:
                 import tetra3 as _tetra3
+                # Release the old DB BEFORE loading the new one: holding both
+                # doubles database RSS on a 512 MB device (OOM-kill during a
+                # Good<->Bad toggle). On a failed load we reload the previous
+                # db; if even that fails, the watchdog restart reloads the
+                # configured db at startup.
+                prev_db_path = getattr(state, "db_path", None)
+                state.solver_t3 = None
+                import gc as _gc
+                _gc.collect()
                 new_t3 = _tetra3.Tetra3(db_path)
             except Exception as e:
+                if prev_db_path:
+                    try:
+                        state.solver_t3 = _tetra3.Tetra3(prev_db_path)
+                        log.warning("set_db failed (%s); previous db reloaded", e)
+                    except Exception as e2:
+                        log.critical("set_db failed AND previous db reload "
+                                     "failed (%s / %s) — solver has no db "
+                                     "until restart", e, e2)
                 return SolverCmdReply(request_id=cmd.request_id, ok=False,
                                       error=f"failed to load {db_path}: {e}")
+            finally:
+                if shared_cfg is not None:
+                    shared_cfg["solver_busy_t"] = 0.0
             state.solver_t3 = new_t3
+            state.db_path = db_path
             log.info("Solver database switched -> %s", db_path)
             return SolverCmdReply(request_id=cmd.request_id, ok=True,
                                   result={"db": db, "db_path": db_path})
@@ -529,19 +558,28 @@ def _imu_propagate_hint(last_sky_q, last_imu_q, shared_cfg):
     return (wh, xh, yh, zh), uncertainty_deg
 
 
-def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg):
+def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
+                          snap=None):
     """Record current IMU quaternion alongside the just-solved sky position.
-    comms_proc uses these pairs to predict pointing between solves."""
-    if not shared_cfg.get("imu_available", False):
+    comms_proc uses these pairs to predict pointing between solves.
+
+    ``snap`` (the solver loop's per-frame shared_cfg snapshot) serves all
+    READS — each Manager .get() is an IPC round-trip, and this function did
+    ~8 of them (plus round-tripping the 20-pair calibration list) on every
+    successful solve. The solver is the only writer of every key read here,
+    so its own snapshot is authoritative. Writes still go to shared_cfg.
+    """
+    src = snap if snap is not None else shared_cfg
+    if not src.get("imu_available", False):
         return
-    q_now = shared_cfg.get("imu_q")
-    imu_t = shared_cfg.get("imu_t", 0.0)
+    q_now = src.get("imu_q")
+    imu_t = src.get("imu_t", 0.0)
     if q_now is None or time.monotonic() - imu_t > 2.0:
         return
-    q_prev    = shared_cfg.get("imu_ref_q")
-    ra_prev   = shared_cfg.get("imu_ref_ra_deg")
-    dec_prev  = shared_cfg.get("imu_ref_dec_deg")
-    roll_prev = shared_cfg.get("imu_ref_roll_deg", 0.0)
+    q_prev    = src.get("imu_ref_q")
+    ra_prev   = src.get("imu_ref_ra_deg")
+    dec_prev  = src.get("imu_ref_dec_deg")
+    roll_prev = src.get("imu_ref_roll_deg", 0.0)
     _ref_t = time.monotonic()
     # Atomic tuple FIRST: comms' pointing prediction reads this single key,
     # so it can never observe a new quaternion paired with the previous
@@ -574,7 +612,7 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg):
     cos_r, sin_r = math.cos(roll_rad), math.sin(roll_rad)
     cam_r =  dra_rad * cos_r + ddec_rad * sin_r
     cam_u = -dra_rad * sin_r + ddec_rad * cos_r
-    pairs = list(shared_cfg.get("imu_calib_pairs", []))
+    pairs = list(src.get("imu_calib_pairs", []))
     pairs.append((r_imu[0], r_imu[1], r_imu[2], cam_r, cam_u))
     if len(pairs) > 20:
         pairs = pairs[-20:]
@@ -660,7 +698,7 @@ def solver_main(slots, latest_solution, shared_cfg,
 
     # Mutable holder so out-of-band commands can swap the database and the
     # hot-pixel mask without restarting the process.
-    state = _SolverState(solver_t3, cfg)
+    state = _SolverState(solver_t3, cfg, db_path=db_path)
 
     # Load a previously-captured hot-pixel mask if present (rejects hot pixels
     # during slews when the temporal cache is offline).
@@ -1312,7 +1350,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                 star=star,
             ))
             _imu_update_reference(
-                shared_cfg, ra_out, dec_out, soln.get("Roll", 0.0))
+                shared_cfg, ra_out, dec_out, soln.get("Roll", 0.0), snap=snap)
 
             if align_req is not None:
                 xt = soln.get("x_target")

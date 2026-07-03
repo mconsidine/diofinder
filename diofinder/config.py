@@ -27,7 +27,7 @@ DEFAULT_CONFIG_PATH = "/etc/diofinder/diofinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.11.20"
+    version: str = "0.11.21"
 
     # -------- Camera --------
     frame_width: int = 960
@@ -101,6 +101,8 @@ class Config:
     # hint, forcing recalibration if that solves at an out-of-window FOV.
     # 0 disables. Escape hatch for a stale committed FOV / poisoned hint.
     fov_fallback_fails: int = 20
+    # Stamped by diofinder/conf_migrate.py after one-shot migrations run.
+    conf_version: int = 0
 
     distortion: float = 0.0
 
@@ -339,8 +341,10 @@ def save_keys(updates: dict, path: Optional[str] = None) -> None:
     import fcntl
     p = Path(path or os.environ.get("DIOFINDER_CONFIG", DEFAULT_CONFIG_PATH))
     if not p.exists():
-        log.warning("Cannot save updates; config file %s missing", p)
-        return
+        # Raise, don't silently succeed: callers treat a non-raising return
+        # as "persisted" (the calibrator commits its in-memory state on that
+        # assumption and the UI reports settings as saved).
+        raise FileNotFoundError(f"config file missing: {p}")
     lock_path = p.parent / (p.name + ".lock")
     with open(lock_path, "w") as lf:
         fcntl.flock(lf, fcntl.LOCK_EX)
