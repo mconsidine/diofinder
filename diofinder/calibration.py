@@ -63,6 +63,15 @@ class CalibrationParams:
     # Drift threshold (in stddevs of the committed window) that
     # triggers re-calibration
     fov_drift_sigmas: float = 3.0
+    # Floor for the drift-check noise scale (degrees). The dead band is
+    # fov_drift_sigmas * max(measured window stddev, this floor): the floor
+    # stops a hyper-tight window (stddev ~0.003 deg measured on-sky) from
+    # triggering recommits on every wobble, while keeping the dead band
+    # proportional to REAL measurement noise instead of the 0.05 deg
+    # convergence constant (whose 0.15 deg dead band let a 0.09 deg
+    # miscentering - committed 13.64 vs true 13.55 after the v0.11.15
+    # sensor-mode change - sit uncorrected forever).
+    fov_drift_stddev_floor: float = 0.01
     # Distortion convergence threshold
     distortion_convergence_stddev: float = 0.005
     # How many solves between recalibration checks once CALIBRATED
@@ -210,11 +219,14 @@ class FovCalibrator:
         if self.committed_fov is None or self.committed_fov_stddev is None:
             return
         recent_med = statistics.median(self._fov_window)
-        # Drift in units of the committed window's stddev. Use the larger
-        # of stored stddev or convergence threshold to avoid hyper-sensitive
-        # triggering on a very tight original calibration.
-        scale = max(self.committed_fov_stddev,
-                    self.params.fov_convergence_stddev)
+        recent_std = (statistics.stdev(self._fov_window)
+                      if len(self._fov_window) > 1 else 0.0)
+        # Drift in units of the CURRENT window's measured stddev (floored).
+        # The old scale - max(committed stddev, 0.05 convergence constant) -
+        # gave a 0.15 deg dead band, ~44x the real measurement noise, so a
+        # 0.09 deg miscentering (sensor-mode change) was "1.75 sigma" to the
+        # code while being a 26-sigma error to the data, and never healed.
+        scale = max(recent_std, self.params.fov_drift_stddev_floor)
         drift = abs(recent_med - self.committed_fov) / scale
         if drift > self.params.fov_drift_sigmas:
             log.warning("FOV drift detected: was %.4f, now %.4f (%.1f sigma); "
@@ -281,3 +293,38 @@ class FovCalibrator:
         except Exception as e:
             log.warning("Could not persist calibration reset: %s", e)
         self._log_state_change()
+
+
+class FallbackGate:
+    """Failure-driven escape hatch for a stale solve constraint.
+
+    The calibrator only learns from SUCCESSFUL solves, so a committed FOV
+    that is wrong by more than the tight tolerance starves it of data and can
+    never self-heal (nor can a poisoned attitude hint clear itself on solver
+    wheels without the blind-fallback pass). This gate watches consecutive
+    failed solve ATTEMPTS — the solver only attempts a solve when detection
+    yielded >= min_centroids stars, so every counted failure had a healthy
+    star field — and, past ``fail_threshold``, permits a LOOSE-window blind
+    retry, repeating every ``retry_every`` further failures so a genuinely
+    hopeless view (lens capped, pointed at a wall) costs at most one extra
+    solve attempt per ``retry_every`` frames.
+
+    Pure counter — unit-tested without hardware. ``fail_threshold <= 0``
+    disables retries entirely.
+    """
+
+    def __init__(self, fail_threshold: int = 20, retry_every: int = 10):
+        self.fail_threshold = int(fail_threshold)
+        self.retry_every = max(1, int(retry_every))
+        self.streak = 0
+
+    def note_success(self) -> None:
+        self.streak = 0
+
+    def note_failure(self) -> bool:
+        """Record one failed solve attempt; True = run a loose retry NOW."""
+        self.streak += 1
+        if self.fail_threshold <= 0:
+            return False
+        over = self.streak - self.fail_threshold
+        return over >= 0 and over % self.retry_every == 0

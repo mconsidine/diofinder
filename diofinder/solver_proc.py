@@ -25,7 +25,7 @@ import numpy as np
 
 from diofinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
 from diofinder.align import AlignResult
-from diofinder.calibration import FovCalibrator
+from diofinder.calibration import FovCalibrator, FallbackGate
 from diofinder.imu_math import quat_delta_rotvec
 from diofinder.polar_run import PolarAligner
 from diofinder import frame_health
@@ -666,6 +666,11 @@ def solver_main(slots, latest_solution, shared_cfg,
         log.warning("Could not load hot-pixel mask: %s", e)
 
     calibrator = FovCalibrator(cfg, shared_cfg)
+    # Loose-window blind retry after a run of failed attempts: the escape
+    # hatch for a stale committed FOV or a poisoned attitude hint, both of
+    # which otherwise deadlock (the calibrator only learns from successes).
+    fallback_gate = FallbackGate(
+        fail_threshold=int(getattr(cfg, "fov_fallback_fails", 20)))
     log.info("Calibrator: state=%s fov=%.4f° tolerance=%.3f°",
              calibrator.state.value,
              calibrator.get_fov_estimate(),
@@ -1121,6 +1126,50 @@ def solver_main(slots, latest_solution, shared_cfg,
             status_int = _OLIVE_STATUS.get(status_str, NO_MATCH)
             solve_count += 1
 
+            if soln.get("RA") is None and fallback_gate.note_failure():
+                # Loose blind retry: same centroids, the LOOSE FOV window and
+                # no attitude hint. One call escapes both self-sustaining
+                # failure modes — a committed FOV that excludes reality
+                # (calibrator starves: it only learns from successes) and a
+                # poisoned hint (wheels without the blind-fallback pass).
+                retry_kw = dict(_solve_kw)
+                retry_kw["fov_max_error"] = max(
+                    float(shared_cfg.get("fov_max_error_deg",
+                                         cfg.fov_max_error_deg)),
+                    float(retry_kw.get("fov_max_error") or 0.0))
+                retry_kw.pop("attitude_hint", None)
+                retry_kw.pop("hint_uncertainty_deg", None)
+                if SOLVER_HAS_STRICT_HINT:
+                    retry_kw["strict_hint"] = False
+                try:
+                    retry_soln = state.solver_t3.solve_from_centroids(
+                        centroids, (cfg.frame_height, cfg.frame_width),
+                        **retry_kw)
+                except Exception as e:
+                    log.warning("loose fallback solve raised: %s", e)
+                    retry_soln = None
+                if retry_soln is not None and retry_soln.get("RA") is not None:
+                    fov_r = retry_soln.get("FOV")
+                    est   = calibrator.get_fov_estimate()
+                    tight = float(getattr(cfg, "fov_calibrated_max_error_deg",
+                                          0.1))
+                    log.warning(
+                        "loose blind fallback solved after %d failed attempts "
+                        "(FOV %.3f vs estimate %.3f, tight window ±%.2f)",
+                        fallback_gate.streak, fov_r if fov_r else -1.0,
+                        est, tight)
+                    if (fov_r is not None and calibrator.use_tight_tolerance
+                            and abs(fov_r - est) > tight):
+                        # The committed calibration excludes reality: drop it
+                        # and relearn (subsequent frames solve loose until the
+                        # rolling window recommits the true value).
+                        calibrator.force_recalibrate()
+                    soln = retry_soln
+                    status_str = soln.get("status", "MatchFound")
+                    status_int = _OLIVE_STATUS.get(status_str, MATCH_FOUND)
+                    solve_only_ms = (time.monotonic() - t_solve) * 1000.0
+                    elapsed_ms    = extract_ms + solve_only_ms
+
             if soln.get("RA") is None:
                 latest_solution.update(_empty_solution(
                     stars=n_stars, peak=local_peak,
@@ -1146,6 +1195,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                 tracking_prev_xy = []
                 continue
 
+            fallback_gate.note_success()
             measured_fov        = soln.get("FOV") or calibrator.get_fov_estimate()
             measured_distortion = soln.get("distortion") or 0.0
             calibrator.update_from_solve(measured_fov, measured_distortion)

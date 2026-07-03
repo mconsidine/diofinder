@@ -170,6 +170,25 @@ tolerance tightens from `fov_max_error_deg` (1.0°) to
 `fov_calibrated_max_error_deg` (0.1°). This makes subsequent solves faster
 and more robust against false positives.
 
+**Self-healing (v0.11.19).** Two mechanisms keep a wrong committed FOV from
+persisting:
+
+* **Drift recommit**: every 50 solves the rolling median is compared against
+  the committed value, with a dead band of 3× the **measured window stddev**
+  (floored at `fov_drift_stddev_floor` = 0.01°). The old dead band used the
+  0.05° convergence constant (0.15° band, ~44× real measurement noise), which
+  let the 13.64-vs-13.55 sensor-mode miscentering sit uncorrected forever.
+* **Failure-driven loose fallback** (`FallbackGate`, config
+  `fov_fallback_fails` = 20, 0 disables): after 20 consecutive failed solve
+  *attempts* (detection healthy — the solver only attempts with
+  ≥ min_centroids stars), the solver retries the same centroids with the
+  loose `fov_max_error_deg` window and **no attitude hint**, repeating every
+  10th failure. A retry that solves at a FOV outside the tight window calls
+  `force_recalibrate()` so the calibrator relearns. One mechanism escapes both
+  self-sustaining failure classes: a committed FOV that excludes reality (the
+  calibrator only learns from successes) and a poisoned hint (on solver
+  wheels without the blind-fallback pass).
+
 If you change the lens or camera mode, reset calibration:
 ```bash
 sudo sed -i 's/^fov_calibrated:.*/fov_calibrated: false/' /etc/diofinder/diofinder.conf
