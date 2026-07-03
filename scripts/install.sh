@@ -222,21 +222,24 @@ if not hasattr(tetra3.Tetra3, 'solve_from_image_fast'):
 print('olive-solve tetra3-py OK')
 " || FAIL "olive-solve verification failed"
 
-# --- Install sycamore-extract star_detect (optional) -------------------------
-# Install only if a wheel exists in vendor/wheels/. Skip gracefully if absent.
+# --- Install sycamore-extract star_detect (REQUIRED) -------------------------
+# star_detect is a hard runtime requirement: diofinder/bg_cache.py imports it
+# at module top and solver_proc refuses to start without it (there is NO
+# fallback extractor when the wheel is absent — the tetra3 backend probe only
+# covers the reverse direction). A missing wheel must fail the install loudly,
+# not produce an image whose solver restart-loops forever.
 
 SYCAMORE_WHL=$(ls "$VENDOR_WHEELS_DIR"/star_detect-*aarch64*.whl 2>/dev/null | head -1 || true)
-if [ -n "$SYCAMORE_WHL" ]; then
-  LOG "Installing sycamore-extract: $SYCAMORE_WHL"
-  sudo -u "$DIOFINDER_USER" "$DIOFINDER_DIR/venv/bin/pip" install "$SYCAMORE_WHL" \
-    || WARN "sycamore-extract install failed (non-fatal; olive backend will be used)"
-  sudo -u "$DIOFINDER_USER" "$DIOFINDER_DIR/venv/bin/python" -c "
+if [ -z "$SYCAMORE_WHL" ]; then
+  echo "FATAL: no sycamore-extract (star_detect) wheel in $VENDOR_WHEELS_DIR — the solver cannot run without it." >&2
+  exit 1
+fi
+LOG "Installing sycamore-extract: $SYCAMORE_WHL"
+sudo -u "$DIOFINDER_USER" "$DIOFINDER_DIR/venv/bin/pip" install "$SYCAMORE_WHL"
+sudo -u "$DIOFINDER_USER" "$DIOFINDER_DIR/venv/bin/python" -c "
 import star_detect
 print('sycamore star_detect OK')
-" 2>/dev/null && LOG "sycamore star_detect verified" || WARN "sycamore star_detect import check failed (non-fatal)"
-else
-  LOG "No sycamore-extract wheel in $VENDOR_WHEELS_DIR — skipping (optional)"
-fi
+" && LOG "sycamore star_detect verified"
 
 # --- Install star database ---------------------------------------------------
 # The database is generated on the x86_64 CI runner by release.yml and

@@ -1074,9 +1074,33 @@ def update_page():
             out = logf
         except OSError:
             out = subprocess.DEVNULL
+        # systemd-run puts the updater in its OWN transient unit: outside
+        # this webui unit's ProtectSystem=full sandbox (so the wrapper-script
+        # and systemd-unit resync actually happen) and outside its cgroup (so
+        # restarting the webui mid-update no longer kills the updater before
+        # it prints completion + the wheel summary). Fallback to a plain
+        # detached Popen when systemd-run is unavailable (dev boxes).
+        run_cmd = (["sudo", "systemd-run", "--collect",
+                    "--unit=diofinder-ota-update",
+                    "--property=StandardOutput=append:" + UPDATE_LOG,
+                    "--property=StandardError=append:" + UPDATE_LOG]
+                   + cmd[1:])
         try:
-            subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT,
-                             start_new_session=True)
+            probe = subprocess.run(["systemd-run", "--version"],
+                                   capture_output=True, timeout=5)
+            use_systemd = probe.returncode == 0
+        except Exception:
+            use_systemd = False
+        try:
+            if use_systemd:
+                r = subprocess.run(run_cmd, capture_output=True, text=True,
+                                   timeout=15)
+                if r.returncode != 0:
+                    # e.g. a previous transient unit still loaded — fall back.
+                    use_systemd = False
+            if not use_systemd:
+                subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT,
+                                 start_new_session=True)
         except FileNotFoundError:
             return "diofinder-update not installed", 500
         return render_template("update_running.html", ref=ref or "latest release")
@@ -1562,12 +1586,17 @@ def debug_collect():
             bgc = _safe_call("bg_cache_status")
             see = _safe_call("seeing_get")
             ver = _safe_call("version")
+            hpx = _safe_call("hot_pixel_status")
             calres = cal.result if cal.ok and cal.result else {}
             eff = {
                 # Release + wheel versions: the wheels update independently of
                 # the code, and a stale olive-solve wheel has masqueraded as an
                 # application regression before. Now every bundle records them.
                 "version":       ver.result if ver.ok else {"error": ver.error},
+                # Mask repair rewrites pixels BEFORE detection; a poisoned
+                # mask (195k px, uncapped capture) made every solve fail
+                # while being invisible in the bundle. Record it always.
+                "hot_pixel":     hpx.result if hpx.ok else {"error": hpx.error},
                 "solver_params": sp.result if sp.ok else {"error": sp.error},
                 "match_params":  mp.result if mp.ok else {"error": mp.error},
                 "bg_cache":      bgc.result if bgc.ok else {"error": bgc.error},

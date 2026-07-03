@@ -130,12 +130,18 @@ exposure time (measured: 1.0 s exposure → 0.5 fps). Two buffers restore
 the unused RAW stream (~18.5 MB CMA per buffer at full res) more than pays for
 the second main buffer.
 
-**Camera-settings epoch:** every successful exposure/gain change bumps
+**Camera-settings epoch:** every successful *effective* exposure/gain change bumps
 `shared_cfg["camera_settings_epoch"]` (single writer: camera_proc). The
 solver forwards it to `bg_cache.note_camera_settings`, which flushes the
 temporal frame stack and marks the model stale — frames captured at the old
 setting don't share the new pedestal, so a stack spanning an auto-exposure
-step (×1.5) would under-/over-subtract for up to two stack periods.
+step (×1.5) would under-/over-subtract for up to two stack periods. No-op
+sets (restoring an identical value, e.g. auto_tune/dark_capture restore
+paths) do **not** bump the epoch (v0.11.20), and a mid-build flush discards
+the in-flight model (generation guard in `bg_cache`) instead of being
+clobbered by its publish. Capture failures no longer publish the stale
+buffer — the camera backs off 0.5 s and retries, so a dead camera surfaces
+as a stale epoch rather than frozen-but-fresh pointing.
 
 ---
 
@@ -386,7 +392,13 @@ logged and ignored. Missing file uses all defaults.
 
 `config.save_keys(updates)` rewrites changed keys in place, preserving
 comments and unrecognised lines. It is the only function that writes to the
-config file at runtime.
+config file at runtime. Since v0.11.20 it is **cross-process safe**: an
+exclusive flock on a `.lock` sidecar serializes solver-side calibration
+commits against comms-side persists (the unlocked RMW could drop the other
+process's keys), and the write goes through temp-file + `os.replace` so a
+power cut can never truncate the conf. Float values are formatted `%.10g`
+(the old `%.6f` rendered any float < 5e-7 as `0.000000` — a persisted
+`match_threshold: 1e-7` round-tripped to 0.0, which admits no match at all).
 
 New keys (this release):
 
@@ -455,9 +467,10 @@ consecutive frames), not just a single snapshot. Raw PNGs are saved for every
 frame; the large arcsinh **display JPGs are capped at the first 2** to keep the
 bundle email-friendly.
 
-* `seeing_set {"mode": "good"|"bad"}` (comms maint): writes every preset key to
-  `shared_cfg` (live solver/auto-exposure keys), switches the solver database
-  in-process via the `set_db` solver command when `star_db` differs, persists
+* `seeing_set {"mode": "good"|"bad"}` (comms maint): switches the solver
+  database **first** (the only fallible step — a set_db failure now aborts the
+  toggle before anything is written, keeping it atomic; v0.11.20), then writes
+  every preset key to `shared_cfg` (live solver/auto-exposure keys), persists
   all of it with `config.save_keys`, and calls `_invalidate_solver_cache`.
 * `seeing_get` returns the mode, both preset tables, the **effective** value of
   every preset-controlled key (shared_cfg over cfg), and a `drift` map of keys
@@ -635,12 +648,13 @@ decision lives in `_auto_exposure_decision` (unit-tested in
   delayed by at most one cycle.
 * **Reversal damping** (pure helper `_ae_apply_reversal_damping`, v0.11.18,
   unit-tested): when the ladder reverses direction, the proposed step is
-  replaced by its square root (×1.5 → ×1.22, and again on each subsequent
-  reversal), so the operating point converges geometrically into the deadband
-  instead of limit-cycling across it — the ×1.5 gain step straddles the
-  0.8×–1.5× star-count deadband when the two rungs land on opposite sides
-  (observed live: gain 2.1↔3.2 for minutes). Same-direction moves keep full
-  steps; the saturation backoff is never damped.
+  replaced by its square root — a constant ×1.22 half-step per reversal — so
+  the operating point can land inside the deadband instead of limit-cycling
+  across it: the full ×1.5 gain step straddles the 0.8×–1.5× star-count
+  deadband when the two rungs sit on opposite sides (observed live: gain
+  2.1↔3.2 for minutes), while a ×1.22 rung always fits inside the 1.875-wide
+  relative band. Same-direction moves keep full steps; the saturation backoff
+  is never damped.
 * Wide deadband (0.8×–1.5× of target) so it settles instead of oscillating;
   sub-5 ms exposure moves are ignored. At most one axis changes per cycle.
 * Bounds: `auto_exposure_min_s`/`max_s`, `auto_exposure_min_gain`/`max_gain`.

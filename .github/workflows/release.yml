@@ -90,8 +90,11 @@ jobs:
           fetch mconsidine/olive-solve      "$OLIVE_TAG"    "tetra3-*aarch64*.whl"
           # Matches both abi3 wheels (sycamore >= 0.11.2) and per-Python
           # cp31x wheels from older releases
-          fetch mconsidine/sycamore-extract "$SYCAMORE_TAG" "star_detect-*aarch64*.whl" \
-            || echo "::warning::No sycamore wheel fetched (optional)"
+          # NOT optional: the solver hard-requires star_detect at runtime
+          # (bg_cache imports it at module top; solver_proc raises without
+          # it). A missing/renamed asset must fail the build, not ship an
+          # image that restart-loops and never solves.
+          fetch mconsidine/sycamore-extract "$SYCAMORE_TAG" "star_detect-*aarch64*.whl"
           # If a release carried several per-Python wheels, keep only the
           # newest-sorted one so install.sh picks a single wheel
           EXTRA=$(ls vendor/wheels/star_detect-*aarch64*.whl 2>/dev/null | sort -V | head -n -1 || true)
@@ -100,6 +103,11 @@ jobs:
           WHL=$(ls vendor/wheels/tetra3-*aarch64*.whl 2>/dev/null | head -1 || true)
           if [ -z "$WHL" ]; then
             echo "::error::No aarch64 tetra3-py wheel could be downloaded from olive-solve releases."
+            exit 1
+          fi
+          SWHL=$(ls vendor/wheels/star_detect-*aarch64*.whl 2>/dev/null | head -1 || true)
+          if [ -z "$SWHL" ]; then
+            echo "::error::No aarch64 star_detect wheel could be downloaded from sycamore-extract releases (hard runtime requirement)."
             exit 1
           fi
 
