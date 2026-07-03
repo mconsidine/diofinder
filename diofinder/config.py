@@ -27,7 +27,7 @@ DEFAULT_CONFIG_PATH = "/etc/diofinder/diofinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.11.18"
+    version: str = "0.11.19"
 
     # -------- Camera --------
     frame_width: int = 960
@@ -96,6 +96,11 @@ class Config:
     fov_calibrated: bool = False
     fov_calibrated_stddev: float = 0.05
     fov_calibrated_max_error_deg: float = 0.1
+    # Consecutive failed solve attempts (healthy star fields) after which the
+    # solver retries with the LOOSE fov_max_error_deg window and no attitude
+    # hint, forcing recalibration if that solves at an out-of-window FOV.
+    # 0 disables. Escape hatch for a stale committed FOV / poisoned hint.
+    fov_fallback_fails: int = 20
 
     distortion: float = 0.0
 

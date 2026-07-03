@@ -59,6 +59,12 @@ arcsec_per_pixel: 50.78
 fov_calibrated: true
 fov_calibrated_stddev: 0.05
 fov_calibrated_max_error_deg: 0.1
+# Escape hatch for a stale calibration (or a poisoned attitude hint): after
+# this many consecutive failed solve attempts on healthy star fields, retry
+# with the loose fov_max_error_deg window and no hint; if that solves at a
+# FOV outside the tight window, calibration is reset and relearned
+# automatically. Retries repeat every 10th failure thereafter. 0 disables.
+fov_fallback_fails: 20
 
 # Distortion coefficient. 0.0 = no estimate (solver fits it per-solve).
 # Updated automatically once the calibrator converges on a stable value.
