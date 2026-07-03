@@ -29,9 +29,20 @@ else
   BASE="https://github.com/$REPO/releases/download/$TAG"
 fi
 
-# Resolve the installed database path the same way the solver does:
-# bare solver_db names live under /var/lib/diofinder/<name>.npz.
-DB_STEM=$(awk -F': *' '$1=="solver_db"{v=$2} END{print v}' "$CONF" 2>/dev/null || true)
+# Resolve the STANDARD database path. solver_db is NOT the right source:
+# while the Bad seeing preset is active it points at the deep (mag 8.5) db,
+# and installing the standard asset over that file would silently replace the
+# deep catalog with mag-8 data (and leave the real standard db stale).
+# star_db_standard records the standard name once a preset has switched away;
+# fall back to solver_db only when it isn't the deep path, else the default.
+DB_STEM=$(awk -F': *' '$1=="star_db_standard"{v=$2} END{print v}' "$CONF" 2>/dev/null || true)
+if [ -z "$DB_STEM" ]; then
+  DB_STEM=$(awk -F': *' '$1=="solver_db"{v=$2} END{print v}' "$CONF" 2>/dev/null || true)
+  DEEP=$(awk -F': *' '$1=="star_db_deep"{v=$2} END{print v}' "$CONF" 2>/dev/null || true)
+  if [ -n "$DEEP" ] && [ "$DB_STEM" = "$DEEP" ]; then
+    DB_STEM="default_database"
+  fi
+fi
 DB_STEM="${DB_STEM:-default_database}"
 case "$DB_STEM" in
   /*) DB_PATH="$DB_STEM" ;;

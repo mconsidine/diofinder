@@ -542,11 +542,18 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg):
     ra_prev   = shared_cfg.get("imu_ref_ra_deg")
     dec_prev  = shared_cfg.get("imu_ref_dec_deg")
     roll_prev = shared_cfg.get("imu_ref_roll_deg", 0.0)
+    _ref_t = time.monotonic()
+    # Atomic tuple FIRST: comms' pointing prediction reads this single key,
+    # so it can never observe a new quaternion paired with the previous
+    # solve's RA/Dec (the split keys below are five separate Manager RPCs —
+    # kept for webui/status display compatibility).
+    shared_cfg["imu_ref"] = (tuple(q_now), float(new_ra_deg),
+                             float(new_dec_deg), float(new_roll_deg), _ref_t)
     shared_cfg["imu_ref_q"]        = q_now
     shared_cfg["imu_ref_ra_deg"]   = new_ra_deg
     shared_cfg["imu_ref_dec_deg"]  = new_dec_deg
     shared_cfg["imu_ref_roll_deg"] = new_roll_deg
-    shared_cfg["imu_ref_t"]        = time.monotonic()
+    shared_cfg["imu_ref_t"]        = _ref_t
     if q_prev is None or ra_prev is None or dec_prev is None:
         return
     r_imu = quat_delta_rotvec(q_now, q_prev)
@@ -760,7 +767,6 @@ def solver_main(slots, latest_solution, shared_cfg,
             idx, frame_seq = slots.acquire_read_slot(timeout=5.0, after_seq=frame_seq)
             t0  = time.monotonic()
 
-            align_req  = _drain_align_queue(align_request_q, align_response_q)
             # Subsampled peak: the <20 gate is about overall illumination and
             # the >=250 saturation check (auto-exposure) is about regions, not
             # single pixels; a 2x2 stride scans 1/4 the data and still sees any
@@ -772,9 +778,23 @@ def solver_main(slots, latest_solution, shared_cfg,
                 latest_solution.update(_empty_solution(peak=local_peak))
                 continue
 
+            # Drain the align queue only for frames that will actually be
+            # processed: draining before the dark gate consumed a pending
+            # :CM# on a dark frame (mid-slew / cloud / exposure step) and
+            # silently dropped it — SkySafari then blocked for the full 15 s
+            # alignment timeout. Requests now stay queued until a bright frame.
+            align_req  = _drain_align_queue(align_request_q, align_response_q)
+
+            # ONE Manager IPC round-trip for all per-frame knob reads: every
+            # snap.get() is a pickled unix-socket RPC to the Manager
+            # process on CPU 0; this loop previously issued ~30 per frame —
+            # comparable to the entire extraction budget on a Pi Zero 2W.
+            # Reads below use the snapshot; writes still go to shared_cfg.
+            snap = dict(shared_cfg)
+
             # Update boresight target in-place only when it has changed.
-            new_bs_y = shared_cfg.get("boresight_y", cfg.boresight_y)
-            new_bs_x = shared_cfg.get("boresight_x", cfg.boresight_x)
+            new_bs_y = snap.get("boresight_y", cfg.boresight_y)
+            new_bs_x = snap.get("boresight_x", cfg.boresight_x)
             if new_bs_y != _bs_y or new_bs_x != _bs_x:
                 _bs_y, _bs_x = new_bs_y, new_bs_x
                 target_pixel[0, 0] = _bs_y
@@ -820,14 +840,28 @@ def solver_main(slots, latest_solution, shared_cfg,
 
             # Feed the temporal background worker (copies internally) and let it
             # track slew via the IMU. No-ops when the cache is disabled.
-            bg_cache.submit_frame(frame_buf)
-            if shared_cfg.get("imu_available", False):
-                bg_cache.note_motion(shared_cfg.get("imu_q"))
+            extractor_backend = str(
+                snap.get("extractor_backend",
+                         getattr(cfg, "extractor_backend", "sycamore")))
+            # Legacy (tetra3) extraction never consumes the temporal cache:
+            # skip the ~0.7 MB per-frame copy and the worker's ~100 ms
+            # GIL-holding median rebuilds while that backend is active. The
+            # cache refills within one stack (8 frames) after switching back.
+            if extractor_backend != "tetra3":
+                bg_cache.submit_frame(frame_buf)
+            if snap.get("imu_available", False):
+                bg_cache.note_motion(snap.get("imu_q"))
+            else:
+                # Un-latch _imu_feeding so solver-derived slew detection and
+                # the fail-streak invalidation take over if the IMU dies
+                # mid-session (previously latched forever after the first
+                # note_motion).
+                bg_cache.note_imu_lost()
             # Exposure/gain changed? Old-setting frames poison the stack: flush
             # and rebuild at the new setting (adopt-first, so a solver restart
             # never invalidates a healthy state).
             bg_cache.note_camera_settings(
-                shared_cfg.get("camera_settings_epoch"))
+                snap.get("camera_settings_epoch"))
 
             # float64: Rust extracts target_sky_coord as PyReadonlyArray2<f64>
             target_sky = None
@@ -837,33 +871,30 @@ def solver_main(slots, latest_solution, shared_cfg,
                     dtype=np.float64)
 
             q_hint, hint_unc = _imu_propagate_hint(
-                last_sky_q, last_solve_imu_q, shared_cfg)
+                last_sky_q, last_solve_imu_q, snap)
 
             # --- Step 1: extract centroids (sycamore, matched_filter) --------
             # Background handling (per-row floor, top-hat, or temporal cache) is
             # routed by BackgroundCache.detect; all knobs are live-overridable
             # via shared_cfg, falling back to the config defaults.
             t_extract = time.monotonic()
-            sigma = shared_cfg.get("detect_sigma", cfg.detect_sigma)
-            bg_mode = shared_cfg.get("detect_bg_mode", cfg.detect_bg_mode)
+            sigma = snap.get("detect_sigma", cfg.detect_sigma)
+            bg_mode = snap.get("detect_bg_mode", cfg.detect_bg_mode)
             tophat_radius = int(
-                shared_cfg.get("detect_tophat_radius", cfg.detect_tophat_radius))
+                snap.get("detect_tophat_radius", cfg.detect_tophat_radius))
             bg_block_size = int(
-                shared_cfg.get("detect_bg_block_size", cfg.detect_bg_block_size))
+                snap.get("detect_bg_block_size", cfg.detect_bg_block_size))
             uniform_filter_size = int(
-                shared_cfg.get("detect_uniform_filter_size", cfg.detect_uniform_filter_size))
-            noise_mode = shared_cfg.get("detect_noise_mode", cfg.detect_noise_mode)
+                snap.get("detect_uniform_filter_size", cfg.detect_uniform_filter_size))
+            noise_mode = snap.get("detect_noise_mode", cfg.detect_noise_mode)
             kernel_sigma = float(
-                shared_cfg.get("detect_kernel_sigma", cfg.detect_kernel_sigma))
+                snap.get("detect_kernel_sigma", cfg.detect_kernel_sigma))
             # 0 disables trail rejection -> infinite axis ratio.
             _mar = float(
-                shared_cfg.get("detect_max_axis_ratio", cfg.detect_max_axis_ratio))
+                snap.get("detect_max_axis_ratio", cfg.detect_max_axis_ratio))
             max_axis_ratio = float("inf") if _mar <= 0.0 else _mar
             local_noise = bool(
-                shared_cfg.get("detect_local_noise", cfg.detect_local_noise))
-            extractor_backend = str(
-                shared_cfg.get("extractor_backend",
-                               getattr(cfg, "extractor_backend", "sycamore")))
+                snap.get("detect_local_noise", cfg.detect_local_noise))
 
             # --- Tracking-mode gate ------------------------------------------
             # Decide whether THIS frame is served by ROI tracking. The whole
@@ -871,11 +902,11 @@ def solver_main(slots, latest_solution, shared_cfg,
             # state machine never leaves FULL and tracking_active stays False,
             # so the extraction path below is the original full-frame detect.
             tracking_on = bool(
-                shared_cfg.get("tracking_enabled", cfg.tracking_enabled))
+                snap.get("tracking_enabled", cfg.tracking_enabled))
             track_window = int(
-                shared_cfg.get("tracking_window_px", cfg.tracking_window_px))
+                snap.get("tracking_window_px", cfg.tracking_window_px))
             track_min_recover = int(
-                shared_cfg.get("tracking_min_recover", cfg.tracking_min_recover))
+                snap.get("tracking_min_recover", cfg.tracking_min_recover))
             track_lock_frames = int(cfg.tracking_lock_frames)
             if not tracking_on:
                 # Disabled at runtime mid-session: reset the machine to FULL so
@@ -929,7 +960,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                         _window_detect,
                         bin=int(cfg.detect_bin),
                         max_stars=int(
-                            shared_cfg.get("max_solve_stars", cfg.max_solve_stars)),
+                            snap.get("max_solve_stars", cfg.max_solve_stars)),
                     )
                     if len(_roi_stars) >= track_min_recover:
                         served_by_tracking = True
@@ -1015,6 +1046,14 @@ def solver_main(slots, latest_solution, shared_cfg,
                         completed_at=time.monotonic(),
                     ))
                 fail_streak += 1
+                # Same failure bookkeeping as a NoMatch: without it an
+                # exception-class failure (e.g. a poisoned cache model) never
+                # drove the fail-streak cache invalidation or dropped the
+                # tracking lock, making it self-sustaining.
+                bg_cache.note_solve_result(None, False)
+                tracking_state = TRACK_FULL
+                tracking_good_run = 0
+                tracking_prev_xy = []
                 continue
 
             extract_ms = (time.monotonic() - t_extract) * 1000.0
@@ -1030,7 +1069,7 @@ def solver_main(slots, latest_solution, shared_cfg,
             state.tracking_recover_fail = tracking_recover_fail
 
             # --- Step 2: star-count gate -------------------------------------
-            min_c = shared_cfg.get("min_centroids", cfg.min_centroids)
+            min_c = snap.get("min_centroids", cfg.min_centroids)
             if n_stars < min_c:
                 latest_solution.update(_empty_solution(
                     stars=n_stars, peak=local_peak,
@@ -1056,16 +1095,16 @@ def solver_main(slots, latest_solution, shared_cfg,
                 continue
 
             # --- Step 3: centroid cap ----------------------------------------
-            max_c = shared_cfg.get("max_solve_stars", cfg.max_solve_stars)
+            max_c = snap.get("max_solve_stars", cfg.max_solve_stars)
             if n_stars > max_c:
                 centroids = centroids[:max_c]
 
             # --- Step 4: plate solve -----------------------------------------
             t_solve = time.monotonic()
             match_threshold = float(
-                shared_cfg.get("match_threshold", cfg.match_threshold))
+                snap.get("match_threshold", cfg.match_threshold))
             match_radius = float(
-                shared_cfg.get("match_radius", cfg.match_radius))
+                snap.get("match_radius", cfg.match_radius))
             # In TRACKING the search is constrained: reuse last_sky_q with a
             # tight cone and strict_hint=True. In FULL keep the existing blind /
             # IMU-propagated hint (strict_hint=False). strict_hint is passed
@@ -1078,10 +1117,16 @@ def solver_main(slots, latest_solution, shared_cfg,
                 solve_q_hint = q_hint
                 solve_hint_unc = hint_unc
                 solve_strict = False
+                if fail_streak >= 5 and solve_q_hint is not None:
+                    # A failing run with a hint in force: the hint (stale
+                    # anchor / body-frame delta) may be what's excluding the
+                    # match — drop it and solve blind until a success
+                    # re-anchors it.
+                    solve_q_hint, solve_hint_unc = None, 0.0
             _solve_kw = dict(
                 fov_estimate=calibrator.get_fov_estimate(),
                 fov_max_error=calibrator.get_fov_max_error(),
-                solve_timeout=shared_cfg.get(
+                solve_timeout=snap.get(
                     "solve_timeout_ms", cfg.solve_timeout_ms),
                 match_threshold=match_threshold,
                 match_radius=match_radius,
@@ -1112,6 +1157,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                         completed_at=time.monotonic(),
                     ))
                 fail_streak += 1
+                fallback_gate.note_failure()   # counts toward the loose retry
                 bg_cache.note_solve_result(None, False)
                 tracking_state = TRACK_FULL
                 tracking_good_run = 0
@@ -1134,7 +1180,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                 # poisoned hint (wheels without the blind-fallback pass).
                 retry_kw = dict(_solve_kw)
                 retry_kw["fov_max_error"] = max(
-                    float(shared_cfg.get("fov_max_error_deg",
+                    float(snap.get("fov_max_error_deg",
                                          cfg.fov_max_error_deg)),
                     float(retry_kw.get("fov_max_error") or 0.0))
                 retry_kw.pop("attitude_hint", None)
@@ -1205,7 +1251,7 @@ def solver_main(slots, latest_solution, shared_cfg,
             q_solved = soln.get("quaternion")
             if q_solved is not None:
                 last_sky_q       = tuple(q_solved)
-                last_solve_imu_q = shared_cfg.get("imu_q")
+                last_solve_imu_q = snap.get("imu_q")
             # --- Tracking-mode bookkeeping (success) -------------------------
             # Remember this frame's centroid (x,y) for next frame's ROI windows
             # and advance the lock-in counter. After tracking_lock_frames
@@ -1246,7 +1292,7 @@ def solver_main(slots, latest_solution, shared_cfg,
             star = None
             if star_names is not None:
                 try:
-                    brightest = bool(shared_cfg.get(
+                    brightest = bool(snap.get(
                         "star_name_brightest",
                         getattr(cfg, "star_name_brightest", True)))
                     if brightest:

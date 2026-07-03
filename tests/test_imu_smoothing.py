@@ -183,6 +183,31 @@ def test_imu_predict_holds_until_solve_reanchors():
         _cfg_rotated(0.8, imu_t=t0 + 1.9, ref_t=now - 0.05)) is None
 
 
+def test_imu_predict_sparse_polls_disengage_on_solve():
+    # Regression: at LX200 poll intervals > 4x the rate baseline the sample
+    # deque prunes to a single entry, the rate is unmeasurable (None), and the
+    # old disengage branch (which required a rate) latched "engaged" forever —
+    # a parked scope then walked with gyro drift instead of reporting the
+    # solved position. A solve landing after the last observed motion must
+    # disengage even with no measurable rate.
+    _reset_rate_state()
+    now = time.monotonic()
+    t0 = now - 1.9
+    ref_old = t0 - 0.05
+    # Fast polls during a slew: engage.
+    comms_proc._imu_predict(_cfg_rotated(0.0, imu_t=t0, ref_t=ref_old))
+    comms_proc._imu_predict(_cfg_rotated(0.4, imu_t=t0 + 0.4, ref_t=ref_old))
+    assert comms_proc._imu_predict(
+        _cfg_rotated(0.8, imu_t=t0 + 0.8, ref_t=ref_old)) is not None
+    # Simulate the poll gap: prune the deque to one stale-free sample so the
+    # next call cannot measure a rate.
+    comms_proc._imu_rate_state["samples"].clear()
+    # A solve has since landed (fresh ref_t) -> must disengage (None = report
+    # the solved position), not stay latched on the unmeasurable rate.
+    assert comms_proc._imu_predict(
+        _cfg_rotated(0.8, imu_t=t0 + 1.6, ref_t=now - 0.05)) is None
+
+
 def test_imu_predict_rate_gate_is_tunable():
     # Same 0.5 deg/s pan, but a 10 deg/s gate treats it as stationary.
     _reset_rate_state()

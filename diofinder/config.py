@@ -27,7 +27,7 @@ DEFAULT_CONFIG_PATH = "/etc/diofinder/diofinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.11.19"
+    version: str = "0.11.20"
 
     # -------- Camera --------
     frame_width: int = 960
@@ -326,33 +326,53 @@ def load_config(path: Optional[str] = None) -> Config:
 
 def save_keys(updates: dict, path: Optional[str] = None) -> None:
     """Write key/value updates back to the config file in place,
-    preserving comments and unknown lines."""
+    preserving comments and unknown lines.
+
+    Cross-process safe: solver_proc (calibration commits) and comms_proc
+    (preset/param persists, :St/:Sg location writes) both call this — an
+    unlocked read-modify-write raced last-writer-wins and could silently drop
+    the other process's keys (e.g. lose ``fov_calibrated: true``). An
+    exclusive flock on a sidecar lockfile serializes the RMW, and the write
+    itself goes through a same-directory temp file + ``os.replace`` so a
+    power cut mid-write can never truncate the conf.
+    """
+    import fcntl
     p = Path(path or os.environ.get("DIOFINDER_CONFIG", DEFAULT_CONFIG_PATH))
     if not p.exists():
         log.warning("Cannot save updates; config file %s missing", p)
         return
-    lines = p.read_text().splitlines()
-    out = []
-    seen = set()
-    for line in lines:
-        stripped = line.split("#", 1)[0].strip()
-        if ":" in stripped:
-            key = stripped.split(":", 1)[0].strip().lower()
-            if key in updates:
-                value = updates[key]
+    lock_path = p.parent / (p.name + ".lock")
+    with open(lock_path, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        lines = p.read_text().splitlines()
+        out = []
+        seen = set()
+        for line in lines:
+            stripped = line.split("#", 1)[0].strip()
+            if ":" in stripped:
+                key = stripped.split(":", 1)[0].strip().lower()
+                if key in updates:
+                    value = updates[key]
+                    out.append(f"{key}: {_format_value(value)}")
+                    seen.add(key)
+                    continue
+            out.append(line)
+        for key, value in updates.items():
+            if key not in seen:
                 out.append(f"{key}: {_format_value(value)}")
-                seen.add(key)
-                continue
-        out.append(line)
-    for key, value in updates.items():
-        if key not in seen:
-            out.append(f"{key}: {_format_value(value)}")
-    p.write_text("\n".join(out) + "\n")
+        tmp = p.parent / (p.name + ".tmp")
+        tmp.write_text("\n".join(out) + "\n")
+        os.replace(tmp, p)
 
 
 def _format_value(v):
-    if isinstance(v, float):
-        return f"{v:.6f}"
+    # bool first: bool is an int subclass, and floats need shortest-exact
+    # formatting — the old fixed-point f"{v:.6f}" rendered any float below
+    # ~5e-7 as "0.000000" (a persisted match_threshold=1e-7 round-tripped to
+    # 0.0 after restart: max-false-positive-probability zero admits NO match,
+    # so the device stopped solving with no error anywhere).
     if isinstance(v, bool):
         return "true" if v else "false"
+    if isinstance(v, float):
+        return f"{v:.10g}"
     return str(v)

@@ -326,15 +326,17 @@ def _auto_exposure_decision(*, solved, stars, matches, peak,
 
 def _ae_apply_reversal_damping(action, cur_s, cur_g, last_dir):
     """Halve the step (in log space) when AE reverses direction, so the ladder
-    converges into the deadband instead of limit-cycling across it.
+    can land inside the deadband instead of limit-cycling across it.
 
     Observed on-sky: gain ping-ponged 2.1 <-> 3.2 for minutes because the x1.5
     gain step straddles the 0.8x-1.5x star-count deadband — at the low rung the
     frame yields too few stars (raise), at the high rung too many (reduce), and
     the full step never lands inside. On a direction reversal this replaces the
-    proposed step with its square root (x1.5 -> x1.22, x0.8 -> x0.89), each
-    reversal shrinking further, so the operating point walks geometrically into
-    the deadband. Same-direction moves (a genuine trend) keep full steps.
+    proposed step with its square root (x1.5 -> x1.22, x0.8 -> x0.89). The
+    damped step is computed from the CURRENT full-step proposal each time, so
+    it is a constant half-step on every reversal (not compounding); it works
+    because a x1.22 rung always fits inside the 1.875-wide relative deadband.
+    Same-direction moves (a genuine trend) keep full steps.
 
     ``last_dir`` is +1 / -1 / 0: the direction of the last APPLIED change (0 =
     none yet). Returns ``(action, new_last_dir)``; a held cycle (action None)
@@ -395,6 +397,7 @@ def _auto_exposure_loop(ctx, interval_s=5.0):
     cfg = ctx.cfg
     raise_streak = 0          # consecutive brightness-raise intents (debounce)
     last_dir = 0              # direction of the last APPLIED change (damping)
+    last_apply_t = 0.0        # when the controller last changed the camera
     while True:
         time.sleep(interval_s)
         try:
@@ -411,6 +414,16 @@ def _auto_exposure_loop(ctx, interval_s=5.0):
                 continue
             cur_s = float(reply.result.get("exposure_s", cfg.exposure_s))
             cur_g = float(reply.result.get("gain", cfg.gain))
+            # Settle guard: a control change reaches the sensor 1-3 frames
+            # later, so a solution read soon after our own last change is
+            # evidence about the OLD operating point. Raises are protected by
+            # the debounce, but reductions act immediately — without this a
+            # 5 s cycle could reduce twice on pre-change frames and overshoot
+            # into starvation. Saturation is urgent and stays exempt.
+            settle_s = max(3.0, 2.0 * cur_s)
+            if (time.monotonic() - last_apply_t < settle_s
+                    and sol.get("peak", 0) < _AE_PEAK_SATURATION):
+                continue
             # target_stars/target_matches/max_s/max_gain are live-mutable (seeing
             # presets / UI write them to shared_cfg); read them fresh each cycle.
             # The exposure and gain floors stay config-only.
@@ -460,6 +473,7 @@ def _auto_exposure_loop(ctx, interval_s=5.0):
                 reply = _call_camera(CAMERA_OP_SET_EXPOSURE,
                                      {"exposure_s": action["exposure_s"]}, *ctx_qs)
                 if reply is not None and reply.ok:
+                    last_apply_t = time.monotonic()
                     log.info("auto-exposure: exp %.3fs -> %.3fs "
                              "(solved=%s stars=%s matches=%s peak=%s)",
                              cur_s, action["exposure_s"], sol.get("solved"),
@@ -468,6 +482,7 @@ def _auto_exposure_loop(ctx, interval_s=5.0):
                 reply = _call_camera(CAMERA_OP_SET_GAIN,
                                      {"gain": action["gain"]}, *ctx_qs)
                 if reply is not None and reply.ok:
+                    last_apply_t = time.monotonic()
                     log.info("auto-exposure: gain %.1f -> %.1f "
                              "(solved=%s stars=%s matches=%s peak=%s)",
                              cur_g, action["gain"], sol.get("solved"),
@@ -1016,10 +1031,16 @@ def _imu_motion_engaged(state, q_now, imu_t, ref_t,
     if rate is not None and rate >= rate_gate_dps:
         state["engaged"] = True
         state["moving_t"] = imu_t
-    elif (state.get("engaged") and rate is not None
+    elif (state.get("engaged")
             and ref_t and ref_t > state.get("moving_t", 0.0)):
-        # Motion has stopped AND a solve landed afterwards: the frozen solved
-        # position now equals where we are — disengage seamlessly.
+        # A solve landed after the last observed motion: the reference is
+        # re-anchored, so the frozen solved position equals where we are —
+        # disengage seamlessly. Deliberately does NOT require a measurable
+        # rate: at slow poll intervals the sample deque prunes to one entry
+        # (rate is None), and requiring a rate here latched "engaged" forever
+        # so a parked scope walked with gyro drift — the exact bug the gate
+        # exists to fix. If the scope is in fact still moving, the next
+        # fast-enough sample pair re-engages via the branch above.
         state["engaged"] = False
     return bool(state.get("engaged"))
 
@@ -1036,10 +1057,19 @@ def _imu_predict(shared_cfg):
     imu_t  = shared_cfg.get("imu_t", 0.0)
     if q_now is None or time.monotonic() - imu_t > 2.0:
         return None
-    q_ref   = shared_cfg.get("imu_ref_q")
-    ra_ref  = shared_cfg.get("imu_ref_ra_deg")
-    dec_ref = shared_cfg.get("imu_ref_dec_deg")
-    ref_t   = shared_cfg.get("imu_ref_t", 0.0)
+    ref = shared_cfg.get("imu_ref")
+    if ref is not None:
+        # Atomic tuple (v0.11.20+ solver): one RPC, and immune to a solve
+        # landing between reads (the split keys could pair a new quaternion
+        # with the previous solve's RA/Dec — a degrees-scale pointing error
+        # exactly at post-slew re-anchor).
+        q_ref, ra_ref, dec_ref, roll_ref_v, ref_t = ref
+    else:
+        q_ref   = shared_cfg.get("imu_ref_q")
+        ra_ref  = shared_cfg.get("imu_ref_ra_deg")
+        dec_ref = shared_cfg.get("imu_ref_dec_deg")
+        roll_ref_v = None
+        ref_t   = shared_cfg.get("imu_ref_t", 0.0)
     if q_ref is None or ra_ref is None or time.monotonic() - ref_t > 120.0:
         return None
     C_flat = shared_cfg.get("imu_calib_C")
@@ -1057,7 +1087,8 @@ def _imu_predict(shared_cfg):
     c = C_flat
     dr = c[0]*r[0] + c[1]*r[1] + c[2]*r[2]
     du = c[3]*r[0] + c[4]*r[1] + c[5]*r[2]
-    roll_ref = shared_cfg.get("imu_ref_roll_deg", 0.0)
+    roll_ref = (roll_ref_v if roll_ref_v is not None
+                else shared_cfg.get("imu_ref_roll_deg", 0.0))
     roll_rad = math.radians(roll_ref)
     cos_r, sin_r = math.cos(roll_rad), math.sin(roll_rad)
     dra_rad  =  dr * cos_r - du * sin_r
@@ -1154,13 +1185,17 @@ def _handle_lx200_command(cmd, latest_solution, align_state, time_state,
                           align_request_q, align_response_q, ctx=None):
     """Dispatch one LX200 command string and return the raw bytes reply."""
     if cmd == ":GR":
-        pred = _imu_predict_smoothed(shared_cfg)
+        # dict() = ONE Manager IPC round-trip; the prediction path then reads
+        # ~14 keys locally instead of issuing ~14 individual RPCs per poll on
+        # CPU 0 (shared with comms/webui/IMU writer). Also makes the multi-key
+        # read coherent — no solve can land between key reads.
+        pred = _imu_predict_smoothed(dict(shared_cfg))
         if pred is not None:
             return _format_ra(pred[0] / 15.0).encode("ascii")
         sol = dict(latest_solution)
         return _format_ra(sol.get("ra_deg", 0.0) / 15.0).encode("ascii")
     if cmd == ":GD":
-        pred = _imu_predict_smoothed(shared_cfg)
+        pred = _imu_predict_smoothed(dict(shared_cfg))
         if pred is not None:
             return _format_dec(pred[1]).encode("ascii")
         sol = dict(latest_solution)
@@ -1627,6 +1662,11 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 return MaintResponse(ok=False, error="camera did not respond")
             if not reply.ok:
                 return MaintResponse(ok=False, error=reply.error)
+            # Keep the in-process cfg in step: the auto-exposure controller
+            # anchors its "walk exposure back to nominal" behaviour on
+            # cfg.exposure_s, so a stale value here silently unwinds a
+            # deliberate user setting one AE cycle at a time.
+            ctx.cfg.exposure_s = new_s
             if persist:
                 cfg_mod.save_keys({"exposure_s": new_s})
             return MaintResponse(ok=True, result={**reply.result,
@@ -1645,6 +1685,7 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 return MaintResponse(ok=False, error="camera did not respond")
             if not reply.ok:
                 return MaintResponse(ok=False, error=reply.error)
+            ctx.cfg.gain = new_g
             if persist:
                 cfg_mod.save_keys({"gain": new_g})
             return MaintResponse(ok=True, result={**reply.result,
@@ -1935,8 +1976,14 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 "drift": drift,
                 "lineage": lineage,
                 "overrides": overrides,
+                # File-existence check, not just a non-empty path: the
+                # shipped conf pre-points at the mag85 path even on images
+                # built without the deep asset, and resolve_star_db silently
+                # falls back to standard — the UI must not imply otherwise.
                 "deep_db_configured": bool(
-                    (getattr(ctx.cfg, "star_db_deep", "") or "").strip()),
+                    (getattr(ctx.cfg, "star_db_deep", "") or "").strip()
+                    and seeing_mod._db_exists(
+                        (getattr(ctx.cfg, "star_db_deep", "") or "").strip())),
             })
 
         if cmd == "seeing_set":
@@ -1961,22 +2008,14 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             persisted = {"seeing_mode": mode}
             db_token = preset.pop("star_db", None)
 
-            for cam_key, cam_op in (("exposure_s", CAMERA_OP_SET_EXPOSURE),
-                                    ("gain", CAMERA_OP_SET_GAIN)):
-                if cam_key in preset:
-                    val = preset.pop(cam_key)
-                    r = _call_camera(cam_op, {cam_key: val},
-                                     ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
-                    if r is not None and r.ok:
-                        persisted[cam_key] = val
-                        setattr(ctx.cfg, cam_key, val)
-
-            for key, val in preset.items():
-                ctx.shared_cfg[key] = val
-                persisted[key] = val
-
-            # Switch the solver database if the preset selected a different one.
-            # First, remember the standard db the first time we leave it —
+            # Switch the solver database FIRST: it is the only step that can
+            # fail (missing file / slow SD load / solver busy), and it used to
+            # run AFTER every shared_cfg + camera write — a failure then left
+            # the solver on one preset's detection params with the other
+            # preset's DB, nothing persisted and the UI showing the old mode.
+            # Failing before any write keeps the toggle atomic: either the
+            # whole preset applies or none of it does.
+            # Remember the standard db the first time we leave it —
             # "standard" resolves via star_db_standard with a fallback to
             # cfg.solver_db, which this very switch mutates and persists.
             # Without this snapshot, one Bad toggle would make "standard"
@@ -1993,15 +2032,31 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                                      timeout_s=15.0)
                 if reply is None:
                     return MaintResponse(ok=False,
-                                         error="solver did not respond to set_db")
+                                         error="solver did not respond to set_db "
+                                               "— preset NOT applied")
                 if not reply.ok:
                     return MaintResponse(ok=False,
-                                         error=f"set_db failed: {reply.error}")
+                                         error=f"set_db failed: {reply.error} "
+                                               "— preset NOT applied")
                 ctx.cfg.solver_db = db_token
                 persisted["solver_db"] = db_token
                 db_result = reply.result
             elif db_token:
                 persisted["solver_db"] = db_token
+
+            for cam_key, cam_op in (("exposure_s", CAMERA_OP_SET_EXPOSURE),
+                                    ("gain", CAMERA_OP_SET_GAIN)):
+                if cam_key in preset:
+                    val = preset.pop(cam_key)
+                    r = _call_camera(cam_op, {cam_key: val},
+                                     ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+                    if r is not None and r.ok:
+                        persisted[cam_key] = val
+                        setattr(ctx.cfg, cam_key, val)
+
+            for key, val in preset.items():
+                ctx.shared_cfg[key] = val
+                persisted[key] = val
 
             ctx.cfg.seeing_mode = mode
             ctx.shared_cfg["seeing_mode"] = mode
@@ -2171,7 +2226,10 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 return MaintResponse(
                     ok=False, error="solve_centroids requires non-empty 'centroids'")
             try:
-                timeout_s = float(args.get("timeout_s", 20.0))
+                # Clamped: the wait holds the global solver-call lock, so an
+                # oversized value would wedge every solver-backed maint
+                # command for its duration.
+                timeout_s = min(30.0, max(1.0, float(args.get("timeout_s", 20.0))))
             except (ValueError, TypeError):
                 timeout_s = 20.0
             reply = _call_solver(SOLVER_OP_SOLVE_CENTROIDS, {"centroids": cents},

@@ -225,6 +225,7 @@ class BackgroundCache:
             self._camera_epoch = epoch
             with self._frame_buf_lock:
                 self._frame_buf.clear()
+            self._invalidate_gen = getattr(self, "_invalidate_gen", 0) + 1
             self._needs_rebuild.set()
 
     def note_motion(self, quat):
@@ -232,8 +233,20 @@ class BackgroundCache:
         if not self.enabled or quat is None:
             return
         self._imu_feeding = True
+        self._imu_last_seen = time.monotonic()
         self._last_imu_quat = tuple(quat)
         self._update_slew(self._last_imu_quat)
+
+    def note_imu_lost(self):
+        """Called by the solver when shared_cfg says the IMU is unavailable.
+
+        Without this, _imu_feeding latched True forever after the first
+        note_motion, so an IMU that died mid-session (cable, driver) disabled
+        BOTH solver-derived slew detection and the fail-streak invalidation
+        for the rest of the run — a stale model served STEADY after every
+        slew until the 60 s max-age expiry."""
+        if self._imu_feeding:
+            self._imu_feeding = False
 
     def _update_slew(self, new_quat) -> None:
         """Drive slew/rebuild state from a fresh pose observation.
@@ -506,8 +519,21 @@ class BackgroundCache:
             if len(stack) < max(2, self.stack_size // 2):
                 self._stop.wait(0.25)
                 continue
+            gen_before = getattr(self, "_invalidate_gen", 0)
             try:
-                self._model = self._build_model(stack)  # atomic publish
+                model = self._build_model(stack)
+                if getattr(self, "_invalidate_gen", 0) != gen_before:
+                    # A camera-settings flush landed while np.median was
+                    # running: this model was built entirely from OLD-pedestal
+                    # frames. Publishing it (and clearing the rebuild flag)
+                    # would serve a wrong background as STEADY — the exact
+                    # mixed-pedestal failure the epoch flush exists to stop.
+                    # Discard; the flag stays set and the next pass rebuilds
+                    # from post-change frames.
+                    log.info("bg-cache build discarded (camera settings "
+                             "changed mid-build)")
+                    continue
+                self._model = model  # atomic publish
                 last_build = now
                 self._n_builds += 1
                 self._needs_rebuild.clear()
@@ -536,9 +562,14 @@ class BackgroundCache:
         # unchanged, so calibrated sigma operating points keep their meaning
         # (including the 0.5 floor).
         time_med_f = np.median(np.stack(frames, axis=0), axis=0).astype(np.float32)
-        if self.bin == 2:
-            tm = time_med_f[: (h // 2) * 2, : (w // 2) * 2]
-            time_med_f = tm.reshape(h // 2, 2, w // 2, 2).mean(axis=(1, 3))
+        if self.bin > 1:
+            # Downsample to the DETECTION resolution for any bin (1/2/4).
+            # This used to run only for bin == 2; at bin=4 the full-res model
+            # then failed sycamore's height//bin validation on every steady
+            # frame — a permanent extraction-exception loop with no recovery.
+            b = self.bin
+            tm = time_med_f[: (h // b) * b, : (w // b) * b]
+            time_med_f = tm.reshape(h // b, b, w // b, b).mean(axis=(1, 3))
         h_det, w_det = time_med_f.shape
         patch = time_med_f[h_det // 3: 2 * h_det // 3,
                            w_det // 3: 2 * w_det // 3].ravel()

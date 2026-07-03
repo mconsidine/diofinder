@@ -85,6 +85,14 @@ def _handle_camera_cmd(cmd, cam, current_state, shared_cfg=None):
                 return CameraCmdReply(
                     request_id=cmd.request_id, ok=False,
                     error=f"exposure_s {new_s} out of range [0.001, 10.0]")
+            if new_s == current_state.get("exposure_s"):
+                # No-op set (e.g. auto_tune/dark_capture restoring the same
+                # value): don't touch the camera and, critically, don't bump
+                # the settings epoch — each bump flushes the temporal
+                # background stack for a full rebuild period.
+                return CameraCmdReply(
+                    request_id=cmd.request_id, ok=True,
+                    result={"exposure_s": new_s})
             if cam is not None:
                 cam.set_controls({
                     "ExposureTime": int(new_s * 1_000_000),
@@ -106,6 +114,10 @@ def _handle_camera_cmd(cmd, cam, current_state, shared_cfg=None):
                 return CameraCmdReply(
                     request_id=cmd.request_id, ok=False,
                     error=f"gain {new_g} out of range [1.0, {MAX_ANALOG_GAIN}]")
+            if new_g == current_state.get("gain"):
+                return CameraCmdReply(
+                    request_id=cmd.request_id, ok=True,
+                    result={"gain": new_g})
             if cam is not None:
                 cam.set_controls({"AnalogueGain": new_g})
             current_state["gain"] = new_g
@@ -281,6 +293,7 @@ def camera_main(slots, camera_cmd_q, camera_cmd_reply_q, cfg,
                         buffer=s.buf) for s in shms]
 
     frame_count = 0
+    init_fails = 0
     last_log = time.monotonic()
 
     try:
@@ -326,8 +339,22 @@ def camera_main(slots, camera_cmd_q, camera_cmd_reply_q, cfg,
             if cam is None:
                 try:
                     cam = _init_camera(cfg, current_state)
+                    init_fails = 0
                 except Exception as e:
-                    log.error("Camera init failed: %s; reverting to test mode", e)
+                    init_fails += 1
+                    if init_fails < 5:
+                        # Transient (busy device / CMA fragmentation at boot):
+                        # retry live before giving up. Reverting to test mode
+                        # on the FIRST failure served the canned test image as
+                        # real pointing with no client-visible indication.
+                        log.error("Camera init failed (attempt %d/5): %s",
+                                  init_fails, e)
+                        time.sleep(2.0)
+                        continue
+                    log.critical(
+                        "Camera init failed %d times: %s — REVERTING TO TEST "
+                        "MODE (canned image; reported positions are NOT real "
+                        "sky). Fix the camera and restart.", init_fails, e)
                     if shared_cfg is not None:
                         shared_cfg["test_mode"] = True
                     time.sleep(2.0)
@@ -338,7 +365,14 @@ def camera_main(slots, camera_cmd_q, camera_cmd_reply_q, cfg,
                 arr = cam.capture_array("main")
                 np.copyto(bufs[idx], arr[:cfg.frame_height, :cfg.frame_width])
             except Exception as e:
+                # Do NOT publish: the slot holds an old frame, and publishing
+                # it would hand the solver stale sky with a fresh sequence
+                # number — pointing looks live while actually frozen, and the
+                # no-sleep retry loop would peg a solver core. Back off and
+                # let a persistent fault surface as a stale epoch instead.
                 log.error("Camera capture failed: %s", e)
+                time.sleep(0.5)
+                continue
             slots.publish(idx)
 
             frame_count += 1
