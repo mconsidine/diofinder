@@ -116,7 +116,10 @@ mode. **Default since v0.11.15 is 2028×1520 — the IMX477's 2×2-binned
 *full-FOV* mode**: same 13.64° FOV and plate scale after ISP scaling, ~4× less
 sensor/ISP/memory bandwidth, a 40 fps mode ceiling, and slightly better SNR
 from on-sensor binning. Set 4056×3040 to revert to the full-resolution readout
-(conf edit + restart; FOV calibration is unaffected either way).
+(conf edit + restart). Measured on-sky FOV in the binned mode is **~13.54°**
+(bundle replay, n=12: 13.515–13.557) vs the theoretical 13.64 — the shipped
+`fov_deg`/`arcsec_per_pixel` are recentered there (v0.11.17) so the calibrated
+±0.1° window brackets the true value with margin.
 
 **Capture cadence:** `_init_camera` passes `buffer_count=2` and drops the RAW
 stream (`raw=None`, with a legacy fallback for older picamera2). With the
@@ -718,7 +721,14 @@ hot-pixel rejection during slews, when the temporal cache is offline.
 * `dark_capture {"frames": N, "exposure_s"?, "gain"?}` → solver grabs N SHM
   frames ~0.3 s apart, median-stacks, flags pixels exceeding
   `median + 5·(1.4826·MAD)`, saves `/var/lib/diofinder/hot_pixel_mask.npz`
-  (indices + shape + count), loads it. When `exposure_s`/`gain` are supplied,
+  (indices + shape + count), loads it. **Sanity guard** (`implausibly_large`,
+  >0.5 % of the frame, abs floor 64): a capture that saw the sky (lens not
+  capped) flags 100k+ pixels — the global threshold picks up every star and
+  the bright half of any gradient — and repairing them corrupts centroid
+  geometry so nothing solves (observed live: 195,356-px mask, healthy star
+  counts, zero solves). Such a mask is **refused on save** (clear error telling
+  the user to cap the lens) and **ignored on load** (protects devices already
+  carrying one). When `exposure_s`/`gain` are supplied,
   comms snapshots the live exposure/gain, pauses auto-exposure, captures at the
   requested **fixed worst-case** point, then restores (try/finally). The web UI
   buttons pass `0.9 s` + `gain 16` (the auto-exposure ceiling) so the mask is a

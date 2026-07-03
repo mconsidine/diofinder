@@ -27,7 +27,7 @@ DEFAULT_CONFIG_PATH = "/etc/diofinder/diofinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.11.16"
+    version: str = "0.11.17"
 
     # -------- Camera --------
     frame_width: int = 960
@@ -82,9 +82,13 @@ class Config:
     # partner of the peak=250 saturation backoff. Live-mutable via shared_cfg.
     auto_exposure_peak_floor: float = 70.0
 
-    # Optical properties
-    fov_deg: float = 13.64  # 25 mm + IMX477 full-sensor mode (see CLAUDE.md)
-    arcsec_per_pixel: float = 51.15  # 6.2 µm eff. pixel × 206265 / 25 mm FL
+    # Optical properties. 13.64 is the theoretical 25 mm + IMX477 value; the
+    # measured on-sky FOV in the (default) 2028x1520 binned mode is ~13.54
+    # (n=12 solves, 13.515-13.557), so the shipped estimate is recentered there
+    # to keep the true value comfortably inside the calibrated +/-0.1 window.
+    # The calibrator refines it per-device either way.
+    fov_deg: float = 13.54
+    arcsec_per_pixel: float = 50.78  # 13.54 deg * 3600 / 960 px
 
     latitude_deg: float = 0.0
     longitude_deg: float = 0.0

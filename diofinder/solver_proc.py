@@ -254,6 +254,17 @@ def _handle_solver_cmd(cmd, calibrator, polar,
             shape = (cfg.frame_height, cfg.frame_width)
             try:
                 mask = _hp.capture_dark_mask(state.read_frame, n, shape)
+                if _hp.implausibly_large(mask.count, shape):
+                    # Lens was NOT capped: the mask saw the sky. Saving it
+                    # would silently break every subsequent solve (observed:
+                    # a 195k-pixel mask -> healthy star counts, zero solves).
+                    return SolverCmdReply(
+                        request_id=cmd.request_id, ok=False,
+                        error=(f"dark capture flagged {mask.count} pixels "
+                               f"(~{100.0 * mask.count / (shape[0] * shape[1]):.0f}% "
+                               "of the frame) — that is sky, not hot pixels. "
+                               "Cap or cover the lens completely and retry. "
+                               "The existing mask was left unchanged."))
                 mask.save(_hp.DEFAULT_MASK_PATH)
                 state.hot_pixel_mask = mask
             except Exception as e:

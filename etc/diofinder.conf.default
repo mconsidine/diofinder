@@ -42,8 +42,9 @@ auto_exposure_max_s: 1.0
 # Optical properties.
 #
 # fov_deg is the camera's horizontal field of view in degrees. This image
-# ships PRE-CALIBRATED for the standard 25 mm lens + IMX477 full-sensor mode
-# (13.64°, see the plate-scale derivation in CLAUDE.md), so the solver runs the
+# ships PRE-CALIBRATED for the standard 25 mm lens + the default 2028x1520
+# binned IMX477 mode (measured on-sky ~13.54°; the theoretical full-res value
+# is 13.64° — see CLAUDE.md), so the solver runs the
 # tight fov_calibrated_max_error_deg tolerance from the first frame instead of
 # relearning over ~30 solves. While fov_calibrated is false the solver uses the
 # (now also tightened) fov_max_error_deg as the tolerance window.
@@ -53,8 +54,8 @@ auto_exposure_max_s: 1.0
 #   sudo sed -i 's/^fov_calibrated:.*/fov_calibrated: false/' /etc/diofinder/diofinder.conf
 #   sudo systemctl restart diofinder
 # (or the Config page → Reset). The solver will then relearn the real FOV.
-fov_deg: 13.64
-arcsec_per_pixel: 51.15
+fov_deg: 13.54
+arcsec_per_pixel: 50.78
 fov_calibrated: true
 fov_calibrated_stddev: 0.05
 fov_calibrated_max_error_deg: 0.1
