@@ -277,13 +277,15 @@ history for the full specs.)*
   `detect_stars_roi` (`tracking.roi_detect_native`). Both capability-probed
   with graceful fallback to the v0.11.22 behavior on older wheels.
 
-### Open tasks from the July 2026 audit
+### July 2026 audit — status after v0.11.24
 
 Full findings with evidence, scenarios, and fix directions:
-**`docs/audit-2026-07.md`** (IDs below refer to it). Each row is
-self-contained enough to hand to an agent together with that doc.
+**`docs/audit-2026-07.md`** (IDs below refer to it). **v0.11.24 implemented
+every P1 and P2 row and most of P3/P4** — the tables below are kept as the
+record of what shipped; the *deferred* items (with reasons) are listed after
+them and are the only open work.
 
-**P1 — correctness / silent field failure (do these first):**
+**P1 — correctness / silent field failure (ALL DONE, v0.11.24):**
 
 | ID | Task |
 |----|------|
@@ -292,7 +294,7 @@ self-contained enough to hand to an agent together with that doc.
 | W3/F1 | `set_db` double-fault: when the previous-DB reload also fails, `os._exit(1)` so systemd restarts with the configured DB (making the existing comment true); throttle the per-frame AttributeError warning. |
 | F2 | FOV escape hatch: after N further FallbackGate fires, escalate the loose retry to a genuinely wide window (several degrees) so a lens change can recover; make the calibration reset (Config page + documented procedure) also restore `fov_deg`, not just `fov_calibrated`. |
 
-**P2 — robustness:**
+**P2 — robustness (ALL DONE, v0.11.24, except W6 — see deferred):**
 
 | ID | Task |
 |----|------|
@@ -305,7 +307,7 @@ self-contained enough to hand to an agent together with that doc.
 | F7 | `dark_capture`: `_ae_pause()` before the camera sets; widen the try/finally over the setup+settle phase. Also set `solver_busy_t` around the solver-side capture (W-L3) and chain `after_seq` for unique frames (F-L2). |
 | W6 | systemd `WatchdogSec` + launcher `sd_notify` pings fed by maint-socket + FrameSlots self-checks — converts any comms/camera wedge into a restart. |
 
-**P3 — performance (biggest wins first; numbers in the audit doc):**
+**P3 — performance (DONE in v0.11.24 except P4/P5 — see deferred):**
 
 | ID | Task |
 |----|------|
@@ -313,9 +315,9 @@ self-contained enough to hand to an agent together with that doc.
 | P3+P6 | Poll-path RPC collapse: ~100 ms-TTL snapshot cache shared by :GR/:GD; `status` handler uses one `dict(shared_cfg)` snap instead of ~15 gets. |
 | P4 | Live-view transport: binary framing on the maint socket (length-prefixed raw payload) instead of base64-in-JSON; longer term a dedicated display SHM segment. |
 | P5 | bg_cache: bin frames at submit time and median-stack at detection resolution (~4× less copy/stack/rebuild; re-verify MAD noise level against calibrated sigmas first). |
-| P7/P10/P11 | Composite `imu=(q,t)` key (40→20 RPC/s, atomic pair); camera request-API capture + TTL `test_mode` read; throttle dark-frame publishes to every Nth. |
+| P7/P10/P11 | Composite `imu=(q,t)` key (40→20 RPC/s, atomic pair); TTL `test_mode` read; throttle dark-frame publishes to every 5th. (The camera request-API capture half of P10 is deferred — see below.) |
 
-**P4 — small robustness / observability:**
+**P4 — small robustness / observability (ALL DONE, v0.11.24):**
 
 | ID | Task |
 |----|------|
@@ -326,6 +328,27 @@ self-contained enough to hand to an agent together with that doc.
 | F-L5/F-L9 | Throttle the two per-frame solver exception warnings; log active `DIOFINDER_*` env overrides at startup and surface them in `version`. |
 | W-L1/W-L2/W-L5/W-L6 | bg_cache gen re-check after `_needs_rebuild.clear()`; bounded `_call_solver` put; receive-buffer caps on both server sockets; per-command maint client timeouts. |
 | F-L7/F-L8 | Mutual exclusion between auto_tune sweep and dark_capture; lineage classification tolerant of AE-moved exposure/gain. |
+
+### Deferred from the July 2026 audit (open, with reasons)
+
+- **P4 (live-view binary transport / display SHM segment)**: UI-latency
+  only; changes the maint-socket wire protocol (or adds a 4th SHM segment).
+  Do it as its own change with on-device before/after timings.
+- **P5 (bg_cache binned-resolution median stack)**: clear ~4× win, but the
+  estimator changes from bin(median) to median(bin) — re-verify the MAD
+  noise level against the calibrated sigma operating points on real frames
+  (bundle replay) before shipping.
+- **P9 (TRACKING fixed-cost trims)**: revisit only if tracking mode
+  graduates from experimental/default-off.
+- **P10 (camera request-API capture)**: picamera2 API variance across
+  versions; needs on-device validation. The TTL `test_mode` half shipped.
+- **W6 (systemd `WatchdogSec` + `sd_notify`)**: `Type=notify` misconfigured
+  can fail the unit at startup — needs on-device testing; W1's camera-stall
+  detection already covers the biggest gap it targeted (comms-thread wedges
+  are also now far less likely after W2's non-blocking align puts).
+- **F2 (partial)**: the escalated full-range blind retry shipped; making
+  the Config-page reset also restore `fov_deg` is still open (the docs now
+  tell lens-changers to set `fov_deg` manually).
 
 ### Accepted-by-design (do NOT "fix" without a new reason)
 

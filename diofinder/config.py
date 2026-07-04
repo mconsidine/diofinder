@@ -27,7 +27,7 @@ DEFAULT_CONFIG_PATH = "/etc/diofinder/diofinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.11.23"
+    version: str = "0.11.24"
 
     # -------- Camera --------
     frame_width: int = 960
@@ -316,13 +316,24 @@ def load_config(path: Optional[str] = None) -> Config:
     else:
         log.warning("Config file %s missing; using defaults", p)
 
+    env_overrides = {}
     for f in dataclasses.fields(cfg):
         env_key = "DIOFINDER_" + f.name.upper()
         if env_key in os.environ:
             try:
                 setattr(cfg, f.name, _coerce(os.environ[env_key], type(getattr(cfg, f.name))))
+                env_overrides[f.name] = os.environ[env_key]
             except Exception as e:
                 log.warning("Bad env %s=%r: %s", env_key, os.environ[env_key], e)
+    # Surface active env overrides: they are applied LAST, so they silently
+    # mask UI-persisted conf values — every "persist succeeded but the value
+    # reverts on restart" report starts here (audit 2026-07 F-L9). One log
+    # line at load + a queryable attribute (the `version` maint command
+    # includes it).
+    cfg.env_overrides = env_overrides
+    if env_overrides:
+        log.warning("Active DIOFINDER_* env overrides mask conf values: %s",
+                    env_overrides)
     return cfg
 
 

@@ -193,7 +193,16 @@ def _call_solver(op, args, solver_cmd_q, solver_cmd_reply_q, timeout_s=8.0):
     exposures (audit 2026-07 W4)."""
     rid = next(_request_id_seq)
     with _solver_call_lock:
-        solver_cmd_q.put(SolverCmd(op=op, args=args or {}, request_id=rid))
+        try:
+            # Bounded: while the solver is legitimately non-draining for a
+            # long stretch (60 s set_db, ~20 s dark capture) pollers can fill
+            # the 16-slot queue; a BLOCKING put then froze every solver-backed
+            # maint command while holding the call lock (audit 2026-07 W-L2).
+            solver_cmd_q.put(SolverCmd(op=op, args=args or {}, request_id=rid),
+                             timeout=1.0)
+        except Full:
+            log.warning("solver command queue full (op=%s) — solver busy", op)
+            return None
         return _wait_for_reply(solver_cmd_reply_q, rid, timeout_s=timeout_s)
 
 
@@ -665,6 +674,12 @@ def _auto_tune_row(candidate, samples, signal_floor=_AT_SIGNAL_FLOOR):
 
 
 _auto_tune_lock = threading.Lock()
+# A dark capture in flight (synchronous inside the maint handler). Mutual
+# exclusion with the auto_tune sweep: both drive the camera with
+# snapshot-and-restore sequences that interleave last-writer-wins
+# (audit 2026-07 F-L7). Written under the GIL from maint handler threads.
+_dark_capture_active = False
+
 _auto_tune_state = {
     "running": False, "phase": "idle", "message": "",
     "progress": 0.0, "result": None, "error": None,
@@ -1439,6 +1454,7 @@ def _handle_lx200_command(cmd, latest_solution, align_state, time_state,
 
 def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
     """Dispatch one maintenance-socket command and return a MaintResponse."""
+    global _dark_capture_active
     cmd  = req.cmd
     args = req.args
 
@@ -1469,6 +1485,12 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             # application regression once.
             from diofinder.wheels import wheel_versions
             result["wheels"] = wheel_versions()
+            # Active DIOFINDER_* env overrides mask conf values (applied last
+            # at load); surfacing them here turns "persist succeeded but the
+            # value reverts" reports into a one-look diagnosis (audit F-L9).
+            env_ov = getattr(ctx.cfg, "env_overrides", None)
+            if env_ov:
+                result["env_overrides"] = env_ov
             return MaintResponse(ok=True, result=result)
 
         if cmd == "status":
@@ -1645,12 +1667,35 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 return MaintResponse(
                     ok=False, error="auto_exposure_set requires boolean 'enabled'")
             persist = bool(args.get("persist", False))
-            ctx.shared_cfg["auto_exposure_enabled"] = enabled
+            updates = {"auto_exposure_enabled": enabled}
+            # Optional controller knobs (audit 2026-07 F-M4): the AE loop
+            # already reads these from shared_cfg each cycle, but no maint
+            # writer existed — the docs called them live-mutable and nothing
+            # honored it.
+            if args.get("peak_floor") is not None:
+                try:
+                    pf = float(args["peak_floor"])
+                except (ValueError, TypeError):
+                    return MaintResponse(ok=False, error="bad peak_floor")
+                if not 0.0 <= pf <= 250.0:
+                    return MaintResponse(
+                        ok=False, error="peak_floor must be in [0, 250]")
+                updates["auto_exposure_peak_floor"] = pf
+            if args.get("nominal_s") is not None:
+                try:
+                    ns = float(args["nominal_s"])
+                except (ValueError, TypeError):
+                    return MaintResponse(ok=False, error="bad nominal_s")
+                if not 0.0 <= ns <= 10.0:
+                    return MaintResponse(
+                        ok=False, error="nominal_s must be in [0, 10]")
+                updates["auto_exposure_nominal_s"] = ns
+            ctx.shared_cfg.update(updates)
             if persist:
-                cfg_mod.save_keys({"auto_exposure_enabled": enabled})
-            log.info("Auto-exposure -> %s", enabled)
+                cfg_mod.save_keys(updates)
+            log.info("Auto-exposure -> %s (%s)", enabled, updates)
             return MaintResponse(ok=True, result={
-                "auto_exposure_enabled": enabled, "persisted": persist})
+                **updates, "persisted": persist})
 
         if cmd == "auto_tune":
             # Precondition: we must currently see a star field (fresh detection
@@ -1674,6 +1719,11 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "frame shows stars and peak >= 20. auto-tune tunes detection "
                     "on signal it can already see; it can't create signal that "
                     "isn't there."))
+            if _dark_capture_active:
+                return MaintResponse(ok=False, error=(
+                    "a dark-frame capture is in progress — it drives the "
+                    "camera to a fixed worst-case point; wait for it to "
+                    "finish, then retry"))
             mode = str(args.get("mode") or ctx.shared_cfg.get(
                 "seeing_mode", ctx.cfg.seeing_mode)).strip().lower()
             if not seeing_mod.is_valid_mode(mode):
@@ -2126,7 +2176,14 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 else:
                     eff_full["exposure_s"] = ctx.cfg.exposure_s
                     eff_full["gain"] = ctx.cfg.gain
-                lineage = seeing_mod.classify_lineage(mode, ctx.cfg, eff_full)
+                # With AE on, exposure/gain are the controller's to move —
+                # exclude them from the tuned-match so the badge doesn't
+                # flip to Custom on the first AE trim (audit F-L8).
+                _ae_on = bool(ctx.shared_cfg.get(
+                    "auto_exposure_enabled", ctx.cfg.auto_exposure_enabled))
+                lineage = seeing_mod.classify_lineage(
+                    mode, ctx.cfg, eff_full,
+                    ignore_keys=(("exposure_s", "gain") if _ae_on else ()))
                 overrides = seeing_mod.overrides_summary()
             except Exception as e:
                 return MaintResponse(ok=False, error=f"seeing_get failed: {e}")
@@ -2281,6 +2338,10 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             return MaintResponse(ok=True, result={"mode": mode, "removed": removed})
 
         if cmd == "dark_capture":
+            if _auto_tune_state["running"]:
+                return MaintResponse(ok=False, error=(
+                    "an auto-tune sweep is running — it drives the camera; "
+                    "cancel it (auto_tune_cancel) or wait, then retry"))
             try:
                 frames = int(args.get("frames", 16) or 16)
             except (ValueError, TypeError):
@@ -2309,6 +2370,7 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             # window left the camera parked at the worst-case setting with
             # AE resumed against it (audit 2026-07 F7).
             snap_s = snap_g = None
+            _dark_capture_active = True
             _ae_pause()
             try:
                 if want_s is not None or want_g is not None:
@@ -2329,7 +2391,25 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     settle_s = want_s if want_s is not None else (snap_s or 0.5)
                     time.sleep(max(0.5, 2.0 * settle_s))
 
-                reply = _call_solver(SOLVER_OP_DARK_CAPTURE, {"frames": frames},
+                # Record the capture conditions in the mask metadata
+                # (audit F-L1): the fixed-point values when supplied, else
+                # the live setting observed at capture time.
+                _cap_args = {"frames": frames}
+                _eff_s, _eff_g = want_s, want_g
+                if _eff_s is None or _eff_g is None:
+                    _live = _call_camera(CAMERA_OP_GET_EXPOSURE, {},
+                                         ctx.camera_cmd_q,
+                                         ctx.camera_cmd_reply_q)
+                    if _live is not None and _live.ok:
+                        if _eff_s is None:
+                            _eff_s = _live.result.get("exposure_s")
+                        if _eff_g is None:
+                            _eff_g = _live.result.get("gain")
+                if _eff_s is not None:
+                    _cap_args["exposure_s"] = float(_eff_s)
+                if _eff_g is not None:
+                    _cap_args["gain"] = float(_eff_g)
+                reply = _call_solver(SOLVER_OP_DARK_CAPTURE, _cap_args,
                                      ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
                                      timeout_s=max(30.0, frames * 0.6 + 10.0))
             finally:
@@ -2340,6 +2420,7 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     _call_camera(CAMERA_OP_SET_GAIN, {"gain": snap_g},
                                  ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
                 _ae_resume()
+                _dark_capture_active = False
             if reply is None:
                 return MaintResponse(ok=False, error="solver did not respond")
             if not reply.ok:
@@ -2477,6 +2558,13 @@ def _handle_maint_client(client, ctx):
             if not chunk:
                 break
             buf += chunk
+            if len(buf) > 65536:
+                # No delimiter in 64 KB: not a JSON-lines client. Drop it
+                # before it grows the buffer for the whole 15 s timeout on a
+                # 512 MB device (audit 2026-07 W-L5).
+                log.warning("maint client sent %d bytes with no newline — "
+                            "dropping connection", len(buf))
+                return
             while b"\n" in buf:
                 line, _, buf = buf.partition(b"\n")
                 if not line.strip():
@@ -2561,6 +2649,13 @@ def _serve_lx200(latest_solution, shared_cfg, cfg,
                 if not chunk:
                     break
                 buf += chunk
+                if len(buf) > 4096:
+                    # LX200 commands are tens of bytes; 4 KB with no '#' is
+                    # a garbage-spewing client on the network-exposed port
+                    # (audit 2026-07 W-L5).
+                    log.warning("LX200 client sent %d bytes with no '#' — "
+                                "dropping connection", len(buf))
+                    break
                 while b"#" in buf:
                     raw, _, buf = buf.partition(b"#")
                     cmd = raw.decode("ascii", errors="ignore").strip()

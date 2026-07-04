@@ -545,10 +545,20 @@ class BackgroundCache:
                     log.info("bg-cache build discarded (camera settings "
                              "changed mid-build)")
                     continue
+                # Clear the flag BEFORE the final gen re-check: with the
+                # old order (publish, then clear) a flush landing between
+                # them had its rebuild request wiped and its stale-model
+                # discard skipped — an old-pedestal model then served STEADY
+                # until max-age expiry (audit 2026-07 W-L1).
+                self._needs_rebuild.clear()
+                if getattr(self, "_invalidate_gen", 0) != gen_before:
+                    self._needs_rebuild.set()
+                    log.info("bg-cache build discarded (camera settings "
+                             "changed in publish window)")
+                    continue
                 self._model = model  # atomic publish
                 last_build = now
                 self._n_builds += 1
-                self._needs_rebuild.clear()
                 log.info("bg-cache model rebuilt (#%d): %d frames, noise=%.2f",
                          self._n_builds, self._model.n_frames, self._model.noise)
             except Exception as e:

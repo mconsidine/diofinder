@@ -25,6 +25,8 @@ import os
 import time
 from typing import Optional
 
+import json
+
 import numpy as np
 
 log = logging.getLogger("diofinder.hot_pixel")
@@ -145,11 +147,18 @@ class HotPixelMask:
     """
 
     def __init__(self, indices: Optional[np.ndarray] = None,
-                 shape=None, mtime: float = 0.0):
+                 shape=None, mtime: float = 0.0, meta: Optional[dict] = None):
         self.indices = (np.asarray(indices, dtype=np.int64)
                         if indices is not None else np.zeros(0, dtype=np.int64))
         self.shape = tuple(shape) if shape is not None else None
         self.mtime = float(mtime)
+        # Capture conditions (exposure_s, gain, sensor mode, created_at):
+        # hot-pixel positions are sensor-mode dependent (the output frame is
+        # always 960x760, so the shape guard passes across mode changes while
+        # every index points at the wrong sky pixel) and coverage scales with
+        # exposure/gain. Stored so a mismatch can be surfaced instead of
+        # silently corrupting faint-star pixels (audit 2026-07 F-L1).
+        self.meta = dict(meta) if meta else {}
         self.neighbors = (build_neighbor_index(self.indices, self.shape)
                           if self.shape is not None and self.indices.size
                           else np.zeros((0, 8), dtype=np.int64))
@@ -170,7 +179,8 @@ class HotPixelMask:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         np.savez(path, indices=self.indices,
                  shape=np.array(self.shape, dtype=np.int64),
-                 count=np.int64(self.indices.size))
+                 count=np.int64(self.indices.size),
+                 meta=np.bytes_(json.dumps(self.meta).encode("utf-8")))
         self.mtime = os.path.getmtime(path)
 
     @classmethod
@@ -188,14 +198,25 @@ class HotPixelMask:
                     "it. Recapture with the lens covered, or clear the mask.",
                     path, indices.size, 100.0 * MAX_MASK_FRACTION)
                 return None
-            return cls(indices=indices, shape=shape, mtime=os.path.getmtime(path))
+            meta = {}
+            if "meta" in getattr(data, "files", []):
+                try:
+                    raw = data["meta"].item()
+                    if isinstance(raw, bytes):
+                        raw = raw.decode("utf-8")
+                    meta = json.loads(raw)
+                except Exception:
+                    meta = {}
+            return cls(indices=indices, shape=shape,
+                       mtime=os.path.getmtime(path), meta=meta)
         except Exception as e:
             log.warning("Could not load hot-pixel mask %s: %s", path, e)
             return None
 
 
 def capture_dark_mask(read_frame, n_frames: int, shape,
-                      interval_s: float = 0.3, k: float = 5.0) -> HotPixelMask:
+                      interval_s: float = 0.3, k: float = 5.0,
+                      meta: Optional[dict] = None) -> HotPixelMask:
     """Median-stack ``n_frames`` from ``read_frame()`` and build a mask.
 
     ``read_frame`` is a callable returning a fresh 2-D uint8 frame copy
@@ -230,4 +251,4 @@ def capture_dark_mask(read_frame, n_frames: int, shape,
         raise RuntimeError("no frames captured for dark mask")
     stack = np.median(np.stack(frames, axis=0), axis=0)
     indices = compute_hot_pixel_indices(stack, k=k)
-    return HotPixelMask(indices=indices, shape=tuple(shape))
+    return HotPixelMask(indices=indices, shape=tuple(shape), meta=meta)

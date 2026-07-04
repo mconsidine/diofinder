@@ -38,6 +38,21 @@ auto_exposure_enabled: true
 auto_exposure_target_stars: 20
 auto_exposure_min_s: 0.05
 auto_exposure_max_s: 1.0
+# Matches-driven target while solving (raw star count is the lost-in-space
+# fallback). Live-mutable; seeing presets write it.
+auto_exposure_target_matches: 8
+# Gain ladder bounds. Gain is the primary (latency-free) knob; exposure only
+# stretches once gain hits the ceiling. max_gain is live-mutable.
+auto_exposure_min_gain: 1.0
+auto_exposure_max_gain: 16.0
+# Exposure the controller anchors to and trims around with gain.
+# 0 = use the configured exposure_s. Live-mutable
+# (auto_exposure_set {"nominal_s": ...}).
+auto_exposure_nominal_s: 0.0
+# Contrast floor (8-bit peak): below this the controller never sheds
+# brightness even when match-rich — too near the detection cliff.
+# Live-mutable (auto_exposure_set {"peak_floor": ...}).
+auto_exposure_peak_floor: 70.0
 
 # Optical properties.
 #
@@ -230,6 +245,25 @@ save_solved_frames: false
 save_failed_frames: false
 failed_frames_dir: /var/lib/diofinder/captures
 log_solve_stats_every_n: 50
+
+# ---- Centroid extractor backend ----
+# "sycamore" (default: matched filter + temporal cache + hot-pixel) or
+# "tetra3" (AstroKeith's exact eFinder_cli extractor via olive-solve — the
+# Legacy preset sets this). Live-mutable via solver_params_set.
+extractor_backend: sycamore
+
+# ---- Star naming (Status page "Centered star" label) ----
+# Catalog refreshed by diofinder-db-update; a missing file disables naming.
+star_names_path: /var/lib/diofinder/star_names.csv
+# true = label the BRIGHTEST cataloged star within star_name_radius_deg of
+# the boresight (falling back to nearest); false = pure nearest.
+star_name_brightest: true
+star_name_radius_deg: 2.0
+
+# ---- IMU pointing prediction ----
+# Rotation-rate gate (deg/s) that distinguishes a real pan from parked gyro
+# drift. Live-mutable via shared_cfg.
+imu_rate_gate_dps: 0.1
 
 # ---- Shutdown ----
 shutdown_grace_s: 2.0

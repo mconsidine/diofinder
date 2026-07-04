@@ -111,7 +111,15 @@ def pending_migrations(path: Optional[str] = None) -> list:
     fires = []
     for key, olds, new, reason in MIGRATIONS:
         cur = conf.get(key)
-        if cur in olds or (cur is None and None in olds):
+        # Numeric-aware matching (audit 2026-07 F-L3): save_keys writes
+        # floats as %.10g, so a user-persisted old default "1.0" lands in
+        # the conf as "1" — which no exact-string rule matched, silently
+        # skipping the migration for exactly the devices that need it.
+        hit = cur in olds or (cur is None and None in olds)
+        if not hit and cur is not None:
+            cur_n = _norm(cur)
+            hit = any(o is not None and _norm(o) == cur_n for o in olds)
+        if hit:
             fires.append((key, cur, new, reason))
     return fires
 

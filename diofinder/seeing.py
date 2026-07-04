@@ -362,7 +362,8 @@ def overrides_summary(path: str = OVERRIDES_PATH) -> Dict[str, Any]:
 
 
 def classify_lineage(mode: str, cfg, effective: Dict[str, Any],
-                     path: str = OVERRIDES_PATH) -> Dict[str, Any]:
+                     path: str = OVERRIDES_PATH,
+                     ignore_keys: tuple = ()) -> Dict[str, Any]:
     """Classify the active config's lineage for ``mode`` as factory / tuned /
     custom.
 
@@ -383,6 +384,12 @@ def classify_lineage(mode: str, cfg, effective: Dict[str, Any],
         cmp = dict(ov.get("values", {}))
         if "star_db" in cmp:
             cmp["star_db"] = resolve_star_db(cmp["star_db"], cfg)
+        # ignore_keys (audit 2026-07 F-L8): with auto-exposure ON, the
+        # controller legitimately walks exposure/gain off the values
+        # auto_tune pinned into the override — requiring an exact match made
+        # the "Tuned" badge silently flip to "Custom" minutes after a tune.
+        for k in ignore_keys:
+            cmp.pop(k, None)
         if cmp and all(_approx_equal(effective.get(k), v) for k, v in cmp.items()):
             return {"source": "tuned", "override": meta, "drift": {}}
 

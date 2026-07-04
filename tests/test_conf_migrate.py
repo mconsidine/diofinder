@@ -31,6 +31,18 @@ class MigrateTests(unittest.TestCase):
             # Second call: stamped, nothing to do.
             self.assertEqual(conf_migrate.migrate(p), {})
 
+    def test_g10_persisted_old_default_still_matches(self):
+        # save_keys writes floats as %.10g, so a user-persisted "1.0" lands
+        # in the conf as "1" — the exact-string rules missed it and the
+        # migration silently skipped (audit 2026-07 F-L3).
+        with tempfile.TemporaryDirectory() as d:
+            p = _write(d, "fov_max_error_deg: 1\n")
+            fires = conf_migrate.pending_migrations(p)
+            keys = [k for k, _c, _n, _r in fires]
+            self.assertIn("fov_max_error_deg", keys)
+            applied = conf_migrate.migrate(p)
+            self.assertEqual(applied["fov_max_error_deg"], "0.3")
+
     def test_user_edits_are_never_overridden(self):
         with tempfile.TemporaryDirectory() as d:
             p = _write(d, "detect_bg_mode: top_hat\n"       # user choice

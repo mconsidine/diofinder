@@ -134,12 +134,18 @@ def cmd_seeing(args, parser):
     if args.action == "set":
         if args.mode not in ("good", "bad"):
             parser.error("seeing set requires MODE 'good' or 'bad'")
-        return _print_result(maint_call("seeing_set", {"mode": args.mode}))
+        # 75 s: seeing_set waits up to 60 s on the solver's set_db. The
+        # default 10 s client timeout reported failure while the toggle
+        # actually completed — the retry then queued a duplicate heavy DB
+        # reload (audit 2026-07 W-L6).
+        return _print_result(maint_call("seeing_set", {"mode": args.mode},
+                                        timeout=75.0))
     if args.action == "apply-override":
         if args.mode not in ("good", "bad"):
             parser.error("seeing apply-override requires MODE 'good' or 'bad'")
         return _print_result(maint_call(
-            "seeing_set", {"mode": args.mode, "use_override": True}))
+            "seeing_set", {"mode": args.mode, "use_override": True},
+            timeout=75.0))
     if args.action in ("save-override", "clear-override"):
         call_args = {}
         if args.mode in ("good", "bad"):

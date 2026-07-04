@@ -310,9 +310,20 @@ def _handle_solver_cmd(cmd, calibrator, polar,
             # watchdog_timeout_s (audit 2026-07 W-L3).
             if shared_cfg is not None:
                 shared_cfg["solver_busy_t"] = time.monotonic()
+            _meta = {
+                "sensor_mode": f"{cfg.sensor_full_width}x{cfg.sensor_full_height}",
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+            for _k in ("exposure_s", "gain"):
+                if cmd.args.get(_k) is not None:
+                    try:
+                        _meta[_k] = float(cmd.args[_k])
+                    except (TypeError, ValueError):
+                        pass
             try:
                 try:
-                    mask = _hp.capture_dark_mask(state.read_frame, n, shape)
+                    mask = _hp.capture_dark_mask(state.read_frame, n, shape,
+                                                 meta=_meta)
                     if _hp.implausibly_large(mask.count, shape):
                         # The mask saw light: lens not capped, or a light leak.
                         # Saving it would silently break every subsequent solve
@@ -356,6 +367,7 @@ def _handle_solver_cmd(cmd, calibrator, polar,
                 "loaded": m is not None,
                 "mtime": mtime,
                 "path": _hp.DEFAULT_MASK_PATH,
+                "meta": (m.meta if m else {}),
             })
 
         if cmd.op == SOLVER_OP_HOT_PIXEL_CLEAR:
@@ -523,8 +535,18 @@ def _handle_solver_cmd(cmd, calibrator, polar,
                 "extract_ms": round(extract_ms, 2)})
 
         if cmd.op == SOLVER_OP_CALIBRATION_STATUS:
+            result = calibrator.get_status()
+            # FallbackGate observability (audit 2026-07 F-L6): whether the
+            # self-healing loose retry has engaged is the first question in
+            # a "healthy stars, zero solves" field diagnosis.
+            if state is not None and getattr(state, "fallback_gate", None):
+                result["fallback"] = {
+                    "streak": int(state.fallback_gate.streak),
+                    "fires": int(getattr(state, "fallback_fires", 0)),
+                    "last_fire_t": float(getattr(state, "last_fallback_t", 0.0)),
+                }
             return SolverCmdReply(request_id=cmd.request_id, ok=True,
-                                  result=calibrator.get_status())
+                                  result=result)
         if cmd.op == SOLVER_OP_CALIBRATION_RESET:
             persisted = calibrator.force_recalibrate()
             result = {"state": calibrator.state.value,
@@ -803,6 +825,16 @@ def solver_main(slots, latest_solution, shared_cfg,
         state.hot_pixel_mask = _hp.HotPixelMask.load(_hp.DEFAULT_MASK_PATH)
         if state.hot_pixel_mask is not None:
             log.info("Hot-pixel mask loaded: %d pixels", state.hot_pixel_mask.count)
+            _mode_now = f"{cfg.sensor_full_width}x{cfg.sensor_full_height}"
+            _mode_mask = state.hot_pixel_mask.meta.get("sensor_mode")
+            if _mode_mask and _mode_mask != _mode_now:
+                # Positions are sensor-mode dependent but the frame is always
+                # 960x760, so the shape guard can't catch this (audit F-L1).
+                log.warning(
+                    "Hot-pixel mask was captured in sensor mode %s but the "
+                    "camera runs %s — every masked pixel points at the wrong "
+                    "sky position. Recapture the dark frame.",
+                    _mode_mask, _mode_now)
     except Exception as e:
         log.warning("Could not load hot-pixel mask: %s", e)
 
@@ -810,8 +842,11 @@ def solver_main(slots, latest_solution, shared_cfg,
     # Loose-window blind retry after a run of failed attempts: the escape
     # hatch for a stale committed FOV or a poisoned attitude hint, both of
     # which otherwise deadlock (the calibrator only learns from successes).
+    state.fallback_fires = 0
+    state.last_fallback_t = 0.0
     fallback_gate = FallbackGate(
         fail_threshold=int(getattr(cfg, "fov_fallback_fails", 20)))
+    state.fallback_gate = fallback_gate
     log.info("Calibrator: state=%s fov=%.4f° tolerance=%.3f°",
              calibrator.state.value,
              calibrator.get_fov_estimate(),
@@ -838,8 +873,10 @@ def solver_main(slots, latest_solution, shared_cfg,
         idx, seq = slots.acquire_read_slot(timeout=2.0, after_seq=after_seq)
         if idx is None or idx < 0:
             return None
-        frame = np.array(bufs[idx], dtype=np.uint8, copy=True)
-        slots.release_read_slot()
+        try:
+            frame = np.array(bufs[idx], dtype=np.uint8, copy=True)
+        finally:
+            slots.release_read_slot()
         return (frame, seq) if with_seq else frame
     state.read_frame = _read_current_frame
 
@@ -1443,6 +1480,8 @@ def solver_main(slots, latest_solution, shared_cfg,
                 # (calibrator starves: it only learns from successes) and a
                 # poisoned hint (wheels without the blind-fallback pass).
                 fallback_fires += 1
+                state.fallback_fires = fallback_fires
+                state.last_fallback_t = time.monotonic()
                 retry_kw = dict(_solve_kw)
                 if fallback_fires % 3 == 0:
                     # Every 3rd fire, escalate to a FULLY blind FOV search:
