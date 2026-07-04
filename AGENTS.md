@@ -277,6 +277,23 @@ history for the full specs.)*
   `detect_stars_roi` (`tracking.roi_detect_native`). Both capability-probed
   with graceful fallback to the v0.11.22 behavior on older wheels.
 
+### v0.11.28 — regression fix + kill switch (post-0.11.21 risk review)
+
+Two fixes from a review of what changed between v0.11.21 (last field-confirmed
+good) and v0.11.27:
+
+- **Dark-throttle regression (introduced v0.11.24)**: the every-Nth-frame dark
+  heartbeat throttle multiplied the watchdog-epoch gap by the frame period, so
+  a long manual exposure (> 6 s) + a dark scene crossed the 30 s watchdog and
+  spuriously restarted the unit. Replaced with a 3 s **time** floor
+  (`_dark_publish_due`, pure/unit-tested) — bounded gap at any exposure, IPC
+  win preserved at short exposure.
+- **Phase-2 pointing kill switch**: `imu_exact_predict` (default true,
+  live-mutable via `solver_params_set`, seeded from conf) forces the legacy
+  C-matrix pointing path if the v0.11.23 exact quaternion prediction looks
+  wrong on-sky — a field-reversible fallback to pre-v0.11.23 behavior with no
+  downgrade.
+
 ### July 2026 audit — status after v0.11.24
 
 Full findings with evidence, scenarios, and fix directions:

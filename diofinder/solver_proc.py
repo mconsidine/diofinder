@@ -51,6 +51,25 @@ _OLIVE_STATUS = {
     "TooFew":      TOO_FEW,     "TOO_FEW":      TOO_FEW,
 }
 
+# Max gap between dark-frame publishes (s). Bounds the watchdog epoch staleness
+# during a dark stretch independent of the exposure/frame period; kept well
+# under the 30 s watchdog default with margin for the 10 s max exposure.
+_DARK_PUBLISH_FLOOR_S = 3.0
+
+
+def _dark_publish_due(dark_streak, now, last_publish_t,
+                      floor=_DARK_PUBLISH_FLOOR_S):
+    """Whether to publish a dark (starless) frame's heartbeat.
+
+    First frame of a dark stretch (streak 0) always publishes so the UI flips
+    state promptly; afterwards at most once per ``floor`` seconds. This bounds
+    the watchdog-epoch gap to ~floor + one frame period regardless of exposure
+    — unlike the old every-Nth-frame throttle, which multiplied the gap by the
+    frame period and could cross the 30 s watchdog at long exposure + dark
+    (v0.11.28 fix). Pure, so the watchdog-safety invariant is unit-testable.
+    """
+    return dark_streak == 0 or (now - last_publish_t) >= floor
+
 
 def _solver_db_path(raw: str) -> str:
     """Expand a bare database name to an absolute .npz path.
@@ -960,6 +979,7 @@ def solver_main(slots, latest_solution, shared_cfg,
 
     fail_streak = 0
     dark_streak = 0
+    last_dark_publish_t = 0.0   # monotonic t of the last dark-frame publish
     camera_stale_streak = 0
     fallback_fires = 0        # loose-retry fires (audit F2 escalation cadence)
     pending_gate_fire = False # gate fired on a raise path; retry next attempt
@@ -1027,13 +1047,20 @@ def solver_main(slots, latest_solution, shared_cfg,
             if local_peak < 20:
                 slots.release_read_slot()
                 # Publish the FIRST dark frame immediately (UI flips state
-                # promptly), then every 5th: dark frames carry no information
-                # beyond "alive", and at the 0.05 s exposure floor the
-                # unconditional publish was 20 Manager RPCs/s (audit 2026-07
-                # P11). Worst-case epoch cadence 5 x exposure = 5 s at a 1 s
-                # exposure — far inside the 30 s watchdog window.
-                if dark_streak % 5 == 0:
+                # promptly), then at most once per _DARK_PUBLISH_FLOOR_S. Dark
+                # frames carry no information beyond "alive", and at the 0.05 s
+                # exposure floor the unconditional publish was 20 Manager
+                # RPCs/s (audit 2026-07 P11). The earlier "every 5th frame"
+                # throttle multiplied the epoch gap by the frame period, so at
+                # a long manual exposure (> 6 s) + a dark scene the gap crossed
+                # the 30 s watchdog and SPURIOUSLY restarted the unit. A TIME
+                # floor bounds the gap to ~_DARK_PUBLISH_FLOOR_S regardless of
+                # exposure: it still collapses the fast-frame IPC, but at long
+                # exposure it publishes every frame (each period already
+                # exceeds the floor) so the epoch never goes stale.
+                if _dark_publish_due(dark_streak, t0, last_dark_publish_t):
                     latest_solution.update(_empty_solution(peak=local_peak))
+                    last_dark_publish_t = t0
                 dark_streak += 1
                 continue
             dark_streak = 0

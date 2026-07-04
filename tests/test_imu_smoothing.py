@@ -287,6 +287,17 @@ def test_imu_predict_frame_path_exact_large_slew():
     err = math.hypot(wrap180(naive[0] - truth[0]), naive[1] - truth[1])
     assert err > 10.0
 
+    # v0.11.28 kill switch: imu_exact_predict=false forces the legacy C-matrix
+    # path even with the fit present. With no valid C calibration in this cfg
+    # (calib_n absent), that path returns None instead of the exact answer.
+    _reset_rate_state()
+    out_ks = None
+    for dt, frac in [(0.0, 0.0), (0.8, 0.5), (1.6, 1.0)]:
+        c = cfg(frac, t0 + dt)
+        c["imu_exact_predict"] = False
+        out_ks = comms_proc._imu_predict(c)
+    assert out_ks is None   # exact path suppressed; C-matrix path unavailable
+
 
 def test_imu_predict_accepts_5_and_6_tuple_refs():
     # Backward/forward compat of the atomic imu_ref tuple: a 5-tuple (pre

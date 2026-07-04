@@ -27,7 +27,7 @@ DEFAULT_CONFIG_PATH = "/etc/diofinder/diofinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.11.27"
+    version: str = "0.11.28"
 
     # -------- Camera --------
     frame_width: int = 960
@@ -250,6 +250,13 @@ class Config:
     # slow manual nudge is >0.1. Once moving, the prediction holds until the
     # next solve re-anchors. Seeded into shared_cfg; live-tunable there.
     imu_rate_gate_dps: float = 0.1
+    # Kill switch for the v0.11.23 exact quaternion pointing prediction. True
+    # (default) uses the frame-corrected exact composition when a quality IMU
+    # body->camera fit is available; false forces the legacy C-matrix
+    # small-angle path (the pre-v0.11.23 behavior). Flip to false if the
+    # LX200 crosshair looks wrong during a slew — a field-reversible fallback
+    # with no downgrade. Live-mutable via shared_cfg (solver_params_set).
+    imu_exact_predict: bool = True
 
     # -------- CPU affinity --------
     # Pi Zero 2W: 4 cores.

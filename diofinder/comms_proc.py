@@ -1194,8 +1194,12 @@ def _imu_predict(shared_cfg):
     # the same construction the solve hint uses (imu_frame fit pairs). No
     # small-angle approximation, so no 5-degree clamp and no pole guard; the
     # C-matrix calibration is not needed at all on this path.
+    # Kill switch (v0.11.28): if the on-sky crosshair looks wrong during a
+    # slew, `imu_exact_predict=false` forces the legacy C-matrix small-angle
+    # path (the pre-v0.11.23 behavior) without a downgrade. Default true.
     R9 = shared_cfg.get("imu_frame_R")
-    use_frame = (R9 is not None and len(R9) == 9 and sky_q_ref is not None)
+    use_frame = (R9 is not None and len(R9) == 9 and sky_q_ref is not None
+                 and shared_cfg.get("imu_exact_predict", True))
     if not use_frame:
         # Legacy small-angle C-matrix path needs its calibration to be
         # present and healthy.
@@ -1945,6 +1949,8 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "tracking_min_recover", ctx.cfg.tracking_min_recover),
                 "bg_cache_bin_at_submit": ctx.shared_cfg.get(
                     "bg_cache_bin_at_submit", ctx.cfg.bg_cache_bin_at_submit),
+                "imu_exact_predict": ctx.shared_cfg.get(
+                    "imu_exact_predict", ctx.cfg.imu_exact_predict),
             })
 
         if cmd == "solver_params_set":
@@ -2125,6 +2131,10 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 bs = bool(args["bg_cache_bin_at_submit"])
                 ctx.shared_cfg["bg_cache_bin_at_submit"] = bs
                 updates["bg_cache_bin_at_submit"] = bs
+            if "imu_exact_predict" in args:
+                ep = bool(args["imu_exact_predict"])
+                ctx.shared_cfg["imu_exact_predict"] = ep
+                updates["imu_exact_predict"] = ep
             if persist and updates:
                 cfg_mod.save_keys(updates)
             return MaintResponse(ok=True, result={**updates, "persisted": persist})
@@ -2721,6 +2731,11 @@ def comms_main(latest_solution, shared_cfg,
     shared_cfg.setdefault("imu_rate_gate_dps",
                           float(getattr(cfg, "imu_rate_gate_dps",
                                         _IMU_RATE_GATE_DPS)))
+    # Seed the exact-prediction kill switch from the conf so a persisted
+    # `imu_exact_predict: false` takes effect from boot (comms reads
+    # shared_cfg, not cfg). setdefault so a live toggle isn't clobbered.
+    shared_cfg.setdefault("imu_exact_predict",
+                          bool(getattr(cfg, "imu_exact_predict", True)))
 
     ctx = _MaintContext(
         cfg=cfg, latest_solution=latest_solution, shared_cfg=shared_cfg,
