@@ -219,6 +219,13 @@ class _SolverState:
         self.tracking_enabled = bool(getattr(cfg, "tracking_enabled", False))
         # Latch so the "tetra3 extractor unavailable" fallback warns only once.
         self.tetra3_backend_warned = False
+        # Rolling per-successful-solve records for the tracking A/B harness
+        # (SOLVER_OP_SOLVE_STATS). Process-local deque — no shared_cfg round
+        # trips; one cheap append per solve, one bulk read per A/B window.
+        # Each: (epoch_monotonic, served_by_tracking, solve_ms, extract_ms,
+        # matches, ra_deg, dec_deg).
+        from collections import deque as _deque
+        self.solve_history = _deque(maxlen=512)
 
 
 def _handle_solver_cmd(cmd, calibrator, polar,
@@ -233,7 +240,7 @@ def _handle_solver_cmd(cmd, calibrator, polar,
         SOLVER_OP_SET_DB, SOLVER_OP_DARK_CAPTURE,
         SOLVER_OP_HOT_PIXEL_STATUS, SOLVER_OP_HOT_PIXEL_CLEAR,
         SOLVER_OP_FRAME_GET,
-        SOLVER_OP_TRACKING_STATUS,
+        SOLVER_OP_TRACKING_STATUS, SOLVER_OP_SOLVE_STATS,
         SOLVER_OP_AUTO_TUNE_EVAL,
     )
     try:
@@ -414,6 +421,16 @@ def _handle_solver_cmd(cmd, calibrator, polar,
                 "frames_full":    int(state.frames_full),
                 "recover_fail":   int(state.tracking_recover_fail),
                 "solve_fail":     int(state.tracking_solve_fail),
+            })
+
+        if cmd.op == SOLVER_OP_SOLVE_STATS:
+            recs = list(state.solve_history) if state is not None else []
+            after = float(cmd.args.get("after", -1.0))
+            if after >= 0:
+                recs = [r for r in recs if r[0] > after]
+            return SolverCmdReply(request_id=cmd.request_id, ok=True, result={
+                "records": [list(r) for r in recs],
+                "now": time.monotonic(),
             })
 
         if cmd.op == SOLVER_OP_BG_CACHE_STATUS:
@@ -861,6 +878,16 @@ def solver_main(slots, latest_solution, shared_cfg,
     bufs = [np.ndarray((cfg.frame_height, cfg.frame_width), dtype=np.uint8,
                         buffer=s.buf) for s in shms]
 
+    # Display segment writer (P4): publish the frame we already hold so the
+    # web live view can read it DIRECTLY (no frame_get maint round-trip, no
+    # base64), but ONLY while a viewer is active (display_wanted_until in the
+    # per-frame snapshot). Best-effort — no-op if the launcher didn't
+    # allocate the segment (older build).
+    from diofinder import display_shm as _display_shm
+    display_writer = _display_shm.DisplayWriter(cfg.frame_height, cfg.frame_width)
+    if display_writer.available:
+        log.info("Display SHM segment attached (live view reads direct)")
+
     def _read_current_frame(with_seq=False, after_seq=-1):
         """Copy the most-recent published SHM frame via the FrameSlots
         protocol. Claiming the read slot means the camera cannot rewrite the
@@ -1044,6 +1071,14 @@ def solver_main(slots, latest_solution, shared_cfg,
             # immediately so camera_proc is never blocked by solve latency.
             np.copyto(frame_buf, bufs[idx])
             slots.release_read_slot()
+
+            # Publish to the display segment for the web live view — only
+            # while a viewer keepalive is fresh, so an unattended finder pays
+            # nothing (P4). frame_buf is our private copy, so the write can't
+            # tear the solve.
+            if (display_writer.available
+                    and t0 < snap.get("display_wanted_until", 0.0)):
+                display_writer.write(frame_buf)
 
             # Exposure/contrast health: flag a crushed/clipped histogram (the
             # detection-throttling condition no extractor can fix). Throttled to
@@ -1561,6 +1596,13 @@ def solver_main(slots, latest_solution, shared_cfg,
                 continue
 
             fallback_gate.note_success()
+            # Record for the tracking A/B harness (SOLVER_OP_SOLVE_STATS): one
+            # cheap append per successful solve, tagged FULL vs TRACKING.
+            state.solve_history.append((
+                time.monotonic(), bool(served_by_tracking),
+                float(solve_only_ms), float(extract_ms),
+                int(soln.get("Matches", 0) or 0),
+                float(soln["RA"]), float(soln["Dec"])))
             measured_fov        = soln.get("FOV") or calibrator.get_fov_estimate()
             measured_distortion = soln.get("distortion") or 0.0
             calibrator.update_from_solve(measured_fov, measured_distortion)

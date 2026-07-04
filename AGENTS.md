@@ -331,15 +331,22 @@ them and are the only open work.
 
 ### Deferred from the July 2026 audit (open, with reasons)
 
-- **P4 (live-view binary transport / display SHM segment)**: UI-latency
-  only; changes the maint-socket wire protocol (or adds a 4th SHM segment).
-  Do it as its own change with on-device before/after timings.
+- **P4 — DONE (v0.11.25): display SHM segment.** `diofinder/display_shm.py`
+  + a launcher-allocated `diofinder_display` segment; the solver seqlock-
+  writes it demand-gated on `display_wanted_until` (comms `display_start`
+  keepalive); the web UI reads it directly (`_live_frame`), falling back to
+  `frame_get`. No maint round-trip / base64 for the live view, and zero cost
+  when no browser is open. On-device before/after timing on `/frame.jpg` is
+  still worth capturing but not required.
 - **P5 (bg_cache binned-resolution median stack)**: clear ~4× win, but the
   estimator changes from bin(median) to median(bin) — re-verify the MAD
   noise level against the calibrated sigma operating points on real frames
   (bundle replay) before shipping.
 - **P9 (TRACKING fixed-cost trims)**: revisit only if tracking mode
-  graduates from experimental/default-off.
+  graduates from experimental/default-off. **Graduation gate now exists**:
+  `tests/ab_tracking.py` (`diofinder-ctl ab-tracking`) does the on-sky FULL
+  vs TRACKING A/B (rate, latency, pointing-agreement) — run it clear-sky
+  before flipping the default.
 - **P10 (camera request-API capture)**: picamera2 API variance across
   versions; needs on-device validation. The TTL `test_mode` half shipped.
 - **W6 (systemd `WatchdogSec` + `sd_notify`)**: `Type=notify` misconfigured

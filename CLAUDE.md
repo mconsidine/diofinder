@@ -40,6 +40,7 @@ LX200-pointing consumers, and the calibration loop).
 | Channel | Type | Direction | Purpose |
 |---------|------|-----------|-------|
 | `diofinder_frame_{0,1,2}` | POSIX shared memory | camera → solver, webui | Raw 8-bit frames |
+| `diofinder_display` | POSIX shared memory (seqlock) | solver → webui | Live-view frame, written only while a viewer is active (`display_wanted_until`); web UI reads direct, no maint round-trip |
 | `FrameSlots` | `multiprocessing.Value` + lock | camera → solver | Ring-buffer slot index |
 | `latest_solution` | `Manager().dict()` | solver → comms | Most recent plate-solve result |
 | `shared_cfg` | `Manager().dict()` | main → all | Live-mutable settings |
@@ -85,6 +86,7 @@ LX200-pointing consumers, and the calibration loop).
 | `auto_exposure_max_gain` | float | comms (via `seeing_set`) | comms auto-exposure thread |
 | `auto_exposure_peak_floor` | float | comms (via maint `auto_exposure_set {"peak_floor":...}`) | comms auto-exposure thread |
 | `imu_rate_gate_dps` | float | comms (seed from cfg) | comms LX200 pointing (rate gate in `_imu_predict`) |
+| `display_wanted_until` | float (monotonic) | comms (via maint `display_start` keepalive) | solver (demand-gates the `diofinder_display` write; no viewer → no copy) |
 | `star_name_brightest` | bool | comms (via maint `solver_params_set`) | solver (centered-star naming) |
 | `imu_available` | bool | imu_thread | comms, webui |
 | `imu` | tuple ((w,x,y,z), t) | imu_thread | comms, solver (via `imu_math.get_imu_qt`; ONE atomic write per 20 Hz read since v0.11.24 — the split `imu_q`/`imu_t` keys are legacy-read only) |
@@ -275,9 +277,11 @@ a fixed worst-case point with snapshot-and-restore), `hot_pixel_status`, and
 `hot_pixel_clear`. `frame_get {"after_seq"?}` returns the newest camera frame
 (base64 u8 + shape + seq) via the solver's FrameSlots-bracketed read — never
 torn by a concurrent camera write; chain `after_seq` for strictly consecutive
-burst frames (the webui live view, debug bundles, and A/B captures all use it,
-falling back to a direct SHM read labeled `frames_synced: False` only when the
-daemon is down).
+burst frames (debug bundles and A/B captures use it, and it is the live view's
+*fallback*). `display_start` arms the demand-gated `diofinder_display` segment
+(the web live view's fast path — see below). `solve_stats {"after"?}` returns
+the solver's rolling per-successful-solve records (FULL vs TRACKING) for the
+tracking A/B harness.
 
 1. Add an `if cmd == "my_command":` branch anywhere in the function.
 2. Read arguments from the `args` dict (always a plain dict, may be empty).
@@ -318,6 +322,28 @@ def my_endpoint():
 
 Templates live in `webui/templates/`. Static assets in `webui/static/`.
 The Jinja2 environment has a `log10` filter registered for log-scale sliders.
+
+### Live-view frame path (`diofinder_display`)
+
+The hot `/frame.jpg` poll uses a **dedicated display SHM segment**, not the
+`frame_get` maint round-trip. `frame_get` copied the frame in the solver,
+pickled it through the reply queue, base64-encoded it in comms, and parsed
+~1 MB of JSON in the browser — ~6 copies + base64 + JSON per poll, with the
+copy and pickle stolen from the *solver* process and the command serviced only
+between frames. So every open live-view tab measurably slowed the solve loop.
+
+Now: `diofinder/display_shm.py` defines a fourth SHM segment (allocated by the
+launcher). The solver writes the frame it already holds into it under a
+best-effort **seqlock** (even/odd generation counter) — but only while
+`display_wanted_until` is fresh, so an unattended finder pays nothing. The web
+UI's `_live_frame` sends a throttled `display_start` keepalive (every ~2 s),
+then `DisplayReader.read()` copies the segment **directly** with a double-seq
+tear check, no maint round-trip and no base64. On a torn read, an absent
+segment (older daemon), or before the solver has armed, it falls back to
+`_daemon_frame` (`frame_get`). Debug bundles and A/B bursts deliberately stay
+on `frame_get` — the display segment is a best-effort preview, not a
+strictly-consecutive source. Round-trip unit-tested in
+`tests/test_display_shm.py`.
 
 ---
 
@@ -635,10 +661,31 @@ they A/B-toggle live without a restart.
 
 ### How to A/B it
 
+**On-sky A/B harness (the graduation gate).** `tests/ab_tracking.py`
+(`diofinder-ctl ab-tracking`) runs the comparison in flight: point the scope
+at a star field, focus until it solves, keep it **stationary**, then
+
 ```bash
-# Toggle on and watch the state machine:
+sudo python3 /opt/diofinder/tests/ab_tracking.py --window 30
+# or: diofinder-ctl ab-tracking --window 30
+```
+
+It drives a FULL window then a TRACKING window on the same field (changing
+only the *live* `tracking_enabled`, restored on exit), and reports solve rate,
+latency, matches, and — the gate that matters — whether TRACKING's pointing
+agrees with FULL's (a `keep-off` verdict + reasons if it diverges or scatters).
+The data comes from the solver's rolling per-solve ring buffer
+(`SOLVER_OP_SOLVE_STATS` → comms `solve_stats`), tagged FULL vs TRACKING; each
+phase is anchored on the solver's own monotonic `now` so the windows are
+clock-correct. Exit 0 = safe to enable, 1 = correctness FAIL or a precondition
+(not solving / never locked / scope moving) wasn't met. Pure decision logic
+(`_summarize`/`_verdict`) is unit-tested in `tests/test_ab_tracking.py`.
+
+Manual toggling + counters:
+
+```bash
 diofinder-ctl raw '{"cmd":"solver_params_set","args":{"tracking_enabled":true}}'
-diofinder-ctl raw '{"cmd":"tracking_status"}'   # {enabled, state, frames_tracked, frames_full, recover_fail}
+diofinder-ctl raw '{"cmd":"tracking_status"}'   # {enabled, state, frames_tracked, frames_full, recover_fail, solve_fail}
 diofinder-ctl raw '{"cmd":"solver_params_set","args":{"tracking_enabled":false}}'
 ```
 

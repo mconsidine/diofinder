@@ -25,6 +25,7 @@ No external daemon, gRPC, or server is involved.
 | `bench_pipeline_combos.py` | Benchmark sycamore blind + hint solve paths with optional sweeps |
 | `bench_extractor_compare.py` | Time sycamore extraction in isolation; star counts + solve outcomes |
 | `test_hint.py` | Attitude-hint effectiveness across a sequence of shifted images |
+| `ab_tracking.py` | **On-device, in-flight**: A/B FULL vs TRACKING on the live sky (`diofinder-ctl ab-tracking`). Point at stars, focus, keep the scope stationary; reports solve rate / latency / pointing-agreement and a keep-off/enable verdict. Restores the live `tracking_enabled` on exit. |
 | `test_seeing_hotpixel.py` | **Pure-logic unit tests** (no hardware, no sycamore): seeing preset application/drift + hot-pixel neighbor-median repair. Run with `python3 -m unittest tests.test_seeing_hotpixel` |
 | `replay_corpus.py` | **Off-device** regression-corpus replay: run detect+solve over a labeled PNG corpus, sweep seeing presets (and optionally bg_modes), report solve rate / star count / timing. See `tests/corpus/README.md` for corpus layout. |
 

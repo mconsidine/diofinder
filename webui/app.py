@@ -96,6 +96,57 @@ def _daemon_frame(after_seq=-1, timeout=8.0):
     return _shm_frame_fallback(h, w), -1, False
 
 
+# Direct display-SHM reader for the live view (P4): no maint round-trip, no
+# base64, no solver-thread theft. Lazily attached; falls back to frame_get
+# when the segment is absent (older daemon) or a read is torn.
+_display_reader = {"r": None, "hw": None}
+_display_keepalive = {"ts": 0.0}
+_DISPLAY_KEEPALIVE_S = 2.0
+
+
+def _live_frame(timeout=3.0):
+    """Newest frame for the web LIVE VIEW, fast path first.
+
+    Sends a throttled ``display_start`` keepalive (so the solver keeps the
+    display segment warm), reads the segment DIRECTLY, and falls back to the
+    ``frame_get`` maint path (the authoritative FrameSlots-bracketed read) on
+    any miss. Returns (frame u8 | None, seq, synced). Bursts / debug bundles
+    deliberately keep using ``_daemon_frame`` — the display segment is a
+    best-effort preview, not a strictly-consecutive source."""
+    import time as _t
+    from diofinder import display_shm
+    now = _t.monotonic()
+    if now - _display_keepalive["ts"] > _DISPLAY_KEEPALIVE_S:
+        _safe_call("display_start", timeout=0.5)
+        _display_keepalive["ts"] = now
+    try:
+        ecfg = _load_cfg_cached()
+        hw = (ecfg.frame_height, ecfg.frame_width)
+    except Exception:
+        hw = (760, 960)
+    if _display_reader["hw"] != hw:
+        # (Re)attach if the reader is missing or the frame geometry changed.
+        old = _display_reader["r"]
+        if old is not None:
+            try:
+                old.close()
+            except Exception:
+                pass
+        try:
+            _display_reader["r"] = display_shm.DisplayReader(hw[0], hw[1])
+            _display_reader["hw"] = hw
+        except Exception:
+            _display_reader["r"] = None
+    reader = _display_reader["r"]
+    if reader is not None and reader.available:
+        got = reader.read()
+        if got is not None:
+            return got[0], got[1], True
+    # Fall back to the maint path (also covers the first frame or two before
+    # the solver has armed the segment).
+    return _daemon_frame(timeout=timeout)
+
+
 def _safe_call(cmd, args=None, timeout=15.0):
     """Call the maintenance daemon; return MaintResponse(ok=False) on any connection error."""
     try:
@@ -1371,7 +1422,8 @@ def frame_jpg():
     cx = _bs_cache["cx"] if _bs_cache["cx"] is not None else width  // 2
     cy = _bs_cache["cy"] if _bs_cache["cy"] is not None else height // 2
 
-    frame, _seq, _synced = _daemon_frame(timeout=3.0)
+    # Live view: direct display-SHM read (P4), falling back to frame_get.
+    frame, _seq, _synced = _live_frame(timeout=3.0)
     if frame is None:
         return "camera not running", 503, {"Content-Type": "text/plain"}
 

@@ -57,6 +57,17 @@ def _allocate_shared_frames(cfg):
     return shms
 
 
+def _allocate_display_frame(cfg):
+    """Dedicated display segment for the web live view (P4). Best-effort: a
+    failure here just means the web UI keeps using the frame_get path."""
+    from diofinder import display_shm
+    try:
+        return display_shm.create(cfg.frame_height, cfg.frame_width)
+    except Exception as e:
+        log.warning("Could not allocate display SHM (live view uses frame_get): %s", e)
+        return None
+
+
 def _resolve_test_image(args):
     if args.test_image:
         p = Path(args.test_image)
@@ -132,6 +143,7 @@ def main():
     mp.set_start_method("spawn", force=True)
 
     shms = _allocate_shared_frames(cfg)
+    display_shm_handle = _allocate_display_frame(cfg)  # noqa: F841 (kept alive)
     slots = FrameSlots()
 
     manager = mp.Manager()
@@ -222,6 +234,9 @@ def main():
     finally:
         for shm in shms:
             try: shm.close(); shm.unlink()
+            except Exception: pass
+        if display_shm_handle is not None:
+            try: display_shm_handle.close(); display_shm_handle.unlink()
             except Exception: pass
 
 
