@@ -137,5 +137,45 @@ class HintTransformTests(unittest.TestCase):
             np.testing.assert_allclose(back, r, atol=1e-9)
 
 
+class UpdateReferenceIpcTests(unittest.TestCase):
+    """Audit 2026-07 P1/P2: one imu_ref write + one batched calib update per
+    solve; the pairs list stays solver-local (never enters shared_cfg)."""
+
+    def _snap(self, q, ref=None):
+        s = {"imu_available": True, "imu": (q, time.monotonic())}
+        if ref is not None:
+            s["imu_ref"] = ref
+        return s
+
+    def test_first_solve_writes_only_atomic_ref(self):
+        solver_proc._imu_calib_pairs.clear()
+        scfg = {}
+        solver_proc._imu_update_reference(
+            scfg, 100.0, 20.0, 0.0,
+            snap=self._snap((1.0, 0.0, 0.0, 0.0)), sky_q=(1.0, 0.0, 0.0, 0.0))
+        self.assertEqual(set(scfg), {"imu_ref"})
+        self.assertEqual(len(scfg["imu_ref"]), 6)
+
+    def test_second_solve_batches_calib_and_keeps_pairs_local(self):
+        solver_proc._imu_calib_pairs.clear()
+        scfg = {}
+        q1 = (1.0, 0.0, 0.0, 0.0)
+        solver_proc._imu_update_reference(
+            scfg, 100.0, 20.0, 0.0, snap=self._snap(q1), sky_q=q1)
+        ref1 = scfg["imu_ref"]
+        # 1-degree sky move with a matching IMU rotation about x.
+        q2 = rotvec_to_quat((math.radians(1.0), 0.0, 0.0))
+        solver_proc._imu_update_reference(
+            scfg, 101.0, 20.0, 0.0, snap=self._snap(q2, ref=ref1), sky_q=q2,
+            prev_sky_q=q1)
+        self.assertEqual(len(solver_proc._imu_calib_pairs), 1)
+        self.assertNotIn("imu_calib_pairs", scfg)   # local, not published
+        self.assertEqual(scfg["imu_calib_n"], 1)
+        # None of the removed split keys reappear.
+        for k in ("imu_ref_q", "imu_ref_ra_deg", "imu_ref_dec_deg",
+                  "imu_ref_roll_deg", "imu_ref_t"):
+            self.assertNotIn(k, scfg)
+
+
 if __name__ == "__main__":
     unittest.main()

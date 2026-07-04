@@ -145,6 +145,24 @@ class LineageTests(unittest.TestCase):
         self.assertEqual(out["source"], "tuned")
         self.assertEqual(out["override"]["source"], "auto_tune")
 
+    def test_tuned_survives_ae_moving_exposure_with_ignore_keys(self):
+        # AE walks exposure/gain off the auto_tune-pinned values; with
+        # ignore_keys the badge stays Tuned instead of silently flipping
+        # (audit 2026-07 F-L8).
+        cfg = _FakeCfg()
+        seeing.save_override(
+            "good", {"detect_sigma": 6.0, "exposure_s": 0.3, "gain": 8.0},
+            source="auto_tune", path=self.path)
+        eff = _effective(cfg, {"detect_sigma": 6.0})
+        eff["exposure_s"] = 0.45   # AE moved it
+        eff["gain"] = 5.3
+        out = seeing.classify_lineage("good", cfg, eff, self.path,
+                                      ignore_keys=("exposure_s", "gain"))
+        self.assertEqual(out["source"], "tuned")
+        # Without ignore_keys the same state reads custom/factory (not tuned).
+        out2 = seeing.classify_lineage("good", cfg, eff, self.path)
+        self.assertNotEqual(out2["source"], "tuned")
+
     def test_custom_when_override_exists_but_not_matched(self):
         cfg = _FakeCfg()
         seeing.save_override("good", {"detect_sigma": 6.0}, path=self.path)

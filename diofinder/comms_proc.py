@@ -35,12 +35,13 @@ import statistics
 import subprocess
 import threading
 import time
-from queue import Empty
+from queue import Empty, Full
 
 from diofinder import config as cfg_mod
 from diofinder.align import AlignRequest, AlignResult, CommsAlignState
 from diofinder.imu_math import (quat_delta_rotvec, alpha_beta_step,
-                                rotvec_to_quat, quat_mul, quat_to_radec)
+                                rotvec_to_quat, quat_mul, quat_to_radec,
+                                get_imu_qt)
 from diofinder.imu_frame import apply_rotation as _imu_apply_rotation
 from diofinder.maint import MaintRequest, MaintResponse, SOCKET_PATH
 from diofinder.worker_cmds import (
@@ -183,20 +184,54 @@ def _wait_for_reply(reply_q, request_id, timeout_s=5.0):
     return None
 
 
-def _call_solver(op, args, solver_cmd_q, solver_cmd_reply_q, timeout_s=5.0):
-    """Send op/args to solver_proc and return the SolverCmdReply, or None on timeout."""
+def _call_solver(op, args, solver_cmd_q, solver_cmd_reply_q, timeout_s=8.0):
+    """Send op/args to solver_proc and return the SolverCmdReply, or None on timeout.
+
+    Default 8 s: the solver drains commands once per loop iteration, and the
+    loop can legitimately sit 5 s inside its frame wait — the old 5 s default
+    raced that window and returned spurious "solver did not respond" at long
+    exposures (audit 2026-07 W4)."""
     rid = next(_request_id_seq)
     with _solver_call_lock:
-        solver_cmd_q.put(SolverCmd(op=op, args=args or {}, request_id=rid))
+        try:
+            # Bounded: while the solver is legitimately non-draining for a
+            # long stretch (60 s set_db, ~20 s dark capture) pollers can fill
+            # the 16-slot queue; a BLOCKING put then froze every solver-backed
+            # maint command while holding the call lock (audit 2026-07 W-L2).
+            solver_cmd_q.put(SolverCmd(op=op, args=args or {}, request_id=rid),
+                             timeout=1.0)
+        except Full:
+            log.warning("solver command queue full (op=%s) — solver busy", op)
+            return None
         return _wait_for_reply(solver_cmd_reply_q, rid, timeout_s=timeout_s)
 
 
-def _call_camera(op, args, camera_cmd_q, camera_cmd_reply_q, timeout_s=2.0):
+# Last exposure comms observed (from any camera reply carrying exposure_s).
+# Scales the camera RPC timeout: camera_proc drains its command queue once
+# per loop iteration, each of which blocks ~one exposure inside capture, so a
+# fixed 2 s timeout made EVERY camera RPC (auto-exposure reads, UI controls,
+# dark-capture snapshots) time out at exposures over ~2 s (audit 2026-07 W4).
+# Plain float assignment is GIL-atomic; no lock needed.
+_last_exposure_s = 0.5
+
+
+def _call_camera(op, args, camera_cmd_q, camera_cmd_reply_q, timeout_s=None):
     """Send op/args to camera_proc and return the CameraCmdReply, or None on timeout."""
+    global _last_exposure_s
+    if timeout_s is None:
+        timeout_s = max(2.0, 2.0 + 2.0 * _last_exposure_s)
     rid = next(_request_id_seq)
     with _camera_call_lock:
         camera_cmd_q.put(CameraCmd(op=op, args=args or {}, request_id=rid))
-        return _wait_for_reply(camera_cmd_reply_q, rid, timeout_s=timeout_s)
+        reply = _wait_for_reply(camera_cmd_reply_q, rid, timeout_s=timeout_s)
+    try:
+        if reply is not None and reply.ok and isinstance(reply.result, dict):
+            v = reply.result.get("exposure_s")
+            if v:
+                _last_exposure_s = float(v)
+    except Exception:
+        pass
+    return reply
 
 
 # Auto-exposure / gain controller tunables.
@@ -639,6 +674,12 @@ def _auto_tune_row(candidate, samples, signal_floor=_AT_SIGNAL_FLOOR):
 
 
 _auto_tune_lock = threading.Lock()
+# A dark capture in flight (synchronous inside the maint handler). Mutual
+# exclusion with the auto_tune sweep: both drive the camera with
+# snapshot-and-restore sequences that interleave last-writer-wins
+# (audit 2026-07 F-L7). Written under the GIL from maint handler threads.
+_dark_capture_active = False
+
 _auto_tune_state = {
     "running": False, "phase": "idle", "message": "",
     "progress": 0.0, "result": None, "error": None,
@@ -874,8 +915,14 @@ def _auto_tune_run(ctx, params):
             ctx.cfg.gain = updates["gain"]
             try:
                 cfg_mod.save_keys(updates)
+                result["persisted"] = True
             except Exception as e:
+                # Surface it: a silent ok=True here is the "settings saved !=
+                # settings in force" class — live values applied, but a
+                # restart reverts them (audit 2026-07 F4).
                 log.warning("auto-tune could not persist: %s", e)
+                result["persisted"] = False
+                result["persist_error"] = str(e)
             # Save a labelled, reversible override artifact for this mode (the
             # factory preset stays untouched). The values applied live above
             # now also match the override -> lineage reads "tuned".
@@ -980,6 +1027,11 @@ def _watchdog_loop(ctx, interval_s=5.0):
             os._exit(1)
 
 
+# Monotonic :CM# correlation ids. Only touched from the LX200 handler on the
+# comms main thread — no lock needed.
+_align_req_seq = itertools.count(1)
+
+
 def _do_alignment(align_state, cfg, shared_cfg,
                   align_request_q, align_response_q):
     """Execute :CM# alignment: send target to solver, wait for result, persist boresight."""
@@ -993,16 +1045,32 @@ def _do_alignment(align_state, cfg, shared_cfg,
     except Empty:
         pass
 
-    align_request_q.put(req)
-    log.info("Alignment requested: RA=%.4f Dec=%.4f",
-             req.target_ra_deg, req.target_dec_deg)
+    req.request_id = next(_align_req_seq)
+    try:
+        # NEVER block: with the solver not consuming (dark frames keep
+        # requests queued), a 5th retry's blocking put wedged the comms main
+        # thread forever — no LX200 client could be served again, and nothing
+        # restarts a blocked-but-alive thread (audit 2026-07 W2).
+        align_request_q.put_nowait(req)
+    except Full:
+        align_state.reset()
+        log.warning("align request queue full (solver not consuming — dark "
+                    "frames / mid-slew?); replying busy")
+        return "align fail: solver busy#"
+    log.info("Alignment requested: RA=%.4f Dec=%.4f (id %d)",
+             req.target_ra_deg, req.target_dec_deg, req.request_id)
 
     deadline = time.monotonic() + CommsAlignState.DEFAULT_TIMEOUT_S
     result = None
     while time.monotonic() < deadline:
         try:
             candidate = align_response_q.get(timeout=0.5)
-            if candidate.completed_at >= req.requested_at:
+            # Strict correlation: only THIS request's echo counts. The old
+            # completed_at >= requested_at check accepted a late result from
+            # a PREVIOUS sync — in the worst interleaving a success computed
+            # for the old target was persisted as the new sync's boresight
+            # (audit 2026-07 W2).
+            if getattr(candidate, "request_id", 0) == req.request_id:
                 result = candidate; break
         except Empty:
             continue
@@ -1099,8 +1167,7 @@ def _imu_predict(shared_cfg):
     """Return (ra_deg, dec_deg) predicted from IMU rotation since last solve, or None if unavailable."""
     if not shared_cfg.get("imu_available", False):
         return None
-    q_now  = shared_cfg.get("imu_q")
-    imu_t  = shared_cfg.get("imu_t", 0.0)
+    q_now, imu_t = get_imu_qt(shared_cfg)
     if q_now is None or time.monotonic() - imu_t > 2.0:
         return None
     ref = shared_cfg.get("imu_ref")
@@ -1198,8 +1265,12 @@ def _imu_predict_smoothed(shared_cfg):
         if z is None:
             st.clear()             # re-snap on the next valid sample
             return None
-        imu_t = shared_cfg.get("imu_t", 0.0)
-        ref_t = shared_cfg.get("imu_ref_t", 0.0)
+        imu_t = get_imu_qt(shared_cfg)[1]
+        # Re-anchor timestamp from the atomic imu_ref tuple (v0.11.24 solvers
+        # no longer publish the split imu_ref_t key); fall back to the split
+        # key for older solvers.
+        _ref = shared_cfg.get("imu_ref")
+        ref_t = _ref[4] if _ref is not None else shared_cfg.get("imu_ref_t", 0.0)
         # Snap (no smoothing) on first sample, a fresh solve anchor, a stale
         # gap, or a non-increasing timestamp. Keeps plate solves authoritative
         # and avoids smoothing across a coordinate re-baseline.
@@ -1248,25 +1319,45 @@ def _sync_clock(sl, sg, sc):
         log.warning("Clock sync error: %s", e)
 
 
+# Snapshot cache for the :GR/:GD poll pair. :GD virtually always follows
+# :GR within milliseconds and the alpha-beta filter already dedupes on
+# imu_t, so <=100 ms staleness is invisible — while cutting up to 4 full-dict
+# Manager RPCs per poll cycle down to 2 per 100 ms window (audit 2026-07 P3).
+_POLL_SNAP_TTL_S = 0.1
+_poll_snap_lock = threading.Lock()
+_poll_snap = {"t": 0.0, "cfg": None, "sol": None}
+
+
+def _poll_snapshots(shared_cfg, latest_solution):
+    """(shared_cfg snapshot, latest_solution snapshot) with a 100 ms TTL."""
+    now = time.monotonic()
+    with _poll_snap_lock:
+        if _poll_snap["cfg"] is None or now - _poll_snap["t"] > _POLL_SNAP_TTL_S:
+            _poll_snap["cfg"] = dict(shared_cfg)
+            _poll_snap["sol"] = dict(latest_solution)
+            _poll_snap["t"] = now
+        return _poll_snap["cfg"], _poll_snap["sol"]
+
+
 def _handle_lx200_command(cmd, latest_solution, align_state, time_state,
                           cfg, shared_cfg,
                           align_request_q, align_response_q, ctx=None):
     """Dispatch one LX200 command string and return the raw bytes reply."""
     if cmd == ":GR":
-        # dict() = ONE Manager IPC round-trip; the prediction path then reads
-        # ~14 keys locally instead of issuing ~14 individual RPCs per poll on
-        # CPU 0 (shared with comms/webui/IMU writer). Also makes the multi-key
-        # read coherent — no solve can land between key reads.
-        pred = _imu_predict_smoothed(dict(shared_cfg))
+        # TTL-cached snapshots = at most TWO Manager IPC round-trips per
+        # 100 ms window shared across :GR and :GD; the prediction path then
+        # reads ~14 keys locally. Also makes the multi-key read coherent —
+        # no solve can land between key reads.
+        scfg, sol = _poll_snapshots(shared_cfg, latest_solution)
+        pred = _imu_predict_smoothed(scfg)
         if pred is not None:
             return _format_ra(pred[0] / 15.0).encode("ascii")
-        sol = dict(latest_solution)
         return _format_ra(sol.get("ra_deg", 0.0) / 15.0).encode("ascii")
     if cmd == ":GD":
-        pred = _imu_predict_smoothed(dict(shared_cfg))
+        scfg, sol = _poll_snapshots(shared_cfg, latest_solution)
+        pred = _imu_predict_smoothed(scfg)
         if pred is not None:
             return _format_dec(pred[1]).encode("ascii")
-        sol = dict(latest_solution)
         return _format_dec(sol.get("dec_deg", 0.0)).encode("ascii")
     if cmd == ":GW":
         return b"AT2#"
@@ -1363,6 +1454,7 @@ def _handle_lx200_command(cmd, latest_solution, align_state, time_state,
 
 def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
     """Dispatch one maintenance-socket command and return a MaintResponse."""
+    global _dark_capture_active
     cmd  = req.cmd
     args = req.args
 
@@ -1393,21 +1485,41 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             # application regression once.
             from diofinder.wheels import wheel_versions
             result["wheels"] = wheel_versions()
+            # Active DIOFINDER_* env overrides mask conf values (applied last
+            # at load); surfacing them here turns "persist succeeded but the
+            # value reverts" reports into a one-look diagnosis (audit F-L9).
+            env_ov = getattr(ctx.cfg, "env_overrides", None)
+            if env_ov:
+                result["env_overrides"] = env_ov
             return MaintResponse(ok=True, result=result)
 
         if cmd == "status":
+            # ONE Manager snapshot instead of ~15 individual gets — this
+            # command is polled at 0.8 Hz by the home page (audit 2026-07 P6).
+            scfg        = dict(ctx.shared_cfg)
             sol         = dict(ctx.latest_solution)
-            imu_n       = ctx.shared_cfg.get("imu_calib_n", 0)
-            imu_quality = ctx.shared_cfg.get("imu_calib_quality", 0.0)
-            imu_avail   = ctx.shared_cfg.get("imu_available", False)
+            imu_n       = scfg.get("imu_calib_n", 0)
+            imu_quality = scfg.get("imu_calib_quality", 0.0)
+            imu_avail   = scfg.get("imu_available", False)
             imu_active  = imu_avail and imu_n >= 3 and imu_quality >= 0.85
+            imu_qv, imu_t = get_imu_qt(scfg)
+            # Post-solve reference from the atomic tuple (split keys are no
+            # longer published); fall back to them for older solvers.
+            _ref = scfg.get("imu_ref")
+            if _ref is not None:
+                ref_q, ref_ra, ref_dec, ref_roll = _ref[:4]
+            else:
+                ref_q    = scfg.get("imu_ref_q")
+                ref_ra   = scfg.get("imu_ref_ra_deg")
+                ref_dec  = scfg.get("imu_ref_dec_deg")
+                ref_roll = scfg.get("imu_ref_roll_deg")
             return MaintResponse(ok=True, result={
                 "solution":  sol,
                 "boresight": {
-                    "y": ctx.shared_cfg.get("boresight_y", ctx.cfg.boresight_y),
-                    "x": ctx.shared_cfg.get("boresight_x", ctx.cfg.boresight_x),
+                    "y": scfg.get("boresight_y", ctx.cfg.boresight_y),
+                    "x": scfg.get("boresight_x", ctx.cfg.boresight_x),
                 },
-                "fov_deg":        ctx.shared_cfg.get("fov_deg", ctx.cfg.fov_deg),
+                "fov_deg":        scfg.get("fov_deg", ctx.cfg.fov_deg),
                 "config_summary": ctx.cfg.summary(),
                 "imu": {
                     "available": imu_avail,
@@ -1417,18 +1529,17 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     # Raw IMU output + post-solve reference, so a debug bundle
                     # records the actual attitude reading at capture time, not
                     # just whether the IMU is active.
-                    "q":            ctx.shared_cfg.get("imu_q"),
-                    "t":            ctx.shared_cfg.get("imu_t", 0.0),
-                    "age_s":        (round(time.monotonic()
-                                           - ctx.shared_cfg.get("imu_t", 0.0), 3)
-                                     if ctx.shared_cfg.get("imu_t") else None),
-                    "ref_q":        ctx.shared_cfg.get("imu_ref_q"),
-                    "ref_ra_deg":   ctx.shared_cfg.get("imu_ref_ra_deg"),
-                    "ref_dec_deg":  ctx.shared_cfg.get("imu_ref_dec_deg"),
-                    "ref_roll_deg": ctx.shared_cfg.get("imu_ref_roll_deg"),
+                    "q":            imu_qv,
+                    "t":            imu_t,
+                    "age_s":        (round(time.monotonic() - imu_t, 3)
+                                     if imu_t else None),
+                    "ref_q":        ref_q,
+                    "ref_ra_deg":   ref_ra,
+                    "ref_dec_deg":  ref_dec,
+                    "ref_roll_deg": ref_roll,
                 },
                 "solver_backend": "sycamore",
-                "test_mode":      ctx.shared_cfg.get("test_mode", False),
+                "test_mode":      scfg.get("test_mode", False),
             })
 
         if cmd == "boresight_show":
@@ -1556,12 +1667,35 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 return MaintResponse(
                     ok=False, error="auto_exposure_set requires boolean 'enabled'")
             persist = bool(args.get("persist", False))
-            ctx.shared_cfg["auto_exposure_enabled"] = enabled
+            updates = {"auto_exposure_enabled": enabled}
+            # Optional controller knobs (audit 2026-07 F-M4): the AE loop
+            # already reads these from shared_cfg each cycle, but no maint
+            # writer existed — the docs called them live-mutable and nothing
+            # honored it.
+            if args.get("peak_floor") is not None:
+                try:
+                    pf = float(args["peak_floor"])
+                except (ValueError, TypeError):
+                    return MaintResponse(ok=False, error="bad peak_floor")
+                if not 0.0 <= pf <= 250.0:
+                    return MaintResponse(
+                        ok=False, error="peak_floor must be in [0, 250]")
+                updates["auto_exposure_peak_floor"] = pf
+            if args.get("nominal_s") is not None:
+                try:
+                    ns = float(args["nominal_s"])
+                except (ValueError, TypeError):
+                    return MaintResponse(ok=False, error="bad nominal_s")
+                if not 0.0 <= ns <= 10.0:
+                    return MaintResponse(
+                        ok=False, error="nominal_s must be in [0, 10]")
+                updates["auto_exposure_nominal_s"] = ns
+            ctx.shared_cfg.update(updates)
             if persist:
-                cfg_mod.save_keys({"auto_exposure_enabled": enabled})
-            log.info("Auto-exposure -> %s", enabled)
+                cfg_mod.save_keys(updates)
+            log.info("Auto-exposure -> %s (%s)", enabled, updates)
             return MaintResponse(ok=True, result={
-                "auto_exposure_enabled": enabled, "persisted": persist})
+                **updates, "persisted": persist})
 
         if cmd == "auto_tune":
             # Precondition: we must currently see a star field (fresh detection
@@ -1585,6 +1719,11 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "frame shows stars and peak >= 20. auto-tune tunes detection "
                     "on signal it can already see; it can't create signal that "
                     "isn't there."))
+            if _dark_capture_active:
+                return MaintResponse(ok=False, error=(
+                    "a dark-frame capture is in progress — it drives the "
+                    "camera to a fixed worst-case point; wait for it to "
+                    "finish, then retry"))
             mode = str(args.get("mode") or ctx.shared_cfg.get(
                 "seeing_mode", ctx.cfg.seeing_mode)).strip().lower()
             if not seeing_mod.is_valid_mode(mode):
@@ -1681,10 +1820,12 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 if r is not None and r.ok:
                     setattr(ctx.cfg, cam_key, float(val))
                     updates[cam_key] = float(val)
+            persist_ok, persist_err = True, None
             try:
                 cfg_mod.save_keys(updates)
             except Exception as e:
                 log.warning("auto_tune_apply_last could not persist: %s", e)
+                persist_ok, persist_err = False, str(e)
             override = None
             try:
                 override = seeing_mod.save_override(mode, dict(updates),
@@ -1694,8 +1835,11 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             _invalidate_solver_cache()
             _at_set(result={**result, "committed": True})
             log.info("auto-tune apply-last (override saved): %s", updates)
-            return MaintResponse(ok=True, result={
-                "applied": updates, "mode": mode, "override": override})
+            _r = {"applied": updates, "mode": mode, "override": override,
+                  "persisted": persist_ok}
+            if persist_err:
+                _r["persist_error"] = persist_err
+            return MaintResponse(ok=True, result=_r)
 
         if cmd == "tuning_set":
             # Toggle the libcamera tuning profile. Takes effect on the NEXT
@@ -2032,7 +2176,14 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 else:
                     eff_full["exposure_s"] = ctx.cfg.exposure_s
                     eff_full["gain"] = ctx.cfg.gain
-                lineage = seeing_mod.classify_lineage(mode, ctx.cfg, eff_full)
+                # With AE on, exposure/gain are the controller's to move —
+                # exclude them from the tuned-match so the badge doesn't
+                # flip to Custom on the first AE trim (audit F-L8).
+                _ae_on = bool(ctx.shared_cfg.get(
+                    "auto_exposure_enabled", ctx.cfg.auto_exposure_enabled))
+                lineage = seeing_mod.classify_lineage(
+                    mode, ctx.cfg, eff_full,
+                    ignore_keys=(("exposure_s", "gain") if _ae_on else ()))
                 overrides = seeing_mod.overrides_summary()
             except Exception as e:
                 return MaintResponse(ok=False, error=f"seeing_get failed: {e}")
@@ -2128,17 +2279,25 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
 
             ctx.cfg.seeing_mode = mode
             ctx.shared_cfg["seeing_mode"] = mode
+            persist_ok, persist_err = True, None
             try:
                 cfg_mod.save_keys(persisted)
             except Exception as e:
+                # Applied live but NOT persisted: without surfacing this, a
+                # read-only SD (post-power-blip remount) made the toggle
+                # silently revert on the next restart (audit 2026-07 F4).
                 log.warning("Could not persist seeing preset: %s", e)
+                persist_ok, persist_err = False, str(e)
 
             _invalidate_solver_cache()
-            log.info("Seeing preset -> %s (db=%s override=%s)",
-                     mode, db_token, override_applied)
-            return MaintResponse(ok=True, result={
-                "mode": mode, "applied": persisted, "db": db_result,
-                "override_applied": override_applied})
+            log.info("Seeing preset -> %s (db=%s override=%s persisted=%s)",
+                     mode, db_token, override_applied, persist_ok)
+            result = {"mode": mode, "applied": persisted, "db": db_result,
+                      "override_applied": override_applied,
+                      "persisted": persist_ok}
+            if persist_err:
+                result["persist_error"] = persist_err
+            return MaintResponse(ok=True, result=result)
 
         if cmd == "seeing_override_save":
             mode = str(args.get("mode") or ctx.shared_cfg.get(
@@ -2179,6 +2338,10 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             return MaintResponse(ok=True, result={"mode": mode, "removed": removed})
 
         if cmd == "dark_capture":
+            if _auto_tune_state["running"]:
+                return MaintResponse(ok=False, error=(
+                    "an auto-tune sweep is running — it drives the camera; "
+                    "cancel it (auto_tune_cancel) or wait, then retry"))
             try:
                 frames = int(args.get("frames", 16) or 16)
             except (ValueError, TypeError):
@@ -2200,30 +2363,53 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             want_s = _opt_float("exposure_s")
             want_g = _opt_float("gain")
 
+            # Pause AE FIRST and put the camera set + settle inside the
+            # try: the old order let an AE cycle move gain during the ~2 s
+            # settle (the "fixed worst-case" mask was then captured at a
+            # different point than requested), and an exception in the setup
+            # window left the camera parked at the worst-case setting with
+            # AE resumed against it (audit 2026-07 F7).
             snap_s = snap_g = None
-            if want_s is not None or want_g is not None:
-                snap = _call_camera(CAMERA_OP_GET_EXPOSURE, {},
-                                    ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
-                snap_s = (float(snap.result.get("exposure_s", ctx.cfg.exposure_s))
-                          if (snap and snap.ok) else ctx.cfg.exposure_s)
-                snap_g = (float(snap.result.get("gain", ctx.cfg.gain))
-                          if (snap and snap.ok) else ctx.cfg.gain)
-                if want_s is not None:
-                    _call_camera(CAMERA_OP_SET_EXPOSURE, {"exposure_s": want_s},
-                                 ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
-                if want_g is not None:
-                    _call_camera(CAMERA_OP_SET_GAIN, {"gain": want_g},
-                                 ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
-                # Let the new setting flush through a few frames before stacking.
-                settle_s = want_s if want_s is not None else (snap_s or 0.5)
-                time.sleep(max(0.5, 2.0 * settle_s))
-
-            # Pause AE for the whole capture (refcounted): an AE step mid
-            # dark-capture changes the pedestal within the stack at ANY
-            # operating point, not just the fixed worst-case one.
+            _dark_capture_active = True
             _ae_pause()
             try:
-                reply = _call_solver(SOLVER_OP_DARK_CAPTURE, {"frames": frames},
+                if want_s is not None or want_g is not None:
+                    snap = _call_camera(CAMERA_OP_GET_EXPOSURE, {},
+                                        ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+                    snap_s = (float(snap.result.get("exposure_s", ctx.cfg.exposure_s))
+                              if (snap and snap.ok) else ctx.cfg.exposure_s)
+                    snap_g = (float(snap.result.get("gain", ctx.cfg.gain))
+                              if (snap and snap.ok) else ctx.cfg.gain)
+                    if want_s is not None:
+                        _call_camera(CAMERA_OP_SET_EXPOSURE, {"exposure_s": want_s},
+                                     ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+                    if want_g is not None:
+                        _call_camera(CAMERA_OP_SET_GAIN, {"gain": want_g},
+                                     ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+                    # Let the new setting flush through a few frames before
+                    # stacking.
+                    settle_s = want_s if want_s is not None else (snap_s or 0.5)
+                    time.sleep(max(0.5, 2.0 * settle_s))
+
+                # Record the capture conditions in the mask metadata
+                # (audit F-L1): the fixed-point values when supplied, else
+                # the live setting observed at capture time.
+                _cap_args = {"frames": frames}
+                _eff_s, _eff_g = want_s, want_g
+                if _eff_s is None or _eff_g is None:
+                    _live = _call_camera(CAMERA_OP_GET_EXPOSURE, {},
+                                         ctx.camera_cmd_q,
+                                         ctx.camera_cmd_reply_q)
+                    if _live is not None and _live.ok:
+                        if _eff_s is None:
+                            _eff_s = _live.result.get("exposure_s")
+                        if _eff_g is None:
+                            _eff_g = _live.result.get("gain")
+                if _eff_s is not None:
+                    _cap_args["exposure_s"] = float(_eff_s)
+                if _eff_g is not None:
+                    _cap_args["gain"] = float(_eff_g)
+                reply = _call_solver(SOLVER_OP_DARK_CAPTURE, _cap_args,
                                      ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
                                      timeout_s=max(30.0, frames * 0.6 + 10.0))
             finally:
@@ -2234,6 +2420,7 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     _call_camera(CAMERA_OP_SET_GAIN, {"gain": snap_g},
                                  ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
                 _ae_resume()
+                _dark_capture_active = False
             if reply is None:
                 return MaintResponse(ok=False, error="solver did not respond")
             if not reply.ok:
@@ -2371,6 +2558,13 @@ def _handle_maint_client(client, ctx):
             if not chunk:
                 break
             buf += chunk
+            if len(buf) > 65536:
+                # No delimiter in 64 KB: not a JSON-lines client. Drop it
+                # before it grows the buffer for the whole 15 s timeout on a
+                # 512 MB device (audit 2026-07 W-L5).
+                log.warning("maint client sent %d bytes with no newline — "
+                            "dropping connection", len(buf))
+                return
             while b"\n" in buf:
                 line, _, buf = buf.partition(b"\n")
                 if not line.strip():
@@ -2455,6 +2649,13 @@ def _serve_lx200(latest_solution, shared_cfg, cfg,
                 if not chunk:
                     break
                 buf += chunk
+                if len(buf) > 4096:
+                    # LX200 commands are tens of bytes; 4 KB with no '#' is
+                    # a garbage-spewing client on the network-exposed port
+                    # (audit 2026-07 W-L5).
+                    log.warning("LX200 client sent %d bytes with no '#' — "
+                                "dropping connection", len(buf))
+                    break
                 while b"#" in buf:
                     raw, _, buf = buf.partition(b"#")
                     cmd = raw.decode("ascii", errors="ignore").strip()

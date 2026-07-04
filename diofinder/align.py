@@ -45,6 +45,9 @@ class AlignRequest:
     target_ra_deg: float
     target_dec_deg: float
     requested_at: float  # time.monotonic()
+    # Correlation id echoed in AlignResult so comms can never accept a stale
+    # result from a previous sync as the current one (audit 2026-07 W2).
+    request_id: int = 0
 
 
 @dataclasses.dataclass
@@ -60,6 +63,7 @@ class AlignResult:
     boresight_x: Optional[float] = None
     error_message: str = ""
     completed_at: float = 0.0
+    request_id: int = 0    # echoes AlignRequest.request_id
 
 
 class CommsAlignState:

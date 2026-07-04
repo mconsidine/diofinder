@@ -308,6 +308,33 @@ def test_imu_predict_accepts_5_and_6_tuple_refs():
         assert out[1] == pytest.approx(20.0, abs=0.05)
 
 
+def test_get_imu_qt_composite_and_fallback():
+    from diofinder.imu_math import get_imu_qt
+    # Composite key preferred (v0.11.24 writer).
+    q, t = get_imu_qt({"imu": ((1.0, 0.0, 0.0, 0.0), 42.0)})
+    assert q == (1.0, 0.0, 0.0, 0.0) and t == 42.0
+    # Legacy split keys still readable (older writer).
+    q, t = get_imu_qt({"imu_q": (0.0, 1.0, 0.0, 0.0), "imu_t": 7.0})
+    assert q == (0.0, 1.0, 0.0, 0.0) and t == 7.0
+    assert get_imu_qt({}) == (None, 0.0)
+
+
+def test_imu_predict_accepts_composite_imu_key():
+    # The rate-gated prediction works when the cfg carries the composite
+    # "imu" key instead of split imu_q/imu_t.
+    _reset_rate_state()
+    now = time.monotonic()
+    t0, ref_t = now - 1.6, now - 1.7
+    out = None
+    for dt, deg in [(0.0, 0.0), (0.8, 0.4), (1.6, 0.8)]:
+        c = _cfg_rotated(deg, imu_t=t0 + dt, ref_t=ref_t)
+        c["imu"] = (c.pop("imu_q"), c.pop("imu_t"))
+        out = comms_proc._imu_predict(c)
+    assert out is not None
+    assert out[0] == pytest.approx(
+        100.0 + 0.8 / math.cos(math.radians(20.0)), abs=0.1)
+
+
 def test_smoothed_wrapper_resnaps_after_stale_gap(monkeypatch):
     comms_proc._imu_filt_state.clear()
     cfg = {"imu_t": 1.0, "imu_ref_t": 100.0, "_z": (10.0, 5.0)}

@@ -27,7 +27,7 @@ from diofinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
 from diofinder.align import AlignResult
 from diofinder.calibration import FovCalibrator, FallbackGate
 from diofinder.imu_math import (quat_delta_rotvec, quat_to_rotvec,
-                                rotvec_to_quat)
+                                rotvec_to_quat, get_imu_qt)
 from diofinder import imu_frame as _imu_frame
 from diofinder.polar_run import PolarAligner
 from diofinder import frame_health
@@ -165,12 +165,23 @@ def _drain_align_queue(q, response_q):
     except Exception:
         pass
     for old_req in superseded:
-        response_q.put(AlignResult(
-            success=False,
-            error_message="superseded by a newer sync request",
-            completed_at=time.monotonic(),
-        ))
+        _align_reply(response_q, old_req, False,
+                     error_message="superseded by a newer sync request")
     return latest
+
+
+def _align_reply(response_q, req, success, **kw):
+    """Echo the request id and NEVER block: a full response queue (comms not
+    draining) blocking the solver here stalled the publish epoch and tripped
+    the watchdog — a restart triggered purely by queued sync spam (audit
+    2026-07 W2)."""
+    try:
+        response_q.put_nowait(AlignResult(
+            success=success,
+            request_id=getattr(req, "request_id", 0),
+            completed_at=time.monotonic(), **kw))
+    except Exception:
+        log.warning("align response queue full — result dropped")
 
 
 def _drain_cmd_queue(q):
@@ -204,6 +215,7 @@ class _SolverState:
         self.frames_tracked = 0
         self.frames_full = 0
         self.tracking_recover_fail = 0
+        self.tracking_solve_fail = 0
         self.tracking_enabled = bool(getattr(cfg, "tracking_enabled", False))
         # Latch so the "tetra3 extractor unavailable" fallback warns only once.
         self.tetra3_backend_warned = False
@@ -262,9 +274,17 @@ def _handle_solver_cmd(cmd, calibrator, polar,
                         state.solver_t3 = _tetra3.Tetra3(prev_db_path)
                         log.warning("set_db failed (%s); previous db reloaded", e)
                     except Exception as e2:
+                        # Double-fault: no database at all. Publishing empty
+                        # solutions would keep the watchdog epoch fresh, so
+                        # the old "log CRITICAL and limp on" left a zombie
+                        # that extracted stars but never solved until a
+                        # manual restart (audit 2026-07 W3/F1). Exit instead:
+                        # systemd restarts the unit, which loads the
+                        # configured db at startup.
                         log.critical("set_db failed AND previous db reload "
-                                     "failed (%s / %s) — solver has no db "
-                                     "until restart", e, e2)
+                                     "failed (%s / %s) — exiting so systemd "
+                                     "restarts with the configured db", e, e2)
+                        os._exit(1)
                 return SolverCmdReply(request_id=cmd.request_id, ok=False,
                                       error=f"failed to load {db_path}: {e}")
             finally:
@@ -284,32 +304,54 @@ def _handle_solver_cmd(cmd, calibrator, polar,
             n = int(cmd.args.get("frames", 16) or 16)
             n = max(2, min(64, n))
             shape = (cfg.frame_height, cfg.frame_width)
+            # Mark the solver busy for the watchdog, like set_db: 64 frames x
+            # 0.3 s + the median stack is ~20 s of no publishes — thin margin
+            # against the 30 s default and NEGATIVE against a user-lowered
+            # watchdog_timeout_s (audit 2026-07 W-L3).
+            if shared_cfg is not None:
+                shared_cfg["solver_busy_t"] = time.monotonic()
+            _meta = {
+                "sensor_mode": f"{cfg.sensor_full_width}x{cfg.sensor_full_height}",
+                "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            }
+            for _k in ("exposure_s", "gain"):
+                if cmd.args.get(_k) is not None:
+                    try:
+                        _meta[_k] = float(cmd.args[_k])
+                    except (TypeError, ValueError):
+                        pass
             try:
-                mask = _hp.capture_dark_mask(state.read_frame, n, shape)
-                if _hp.implausibly_large(mask.count, shape):
-                    # The mask saw light: lens not capped, or a light leak.
-                    # Saving it would silently break every subsequent solve
-                    # (observed: a 195k-pixel mask -> healthy star counts,
-                    # zero solves). MAD-collapse on a clean capped frame is
-                    # handled by MIN_THRESH_DN in hot_pixel.py, so by the
-                    # time this trips the capture genuinely saw light.
-                    return SolverCmdReply(
-                        request_id=cmd.request_id, ok=False,
-                        error=(f"dark capture flagged {mask.count} pixels "
-                               f"(~{100.0 * mask.count / (shape[0] * shape[1]):.0f}% "
-                               "of the frame) — the sensor saw light, not hot "
-                               "pixels. Cap or cover the lens completely "
-                               "(check for light leaks) and retry. "
-                               "The existing mask was left unchanged."))
-                mask.save(_hp.DEFAULT_MASK_PATH)
-                state.hot_pixel_mask = mask
-            except Exception as e:
-                return SolverCmdReply(request_id=cmd.request_id, ok=False,
-                                      error=f"dark capture failed: {e}")
-            log.info("Hot-pixel mask captured: %d pixels from %d frames",
-                     mask.count, n)
-            return SolverCmdReply(request_id=cmd.request_id, ok=True, result={
-                "count": mask.count, "frames": n, "path": _hp.DEFAULT_MASK_PATH})
+                try:
+                    mask = _hp.capture_dark_mask(state.read_frame, n, shape,
+                                                 meta=_meta)
+                    if _hp.implausibly_large(mask.count, shape):
+                        # The mask saw light: lens not capped, or a light leak.
+                        # Saving it would silently break every subsequent solve
+                        # (observed: a 195k-pixel mask -> healthy star counts,
+                        # zero solves). MAD-collapse on a clean capped frame is
+                        # handled by MIN_THRESH_DN in hot_pixel.py, so by the
+                        # time this trips the capture genuinely saw light.
+                        return SolverCmdReply(
+                            request_id=cmd.request_id, ok=False,
+                            error=(f"dark capture flagged {mask.count} pixels "
+                                   f"(~{100.0 * mask.count / (shape[0] * shape[1]):.0f}% "
+                                   "of the frame) — the sensor saw light, not hot "
+                                   "pixels. Cap or cover the lens completely "
+                                   "(check for light leaks) and retry. "
+                                   "The existing mask was left unchanged."))
+                    mask.save(_hp.DEFAULT_MASK_PATH)
+                    state.hot_pixel_mask = mask
+                except Exception as e:
+                    return SolverCmdReply(request_id=cmd.request_id, ok=False,
+                                          error=f"dark capture failed: {e}")
+                log.info("Hot-pixel mask captured: %d pixels from %d frames",
+                         mask.count, n)
+                return SolverCmdReply(request_id=cmd.request_id, ok=True, result={
+                    "count": mask.count, "frames": n,
+                    "path": _hp.DEFAULT_MASK_PATH})
+            finally:
+                if shared_cfg is not None:
+                    shared_cfg["solver_busy_t"] = 0.0
 
         if cmd.op == SOLVER_OP_HOT_PIXEL_STATUS:
             from diofinder import hot_pixel as _hp
@@ -325,6 +367,7 @@ def _handle_solver_cmd(cmd, calibrator, polar,
                 "loaded": m is not None,
                 "mtime": mtime,
                 "path": _hp.DEFAULT_MASK_PATH,
+                "meta": (m.meta if m else {}),
             })
 
         if cmd.op == SOLVER_OP_HOT_PIXEL_CLEAR:
@@ -370,6 +413,7 @@ def _handle_solver_cmd(cmd, calibrator, polar,
                 "frames_tracked": int(state.frames_tracked),
                 "frames_full":    int(state.frames_full),
                 "recover_fail":   int(state.tracking_recover_fail),
+                "solve_fail":     int(state.tracking_solve_fail),
             })
 
         if cmd.op == SOLVER_OP_BG_CACHE_STATUS:
@@ -463,7 +507,8 @@ def _handle_solver_cmd(cmd, calibrator, polar,
                     "peak": local_peak, "solve_ms": 0.0,
                     "extract_ms": round(extract_ms, 2)})
             # sycamore returns (x=col, y=row, ...); tetra3 wants (row, col).
-            cents = np.array([[s[1], s[0]] for s in _raw], dtype=np.float64)
+            cents = (np.asarray(_raw, dtype=np.float64)[:, [1, 0]]
+                     if _raw else np.empty((0, 2), dtype=np.float64))
             timeout_ms = int(a.get(
                 "solve_timeout_ms",
                 (shared_cfg or {}).get("solve_timeout_ms", cfg.solve_timeout_ms)))
@@ -490,12 +535,28 @@ def _handle_solver_cmd(cmd, calibrator, polar,
                 "extract_ms": round(extract_ms, 2)})
 
         if cmd.op == SOLVER_OP_CALIBRATION_STATUS:
+            result = calibrator.get_status()
+            # FallbackGate observability (audit 2026-07 F-L6): whether the
+            # self-healing loose retry has engaged is the first question in
+            # a "healthy stars, zero solves" field diagnosis.
+            if state is not None and getattr(state, "fallback_gate", None):
+                result["fallback"] = {
+                    "streak": int(state.fallback_gate.streak),
+                    "fires": int(getattr(state, "fallback_fires", 0)),
+                    "last_fire_t": float(getattr(state, "last_fallback_t", 0.0)),
+                }
             return SolverCmdReply(request_id=cmd.request_id, ok=True,
-                                  result=calibrator.get_status())
+                                  result=result)
         if cmd.op == SOLVER_OP_CALIBRATION_RESET:
-            calibrator.force_recalibrate()
+            persisted = calibrator.force_recalibrate()
+            result = {"state": calibrator.state.value,
+                      "persisted": bool(persisted)}
+            if not persisted:
+                result["warning"] = ("reset applied live but NOT persisted "
+                                     "(conf write failed) — it will revert "
+                                     "on restart")
             return SolverCmdReply(request_id=cmd.request_id, ok=True,
-                                  result={"state": calibrator.state.value})
+                                  result=result)
         if cmd.op == SOLVER_OP_POLAR_START:
             polar.start()
             return SolverCmdReply(request_id=cmd.request_id, ok=True,
@@ -536,8 +597,7 @@ def _imu_propagate_hint(last_sky_q, last_imu_q, shared_cfg):
         return None, 0.0
     if last_imu_q is None or not shared_cfg.get("imu_available", False):
         return last_sky_q, 0.1
-    q_cur = shared_cfg.get("imu_q")
-    imu_t = shared_cfg.get("imu_t", 0.0)
+    q_cur, imu_t = get_imu_qt(shared_cfg)
     if q_cur is None or time.monotonic() - imu_t > 2.0:
         return last_sky_q, 0.1
 
@@ -585,6 +645,12 @@ def _imu_propagate_hint(last_sky_q, last_imu_q, shared_cfg):
     return (wh, xh, yh, zh), uncertainty_deg
 
 
+# Rolling IMU<->sky calibration pairs. Process-local by design: only the
+# solver writes and reads them, so publishing the list through shared_cfg
+# just fattened every snapshot RPC in the system (audit 2026-07 P2).
+_imu_calib_pairs = []
+
+
 def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
                           snap=None, sky_q=None, prev_sky_q=None):
     """Record current IMU quaternion alongside the just-solved sky position.
@@ -599,28 +665,26 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
     src = snap if snap is not None else shared_cfg
     if not src.get("imu_available", False):
         return
-    q_now = src.get("imu_q")
-    imu_t = src.get("imu_t", 0.0)
+    q_now, imu_t = get_imu_qt(src)
     if q_now is None or time.monotonic() - imu_t > 2.0:
         return
-    q_prev    = src.get("imu_ref_q")
-    ra_prev   = src.get("imu_ref_ra_deg")
-    dec_prev  = src.get("imu_ref_dec_deg")
-    roll_prev = src.get("imu_ref_roll_deg", 0.0)
+    # Previous reference from the atomic tuple (this function is its only
+    # writer, so the loop snapshot is authoritative). The split imu_ref_*
+    # keys are no longer published — they cost five extra Manager RPCs per
+    # solve and every reader has moved to the tuple (audit 2026-07 P1).
+    prev_ref = src.get("imu_ref")
+    if prev_ref is not None:
+        q_prev, ra_prev, dec_prev, roll_prev = prev_ref[:4]
+    else:
+        q_prev, ra_prev, dec_prev, roll_prev = None, None, None, 0.0
     _ref_t = time.monotonic()
-    # Atomic tuple FIRST: comms' pointing prediction reads this single key,
-    # so it can never observe a new quaternion paired with the previous
-    # solve's RA/Dec (the split keys below are five separate Manager RPCs —
-    # kept for webui/status display compatibility).
+    # Atomic tuple: comms' pointing prediction reads this single key, so it
+    # can never observe a new quaternion paired with the previous solve's
+    # RA/Dec.
     _sky_q_t = tuple(sky_q) if sky_q is not None else None
     shared_cfg["imu_ref"] = (tuple(q_now), float(new_ra_deg),
                              float(new_dec_deg), float(new_roll_deg), _ref_t,
                              _sky_q_t)
-    shared_cfg["imu_ref_q"]        = q_now
-    shared_cfg["imu_ref_ra_deg"]   = new_ra_deg
-    shared_cfg["imu_ref_dec_deg"]  = new_dec_deg
-    shared_cfg["imu_ref_roll_deg"] = new_roll_deg
-    shared_cfg["imu_ref_t"]        = _ref_t
     if q_prev is None or ra_prev is None or dec_prev is None:
         return
     r_imu = quat_delta_rotvec(q_now, q_prev)
@@ -641,7 +705,10 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
     cos_r, sin_r = math.cos(roll_rad), math.sin(roll_rad)
     cam_r =  dra_rad * cos_r + ddec_rad * sin_r
     cam_u = -dra_rad * sin_r + ddec_rad * cos_r
-    pairs = list(src.get("imu_calib_pairs", []))
+    # Solver-local: the pairs list is written and read only by this process,
+    # and round-tripping 20 float tuples through shared_cfg inflated every
+    # dict(shared_cfg) snapshot in the system (audit 2026-07 P2).
+    pairs = _imu_calib_pairs
     # Full 3-D sky rotation vector (from consecutive SOLVED attitudes) rides
     # along with the 2-D projection: it feeds the frame-rotation fit that
     # lets the solve hint apply the IMU delta in the CAMERA frame instead of
@@ -653,7 +720,11 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
         entry = entry + (r_sky3[0], r_sky3[1], r_sky3[2])
     pairs.append(entry)
     if len(pairs) > 20:
-        pairs = pairs[-20:]
+        del pairs[:-20]
+    # Batch every calibration key into ONE Manager RPC (dict.update is a
+    # single proxy method call) instead of up to six individual writes per
+    # moving solve (audit 2026-07 P1).
+    payload = {"imu_calib_n": len(pairs)}
     if len(pairs) >= 3:
         R = np.array([[p[0], p[1], p[2]] for p in pairs])
         S = np.array([[p[3], p[4]]       for p in pairs])
@@ -662,10 +733,8 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
         ss_res = float(np.sum((S - S_pred)**2))
         ss_tot = float(np.sum((S - S.mean(axis=0))**2))
         r2 = max(0.0, 1.0 - ss_res / ss_tot) if ss_tot > 1e-15 else 0.0
-        shared_cfg["imu_calib_C"]       = C.T.flatten().tolist()
-        shared_cfg["imu_calib_quality"] = r2
-    shared_cfg["imu_calib_pairs"] = pairs
-    shared_cfg["imu_calib_n"]     = len(pairs)
+        payload["imu_calib_C"]       = C.T.flatten().tolist()
+        payload["imu_calib_quality"] = r2
     # IMU-body -> camera frame rotation (quality-gated Kabsch fit over the
     # 3-D pairs). Published only when demonstrably good; the hint path falls
     # back to the wide-cone body-frame behavior otherwise.
@@ -673,9 +742,10 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
     if len(full) >= _imu_frame.MIN_PAIRS:
         R9, quality = _imu_frame.fit_frame_rotation(
             [p[0:3] for p in full], [p[5:8] for p in full])
-        shared_cfg["imu_frame_R"] = R9
-        shared_cfg["imu_frame_quality"] = (
+        payload["imu_frame_R"] = R9
+        payload["imu_frame_quality"] = (
             quality if R9 is not None else {"rejected": str(quality)})
+    shared_cfg.update(payload)
 
 
 def solver_main(slots, latest_solution, shared_cfg,
@@ -755,6 +825,16 @@ def solver_main(slots, latest_solution, shared_cfg,
         state.hot_pixel_mask = _hp.HotPixelMask.load(_hp.DEFAULT_MASK_PATH)
         if state.hot_pixel_mask is not None:
             log.info("Hot-pixel mask loaded: %d pixels", state.hot_pixel_mask.count)
+            _mode_now = f"{cfg.sensor_full_width}x{cfg.sensor_full_height}"
+            _mode_mask = state.hot_pixel_mask.meta.get("sensor_mode")
+            if _mode_mask and _mode_mask != _mode_now:
+                # Positions are sensor-mode dependent but the frame is always
+                # 960x760, so the shape guard can't catch this (audit F-L1).
+                log.warning(
+                    "Hot-pixel mask was captured in sensor mode %s but the "
+                    "camera runs %s — every masked pixel points at the wrong "
+                    "sky position. Recapture the dark frame.",
+                    _mode_mask, _mode_now)
     except Exception as e:
         log.warning("Could not load hot-pixel mask: %s", e)
 
@@ -762,8 +842,11 @@ def solver_main(slots, latest_solution, shared_cfg,
     # Loose-window blind retry after a run of failed attempts: the escape
     # hatch for a stale committed FOV or a poisoned attitude hint, both of
     # which otherwise deadlock (the calibrator only learns from successes).
+    state.fallback_fires = 0
+    state.last_fallback_t = 0.0
     fallback_gate = FallbackGate(
         fail_threshold=int(getattr(cfg, "fov_fallback_fails", 20)))
+    state.fallback_gate = fallback_gate
     log.info("Calibrator: state=%s fov=%.4f° tolerance=%.3f°",
              calibrator.state.value,
              calibrator.get_fov_estimate(),
@@ -790,8 +873,10 @@ def solver_main(slots, latest_solution, shared_cfg,
         idx, seq = slots.acquire_read_slot(timeout=2.0, after_seq=after_seq)
         if idx is None or idx < 0:
             return None
-        frame = np.array(bufs[idx], dtype=np.uint8, copy=True)
-        slots.release_read_slot()
+        try:
+            frame = np.array(bufs[idx], dtype=np.uint8, copy=True)
+        finally:
+            slots.release_read_slot()
         return (frame, seq) if with_seq else frame
     state.read_frame = _read_current_frame
 
@@ -825,6 +910,9 @@ def solver_main(slots, latest_solution, shared_cfg,
     frames_tracked      = 0       # counters for tracking_status
     frames_full         = 0
     tracking_recover_fail = 0
+    tracking_solve_fail   = 0     # verify/solve failures while TRACKING (F3)
+    tracking_fail_episodes = 0    # drives the relock backoff (audit F3)
+    tracking_run_len      = 0     # consecutive tracked frames this episode
     # Capability-probe: only pass strict_hint to the solver when it accepts it.
     try:
         import inspect as _inspect
@@ -844,6 +932,10 @@ def solver_main(slots, latest_solution, shared_cfg,
              SOLVER_HAS_VERIFY, EXTRACT_HAS_ROI)
 
     fail_streak = 0
+    dark_streak = 0
+    camera_stale_streak = 0
+    fallback_fires = 0        # loose-retry fires (audit F2 escalation cadence)
+    pending_gate_fire = False # gate fired on a raise path; retry next attempt
     solve_count = 0
     frame_seq = -1   # last frame sequence processed; gates re-work on stale frames
     _last_health_t = 0.0      # throttle for the exposure/contrast health warning
@@ -867,9 +959,37 @@ def solver_main(slots, latest_solution, shared_cfg,
             # re-extracting and re-solving an identical frame when a solve
             # finishes faster than the exposure-limited frame period. On a
             # camera stall the 5 s timeout still returns the current frame so
-            # housekeeping runs and the watchdog epoch keeps advancing.
+            # command housekeeping keeps running — but a sustained stall now
+            # freezes the publish epoch (below) instead of masquerading as a
+            # live camera.
+            prev_seq = frame_seq
             idx, frame_seq = slots.acquire_read_slot(timeout=5.0, after_seq=frame_seq)
             t0  = time.monotonic()
+
+            # Camera-stall detection (audit 2026-07 W1): the timeout path
+            # above returns the CURRENT frame with an unchanged seq. A
+            # blocking (non-raising) capture stall therefore shows up as
+            # consecutive same-seq returns — the only place in the system
+            # that can see it. After ~30 s stop publishing so the watchdog
+            # epoch goes stale and systemd restarts the unit, instead of
+            # re-solving the frozen frame forever and serving stale pointing
+            # as live. Threshold: 6 x 5 s timeouts; even a 10 s exposure
+            # produces a new frame every frame period, so a healthy slow
+            # camera never accumulates more than ~2.
+            if prev_seq >= 0 and frame_seq == prev_seq:
+                camera_stale_streak += 1
+                if camera_stale_streak >= 6:
+                    if (camera_stale_streak == 6
+                            or camera_stale_streak % 12 == 0):
+                        log.critical(
+                            "camera appears stalled: no new frame for ~%.0f s "
+                            "(seq stuck at %d) — freezing the publish epoch "
+                            "so the watchdog restarts the unit",
+                            camera_stale_streak * 5.0, frame_seq)
+                    slots.release_read_slot()
+                    continue
+            else:
+                camera_stale_streak = 0
 
             # Subsampled peak: the <20 gate is about overall illumination and
             # the >=250 saturation check (auto-exposure) is about regions, not
@@ -879,8 +999,17 @@ def solver_main(slots, latest_solution, shared_cfg,
 
             if local_peak < 20:
                 slots.release_read_slot()
-                latest_solution.update(_empty_solution(peak=local_peak))
+                # Publish the FIRST dark frame immediately (UI flips state
+                # promptly), then every 5th: dark frames carry no information
+                # beyond "alive", and at the 0.05 s exposure floor the
+                # unconditional publish was 20 Manager RPCs/s (audit 2026-07
+                # P11). Worst-case epoch cadence 5 x exposure = 5 s at a 1 s
+                # exposure — far inside the 30 s watchdog window.
+                if dark_streak % 5 == 0:
+                    latest_solution.update(_empty_solution(peak=local_peak))
+                dark_streak += 1
                 continue
+            dark_streak = 0
 
             # Drain the align queue only for frames that will actually be
             # processed: draining before the dark gate consumed a pending
@@ -953,8 +1082,17 @@ def solver_main(slots, latest_solution, shared_cfg,
             # cache refills within one stack (8 frames) after switching back.
             if extractor_backend != "tetra3":
                 bg_cache.submit_frame(frame_buf)
-            if snap.get("imu_available", False):
-                bg_cache.note_motion(snap.get("imu_q"))
+            _imu_q_snap, _imu_t_snap = get_imu_qt(snap)
+            if (snap.get("imu_available", False)
+                    and time.monotonic() - _imu_t_snap < 2.0):
+                # Staleness gate (audit 2026-07 W5): an IMU wedged in a kernel
+                # I2C read leaves imu_available=True with a FROZEN quaternion.
+                # Feeding that to note_motion means slews are never detected
+                # AND the fail-streak invalidation stays disabled ("IMU-less
+                # only") — a stale background model then suppresses the new
+                # field's stars on every slew, unlogged. The 2 s freshness
+                # window matches the hint/prediction gates.
+                bg_cache.note_motion(_imu_q_snap)
             else:
                 # Un-latch _imu_feeding so solver-derived slew detection and
                 # the fail-streak invalidation take over if the IMU dies
@@ -1091,6 +1229,8 @@ def solver_main(slots, latest_solution, shared_cfg,
                         # Not enough recovered -> fall back to FULL this frame
                         # and drop the lock so we re-acquire blind.
                         tracking_recover_fail += 1
+                        tracking_fail_episodes += 1
+                        tracking_run_len = 0
                         tracking_state = TRACK_FULL
                         tracking_good_run = 0
                         tracking_prev_xy = []
@@ -1154,18 +1294,16 @@ def solver_main(slots, latest_solution, shared_cfg,
                         # tetra3 solve_from_centroids expects (row, col) = (y, x).
                         # Must be float64: Rust PyO3 binding rejects float32.
                         centroids = (
-                            np.array([[s[1], s[0]] for s in _raw], dtype=np.float64)
+                            np.asarray(_raw, dtype=np.float64)[:, [1, 0]]
                             if _raw else None
                         )
             except Exception as e:
-                log.warning("centroid extraction raised: %s", e)
+                if fail_streak == 0 or (fail_streak + 1) % 20 == 0:
+                    log.warning("centroid extraction raised: %s", e)
                 latest_solution.update(_empty_solution(peak=local_peak))
                 if align_req is not None:
-                    align_response_q.put(AlignResult(
-                        success=False,
-                        error_message=f"centroid extraction raised: {e}",
-                        completed_at=time.monotonic(),
-                    ))
+                    _align_reply(align_response_q, align_req, False,
+                                 error_message=f"centroid extraction raised: {e}")
                 fail_streak += 1
                 # Same failure bookkeeping as a NoMatch: without it an
                 # exception-class failure (e.g. a poisoned cache model) never
@@ -1188,6 +1326,7 @@ def solver_main(slots, latest_solution, shared_cfg,
             state.frames_tracked = frames_tracked
             state.frames_full = frames_full
             state.tracking_recover_fail = tracking_recover_fail
+            state.tracking_solve_fail = tracking_solve_fail
 
             # --- Step 2: star-count gate -------------------------------------
             min_c = snap.get("min_centroids", cfg.min_centroids)
@@ -1196,12 +1335,13 @@ def solver_main(slots, latest_solution, shared_cfg,
                     stars=n_stars, peak=local_peak,
                     solve_ms=extract_ms, status=TOO_FEW))
                 if align_req is not None:
-                    align_response_q.put(AlignResult(
-                        success=False,
-                        error_message=f"too few stars ({n_stars}<{min_c})",
-                        completed_at=time.monotonic(),
-                    ))
+                    _align_reply(align_response_q, align_req, False,
+                                 error_message=f"too few stars ({n_stars}<{min_c})")
                 fail_streak += 1
+                if served_by_tracking:
+                    tracking_solve_fail += 1
+                    tracking_fail_episodes += 1
+                    tracking_run_len = 0
                 if fail_streak == 1 or fail_streak % 20 == 0:
                     log.info(
                         "no solve: too few stars (%d<%d) peak=%d ext=%.0fms",
@@ -1252,7 +1392,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                     solve_q_hint, solve_hint_unc = None, 0.0
             _solve_kw = dict(
                 fov_estimate=calibrator.get_fov_estimate(),
-                fov_max_error=calibrator.get_fov_max_error(),
+                fov_max_error=calibrator.get_fov_max_error(snap),
                 solve_timeout=snap.get(
                     "solve_timeout_ms", cfg.solve_timeout_ms),
                 match_threshold=match_threshold,
@@ -1290,18 +1430,31 @@ def solver_main(slots, latest_solution, shared_cfg,
                         **_solve_kw,
                     )
             except Exception as e:
-                log.warning("solve_from_centroids raised: %s", e)
+                if fail_streak == 0 or (fail_streak + 1) % 20 == 0:
+                    log.warning("solve_from_centroids raised: %s", e)
                 latest_solution.update(_empty_solution(
                     stars=n_stars, peak=local_peak,
                     solve_ms=extract_ms, status=NO_MATCH))
                 if align_req is not None:
-                    align_response_q.put(AlignResult(
-                        success=False,
-                        error_message=f"solver raised: {e}",
-                        completed_at=time.monotonic(),
-                    ))
+                    _align_reply(align_response_q, align_req, False,
+                                 error_message=f"solver raised: {e}")
                 fail_streak += 1
-                fallback_gate.note_failure()   # counts toward the loose retry
+                if served_by_tracking:
+                    # A tracked verify/solve failure says "the tight attitude
+                    # check failed", not "the FOV window excludes reality" —
+                    # keep it out of the FallbackGate streak (audit F3); the
+                    # next frame re-acquires with the FULL solver anyway.
+                    tracking_solve_fail += 1
+                    tracking_fail_episodes += 1
+                    tracking_run_len = 0
+                else:
+                    # A raise counts toward the loose retry like a NoMatch.
+                    # The fire signal can't run the retry here (no solution
+                    # flow), so carry it to the next attempt — otherwise an
+                    # exception-class failure streak (NaN centroid, wheel API
+                    # mismatch) never triggers the escape hatch (audit F5).
+                    if fallback_gate.note_failure():
+                        pending_gate_fire = True
                 bg_cache.note_solve_result(None, False)
                 tracking_state = TRACK_FULL
                 tracking_good_run = 0
@@ -1316,17 +1469,38 @@ def solver_main(slots, latest_solution, shared_cfg,
             status_int = _OLIVE_STATUS.get(status_str, NO_MATCH)
             solve_count += 1
 
-            if soln.get("RA") is None and fallback_gate.note_failure():
+            gate_fired = False
+            if soln.get("RA") is None and not served_by_tracking:
+                gate_fired = fallback_gate.note_failure() or pending_gate_fire
+                pending_gate_fire = False
+            if gate_fired:
                 # Loose blind retry: same centroids, the LOOSE FOV window and
                 # no attitude hint. One call escapes both self-sustaining
                 # failure modes — a committed FOV that excludes reality
                 # (calibrator starves: it only learns from successes) and a
                 # poisoned hint (wheels without the blind-fallback pass).
+                fallback_fires += 1
+                state.fallback_fires = fallback_fires
+                state.last_fallback_t = time.monotonic()
                 retry_kw = dict(_solve_kw)
-                retry_kw["fov_max_error"] = max(
-                    float(snap.get("fov_max_error_deg",
-                                         cfg.fov_max_error_deg)),
-                    float(retry_kw.get("fov_max_error") or 0.0))
+                if fallback_fires % 3 == 0:
+                    # Every 3rd fire, escalate to a FULLY blind FOV search:
+                    # the loose window is only +/-fov_max_error_deg (0.3 deg)
+                    # around the SAME committed estimate, which can never
+                    # recover from a lens change (13.5 -> 6.8 deg swaps every
+                    # solve outside it forever, and force_recalibrate needs a
+                    # SUCCESS to fire). fov_estimate=None lets olive-solve
+                    # search the database's full FOV range (audit 2026-07 F2).
+                    retry_kw["fov_estimate"] = None
+                    retry_kw["fov_max_error"] = None
+                    log.warning(
+                        "fallback fire #%d: escalating to full-range blind "
+                        "FOV search", fallback_fires)
+                else:
+                    retry_kw["fov_max_error"] = max(
+                        float(snap.get("fov_max_error_deg",
+                                             cfg.fov_max_error_deg)),
+                        float(retry_kw.get("fov_max_error") or 0.0))
                 retry_kw.pop("attitude_hint", None)
                 retry_kw.pop("hint_uncertainty_deg", None)
                 if SOLVER_HAS_STRICT_HINT:
@@ -1365,11 +1539,8 @@ def solver_main(slots, latest_solution, shared_cfg,
                     stars=n_stars, peak=local_peak,
                     solve_ms=elapsed_ms, status=status_int))
                 if align_req is not None:
-                    align_response_q.put(AlignResult(
-                        success=False,
-                        error_message=f"no match (status={status_str})",
-                        completed_at=time.monotonic(),
-                    ))
+                    _align_reply(align_response_q, align_req, False,
+                                 error_message=f"no match (status={status_str})")
                 fail_streak += 1
                 if fail_streak == 1 or fail_streak % 20 == 0:
                     log.info(
@@ -1380,6 +1551,10 @@ def solver_main(slots, latest_solution, shared_cfg,
                 if cfg.save_failed_frames and frame_snapshot is not None:
                     _save_frame(frame_snapshot, cfg, f"failed_{status_str}")
                 bg_cache.note_solve_result(None, False)
+                if served_by_tracking:
+                    tracking_solve_fail += 1
+                    tracking_fail_episodes += 1
+                    tracking_run_len = 0
                 tracking_state = TRACK_FULL
                 tracking_good_run = 0
                 tracking_prev_xy = []
@@ -1397,7 +1572,7 @@ def solver_main(slots, latest_solution, shared_cfg,
             if q_solved is not None:
                 prev_sky_q_for_ref = last_sky_q    # previous solve's attitude
                 last_sky_q       = tuple(q_solved)
-                last_solve_imu_q = snap.get("imu_q")
+                last_solve_imu_q = get_imu_qt(snap)[0]
             # --- Tracking-mode bookkeeping (success) -------------------------
             # Remember this frame's centroid (x,y) for next frame's ROI windows
             # and advance the lock-in counter. After tracking_lock_frames
@@ -1407,8 +1582,20 @@ def solver_main(slots, latest_solution, shared_cfg,
             if tracking_on:
                 tracking_prev_xy = _tracking_mod.centroids_to_xy(centroids)
                 tracking_good_run += 1
+                if served_by_tracking:
+                    tracking_run_len += 1
+                    if tracking_run_len >= 20:
+                        # A sustained healthy episode clears the backoff.
+                        tracking_fail_episodes = 0
+                # Relock backoff (audit F3): without it a systematic verify
+                # failure produced 3 good solves -> lock -> 1 failed tracked
+                # frame -> repeat forever, dropping one pointing frame in
+                # four invisibly. Each failed episode doubles the
+                # consecutive-solves requirement (capped at 8x).
+                _lock_needed = track_lock_frames * (
+                    2 ** min(tracking_fail_episodes, 3))
                 if (tracking_state == TRACK_FULL
-                        and tracking_good_run >= track_lock_frames
+                        and tracking_good_run >= _lock_needed
                         and len(tracking_prev_xy) >= track_min_recover):
                     tracking_state = TRACK_TRACKING
             else:
@@ -1466,30 +1653,22 @@ def solver_main(slots, latest_solution, shared_cfg,
                 xt = soln.get("x_target")
                 yt = soln.get("y_target")
                 if xt is None or yt is None:
-                    align_response_q.put(AlignResult(
-                        success=False,
-                        error_message="no x_target/y_target in solution",
-                        completed_at=time.monotonic(),
-                    ))
+                    _align_reply(align_response_q, align_req, False,
+                                 error_message="no x_target/y_target in solution")
                 else:
                     x = xt[0] if hasattr(xt, "__len__") else xt
                     y = yt[0] if hasattr(yt, "__len__") else yt
                     if x is None or y is None:
-                        align_response_q.put(AlignResult(
-                            success=False,
-                            error_message="target outside camera FOV",
-                            completed_at=time.monotonic(),
-                        ))
+                        _align_reply(align_response_q, align_req, False,
+                                     error_message="target outside camera FOV")
                     else:
                         log.info(
                             "ALIGN: (%.4f, %.4f) -> pixel (y=%.2f, x=%.2f)",
                             align_req.target_ra_deg,
                             align_req.target_dec_deg, y, x)
-                        align_response_q.put(AlignResult(
-                            success=True,
-                            boresight_y=float(y), boresight_x=float(x),
-                            completed_at=time.monotonic(),
-                        ))
+                        _align_reply(align_response_q, align_req, True,
+                                     boresight_y=float(y),
+                                     boresight_x=float(x))
 
             if cfg.save_solved_frames and frame_snapshot is not None:
                 _save_frame(frame_snapshot, cfg, "solved")

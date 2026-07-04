@@ -82,6 +82,14 @@ HAS_BLOCK_CACHE = HAS_BLOCK_MEDIANS and CACHE_HAS_BLOCK_OFFSETS
 # functions don't support inspect.signature-based kwarg probing reliably.
 HAS_BG_IMAGE = HAS_CACHE and bool(getattr(star_detect, "HAS_BG_IMAGE", False))
 
+# Modes composable with the per-row cached model. block_percentile is
+# additionally cache-compatible on sycamore>=0.12 via a block-median grid
+# (handled separately in detect()). column_percentile,
+# row_column_percentile, and uniform_mean need full-image spatial
+# preprocessing and always force the per-frame path.
+CACHE_COMPATIBLE_MODES = frozenset(
+    {"row_percentile", "line_median", "top_hat"})
+
 
 class CacheState(Enum):
     WARMING_UP = auto()  # not enough frames collected yet
@@ -361,13 +369,6 @@ class BackgroundCache:
         per-frame) AND leaves the cache's model-kind tracking untouched. Used by
         the offline auto-tune sweep to evaluate a candidate bg_mode cleanly
         without triggering a live model rebuild for the wrong mode."""
-        # Modes composable with the per-row cached model. block_percentile is
-        # additionally cache-compatible on sycamore>=0.12 via a block-median
-        # grid (handled separately below). column_percentile,
-        # row_column_percentile, and uniform_mean need full-image spatial
-        # preprocessing and always force the per-frame path.
-        CACHE_COMPATIBLE_MODES = frozenset(
-            {"row_percentile", "line_median", "top_hat"})
         want_tophat = (bg_mode == "top_hat")
         if want_tophat and not HAS_TOPHAT:
             # Old wheel: silently fall back to the robust per-row median.
@@ -544,10 +545,20 @@ class BackgroundCache:
                     log.info("bg-cache build discarded (camera settings "
                              "changed mid-build)")
                     continue
+                # Clear the flag BEFORE the final gen re-check: with the
+                # old order (publish, then clear) a flush landing between
+                # them had its rebuild request wiped and its stale-model
+                # discard skipped — an old-pedestal model then served STEADY
+                # until max-age expiry (audit 2026-07 W-L1).
+                self._needs_rebuild.clear()
+                if getattr(self, "_invalidate_gen", 0) != gen_before:
+                    self._needs_rebuild.set()
+                    log.info("bg-cache build discarded (camera settings "
+                             "changed in publish window)")
+                    continue
                 self._model = model  # atomic publish
                 last_build = now
                 self._n_builds += 1
-                self._needs_rebuild.clear()
                 log.info("bg-cache model rebuilt (#%d): %d frames, noise=%.2f",
                          self._n_builds, self._model.n_frames, self._model.noise)
             except Exception as e:

@@ -1610,6 +1610,7 @@ def debug_collect():
             see = _safe_call("seeing_get")
             ver = _safe_call("version")
             hpx = _safe_call("hot_pixel_status")
+            trk = _safe_call("tracking_status")
             calres = cal.result if cal.ok and cal.result else {}
             eff = {
                 # Release + wheel versions: the wheels update independently of
@@ -1624,6 +1625,9 @@ def debug_collect():
                 "match_params":  mp.result if mp.ok else {"error": mp.error},
                 "bg_cache":      bgc.result if bgc.ok else {"error": bgc.error},
                 "seeing":        see.result if see.ok else {"error": see.error},
+                # Tracking state machine + failure counters (audit F-L6): a
+                # FULL/TRACKING flap is invisible without these.
+                "tracking":      trk.result if trk.ok else {"error": trk.error},
                 # The FOV estimate + tolerance ACTUALLY used by the live solve
                 # (calibrated tightens fov_max_error well below the loose conf
                 # value). These are the usual runtime-vs-diagnostic mismatch.

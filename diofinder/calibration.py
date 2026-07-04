@@ -113,7 +113,7 @@ class FovCalibrator:
             return self.committed_fov
         return self.cfg.fov_deg
 
-    def get_fov_max_error(self) -> float:
+    def get_fov_max_error(self, snap=None) -> float:
         """Tolerance to feed to olive-solve. Tight after calibration.
 
         The loose (uncalibrated / blind) tolerance honours a live
@@ -121,10 +121,16 @@ class FovCalibrator:
         the maint socket without a restart; absent an override it falls back to
         the config value. The tight (calibrated) tolerance is left to the
         calibration machinery.
+
+        ``snap`` (the caller's per-frame shared_cfg snapshot) serves the
+        override read when provided — a bare shared_cfg.get here was one
+        Manager RPC per frame for the whole uncalibrated phase (audit
+        2026-07 P8).
         """
         if self.use_tight_tolerance:
             return getattr(self.cfg, "fov_calibrated_max_error_deg", 0.1)
-        override = self.shared_cfg.get("fov_max_error_deg")
+        src = snap if snap is not None else self.shared_cfg
+        override = src.get("fov_max_error_deg")
         if override is not None:
             return float(override)
         return self.cfg.fov_max_error_deg
@@ -291,7 +297,12 @@ class FovCalibrator:
                 "fov_calibrated_stddev": self.params.fov_convergence_stddev,
             })
         except Exception as e:
+            # Report the failure to the caller: the in-memory reset applied,
+            # but a restart resurrects the old committed calibration — the
+            # UI must not claim an unconditional success (audit 2026-07 F6).
             log.warning("Could not persist calibration reset: %s", e)
+            return False
+        return True
         self._log_state_change()
 
 

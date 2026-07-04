@@ -81,6 +81,21 @@ def wrap180(deg):
     return (deg + 180.0) % 360.0 - 180.0
 
 
+def get_imu_qt(src):
+    """(quaternion, timestamp) from a shared_cfg dict/snapshot.
+
+    v0.11.24 publishes the pair as ONE composite key ``imu = (q, t)`` —
+    halving the IMU thread's steady 40 Manager RPCs/s and making the pair
+    atomic (the split keys could tear between two RPCs). Falls back to the
+    legacy split ``imu_q``/``imu_t`` keys for older writers.
+    Returns (None, 0.0) when no reading is available.
+    """
+    v = src.get("imu")
+    if v is not None:
+        return v[0], v[1]
+    return src.get("imu_q"), src.get("imu_t", 0.0)
+
+
 def alpha_beta_step(state, z_ra, z_dec, dt, alpha, beta):
     """One alpha-beta tracker step on a (RA, Dec) estimate, in degrees.
 

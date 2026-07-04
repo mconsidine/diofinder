@@ -83,13 +83,12 @@ LX200-pointing consumers, and the calibration loop).
 | `auto_exposure_target_matches` | int | comms (via `seeing_set`) | comms auto-exposure thread |
 | `auto_exposure_max_s` | float | comms (via `seeing_set`) | comms auto-exposure thread |
 | `auto_exposure_max_gain` | float | comms (via `seeing_set`) | comms auto-exposure thread |
-| `auto_exposure_peak_floor` | float | *(no writer yet — config-only today; see docs/audit-2026-07.md F-M4)* | comms auto-exposure thread |
+| `auto_exposure_peak_floor` | float | comms (via maint `auto_exposure_set {"peak_floor":...}`) | comms auto-exposure thread |
 | `imu_rate_gate_dps` | float | comms (seed from cfg) | comms LX200 pointing (rate gate in `_imu_predict`) |
 | `star_name_brightest` | bool | comms (via maint `solver_params_set`) | solver (centered-star naming) |
 | `imu_available` | bool | imu_thread | comms, webui |
-| `imu_q` | tuple (w,x,y,z) | imu_thread | comms |
-| `imu_t` | float | imu_thread | comms |
-| `imu_ref_q/ra/dec/roll/t` | varies | solver (post-solve) | comms (display); prediction reads the atomic `imu_ref` tuple |
+| `imu` | tuple ((w,x,y,z), t) | imu_thread | comms, solver (via `imu_math.get_imu_qt`; ONE atomic write per 20 Hz read since v0.11.24 — the split `imu_q`/`imu_t` keys are legacy-read only) |
+| `imu_ref_q/ra/dec/roll/t` | varies | *(no longer published since v0.11.24 — readers use the `imu_ref` tuple; comms still accepts them from older solvers)* | — |
 | `imu_ref` | tuple (q, ra, dec, roll, t, sky_q) | solver (post-solve, single RPC) | comms LX200 pointing (tear-proof reference). `sky_q` (the solved attitude quaternion, v0.11.23) enables the exact frame-corrected prediction; comms still accepts 5-tuples from older solvers |
 | `solver_busy_t` | float | solver (set_db load window) | comms watchdog (skips enforcement while fresh, 120 s bound) |
 | `imu_frame_R` | list[9] or None | solver (quality-gated Kabsch fit post-solve) | solver hint path (body→camera delta conjugation) |
@@ -182,6 +181,15 @@ Once the window standard deviation falls below `fov_calibrated_stddev` (default
 tolerance tightens from `fov_max_error_deg` (0.3° since v0.11.21) to
 `fov_calibrated_max_error_deg` (0.1°). This makes subsequent solves faster
 and more robust against false positives.
+
+**Escape-hatch escalation (v0.11.24)**: every 3rd FallbackGate fire retries
+with `fov_estimate=None` — olive-solve then searches the database's full FOV
+range — so a lens change (e.g. 25 mm → 50 mm) can recover; the ±0.3° loose
+window around the old committed estimate mathematically never could. Gate
+streak/fire counters are surfaced in `calibration_status` (`fallback` key).
+**When changing lenses** also set `fov_deg` in the conf to a rough estimate
+for the new lens — the reset procedure below clears the calibration state
+but keeps `fov_deg` as the starting search estimate.
 
 **Self-healing (v0.11.19).** Two mechanisms keep a wrong committed FOV from
 persisting:
@@ -842,7 +850,11 @@ hot-pixel rejection during slews, when the temporal cache is offline.
 watches `latest_solution["epoch_monotonic"]`. The solver publishes every frame
 including dark ones, so if the epoch stops advancing for `watchdog_timeout_s`
 (default 30) the solver is hung: it logs CRITICAL and `os._exit(1)` so systemd
-restarts the unit. The watchdog **arms only after the first non-zero epoch**, so
+restarts the unit. A **blocking** camera stall (capture that hangs rather
+than raises) is detected by the solver since v0.11.24: consecutive same-seq
+timeout returns from `acquire_read_slot` for ~30 s freeze the publish epoch,
+which converts the stall into a watchdog restart instead of re-solving the
+frozen frame forever. The watchdog **arms only after the first non-zero epoch**, so
 a slow boot / first DB load never trips it — but since v0.11.23 a **first-publish
 deadline** (300 s) backstops that rule: a solver that wedges during startup and
 never publishes at all now exits for a systemd restart instead of hanging
