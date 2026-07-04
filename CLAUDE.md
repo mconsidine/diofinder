@@ -89,6 +89,8 @@ LX200-pointing consumers, and the calibration loop).
 | `imu_ref_q/ra/dec/roll/t` | varies | solver (post-solve) | comms (display); prediction reads the atomic `imu_ref` tuple |
 | `imu_ref` | tuple (q, ra, dec, roll, t) | solver (post-solve, single RPC) | comms LX200 pointing (tear-proof reference) |
 | `solver_busy_t` | float | solver (set_db load window) | comms watchdog (skips enforcement while fresh, 120 s bound) |
+| `imu_frame_R` | list[9] or None | solver (quality-gated Kabsch fit post-solve) | solver hint path (body→camera delta conjugation) |
+| `imu_frame_quality` | dict | solver | webui/diagnostics |
 | `imu_calib_n`, `imu_calib_quality`, `imu_calib_C` | varies | solver | comms |
 | `fov_deg` | float | solver (post-calibration) | comms, webui |
 
@@ -259,7 +261,12 @@ trio: `dark_capture {"frames":N, "exposure_s"?, "gain"?}` (cap the lens;
 median-stacks N frames into a mask saved at
 `/var/lib/diofinder/hot_pixel_mask.npz`; optional `exposure_s`/`gain` capture at
 a fixed worst-case point with snapshot-and-restore), `hot_pixel_status`, and
-`hot_pixel_clear`.
+`hot_pixel_clear`. `frame_get {"after_seq"?}` returns the newest camera frame
+(base64 u8 + shape + seq) via the solver's FrameSlots-bracketed read — never
+torn by a concurrent camera write; chain `after_seq` for strictly consecutive
+burst frames (the webui live view, debug bundles, and A/B captures all use it,
+falling back to a direct SHM read labeled `frames_synced: False` only when the
+daemon is down).
 
 1. Add an `if cmd == "my_command":` branch anywhere in the function.
 2. Read arguments from the `args` dict (always a plain dict, may be empty).
@@ -326,10 +333,17 @@ versions; they appear in the solver startup log, the `version` maint command
 (old → new, or a loud "NOT refreshed" warning) both after the wheel step and as
 the final lines of the run — a silently stale wheel has masqueraded as an
 application regression before (v0.11.15 code + pre-v0.1.3 olive-solve = no
-blind-hint fallback = post-slew re-acquisition deadlock). The solve hint cone
-is `max(2°, 2.5×` the IMU-measured rotation`)` since v0.11.18: the delta is
-applied in the IMU body frame, so the hint error can reach ~2× the slew angle
-(measured 1.76×); the old 1.5× cone could exclude truth entirely.
+blind-hint fallback = post-slew re-acquisition deadlock). The solve hint applies the
+IMU delta in the **camera frame** since v0.11.22 when a quality-gated fit is
+available: `diofinder/imu_frame.py` Kabsch-fits the IMU-body→camera rotation
+from the 3-D rotation-vector pairs harvested between consecutive solves
+(gates: ≥4 magnitude-consistent pairs, axis diversity ≥0.25, R²≥0.9 — an
+alt-only slew history is refused as unobservable), publishes it as
+`shared_cfg["imu_frame_R"]`, and the hint cone tightens to 1.2× the measured
+rotation. Without a fit the defensive body-frame path remains: cone
+`max(2°, 2.5×` the rotation`)` (v0.11.18 — the raw body-frame delta was
+measured landing 1.76× the slew angle from truth; the old 1.5× cone could
+exclude truth entirely). olive-solve ≥0.1.3's blind fallback backstops both.
 
 Detection is routed through `diofinder/bg_cache.py::BackgroundCache`, not by calling
 `detect_stars` directly. This gives three composable background strategies, all

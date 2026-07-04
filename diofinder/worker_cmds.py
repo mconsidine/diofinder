@@ -79,6 +79,10 @@ SOLVER_OP_HOT_PIXEL_STATUS = "hot_pixel_status"
 SOLVER_OP_TRACKING_STATUS = "tracking_status"
 # Clear the hot-pixel mask (delete file + unload). args: {}.
 SOLVER_OP_HOT_PIXEL_CLEAR = "hot_pixel_clear"
+# Return the newest published camera frame (bytes + shape + seq), read via
+# the FrameSlots protocol so it can never be torn by a concurrent camera
+# write. Serves webui frame displays, debug bundles, and A/B captures.
+SOLVER_OP_FRAME_GET = "frame_get"
 
 
 # ----- Camera commands -----

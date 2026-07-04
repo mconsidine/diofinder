@@ -49,6 +49,7 @@ from diofinder.worker_cmds import (
     SOLVER_OP_SOLVE_CENTROIDS, SOLVER_OP_BG_CACHE_STATUS,
     SOLVER_OP_SET_DB, SOLVER_OP_DARK_CAPTURE,
     SOLVER_OP_HOT_PIXEL_STATUS, SOLVER_OP_HOT_PIXEL_CLEAR,
+    SOLVER_OP_FRAME_GET,
     SOLVER_OP_TRACKING_STATUS,
     SOLVER_OP_AUTO_TUNE_EVAL,
     CAMERA_OP_GET_EXPOSURE, CAMERA_OP_SET_EXPOSURE, CAMERA_OP_SET_GAIN,
@@ -2204,6 +2205,28 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             if not reply.ok:
                 return MaintResponse(ok=False, error=reply.error)
             return MaintResponse(ok=True, result=reply.result)
+
+        if cmd == "frame_get":
+            # Newest camera frame via the solver's FrameSlots-bracketed read
+            # (never torn by a concurrent camera write). Serves the webui
+            # live view, debug bundles, and A/B captures; args:
+            # {"after_seq": N} waits (<=2 s solver-side) for a frame newer
+            # than N so bursts can chain strictly consecutive frames.
+            try:
+                after = int(args.get("after_seq", -1))
+            except (ValueError, TypeError):
+                after = -1
+            reply = _call_solver(SOLVER_OP_FRAME_GET, {"after_seq": after},
+                                 ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
+                                 timeout_s=6.0)
+            if reply is None:
+                return MaintResponse(ok=False, error="solver did not respond")
+            if not reply.ok:
+                return MaintResponse(ok=False, error=reply.error)
+            import base64
+            r = dict(reply.result)
+            r["data_b64"] = base64.b64encode(r.pop("data")).decode("ascii")
+            return MaintResponse(ok=True, result=r)
 
         if cmd == "hot_pixel_status":
             reply = _call_solver(SOLVER_OP_HOT_PIXEL_STATUS, {},

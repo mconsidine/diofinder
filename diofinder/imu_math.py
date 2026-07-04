@@ -41,6 +41,16 @@ def quat_to_rotvec(q):
     return (x * scale, y * scale, z * scale)
 
 
+def rotvec_to_quat(r):
+    """Inverse of quat_to_rotvec: rotation vector (radians) -> unit quaternion."""
+    rx, ry, rz = r
+    angle = math.sqrt(rx*rx + ry*ry + rz*rz)
+    if angle < 1e-12:
+        return (1.0, 0.5*rx, 0.5*ry, 0.5*rz)   # small-angle, matches quat_to_rotvec
+    s = math.sin(angle / 2.0) / angle
+    return (math.cos(angle / 2.0), rx*s, ry*s, rz*s)
+
+
 def quat_delta_rotvec(q_now, q_ref):
     """
     Rotation vector (in q_ref's coordinate frame) for the rotation that

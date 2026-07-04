@@ -39,6 +39,63 @@ app.jinja_env.filters['log10'] = \
     lambda x: math.log10(float(x)) if float(x) > 0 else -3
 
 
+def _shm_frame_fallback(height, width):
+    """Direct SHM read of the first openable slot - the pre-frame_get path.
+
+    Kept ONLY as a fallback for when the daemon is down (so the live view can
+    still show something): the read ignores the FrameSlots protocol, so the
+    frame may be TORN (camera writing that slot concurrently). Callers label
+    frames from this path unsynced."""
+    import numpy as np
+    from multiprocessing import shared_memory, resource_tracker as _rt
+    from diofinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
+    for i in range(NUM_BUFFERS):
+        try:
+            shm = shared_memory.SharedMemory(name=f"{SHM_PREFIX}_{i}",
+                                             create=False)
+            try:
+                _rt.unregister(shm._name, "shared_memory")
+            except Exception:
+                pass
+            frame = np.ndarray((height, width), dtype=np.uint8,
+                               buffer=shm.buf).copy()
+            shm.close()
+            return frame
+        except Exception:
+            continue
+    return None
+
+
+def _daemon_frame(after_seq=-1, timeout=8.0):
+    """Newest camera frame via the daemon's frame_get maint command
+    (FrameSlots-bracketed in the solver - can never be torn by a concurrent
+    camera write).
+
+    Returns (frame u8 ndarray | None, seq, synced). after_seq >= 0 waits
+    solver-side for a frame NEWER than that sequence - chain it for strictly
+    consecutive burst frames. Falls back to the direct-SHM read (seq -1,
+    synced False) when the daemon is unreachable."""
+    import base64
+    import numpy as np
+    r = _safe_call("frame_get", {"after_seq": int(after_seq)}, timeout=timeout)
+    if r.ok and r.result and r.result.get("data_b64"):
+        try:
+            shape = r.result.get("shape") or [0, 0]
+            buf = base64.b64decode(r.result["data_b64"])
+            fr = np.frombuffer(buf, dtype=np.uint8)
+            if fr.size == int(shape[0]) * int(shape[1]) and fr.size > 0:
+                return (fr.reshape(int(shape[0]), int(shape[1])).copy(),
+                        int(r.result.get("seq", -1)), True)
+        except Exception:
+            pass
+    try:
+        ecfg = _load_cfg_cached()
+        h, w = ecfg.frame_height, ecfg.frame_width
+    except Exception:
+        h, w = 760, 960
+    return _shm_frame_fallback(h, w), -1, False
+
+
 def _safe_call(cmd, args=None, timeout=15.0):
     """Call the maintenance daemon; return MaintResponse(ok=False) on any connection error."""
     try:
@@ -394,20 +451,7 @@ def bg_jpg():
     except Exception:
         ecfg, W, H = None, 960, 760
 
-    from diofinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
-    frame = None
-    for i in range(NUM_BUFFERS):
-        try:
-            shm = shared_memory.SharedMemory(name=f"{SHM_PREFIX}_{i}", create=False)
-            try:
-                _rt.unregister(shm._name, "shared_memory")
-            except Exception:
-                pass
-            frame = np.ndarray((H, W), dtype=np.uint8, buffer=shm.buf).copy()
-            shm.close()
-            break
-        except Exception:
-            continue
+    frame, _seq, _synced = _daemon_frame(timeout=3.0)
     if frame is None:
         return "camera not running", 503, {"Content-Type": "text/plain"}
 
@@ -1327,23 +1371,7 @@ def frame_jpg():
     cx = _bs_cache["cx"] if _bs_cache["cx"] is not None else width  // 2
     cy = _bs_cache["cy"] if _bs_cache["cy"] is not None else height // 2
 
-    from diofinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
-    frame = None
-    for i in range(NUM_BUFFERS):
-        try:
-            shm = shared_memory.SharedMemory(name=f"{SHM_PREFIX}_{i}", create=False)
-            try:
-                _rt.unregister(shm._name, "shared_memory")
-            except Exception:
-                pass
-            frame = np.ndarray(
-                (height, width), dtype=np.uint8, buffer=shm.buf,
-            ).copy()
-            shm.close()
-            break
-        except Exception:
-            continue
-
+    frame, _seq, _synced = _daemon_frame(timeout=3.0)
     if frame is None:
         return "camera not running", 503, {"Content-Type": "text/plain"}
 
@@ -1430,22 +1458,7 @@ def _read_focus_data():
     except Exception:
         width, height = 960, 760
 
-    from diofinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
-    frame = None
-    for i in range(NUM_BUFFERS):
-        try:
-            shm = shared_memory.SharedMemory(name=f"{SHM_PREFIX}_{i}", create=False)
-            try:
-                _rt.unregister(shm._name, "shared_memory")
-            except Exception:
-                pass
-            frame = np.ndarray((height, width), dtype=np.uint8,
-                               buffer=shm.buf).copy()
-            shm.close()
-            break
-        except Exception:
-            continue
-
+    frame, _seq, _synced = _daemon_frame(timeout=3.0)
     if frame is None:
         return None
 
@@ -1645,18 +1658,19 @@ def debug_collect():
         cx   = int(round(bs["x"])) if bs else W // 2
         cy   = int(round(bs["y"])) if bs else H // 2
 
+        _burst = {"last_seq": -1, "synced": True}
+
         def _capture_frame():
-            for i in range(NUM_BUFFERS):
-                try:
-                    shm = shared_memory.SharedMemory(
-                        name=f"{SHM_PREFIX}_{i}", create=False)
-                    frame = np.ndarray(
-                        (H, W), dtype=np.uint8, buffer=shm.buf).copy()
-                    shm.close()
-                    return frame
-                except Exception:
-                    continue
-            return None
+            # Chain after_seq: the burst is then STRICTLY CONSECUTIVE
+            # solver frames (the temporal-cache reconstruction premise)
+            # and can never be torn. Direct-SHM fallback (daemon down) is
+            # labeled unsynced in the bundle metadata.
+            fr, seq, synced = _daemon_frame(after_seq=_burst["last_seq"])
+            if fr is not None and synced:
+                _burst["last_seq"] = seq
+            elif fr is not None:
+                _burst["synced"] = False
+            return fr
 
         def _save_frame_pair(zf, idx, frame, with_display=True):
             # Raw grayscale PNG — the solver's food; saved for EVERY frame so an
@@ -1771,6 +1785,9 @@ def debug_collect():
         except Exception:
             pass
         lines.append(f"frames_in_bundle: {frames_saved}")
+        # False = at least one frame came from the direct-SHM fallback
+        # (daemon down): frames may be torn / non-consecutive.
+        lines.append(f"frames_synced: {_burst['synced']}")
         if status.ok and status.result:
             r = status.result
             lines.append(f"test_mode: {r.get('test_mode')}")
@@ -1847,20 +1864,16 @@ def _bgrun_capture(frames_dir, n_target, max_seconds):
     ecfg = load_config()
     W, H = ecfg.frame_width, ecfg.frame_height
 
+    _cap = {"last_seq": -1}
+
     def read_latest():
-        for i in range(NUM_BUFFERS):
-            try:
-                shm = shared_memory.SharedMemory(name=f"{SHM_PREFIX}_{i}", create=False)
-                try:
-                    _rt.unregister(shm._name, "shared_memory")
-                except Exception:
-                    pass
-                fr = np.ndarray((H, W), dtype=np.uint8, buffer=shm.buf).copy()
-                shm.close()
-                return fr
-            except Exception:
-                continue
-        return None
+        # frame_get with after_seq chaining: distinct, untorn, consecutive
+        # frames (replaces the identical-frame dedupe below as the primary
+        # freshness mechanism; the dedupe stays for the SHM fallback path).
+        fr, seq, synced = _daemon_frame(after_seq=_cap["last_seq"])
+        if fr is not None and synced:
+            _cap["last_seq"] = seq
+        return fr
 
     frames_dir.mkdir(parents=True, exist_ok=True)
     frames, peak, last = [], 0, None
