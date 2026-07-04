@@ -53,7 +53,7 @@ from diofinder.worker_cmds import (
     SOLVER_OP_SET_DB, SOLVER_OP_DARK_CAPTURE,
     SOLVER_OP_HOT_PIXEL_STATUS, SOLVER_OP_HOT_PIXEL_CLEAR,
     SOLVER_OP_FRAME_GET,
-    SOLVER_OP_TRACKING_STATUS,
+    SOLVER_OP_TRACKING_STATUS, SOLVER_OP_SOLVE_STATS,
     SOLVER_OP_AUTO_TUNE_EVAL,
     CAMERA_OP_GET_EXPOSURE, CAMERA_OP_SET_EXPOSURE, CAMERA_OP_SET_GAIN,
 )
@@ -2427,6 +2427,15 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 return MaintResponse(ok=False, error=reply.error)
             return MaintResponse(ok=True, result=reply.result)
 
+        if cmd == "display_start":
+            # Web-UI live-view keepalive: arm the solver's demand-gated
+            # display-segment writes for a short TTL. Cheap — one shared_cfg
+            # write. The browser re-arms every couple of seconds while the
+            # page polls; when it stops, the writes lapse and the solver
+            # stops paying the copy (P4).
+            ctx.shared_cfg["display_wanted_until"] = time.monotonic() + 5.0
+            return MaintResponse(ok=True, result={"armed_s": 5.0})
+
         if cmd == "frame_get":
             # Newest camera frame via the solver's FrameSlots-bracketed read
             # (never torn by a concurrent camera write). Serves the webui
@@ -2485,6 +2494,21 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             reply = _cached_call_solver(SOLVER_OP_TRACKING_STATUS,
                                         ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
                                         ttl_s=0.5)
+            if reply is None:
+                return MaintResponse(ok=False, error="solver did not respond")
+            if not reply.ok:
+                return MaintResponse(ok=False, error=reply.error)
+            return MaintResponse(ok=True, result=reply.result)
+
+        if cmd == "solve_stats":
+            # Per-successful-solve records (FULL vs TRACKING) for the tracking
+            # A/B harness. args: {"after": epoch} for only-newer records.
+            try:
+                after = float(args.get("after", -1.0))
+            except (TypeError, ValueError):
+                after = -1.0
+            reply = _call_solver(SOLVER_OP_SOLVE_STATS, {"after": after},
+                                 ctx.solver_cmd_q, ctx.solver_cmd_reply_q)
             if reply is None:
                 return MaintResponse(ok=False, error="solver did not respond")
             if not reply.ok:

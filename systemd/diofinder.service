@@ -19,7 +19,7 @@ RuntimeDirectoryMode=0750
 # Clean up stale IPC left by an unclean exit before starting. The '-' prefix
 # makes a failure non-fatal (e.g. nothing to remove). The shell glob needs a
 # shell, so these run via /bin/sh -c.
-ExecStartPre=-/bin/sh -c 'rm -f /dev/shm/diofinder_frame_*'
+ExecStartPre=-/bin/sh -c 'rm -f /dev/shm/diofinder_frame_* /dev/shm/diofinder_display'
 ExecStartPre=-/bin/sh -c 'rm -f /run/diofinder/maint.sock'
 
 ExecStart=/opt/diofinder/venv/bin/python -m diofinder.diofinder_main

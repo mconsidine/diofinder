@@ -77,6 +77,11 @@ SOLVER_OP_HOT_PIXEL_STATUS = "hot_pixel_status"
 # Tracking-mode status: {"enabled", "state", "frames_tracked", "frames_full",
 # "recover_fail"}.
 SOLVER_OP_TRACKING_STATUS = "tracking_status"
+# Return the rolling per-successful-solve records (FULL vs TRACKING) for the
+# tracking A/B harness. args: {"after": epoch_monotonic} to fetch only newer
+# records. Result: {"records": [[epoch, tracked, solve_ms, extract_ms,
+# matches, ra, dec], ...], "now": monotonic}.
+SOLVER_OP_SOLVE_STATS = "solve_stats"
 # Clear the hot-pixel mask (delete file + unload). args: {}.
 SOLVER_OP_HOT_PIXEL_CLEAR = "hot_pixel_clear"
 # Return the newest published camera frame (bytes + shape + seq), read via

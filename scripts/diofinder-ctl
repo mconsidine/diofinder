@@ -191,6 +191,20 @@ def cmd_autotune(args, parser):
                     maint_call("auto_tune_status"))
 
 
+def cmd_ab_tracking(args, parser):
+    # Delegate to the harness module (it drives the maint socket itself and
+    # restores tracking_enabled on exit).
+    try:
+        from tests.ab_tracking import main as ab_main
+    except Exception:
+        import os
+        sys.path.insert(0, "/opt/diofinder")
+        from tests.ab_tracking import main as ab_main
+    argv = ["--window", str(args.window), "--settle", str(args.settle),
+            "--lock-timeout", str(args.lock_timeout)]
+    return ab_main(argv)
+
+
 def cmd_raw(args, parser):
     try:
         obj = json.loads(args.json)
@@ -261,6 +275,16 @@ def main():
     p_at.add_argument("--wait", action="store_true",
                       help="Poll until the sweep finishes, then print result")
 
+    p_ab = sub.add_parser("ab-tracking",
+                          help="A/B FULL vs TRACKING on the live sky "
+                               "(scope stationary, pointed at stars)")
+    p_ab.add_argument("--window", type=float, default=30.0,
+                      help="measurement seconds per phase (default 30)")
+    p_ab.add_argument("--settle", type=float, default=3.0,
+                      help="settle seconds after a mode switch (default 3)")
+    p_ab.add_argument("--lock-timeout", type=float, default=15.0,
+                      help="max seconds to wait for TRACKING lock (default 15)")
+
     p_raw = sub.add_parser("raw", help="Send a raw JSON request")
     p_raw.add_argument("json", help='e.g. \'{"cmd":"status","args":{}}\'')
 
@@ -276,6 +300,7 @@ def main():
         "gain": cmd_gain,
         "seeing": cmd_seeing,
         "auto-tune": cmd_autotune,
+        "ab-tracking": cmd_ab_tracking,
         "raw": cmd_raw,
     }
     try:
