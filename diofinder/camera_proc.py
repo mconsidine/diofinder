@@ -297,6 +297,8 @@ def camera_main(slots, camera_cmd_q, camera_cmd_reply_q, cfg,
     last_log = time.monotonic()
 
     try:
+        test_mode_cached = False
+        test_mode_read_t = -10.0
         while True:
             for cmd in _drain_cmd_queue(camera_cmd_q):
                 reply = _handle_camera_cmd(cmd, cam, current_state, shared_cfg)
@@ -305,9 +307,17 @@ def camera_main(slots, camera_cmd_q, camera_cmd_reply_q, cfg,
                 except Exception as e:
                     log.warning("Could not enqueue camera reply: %s", e)
 
-            # Determine active mode
+            # Determine active mode. TTL-cached: the bare get was one
+            # Manager RPC per frame on CPU 3 — a solver rayon core (audit
+            # 2026-07 P10). test_mode flips via a maint command, so a 1 s
+            # stale read is invisible.
+            now_tm = time.monotonic()
             if shared_cfg is not None:
-                use_test = bool(shared_cfg.get("test_mode", test_frame is not None))
+                if now_tm - test_mode_read_t > 1.0:
+                    test_mode_cached = bool(
+                        shared_cfg.get("test_mode", test_frame is not None))
+                    test_mode_read_t = now_tm
+                use_test = test_mode_cached
             else:
                 use_test = test_frame is not None
 

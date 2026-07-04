@@ -148,8 +148,13 @@ def imu_thread(shared_cfg, stop_event=None):
 
     Publishes to shared_cfg:
         "imu_available"  bool   — True when sensor is responding
-        "imu_q"          tuple  — (w, x, y, z) most recent quaternion
-        "imu_t"          float  — monotonic timestamp of last successful read
+        "imu"            tuple  — ((w, x, y, z) quaternion, monotonic read
+                                  timestamp) as ONE atomic composite key:
+                                  halves the 20 Hz write RPCs and the pair
+                                  can never tear between two Manager writes
+                                  (audit 2026-07 P7). Readers unpack via
+                                  imu_math.get_imu_qt (falls back to the
+                                  legacy split imu_q / imu_t keys).
     """
     smbus2 = _import_smbus2()
     if smbus2 is None:
@@ -181,8 +186,7 @@ def imu_thread(shared_cfg, stop_event=None):
         try:
             q = _read_quaternion(bus, addr)
             if q is not None:
-                shared_cfg["imu_q"] = q
-                shared_cfg["imu_t"] = t0
+                shared_cfg["imu"] = (q, t0)
         except Exception as e:
             log.warning("BNO055 read error (%s) — will re-probe", e)
             try:

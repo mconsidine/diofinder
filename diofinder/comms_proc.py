@@ -40,7 +40,8 @@ from queue import Empty
 from diofinder import config as cfg_mod
 from diofinder.align import AlignRequest, AlignResult, CommsAlignState
 from diofinder.imu_math import (quat_delta_rotvec, alpha_beta_step,
-                                rotvec_to_quat, quat_mul, quat_to_radec)
+                                rotvec_to_quat, quat_mul, quat_to_radec,
+                                get_imu_qt)
 from diofinder.imu_frame import apply_rotation as _imu_apply_rotation
 from diofinder.maint import MaintRequest, MaintResponse, SOCKET_PATH
 from diofinder.worker_cmds import (
@@ -1099,8 +1100,7 @@ def _imu_predict(shared_cfg):
     """Return (ra_deg, dec_deg) predicted from IMU rotation since last solve, or None if unavailable."""
     if not shared_cfg.get("imu_available", False):
         return None
-    q_now  = shared_cfg.get("imu_q")
-    imu_t  = shared_cfg.get("imu_t", 0.0)
+    q_now, imu_t = get_imu_qt(shared_cfg)
     if q_now is None or time.monotonic() - imu_t > 2.0:
         return None
     ref = shared_cfg.get("imu_ref")
@@ -1198,8 +1198,12 @@ def _imu_predict_smoothed(shared_cfg):
         if z is None:
             st.clear()             # re-snap on the next valid sample
             return None
-        imu_t = shared_cfg.get("imu_t", 0.0)
-        ref_t = shared_cfg.get("imu_ref_t", 0.0)
+        imu_t = get_imu_qt(shared_cfg)[1]
+        # Re-anchor timestamp from the atomic imu_ref tuple (v0.11.24 solvers
+        # no longer publish the split imu_ref_t key); fall back to the split
+        # key for older solvers.
+        _ref = shared_cfg.get("imu_ref")
+        ref_t = _ref[4] if _ref is not None else shared_cfg.get("imu_ref_t", 0.0)
         # Snap (no smoothing) on first sample, a fresh solve anchor, a stale
         # gap, or a non-increasing timestamp. Keeps plate solves authoritative
         # and avoids smoothing across a coordinate re-baseline.
@@ -1248,25 +1252,45 @@ def _sync_clock(sl, sg, sc):
         log.warning("Clock sync error: %s", e)
 
 
+# Snapshot cache for the :GR/:GD poll pair. :GD virtually always follows
+# :GR within milliseconds and the alpha-beta filter already dedupes on
+# imu_t, so <=100 ms staleness is invisible — while cutting up to 4 full-dict
+# Manager RPCs per poll cycle down to 2 per 100 ms window (audit 2026-07 P3).
+_POLL_SNAP_TTL_S = 0.1
+_poll_snap_lock = threading.Lock()
+_poll_snap = {"t": 0.0, "cfg": None, "sol": None}
+
+
+def _poll_snapshots(shared_cfg, latest_solution):
+    """(shared_cfg snapshot, latest_solution snapshot) with a 100 ms TTL."""
+    now = time.monotonic()
+    with _poll_snap_lock:
+        if _poll_snap["cfg"] is None or now - _poll_snap["t"] > _POLL_SNAP_TTL_S:
+            _poll_snap["cfg"] = dict(shared_cfg)
+            _poll_snap["sol"] = dict(latest_solution)
+            _poll_snap["t"] = now
+        return _poll_snap["cfg"], _poll_snap["sol"]
+
+
 def _handle_lx200_command(cmd, latest_solution, align_state, time_state,
                           cfg, shared_cfg,
                           align_request_q, align_response_q, ctx=None):
     """Dispatch one LX200 command string and return the raw bytes reply."""
     if cmd == ":GR":
-        # dict() = ONE Manager IPC round-trip; the prediction path then reads
-        # ~14 keys locally instead of issuing ~14 individual RPCs per poll on
-        # CPU 0 (shared with comms/webui/IMU writer). Also makes the multi-key
-        # read coherent — no solve can land between key reads.
-        pred = _imu_predict_smoothed(dict(shared_cfg))
+        # TTL-cached snapshots = at most TWO Manager IPC round-trips per
+        # 100 ms window shared across :GR and :GD; the prediction path then
+        # reads ~14 keys locally. Also makes the multi-key read coherent —
+        # no solve can land between key reads.
+        scfg, sol = _poll_snapshots(shared_cfg, latest_solution)
+        pred = _imu_predict_smoothed(scfg)
         if pred is not None:
             return _format_ra(pred[0] / 15.0).encode("ascii")
-        sol = dict(latest_solution)
         return _format_ra(sol.get("ra_deg", 0.0) / 15.0).encode("ascii")
     if cmd == ":GD":
-        pred = _imu_predict_smoothed(dict(shared_cfg))
+        scfg, sol = _poll_snapshots(shared_cfg, latest_solution)
+        pred = _imu_predict_smoothed(scfg)
         if pred is not None:
             return _format_dec(pred[1]).encode("ascii")
-        sol = dict(latest_solution)
         return _format_dec(sol.get("dec_deg", 0.0)).encode("ascii")
     if cmd == ":GW":
         return b"AT2#"
@@ -1396,18 +1420,32 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             return MaintResponse(ok=True, result=result)
 
         if cmd == "status":
+            # ONE Manager snapshot instead of ~15 individual gets — this
+            # command is polled at 0.8 Hz by the home page (audit 2026-07 P6).
+            scfg        = dict(ctx.shared_cfg)
             sol         = dict(ctx.latest_solution)
-            imu_n       = ctx.shared_cfg.get("imu_calib_n", 0)
-            imu_quality = ctx.shared_cfg.get("imu_calib_quality", 0.0)
-            imu_avail   = ctx.shared_cfg.get("imu_available", False)
+            imu_n       = scfg.get("imu_calib_n", 0)
+            imu_quality = scfg.get("imu_calib_quality", 0.0)
+            imu_avail   = scfg.get("imu_available", False)
             imu_active  = imu_avail and imu_n >= 3 and imu_quality >= 0.85
+            imu_qv, imu_t = get_imu_qt(scfg)
+            # Post-solve reference from the atomic tuple (split keys are no
+            # longer published); fall back to them for older solvers.
+            _ref = scfg.get("imu_ref")
+            if _ref is not None:
+                ref_q, ref_ra, ref_dec, ref_roll = _ref[:4]
+            else:
+                ref_q    = scfg.get("imu_ref_q")
+                ref_ra   = scfg.get("imu_ref_ra_deg")
+                ref_dec  = scfg.get("imu_ref_dec_deg")
+                ref_roll = scfg.get("imu_ref_roll_deg")
             return MaintResponse(ok=True, result={
                 "solution":  sol,
                 "boresight": {
-                    "y": ctx.shared_cfg.get("boresight_y", ctx.cfg.boresight_y),
-                    "x": ctx.shared_cfg.get("boresight_x", ctx.cfg.boresight_x),
+                    "y": scfg.get("boresight_y", ctx.cfg.boresight_y),
+                    "x": scfg.get("boresight_x", ctx.cfg.boresight_x),
                 },
-                "fov_deg":        ctx.shared_cfg.get("fov_deg", ctx.cfg.fov_deg),
+                "fov_deg":        scfg.get("fov_deg", ctx.cfg.fov_deg),
                 "config_summary": ctx.cfg.summary(),
                 "imu": {
                     "available": imu_avail,
@@ -1417,18 +1455,17 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     # Raw IMU output + post-solve reference, so a debug bundle
                     # records the actual attitude reading at capture time, not
                     # just whether the IMU is active.
-                    "q":            ctx.shared_cfg.get("imu_q"),
-                    "t":            ctx.shared_cfg.get("imu_t", 0.0),
-                    "age_s":        (round(time.monotonic()
-                                           - ctx.shared_cfg.get("imu_t", 0.0), 3)
-                                     if ctx.shared_cfg.get("imu_t") else None),
-                    "ref_q":        ctx.shared_cfg.get("imu_ref_q"),
-                    "ref_ra_deg":   ctx.shared_cfg.get("imu_ref_ra_deg"),
-                    "ref_dec_deg":  ctx.shared_cfg.get("imu_ref_dec_deg"),
-                    "ref_roll_deg": ctx.shared_cfg.get("imu_ref_roll_deg"),
+                    "q":            imu_qv,
+                    "t":            imu_t,
+                    "age_s":        (round(time.monotonic() - imu_t, 3)
+                                     if imu_t else None),
+                    "ref_q":        ref_q,
+                    "ref_ra_deg":   ref_ra,
+                    "ref_dec_deg":  ref_dec,
+                    "ref_roll_deg": ref_roll,
                 },
                 "solver_backend": "sycamore",
-                "test_mode":      ctx.shared_cfg.get("test_mode", False),
+                "test_mode":      scfg.get("test_mode", False),
             })
 
         if cmd == "boresight_show":

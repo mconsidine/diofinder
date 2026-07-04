@@ -82,6 +82,14 @@ HAS_BLOCK_CACHE = HAS_BLOCK_MEDIANS and CACHE_HAS_BLOCK_OFFSETS
 # functions don't support inspect.signature-based kwarg probing reliably.
 HAS_BG_IMAGE = HAS_CACHE and bool(getattr(star_detect, "HAS_BG_IMAGE", False))
 
+# Modes composable with the per-row cached model. block_percentile is
+# additionally cache-compatible on sycamore>=0.12 via a block-median grid
+# (handled separately in detect()). column_percentile,
+# row_column_percentile, and uniform_mean need full-image spatial
+# preprocessing and always force the per-frame path.
+CACHE_COMPATIBLE_MODES = frozenset(
+    {"row_percentile", "line_median", "top_hat"})
+
 
 class CacheState(Enum):
     WARMING_UP = auto()  # not enough frames collected yet
@@ -361,13 +369,6 @@ class BackgroundCache:
         per-frame) AND leaves the cache's model-kind tracking untouched. Used by
         the offline auto-tune sweep to evaluate a candidate bg_mode cleanly
         without triggering a live model rebuild for the wrong mode."""
-        # Modes composable with the per-row cached model. block_percentile is
-        # additionally cache-compatible on sycamore>=0.12 via a block-median
-        # grid (handled separately below). column_percentile,
-        # row_column_percentile, and uniform_mean need full-image spatial
-        # preprocessing and always force the per-frame path.
-        CACHE_COMPATIBLE_MODES = frozenset(
-            {"row_percentile", "line_median", "top_hat"})
         want_tophat = (bg_mode == "top_hat")
         if want_tophat and not HAS_TOPHAT:
             # Old wheel: silently fall back to the robust per-row median.

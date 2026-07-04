@@ -27,7 +27,7 @@ from diofinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
 from diofinder.align import AlignResult
 from diofinder.calibration import FovCalibrator, FallbackGate
 from diofinder.imu_math import (quat_delta_rotvec, quat_to_rotvec,
-                                rotvec_to_quat)
+                                rotvec_to_quat, get_imu_qt)
 from diofinder import imu_frame as _imu_frame
 from diofinder.polar_run import PolarAligner
 from diofinder import frame_health
@@ -463,7 +463,8 @@ def _handle_solver_cmd(cmd, calibrator, polar,
                     "peak": local_peak, "solve_ms": 0.0,
                     "extract_ms": round(extract_ms, 2)})
             # sycamore returns (x=col, y=row, ...); tetra3 wants (row, col).
-            cents = np.array([[s[1], s[0]] for s in _raw], dtype=np.float64)
+            cents = (np.asarray(_raw, dtype=np.float64)[:, [1, 0]]
+                     if _raw else np.empty((0, 2), dtype=np.float64))
             timeout_ms = int(a.get(
                 "solve_timeout_ms",
                 (shared_cfg or {}).get("solve_timeout_ms", cfg.solve_timeout_ms)))
@@ -536,8 +537,7 @@ def _imu_propagate_hint(last_sky_q, last_imu_q, shared_cfg):
         return None, 0.0
     if last_imu_q is None or not shared_cfg.get("imu_available", False):
         return last_sky_q, 0.1
-    q_cur = shared_cfg.get("imu_q")
-    imu_t = shared_cfg.get("imu_t", 0.0)
+    q_cur, imu_t = get_imu_qt(shared_cfg)
     if q_cur is None or time.monotonic() - imu_t > 2.0:
         return last_sky_q, 0.1
 
@@ -585,6 +585,12 @@ def _imu_propagate_hint(last_sky_q, last_imu_q, shared_cfg):
     return (wh, xh, yh, zh), uncertainty_deg
 
 
+# Rolling IMU<->sky calibration pairs. Process-local by design: only the
+# solver writes and reads them, so publishing the list through shared_cfg
+# just fattened every snapshot RPC in the system (audit 2026-07 P2).
+_imu_calib_pairs = []
+
+
 def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
                           snap=None, sky_q=None, prev_sky_q=None):
     """Record current IMU quaternion alongside the just-solved sky position.
@@ -599,28 +605,26 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
     src = snap if snap is not None else shared_cfg
     if not src.get("imu_available", False):
         return
-    q_now = src.get("imu_q")
-    imu_t = src.get("imu_t", 0.0)
+    q_now, imu_t = get_imu_qt(src)
     if q_now is None or time.monotonic() - imu_t > 2.0:
         return
-    q_prev    = src.get("imu_ref_q")
-    ra_prev   = src.get("imu_ref_ra_deg")
-    dec_prev  = src.get("imu_ref_dec_deg")
-    roll_prev = src.get("imu_ref_roll_deg", 0.0)
+    # Previous reference from the atomic tuple (this function is its only
+    # writer, so the loop snapshot is authoritative). The split imu_ref_*
+    # keys are no longer published — they cost five extra Manager RPCs per
+    # solve and every reader has moved to the tuple (audit 2026-07 P1).
+    prev_ref = src.get("imu_ref")
+    if prev_ref is not None:
+        q_prev, ra_prev, dec_prev, roll_prev = prev_ref[:4]
+    else:
+        q_prev, ra_prev, dec_prev, roll_prev = None, None, None, 0.0
     _ref_t = time.monotonic()
-    # Atomic tuple FIRST: comms' pointing prediction reads this single key,
-    # so it can never observe a new quaternion paired with the previous
-    # solve's RA/Dec (the split keys below are five separate Manager RPCs —
-    # kept for webui/status display compatibility).
+    # Atomic tuple: comms' pointing prediction reads this single key, so it
+    # can never observe a new quaternion paired with the previous solve's
+    # RA/Dec.
     _sky_q_t = tuple(sky_q) if sky_q is not None else None
     shared_cfg["imu_ref"] = (tuple(q_now), float(new_ra_deg),
                              float(new_dec_deg), float(new_roll_deg), _ref_t,
                              _sky_q_t)
-    shared_cfg["imu_ref_q"]        = q_now
-    shared_cfg["imu_ref_ra_deg"]   = new_ra_deg
-    shared_cfg["imu_ref_dec_deg"]  = new_dec_deg
-    shared_cfg["imu_ref_roll_deg"] = new_roll_deg
-    shared_cfg["imu_ref_t"]        = _ref_t
     if q_prev is None or ra_prev is None or dec_prev is None:
         return
     r_imu = quat_delta_rotvec(q_now, q_prev)
@@ -641,7 +645,10 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
     cos_r, sin_r = math.cos(roll_rad), math.sin(roll_rad)
     cam_r =  dra_rad * cos_r + ddec_rad * sin_r
     cam_u = -dra_rad * sin_r + ddec_rad * cos_r
-    pairs = list(src.get("imu_calib_pairs", []))
+    # Solver-local: the pairs list is written and read only by this process,
+    # and round-tripping 20 float tuples through shared_cfg inflated every
+    # dict(shared_cfg) snapshot in the system (audit 2026-07 P2).
+    pairs = _imu_calib_pairs
     # Full 3-D sky rotation vector (from consecutive SOLVED attitudes) rides
     # along with the 2-D projection: it feeds the frame-rotation fit that
     # lets the solve hint apply the IMU delta in the CAMERA frame instead of
@@ -653,7 +660,11 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
         entry = entry + (r_sky3[0], r_sky3[1], r_sky3[2])
     pairs.append(entry)
     if len(pairs) > 20:
-        pairs = pairs[-20:]
+        del pairs[:-20]
+    # Batch every calibration key into ONE Manager RPC (dict.update is a
+    # single proxy method call) instead of up to six individual writes per
+    # moving solve (audit 2026-07 P1).
+    payload = {"imu_calib_n": len(pairs)}
     if len(pairs) >= 3:
         R = np.array([[p[0], p[1], p[2]] for p in pairs])
         S = np.array([[p[3], p[4]]       for p in pairs])
@@ -662,10 +673,8 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
         ss_res = float(np.sum((S - S_pred)**2))
         ss_tot = float(np.sum((S - S.mean(axis=0))**2))
         r2 = max(0.0, 1.0 - ss_res / ss_tot) if ss_tot > 1e-15 else 0.0
-        shared_cfg["imu_calib_C"]       = C.T.flatten().tolist()
-        shared_cfg["imu_calib_quality"] = r2
-    shared_cfg["imu_calib_pairs"] = pairs
-    shared_cfg["imu_calib_n"]     = len(pairs)
+        payload["imu_calib_C"]       = C.T.flatten().tolist()
+        payload["imu_calib_quality"] = r2
     # IMU-body -> camera frame rotation (quality-gated Kabsch fit over the
     # 3-D pairs). Published only when demonstrably good; the hint path falls
     # back to the wide-cone body-frame behavior otherwise.
@@ -673,9 +682,10 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
     if len(full) >= _imu_frame.MIN_PAIRS:
         R9, quality = _imu_frame.fit_frame_rotation(
             [p[0:3] for p in full], [p[5:8] for p in full])
-        shared_cfg["imu_frame_R"] = R9
-        shared_cfg["imu_frame_quality"] = (
+        payload["imu_frame_R"] = R9
+        payload["imu_frame_quality"] = (
             quality if R9 is not None else {"rejected": str(quality)})
+    shared_cfg.update(payload)
 
 
 def solver_main(slots, latest_solution, shared_cfg,
@@ -844,6 +854,7 @@ def solver_main(slots, latest_solution, shared_cfg,
              SOLVER_HAS_VERIFY, EXTRACT_HAS_ROI)
 
     fail_streak = 0
+    dark_streak = 0
     solve_count = 0
     frame_seq = -1   # last frame sequence processed; gates re-work on stale frames
     _last_health_t = 0.0      # throttle for the exposure/contrast health warning
@@ -879,8 +890,17 @@ def solver_main(slots, latest_solution, shared_cfg,
 
             if local_peak < 20:
                 slots.release_read_slot()
-                latest_solution.update(_empty_solution(peak=local_peak))
+                # Publish the FIRST dark frame immediately (UI flips state
+                # promptly), then every 5th: dark frames carry no information
+                # beyond "alive", and at the 0.05 s exposure floor the
+                # unconditional publish was 20 Manager RPCs/s (audit 2026-07
+                # P11). Worst-case epoch cadence 5 x exposure = 5 s at a 1 s
+                # exposure — far inside the 30 s watchdog window.
+                if dark_streak % 5 == 0:
+                    latest_solution.update(_empty_solution(peak=local_peak))
+                dark_streak += 1
                 continue
+            dark_streak = 0
 
             # Drain the align queue only for frames that will actually be
             # processed: draining before the dark gate consumed a pending
@@ -954,7 +974,7 @@ def solver_main(slots, latest_solution, shared_cfg,
             if extractor_backend != "tetra3":
                 bg_cache.submit_frame(frame_buf)
             if snap.get("imu_available", False):
-                bg_cache.note_motion(snap.get("imu_q"))
+                bg_cache.note_motion(get_imu_qt(snap)[0])
             else:
                 # Un-latch _imu_feeding so solver-derived slew detection and
                 # the fail-streak invalidation take over if the IMU dies
@@ -1154,7 +1174,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                         # tetra3 solve_from_centroids expects (row, col) = (y, x).
                         # Must be float64: Rust PyO3 binding rejects float32.
                         centroids = (
-                            np.array([[s[1], s[0]] for s in _raw], dtype=np.float64)
+                            np.asarray(_raw, dtype=np.float64)[:, [1, 0]]
                             if _raw else None
                         )
             except Exception as e:
@@ -1252,7 +1272,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                     solve_q_hint, solve_hint_unc = None, 0.0
             _solve_kw = dict(
                 fov_estimate=calibrator.get_fov_estimate(),
-                fov_max_error=calibrator.get_fov_max_error(),
+                fov_max_error=calibrator.get_fov_max_error(snap),
                 solve_timeout=snap.get(
                     "solve_timeout_ms", cfg.solve_timeout_ms),
                 match_threshold=match_threshold,
@@ -1397,7 +1417,7 @@ def solver_main(slots, latest_solution, shared_cfg,
             if q_solved is not None:
                 prev_sky_q_for_ref = last_sky_q    # previous solve's attitude
                 last_sky_q       = tuple(q_solved)
-                last_solve_imu_q = snap.get("imu_q")
+                last_solve_imu_q = get_imu_qt(snap)[0]
             # --- Tracking-mode bookkeeping (success) -------------------------
             # Remember this frame's centroid (x,y) for next frame's ROI windows
             # and advance the lock-in counter. After tracking_lock_frames
