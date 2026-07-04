@@ -163,6 +163,12 @@ bg_cache_max_age_s: 60.0
 # Consecutive solve failures that invalidate the temporal cache when no IMU is
 # reporting motion (solver-derived slew detection). 0 disables.
 bg_cache_fail_invalidate: 3
+# P5 (opt-in, EXPERIMENTAL): bin each frame to the detection resolution at
+# submit and median-stack there (~2x less stack memory, ~4x faster rebuild).
+# A DIFFERENT noise estimator than the default (within ~1-2% on real sky);
+# A/B it on a clear night before enabling permanently. Live-mutable via
+# solver_params_set. No effect at detect_bin=1.
+bg_cache_bin_at_submit: false
 
 # ---- Tracking mode (experimental, opt-in) ----
 # After tracking_lock_frames consecutive confident full-frame solves, switch

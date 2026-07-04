@@ -1139,6 +1139,10 @@ def solver_main(slots, latest_solution, shared_cfg,
             # never invalidates a healthy state).
             bg_cache.note_camera_settings(
                 snap.get("camera_settings_epoch"))
+            # P5 (opt-in, A/B): live toggle of the bin-at-submit stack path.
+            # O(1) when unchanged; flushes + rebuilds on a flip.
+            bg_cache.note_bin_at_submit(
+                snap.get("bg_cache_bin_at_submit", cfg.bg_cache_bin_at_submit))
 
             # float64: Rust extracts target_sky_coord as PyReadonlyArray2<f64>
             target_sky = None

@@ -60,6 +60,7 @@ LX200-pointing consumers, and the calibration loop).
 | `detect_sigma` | float | comms (via maint) | solver |
 | `detect_bg_mode` | str | comms (via maint, incl. `seeing_set`) | solver |
 | `detect_bin` | int (1/2/4) | config file only (restart; cache is built at one binning) | solver |
+| `bg_cache_bin_at_submit` | bool | comms (via maint `solver_params_set`) | solver bg_cache (P5 opt-in; A/B before default) |
 | `detect_kernel_sigma` | float (1.0–4.0) | comms (via maint / `seeing_set`) | solver (sycamore≥0.12) |
 | `detect_max_axis_ratio` | float (0=off, else 1.5–10.0) | comms (via maint / `seeing_set`) | solver |
 | `detect_local_noise` | bool | comms (via maint) | solver (sycamore≥0.12) |
@@ -436,6 +437,17 @@ toggleable from config (and live-overridable via `shared_cfg`):
   on any exposure/gain change** (`camera_settings_epoch` → `note_camera_settings`;
   see the camera section) so mixed-pedestal frames never build a model. The temporal model is orthogonal to the per-frame mode and
   composes with `row_percentile`, `line_median`, and `top_hat`.
+
+  **`bg_cache_bin_at_submit`** (v0.11.26, opt-in, default false, live-mutable
+  via `solver_params_set`): bins each frame to the detection resolution at
+  submit (stored as uint16 block *sums*) and median-stacks there, instead of
+  stacking full-res and binning the median — ~2× less stack memory and ~4×
+  fewer median elements (the ~100–300 ms GIL-held rebuild). It is a
+  **different noise estimator** (spatial-mean and temporal-median don't
+  commute), offline-quantified within ~1–2% of the default on real sky with
+  matching star counts at the operating sigma (`tests/test_bg_cache_bin_at_submit.py`).
+  A/B on a clear night (`bg_cache_status.bin_at_submit` + `solve_stats`)
+  before flipping the default. No effect at `detect_bin=1`.
 
 A/B these on-device with `tests/diag_background.py` (e.g. `--inject-gradient 40`
 to stress the glow case); the upstream extractor harness is
