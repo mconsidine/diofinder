@@ -833,6 +833,15 @@ def solver_main(slots, latest_solution, shared_cfg,
         SOLVER_HAS_STRICT_HINT = "strict_hint" in _solve_params
     except (TypeError, ValueError):
         SOLVER_HAS_STRICT_HINT = True  # builtin without signature; current API has it
+    # olive-solve >= 0.1.6: true verify-only entry point (catalog projected
+    # through a known attitude, matched, refined — no 4-star pattern hashing).
+    # Probed on the class, which survives set_db instance swaps.
+    SOLVER_HAS_VERIFY = hasattr(solver_t3, "verify_attitude")
+    # sycamore >= 0.14: native batched window-list ROI detection (one GIL
+    # round-trip for all tracking windows instead of one per window).
+    EXTRACT_HAS_ROI = bool(getattr(_star_detect, "HAS_ROI", False))
+    log.info("tracking fast paths: verify_attitude=%s detect_stars_roi=%s",
+             SOLVER_HAS_VERIFY, EXTRACT_HAS_ROI)
 
     fail_streak = 0
     solve_count = 0
@@ -1048,15 +1057,32 @@ def solver_main(slots, latest_solution, shared_cfg,
                     # centroid (x,y) with NO IMU/sidereal shift — sub-pixel drift
                     # between frames at this cadence is < 1 px, well inside the
                     # window. A slew is caught by the _slewing fallback above.
-                    _roi_stars, _n_hit = _tracking_mod.roi_detect(
-                        frame_buf,
-                        tracking_prev_xy,
-                        track_window,
-                        _window_detect,
-                        bin=int(cfg.detect_bin),
-                        max_stars=int(
-                            snap.get("max_solve_stars", cfg.max_solve_stars)),
-                    )
+                    _track_max = int(
+                        snap.get("max_solve_stars", cfg.max_solve_stars))
+                    if EXTRACT_HAS_ROI:
+                        # Native window-list path (sycamore >= 0.14): the full
+                        # frame + all windows cross into Rust once; per-window
+                        # line_median floor + whole-window MAD noise built in.
+                        def _roi_fn(fr, windows):
+                            return _star_detect.detect_stars_roi(
+                                fr, windows,
+                                sigma=float(sigma),
+                                kernel_sigma=float(kernel_sigma),
+                                local_noise=bool(local_noise),
+                                max_axis_ratio=float(max_axis_ratio),
+                            )
+                        _roi_stars, _n_hit = _tracking_mod.roi_detect_native(
+                            frame_buf, tracking_prev_xy, track_window,
+                            _roi_fn, max_stars=_track_max)
+                    else:
+                        _roi_stars, _n_hit = _tracking_mod.roi_detect(
+                            frame_buf,
+                            tracking_prev_xy,
+                            track_window,
+                            _window_detect,
+                            bin=int(cfg.detect_bin),
+                            max_stars=_track_max,
+                        )
                     if len(_roi_stars) >= track_min_recover:
                         served_by_tracking = True
                         centroids = np.array(
@@ -1200,10 +1226,16 @@ def solver_main(slots, latest_solution, shared_cfg,
                 snap.get("match_threshold", cfg.match_threshold))
             match_radius = float(
                 snap.get("match_radius", cfg.match_radius))
-            # In TRACKING the search is constrained: reuse last_sky_q with a
-            # tight cone and strict_hint=True. In FULL keep the existing blind /
+            # In TRACKING the search is constrained: with olive-solve >= 0.1.6
+            # the centroids go through verify_attitude (catalog projected
+            # through last_sky_q, matched, refined — the pattern hash is
+            # skipped entirely; a NoMatch drops the lock exactly like a failed
+            # solve). On older wheels: reuse last_sky_q with a tight cone and
+            # strict_hint=True. In FULL keep the existing blind /
             # IMU-propagated hint (strict_hint=False). strict_hint is passed
             # only when the installed solver accepts it (capability-probed).
+            use_verify = (served_by_tracking and last_sky_q is not None
+                          and SOLVER_HAS_VERIFY)
             if served_by_tracking and last_sky_q is not None:
                 solve_q_hint = last_sky_q
                 solve_hint_unc = 2.0       # deg — tight cone around last solve
@@ -1235,11 +1267,28 @@ def solver_main(slots, latest_solution, shared_cfg,
             if SOLVER_HAS_STRICT_HINT:
                 _solve_kw["strict_hint"] = solve_strict
             try:
-                soln = state.solver_t3.solve_from_centroids(
-                    centroids,
-                    (cfg.frame_height, cfg.frame_width),
-                    **_solve_kw,
-                )
+                if use_verify:
+                    # Verify-only fast path: no pattern search. The hint/
+                    # window/timeout knobs are meaningless here (nothing to
+                    # bound), so pass only what verification consumes.
+                    soln = state.solver_t3.verify_attitude(
+                        centroids,
+                        (cfg.frame_height, cfg.frame_width),
+                        tuple(float(v) for v in last_sky_q),
+                        fov_estimate=calibrator.get_fov_estimate(),
+                        match_threshold=match_threshold,
+                        match_radius=match_radius,
+                        distortion=calibrator.get_distortion_estimate(),
+                        target_pixel=target_pixel,
+                        target_sky_coord=target_sky,
+                        return_matches=False,
+                    )
+                else:
+                    soln = state.solver_t3.solve_from_centroids(
+                        centroids,
+                        (cfg.frame_height, cfg.frame_width),
+                        **_solve_kw,
+                    )
             except Exception as e:
                 log.warning("solve_from_centroids raised: %s", e)
                 latest_solution.update(_empty_solution(

@@ -87,7 +87,7 @@ LX200-pointing consumers, and the calibration loop).
 | `imu_q` | tuple (w,x,y,z) | imu_thread | comms |
 | `imu_t` | float | imu_thread | comms |
 | `imu_ref_q/ra/dec/roll/t` | varies | solver (post-solve) | comms (display); prediction reads the atomic `imu_ref` tuple |
-| `imu_ref` | tuple (q, ra, dec, roll, t) | solver (post-solve, single RPC) | comms LX200 pointing (tear-proof reference) |
+| `imu_ref` | tuple (q, ra, dec, roll, t, sky_q) | solver (post-solve, single RPC) | comms LX200 pointing (tear-proof reference). `sky_q` (the solved attitude quaternion, v0.11.23) enables the exact frame-corrected prediction; comms still accepts 5-tuples from older solvers |
 | `solver_busy_t` | float | solver (set_db load window) | comms watchdog (skips enforcement while fresh, 120 s bound) |
 | `imu_frame_R` | list[9] or None | solver (quality-gated Kabsch fit post-solve) | solver hint path (body→camera delta conjugation) |
 | `imu_frame_quality` | dict | solver | webui/diagnostics |
@@ -344,6 +344,14 @@ rotation. Without a fit the defensive body-frame path remains: cone
 `max(2°, 2.5×` the rotation`)` (v0.11.18 — the raw body-frame delta was
 measured landing 1.76× the slew angle from truth; the old 1.5× cone could
 exclude truth entirely). olive-solve ≥0.1.3's blind fallback backstops both.
+Since v0.11.23 the same fit also drives the **LX200 pointing prediction** in
+comms (`_imu_predict`): when `imu_frame_R` and the `imu_ref` 6-tuple's sky
+quaternion are both present, the prediction is exact quaternion composition —
+delta conjugated through the fit, composed onto the reference attitude,
+converted via `imu_math.quat_to_radec` (boresight = row 0 of R(q)) — with no
+small-angle approximation, no 5° clamp, no pole guard, and no dependence on
+the C-matrix calibration. The legacy C-matrix small-angle path remains the
+fallback (5-tuple refs / no fit).
 
 Detection is routed through `diofinder/bg_cache.py::BackgroundCache`, not by calling
 `detect_stars` directly. This gives three composable background strategies, all
@@ -547,24 +555,33 @@ machine. **Default OFF** (`tracking_enabled: false`) pending on-sky validation.
 
 After a run of confident full-frame solves it switches star **detection** from
 full-frame extraction to small ROI windows placed around the previous frame's
-solved star positions (`tracking.roi_detect` slices a `tracking_window_px`-square
-window per predicted star — sycamore has no ROI API, so we slice the numpy frame
-ourselves, call the injected per-window detector, take the brightest detection,
-and offset its coordinates back to full-frame; overlapping windows are deduped by
-proximity, edge windows are clamped inward). This saves the dominant full-frame
-extraction cost (~6 ms → target ~1.5 ms). The recovered centroids are then solved
-with the **existing** `solve_from_centroids` under a tight attitude hint
-(`strict_hint=True`, 2° cone seeded from `last_sky_q`) instead of the blind path.
+solved star positions (`tracking_window_px`-square windows; overlapping windows
+are deduped by proximity, edge windows are clamped inward). This saves the
+dominant full-frame extraction cost (~6 ms → target ~1.5 ms). Detection has two
+capability-probed paths:
 
-### HONEST scope / known limitation (NOT verify-only)
+* **sycamore ≥ 0.14** (`getattr(star_detect, "HAS_ROI", False)`):
+  `tracking.roi_detect_native` builds the (N, 4) window list
+  (`tracking.build_windows`) and hands the full frame + all windows to the
+  native `star_detect.detect_stars_roi` in ONE call (one GIL round-trip; the
+  windows fan out on sycamore's bounded pool; per-window line_median floor +
+  whole-window MAD noise; at most one star per window, full-frame coords).
+* **Older wheels**: `tracking.roi_detect` slices numpy windows in Python and
+  calls the injected per-window detector (routed through `bg_cache.detect`)
+  once per window, offsetting coordinates back to full-frame.
 
-This is **ROI-windowed detection + tight-hint solving**. It does **not** skip the
-solver's 4-star pattern hashing. olive-solve's Python API exposes **no** pure
-verify-only entry point (project the catalog through a known attitude, match,
-refine, skipping the hash), so a true verify-only fast path is impossible from
-here and is left as **future work requiring an olive-solve API addition**. Do not
-describe this as verify-only. The win is the saved extraction cost plus a
-constrained (faster, fewer false positives) solve, not a skipped solver.
+The recovered centroids are then solved via one of two capability-probed paths:
+
+* **olive-solve ≥ 0.1.6** (`hasattr(t3, "verify_attitude")`): the true
+  **verify-only** entry point — the catalog is projected through `last_sky_q`,
+  matched, verified (binomial FPR) and refined, with the 4-star pattern hash
+  **skipped entirely**. A wrong/stale attitude returns NoMatch fast, which
+  drops the lock to FULL exactly like a failed solve (re-acquisition is always
+  the full solver, never verify). Measured x86: 0.01 ms vs 0.5 ms full solve,
+  identical RA/Dec.
+* **Older wheels**: the existing `solve_from_centroids` under a tight attitude
+  hint (`strict_hint=True`, 2° cone seeded from `last_sky_q`) — constrained
+  but still pattern-hashing.
 
 ### State machine
 
@@ -573,11 +590,11 @@ constrained (faster, fewer false positives) solve, not a skipped solver.
 * Enter **TRACKING** after `tracking_lock_frames` consecutive successful solves
   (and `tracking_enabled`), once the last solve produced ≥ `tracking_min_recover`
   centroids to predict from.
-* **TRACKING** — `roi_detect` around the previous frame's solved centroids
+* **TRACKING** — ROI detection around the previous frame's solved centroids
   (`tracking.centroids_to_xy` inverts the solver's (row,col) back to (x,y)). v1
   uses the raw previous positions with **no** IMU/sidereal shift (sub-pixel drift
   between frames at this cadence is < 1 px, inside the window). If ≥
-  `tracking_min_recover` stars recover, solve with the tight hint.
+  `tracking_min_recover` stars recover, verify/solve as described above.
 * **Fall back to FULL** on any of: `tracking_enabled` false, ROI recovered <
   `tracking_min_recover`, the solve failed (too few / no match / solver raised),
   or `bg_cache.state()` is `SLEWING` (the same slew signal `note_motion` /
@@ -823,7 +840,10 @@ watches `latest_solution["epoch_monotonic"]`. The solver publishes every frame
 including dark ones, so if the epoch stops advancing for `watchdog_timeout_s`
 (default 30) the solver is hung: it logs CRITICAL and `os._exit(1)` so systemd
 restarts the unit. The watchdog **arms only after the first non-zero epoch**, so
-a slow boot / first DB load never trips it.
+a slow boot / first DB load never trips it — but since v0.11.23 a **first-publish
+deadline** (300 s) backstops that rule: a solver that wedges during startup and
+never publishes at all now exits for a systemd restart instead of hanging
+invisibly forever.
 
 `systemd/diofinder.service` has `ExecStartPre=-/bin/sh -c 'rm -f …'` lines (the
 `-` prefix makes failure non-fatal) that remove stale

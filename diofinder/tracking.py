@@ -7,16 +7,18 @@ windows that contained stars last frame saves the dominant full-frame
 extraction cost (~6 ms full-frame -> target ~1.5 ms windowed on the Pi Zero
 2 W; see sycamore-extract/ARCHITECTURE.md decision #4).
 
-HONEST SCOPE / known limitation
--------------------------------
-This module implements ROI-windowed **detection** only. The recovered
-centroids are still handed to the ordinary ``solve_from_centroids`` (with a
-tight attitude hint) — i.e. the solver still runs its 4-star geometric pattern
-hashing. olive-solve's Python API exposes **no** pure "verify-only" entry
-point (project the catalog through a known attitude, match, refine, skipping
-pattern hashing), so a true verify-only fast path is **not** possible from here
-and is left as future work requiring an olive-solve API addition. Do not read
-this as verify-only solving — it is ROI detection plus tight-hint solving.
+Scope
+-----
+This module implements ROI-windowed **detection**. The solve side lives in
+solver_proc: with olive-solve >= 0.1.6 (capability-probed via
+``hasattr(t3, "verify_attitude")``) the recovered centroids go through the
+true verify-only entry point — catalog projected through the previous
+attitude, matched, refined, no 4-star pattern hashing; on older wheels they
+fall back to ``solve_from_centroids`` with a tight strict hint. Detection
+likewise has two paths: the native batched ``star_detect.detect_stars_roi``
+(sycamore >= 0.14, probed via ``HAS_ROI``; one GIL round-trip for all
+windows) via :func:`roi_detect_native`, or the Python slice-per-window
+:func:`roi_detect` on older wheels.
 
 The module is deliberately free of any ``star_detect`` / ``picamera2`` /
 ``tetra3`` import so it loads and unit-tests in a wheel-less environment. The
@@ -135,6 +137,62 @@ def roi_detect(
         n_windows_hit += 1
 
     deduped = _dedupe(recovered, dedupe_dist_px)
+    deduped.sort(key=lambda s: s[2], reverse=True)
+    if max_stars is not None and max_stars >= 0:
+        deduped = deduped[:max_stars]
+    return deduped, n_windows_hit
+
+
+def build_windows(
+    predicted_xy: Sequence[Tuple[float, float]],
+    window_px: int,
+    height: int,
+    width: int,
+) -> np.ndarray:
+    """(N, 4) int64 window list (x0, y0, x1, y1; exclusive) for the native
+    ``star_detect.detect_stars_roi`` — one full-size window per prediction,
+    clamped/shifted inward with the same rules as :func:`roi_detect`."""
+    win = max(1, int(window_px))
+    rows = []
+    for px, py in predicted_xy:
+        y0, y1, x0, x1 = _clamp_window(float(px), float(py), win, height, width)
+        if y1 <= y0 or x1 <= x0:
+            continue
+        rows.append((x0, y0, x1, y1))
+    return np.asarray(rows, dtype=np.int64).reshape(-1, 4)
+
+
+def roi_detect_native(
+    frame_u8: np.ndarray,
+    predicted_xy: Sequence[Tuple[float, float]],
+    window_px: int,
+    roi_fn: Callable[[np.ndarray, np.ndarray], Sequence[Star]],
+    max_stars: Optional[int] = None,
+    dedupe_dist_px: float = 3.0,
+) -> Tuple[List[Star], int]:
+    """Batched sibling of :func:`roi_detect` for the native window-list API.
+
+    ``roi_fn(frame_u8, windows_i64)`` is the injected batch detector —
+    normally ``star_detect.detect_stars_roi`` wrapped with the live params.
+    It receives the FULL frame plus the (N, 4) window list built by
+    :func:`build_windows` and returns full-frame ``(x, y, brightness, peak)``
+    tuples, at most one per window (so the raw count doubles as the
+    windows-hit health signal). Dedupe/sort/cap semantics match
+    :func:`roi_detect` exactly.
+    """
+    if frame_u8.ndim != 2:
+        raise ValueError("frame_u8 must be a 2-D image")
+    h, w = frame_u8.shape
+    windows = build_windows(predicted_xy, window_px, h, w)
+    if windows.shape[0] == 0:
+        return [], 0
+    try:
+        raw = list(roi_fn(frame_u8, windows))
+    except Exception:
+        # Never sink the frame on a detector fault; caller falls back to FULL.
+        return [], 0
+    n_windows_hit = len(raw)
+    deduped = _dedupe(raw, dedupe_dist_px)
     deduped.sort(key=lambda s: s[2], reverse=True)
     if max_stars is not None and max_stars >= 0:
         deduped = deduped[:max_stars]

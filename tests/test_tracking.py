@@ -152,5 +152,74 @@ class RoiDetectTests(unittest.TestCase):
         self.assertEqual(n_hit, 0)
 
 
+def _batch_roi_fn(frame, windows):
+    """Stub for star_detect.detect_stars_roi: brightest pixel per window,
+    FULL-FRAME coordinates, at most one detection per window."""
+    out = []
+    for x0, y0, x1, y1 in windows:
+        win = frame[y0:y1, x0:x1]
+        peak = int(win.max())
+        if peak < 100:
+            continue
+        ry, rx = np.unravel_index(int(np.argmax(win)), win.shape)
+        out.append((float(rx + x0), float(ry + y0), float(peak), float(peak)))
+    out.sort(key=lambda s: s[2], reverse=True)
+    return out
+
+
+class RoiDetectNativeTests(unittest.TestCase):
+    def test_build_windows_clamped_full_size(self):
+        # Interior prediction: centered window. Edge prediction: shifted
+        # inward, full size — same rules as _clamp_window.
+        w = tracking.build_windows([(100, 90), (2, 2)], 40, 200, 200)
+        self.assertEqual(w.shape, (2, 4))
+        self.assertEqual(w.dtype, np.int64)
+        x0, y0, x1, y1 = w[0]
+        self.assertEqual((x1 - x0, y1 - y0), (40, 40))
+        self.assertLess(abs((x0 + x1) / 2 - 100), 2)
+        x0, y0, x1, y1 = w[1]
+        self.assertEqual((x0, y0, x1, y1), (0, 0, 40, 40))
+
+    def test_native_recovers_full_frame_coords(self):
+        frame = _make_frame(stars=[(100, 90), (30, 160)])
+        stars, n_hit = tracking.roi_detect_native(
+            frame, [(101, 89), (29, 161)], 40, _batch_roi_fn)
+        self.assertEqual(n_hit, 2)
+        self.assertEqual(len(stars), 2)
+        got = sorted((s[0], s[1]) for s in stars)
+        for (gx, gy), (ex, ey) in zip(got, [(30, 160), (100, 90)]):
+            self.assertAlmostEqual(gx, ex, delta=1.0)
+            self.assertAlmostEqual(gy, ey, delta=1.0)
+
+    def test_native_dedupes_overlapping_windows(self):
+        # Two predictions straddling ONE star: overlapping windows both
+        # recover it; dedupe keeps a single entry but both windows count as
+        # hit (the health signal is windows, not unique stars).
+        frame = _make_frame(stars=[(100, 90)])
+        stars, n_hit = tracking.roi_detect_native(
+            frame, [(97, 90), (103, 90)], 40, _batch_roi_fn)
+        self.assertEqual(n_hit, 2)
+        self.assertEqual(len(stars), 1)
+
+    def test_native_max_stars_and_empty(self):
+        frame = _make_frame(stars=[(40, 40), (100, 90), (160, 150)])
+        stars, _ = tracking.roi_detect_native(
+            frame, [(40, 40), (100, 90), (160, 150)], 30, _batch_roi_fn,
+            max_stars=2)
+        self.assertEqual(len(stars), 2)
+        stars, n_hit = tracking.roi_detect_native(
+            frame, [], 30, _batch_roi_fn)
+        self.assertEqual((stars, n_hit), ([], 0))
+
+    def test_native_detector_fault_returns_empty(self):
+        # A raising batch detector must not sink the frame — the caller falls
+        # back to FULL on the empty result.
+        def boom(frame, windows):
+            raise RuntimeError("wheel exploded")
+        frame = _make_frame(stars=[(100, 90)])
+        stars, n_hit = tracking.roi_detect_native(frame, [(100, 90)], 40, boom)
+        self.assertEqual((stars, n_hit), ([], 0))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

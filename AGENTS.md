@@ -101,9 +101,11 @@ GitHub releases. This is the project's most dangerous seam — see §5.
 9. **Comments state constraints, not narration.** This codebase's comments
    record *why* something is load-bearing (often a live-debugged failure).
    Follow that idiom; don't strip them.
-10. **Do not describe tracking mode as "verify-only"** and do not present the
-    Legacy preset as the recommended path — both are documented honesty
-    constraints in CLAUDE.md.
+10. **Describe tracking mode's solve path precisely**: it is verify-only ONLY
+    when olive-solve ≥ 0.1.6 is installed (`verify_attitude`, capability-
+    probed); on older wheels it is tight-hint solving with the pattern hash
+    still paid. Do not present the Legacy preset as the recommended path —
+    both are documented honesty constraints in CLAUDE.md.
 11. Keep model/vendor identifiers out of code, commits, and PRs.
 
 ---
@@ -258,15 +260,26 @@ history for the full specs.)*
 - **Task B (done, v0.11.22)**: `diofinder/imu_frame.py` Kabsch-fits the
   IMU-body→camera rotation from solve-pair rotation vectors (quality-gated:
   pairs≥4, axis diversity, R²) and the solve hint conjugates the IMU delta
-  through it (cone 1.2× when active, 2.5× fallback otherwise). Phase 2 —
-  using the same fit for the LX200 pointing prediction in comms — remains
-  open as an optional improvement.
+  through it (cone 1.2× when active, 2.5× fallback otherwise).
+- **Done (v0.11.23), phase-2 pointing**: the LX200 prediction in comms uses
+  the same fit — `imu_ref` grew a 6th element (the solved sky quaternion),
+  and `_imu_predict` composes the exact quaternion prediction
+  (`quat_to_radec`, boresight = row 0 of R(q)) when fit + sky_q are present;
+  the C-matrix small-angle path (5° clamp, pole guard, calib gates) survives
+  as the fallback.
+- **Done (v0.11.23), watchdog first-publish deadline**: 300 s from comms
+  start with no first publish → CRITICAL + exit (systemd restarts). The
+  arm-after-first-publish rule still protects slow DB loads under that bound.
+- **Done (v0.11.23), tracking fast paths**: with olive-solve ≥ 0.1.6 the
+  tracking solve goes through `verify_attitude` (true verify-only — pattern
+  hash skipped; NoMatch drops the lock and re-acquisition is always the full
+  solver); with sycamore ≥ 0.14 ROI detection goes through the native batched
+  `detect_stars_roi` (`tracking.roi_detect_native`). Both capability-probed
+  with graceful fallback to the v0.11.22 behavior on older wheels.
 
 ### Accepted-by-design (do NOT "fix" without a new reason)
 
 - LX200 server handles one client connection at a time.
-- A solver hung *before its first publish* never arms the watchdog
-  (deliberate: slow first DB load).
 - Tracking mode (`tracking.py`) is experimental, default-off; its dedupe
   distance not scaling with `bin` is known and harmless at bin=2.
 - `detect_bin` is restart-only (the temporal cache is built at one binning).
