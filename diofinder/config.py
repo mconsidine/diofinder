@@ -179,10 +179,10 @@ class Config:
     # After a run of confident full-frame solves, switch star DETECTION from
     # full-frame extraction to small ROI windows around the previous frame's
     # solved star positions (saves the dominant ~6 ms extraction cost). The
-    # recovered centroids are still solved with the ordinary solver under a
-    # tight attitude hint — this is ROI detection + tight-hint solving, NOT a
-    # verify-only fast path (olive-solve exposes no verify-only API; see
-    # diofinder/tracking.py). Default OFF pending on-sky validation.
+    # recovered centroids are solved via olive-solve >= 0.1.6's verify-only
+    # verify_attitude (pattern hash skipped; capability-probed), falling back
+    # to a tight-hint ordinary solve on older wheels — see
+    # diofinder/tracking.py. Default OFF pending on-sky validation.
     # tracking_enabled is live-mutable via shared_cfg (maint solver_params_set).
     tracking_enabled: bool = False
     tracking_window_px: int = 48          # ROI side length (full-frame px)

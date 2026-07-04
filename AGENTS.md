@@ -277,6 +277,56 @@ history for the full specs.)*
   `detect_stars_roi` (`tracking.roi_detect_native`). Both capability-probed
   with graceful fallback to the v0.11.22 behavior on older wheels.
 
+### Open tasks from the July 2026 audit
+
+Full findings with evidence, scenarios, and fix directions:
+**`docs/audit-2026-07.md`** (IDs below refer to it). Each row is
+self-contained enough to hand to an agent together with that doc.
+
+**P1 — correctness / silent field failure (do these first):**
+
+| ID | Task |
+|----|------|
+| W1 | Camera-stall liveness: solver counts consecutive same-`seq` timeout returns from `acquire_read_slot`; after ~30 s stop refreshing `epoch_monotonic` (or publish `frame_stale`) so the existing watchdog restarts the unit instead of serving frozen pointing as live. |
+| W2 | Align path: make both `align_request_q`/`align_response_q` puts non-blocking (full queue → ":CM# busy" reply / drop superseded response), and add a `request_id` echoed through `AlignResult` so a late result from a previous sync can never be accepted — or persisted as boresight — for the current one. |
+| W3/F1 | `set_db` double-fault: when the previous-DB reload also fails, `os._exit(1)` so systemd restarts with the configured DB (making the existing comment true); throttle the per-frame AttributeError warning. |
+| F2 | FOV escape hatch: after N further FallbackGate fires, escalate the loose retry to a genuinely wide window (several degrees) so a lens change can recover; make the calibration reset (Config page + documented procedure) also restore `fov_deg`, not just `fov_calibrated`. |
+
+**P2 — robustness:**
+
+| ID | Task |
+|----|------|
+| W4 | Camera RPC timeout vs frame period: drain the camera cmd queue from a helper thread or scale `_call_camera` timeout with live exposure; bump `_call_solver` past the 5 s frame wait. |
+| W5 | Treat a stale `imu_t` (>2 s) as IMU-lost in the solver's bg_cache feed (`note_imu_lost`) so a wedged BNO055 doesn't disable slew detection with a frozen quaternion. |
+| F4 | Surface persistence failures: `seeing_set` / `auto_tune commit` / `auto_tune_apply_last` return `persisted:false` + error instead of silent `ok=True`; webui banner. |
+| F5 | Honor `fallback_gate.note_failure()`'s return on the solver-raise path so an exception-class failure streak still triggers the loose retry. |
+| F6 | `force_recalibrate` persist failure → propagate into the reset reply ("applied live, NOT persisted"). |
+| F3 | Tracking flap observability + backoff: count tracking-solve failures (new counter in `tracking_status` + bundle), add relock backoff after a failed episode; consider excluding verify-only failures from the FallbackGate count. |
+| F7 | `dark_capture`: `_ae_pause()` before the camera sets; widen the try/finally over the setup+settle phase. Also set `solver_busy_t` around the solver-side capture (W-L3) and chain `after_seq` for unique frames (F-L2). |
+| W6 | systemd `WatchdogSec` + launcher `sd_notify` pings fed by maint-socket + FrameSlots self-checks — converts any comms/camera wedge into a restart. |
+
+**P3 — performance (biggest wins first; numbers in the audit doc):**
+
+| ID | Task |
+|----|------|
+| P1+P2+P8 | Solver-side IPC diet: stop writing the 5 legacy `imu_ref_*` split keys per solve (readers move to the atomic tuple), batch calib keys into one composite, keep `imu_calib_pairs` solver-local, pass the frame snapshot into `get_fov_max_error`. ~3–12 ms back per solved frame. |
+| P3+P6 | Poll-path RPC collapse: ~100 ms-TTL snapshot cache shared by :GR/:GD; `status` handler uses one `dict(shared_cfg)` snap instead of ~15 gets. |
+| P4 | Live-view transport: binary framing on the maint socket (length-prefixed raw payload) instead of base64-in-JSON; longer term a dedicated display SHM segment. |
+| P5 | bg_cache: bin frames at submit time and median-stack at detection resolution (~4× less copy/stack/rebuild; re-verify MAD noise level against calibrated sigmas first). |
+| P7/P10/P11 | Composite `imu=(q,t)` key (40→20 RPC/s, atomic pair); camera request-API capture + TTL `test_mode` read; throttle dark-frame publishes to every Nth. |
+
+**P4 — small robustness / observability:**
+
+| ID | Task |
+|----|------|
+| F-L4/F-M4 | Add the ~10 missing keys to conf.default; wire `auto_exposure_peak_floor`/`nominal_s` into a params_set (or re-document as config-only). |
+| F-L6 | FallbackGate counters in `calibration_status`; `tracking_status` into the debug bundle. |
+| F-L1 | Hot-pixel mask capture metadata (exposure/gain/sensor mode) + mismatch warning. |
+| F-L3 | `conf_migrate` numeric matching via `_norm()` (a `%.10g`-persisted `1.0` currently escapes migration). |
+| F-L5/F-L9 | Throttle the two per-frame solver exception warnings; log active `DIOFINDER_*` env overrides at startup and surface them in `version`. |
+| W-L1/W-L2/W-L5/W-L6 | bg_cache gen re-check after `_needs_rebuild.clear()`; bounded `_call_solver` put; receive-buffer caps on both server sockets; per-command maint client timeouts. |
+| F-L7/F-L8 | Mutual exclusion between auto_tune sweep and dark_capture; lineage classification tolerant of AE-moved exposure/gain. |
+
 ### Accepted-by-design (do NOT "fix" without a new reason)
 
 - LX200 server handles one client connection at a time.
