@@ -60,6 +60,22 @@ def quat_delta_rotvec(q_now, q_ref):
     return quat_to_rotvec(quat_mul(q_now, quat_conjugate(q_ref)))
 
 
+def quat_to_radec(q):
+    """(RA, Dec) in degrees of the boresight for a solver attitude quaternion.
+
+    Convention (verified against olive-solve solutions): q maps celestial ->
+    camera with the camera +X axis as the boresight, so the boresight's
+    celestial unit vector is ROW 0 of the rotation matrix of q.
+    """
+    w, x, y, z = q
+    bx = 1.0 - 2.0 * (y * y + z * z)
+    by = 2.0 * (x * y - z * w)
+    bz = 2.0 * (x * z + y * w)
+    ra = math.degrees(math.atan2(by, bx)) % 360.0
+    dec = math.degrees(math.asin(max(-1.0, min(1.0, bz))))
+    return ra, dec
+
+
 def wrap180(deg):
     """Wrap an angle difference into [-180, 180)."""
     return (deg + 180.0) % 360.0 - 180.0

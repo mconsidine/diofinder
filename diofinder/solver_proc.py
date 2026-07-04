@@ -612,8 +612,10 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
     # so it can never observe a new quaternion paired with the previous
     # solve's RA/Dec (the split keys below are five separate Manager RPCs —
     # kept for webui/status display compatibility).
+    _sky_q_t = tuple(sky_q) if sky_q is not None else None
     shared_cfg["imu_ref"] = (tuple(q_now), float(new_ra_deg),
-                             float(new_dec_deg), float(new_roll_deg), _ref_t)
+                             float(new_dec_deg), float(new_roll_deg), _ref_t,
+                             _sky_q_t)
     shared_cfg["imu_ref_q"]        = q_now
     shared_cfg["imu_ref_ra_deg"]   = new_ra_deg
     shared_cfg["imu_ref_dec_deg"]  = new_dec_deg
