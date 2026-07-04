@@ -126,6 +126,22 @@ class BackgroundCache:
     def __init__(self, cfg):
         self.enabled = bool(cfg.bg_cache_enabled)
         self.bin = max(1, int(cfg.detect_bin))
+        # Full-res frame dims — the model's h/w are always full resolution even
+        # when the stack holds pre-binned frames (P5).
+        self._full_hw = (int(getattr(cfg, "frame_height", 760)),
+                         int(getattr(cfg, "frame_width", 960)))
+        # P5 (opt-in, default OFF): bin each frame to DETECTION resolution at
+        # submit and median-stack there, instead of stacking full-res and
+        # binning the median. ~2x less stack memory (uint16 binned sums) and
+        # ~4x fewer median elements (the ~100-300 ms GIL-held rebuild). Stored
+        # as uint16 SUMS so median(sums)/bin**2 reproduces the float
+        # median(bin_mean(frames)) estimator EXACTLY (no u8 quantization of
+        # the MAD). NOTE: that estimator is NOT algebraically identical to the
+        # default bin_mean(median(frames)) — spatial-mean and temporal-median
+        # do not commute — but offline quantification put the divergence at
+        # ~1-2% of the noise scalar on real sky (up to ~5% on steep synthetic
+        # structure), with identical u8 offsets and matching star counts at
+        # the operating sigma. Hence opt-in + A/B before the default flips.
         self.stack_size = max(2, int(cfg.bg_cache_stack))
         self.refresh_interval_s = float(cfg.bg_cache_refresh_s)
         self.slew_threshold_rad = math.radians(float(cfg.bg_cache_slew_deg))
@@ -135,6 +151,8 @@ class BackgroundCache:
         # the worker knows which kind of model to build (row vs. block grid).
         self._active_bg_mode = str(cfg.detect_bg_mode)
         self._active_block_size = int(getattr(cfg, "detect_bg_block_size", 0))
+        self._bin_at_submit = (bool(getattr(cfg, "bg_cache_bin_at_submit", False))
+                               and self.bin > 1)
 
         self._model: Optional[BgModel] = None
         self._frame_buf: "deque[np.ndarray]" = deque(maxlen=self.stack_size)
@@ -205,7 +223,11 @@ class BackgroundCache:
         if steady and self._submit_seq % 4 != 0:
             return
         with self._frame_buf_lock:
-            self._frame_buf.append(np.array(frame_u8, dtype=np.uint8, copy=True))
+            if self._bin_at_submit:
+                self._frame_buf.append(self._bin_sum_u16(frame_u8))
+            else:
+                self._frame_buf.append(
+                    np.array(frame_u8, dtype=np.uint8, copy=True))
 
     def note_camera_settings(self, epoch):
         """Called with shared_cfg['camera_settings_epoch'] (bumped by
@@ -235,6 +257,31 @@ class BackgroundCache:
                 self._frame_buf.clear()
             self._invalidate_gen = getattr(self, "_invalidate_gen", 0) + 1
             self._needs_rebuild.set()
+
+    def note_bin_at_submit(self, on):
+        """Live A/B toggle for the P5 bin-at-submit path. On a change the
+        frame buffer is flushed (it must not mix full-res u8 and pre-binned
+        uint16 frames) and the model is marked stale — detection falls back
+        to per-frame until the stack refills. O(1) when unchanged."""
+        if not self.enabled:
+            return
+        want = bool(on) and self.bin > 1
+        if want == self._bin_at_submit:
+            return
+        self._bin_at_submit = want
+        with self._frame_buf_lock:
+            self._frame_buf.clear()
+        self._invalidate_gen = getattr(self, "_invalidate_gen", 0) + 1
+        self._needs_rebuild.set()
+        log.info("bg-cache bin_at_submit -> %s (buffer flushed)", want)
+
+    def _bin_sum_u16(self, frame_u8):
+        """2x2 (or bin x bin) block SUMS as uint16 at detection resolution.
+        Exact: max sum = bin**2 * 255 (1020 at bin=2, 4080 at bin=4) < 65535."""
+        b = self.bin
+        h, w = frame_u8.shape
+        f = frame_u8[: (h // b) * b, : (w // b) * b].astype(np.uint16)
+        return f.reshape(h // b, b, w // b, b).sum(axis=(1, 3)).astype(np.uint16)
 
     def note_motion(self, quat):
         """Called with the latest IMU quaternion (w,x,y,z) or None."""
@@ -508,6 +555,7 @@ class BackgroundCache:
                              else "row")
                             if m else None),
             "active_bg_mode": self._active_bg_mode,
+            "bin_at_submit": self._bin_at_submit,   # P5 opt-in (A/B)
             "block_cache_supported": HAS_BLOCK_CACHE,
             "bg_image_supported": HAS_BG_IMAGE,
         }
@@ -574,7 +622,6 @@ class BackgroundCache:
             return list(self._frame_buf)
 
     def _build_model(self, frames: list) -> BgModel:
-        h, w = frames[0].shape
         # Median-stack in float and KEEP float through binning and the noise
         # estimate. The previous uint8 casts (median -> u8, bin-mean -> u8)
         # quantized the MAD to whole DN, so `noise` could only take the values
@@ -583,15 +630,31 @@ class BackgroundCache:
         # faint sky. Float MAD has sub-DN resolution; the estimator itself is
         # unchanged, so calibrated sigma operating points keep their meaning
         # (including the 0.5 floor).
-        time_med_f = np.median(np.stack(frames, axis=0), axis=0).astype(np.float32)
-        if self.bin > 1:
-            # Downsample to the DETECTION resolution for any bin (1/2/4).
-            # This used to run only for bin == 2; at bin=4 the full-res model
-            # then failed sycamore's height//bin validation on every steady
-            # frame — a permanent extraction-exception loop with no recovery.
-            b = self.bin
-            tm = time_med_f[: (h // b) * b, : (w // b) * b]
-            time_med_f = tm.reshape(h // b, b, w // b, b).mean(axis=(1, 3))
+        if frames[0].dtype == np.uint16:
+            # P5 pre-binned path: frames are uint16 block SUMS at detection
+            # resolution. median(sums)/bin**2 reproduces the float
+            # median(bin_mean(frames)) estimator exactly, on 1/bin**2 the
+            # elements with 1/2 the stack memory. This APPROXIMATES (does not
+            # equal) the default bin_mean(median) below — see the __init__
+            # note; A/B before flipping the default. Model h/w are full
+            # resolution (from cfg), since the stored frames are binned.
+            h, w = self._full_hw
+            time_med_f = (np.median(np.stack(frames, axis=0), axis=0)
+                          .astype(np.float32) / (self.bin * self.bin))
+        else:
+            # Default path: frames are full-resolution, so their own shape is
+            # the model's h/w and drives the binning reshape.
+            h, w = frames[0].shape
+            time_med_f = np.median(np.stack(frames, axis=0),
+                                   axis=0).astype(np.float32)
+            if self.bin > 1:
+                # Downsample to the DETECTION resolution for any bin (1/2/4).
+                # This used to run only for bin == 2; at bin=4 the full-res
+                # model then failed sycamore's height//bin validation on every
+                # steady frame — a permanent extraction-exception loop.
+                b = self.bin
+                tm = time_med_f[: (h // b) * b, : (w // b) * b]
+                time_med_f = tm.reshape(h // b, b, w // b, b).mean(axis=(1, 3))
         h_det, w_det = time_med_f.shape
         patch = time_med_f[h_det // 3: 2 * h_det // 3,
                            w_det // 3: 2 * w_det // 3].ravel()

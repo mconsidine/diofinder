@@ -1943,6 +1943,8 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "tracking_window_px",  ctx.cfg.tracking_window_px),
                 "tracking_min_recover": ctx.shared_cfg.get(
                     "tracking_min_recover", ctx.cfg.tracking_min_recover),
+                "bg_cache_bin_at_submit": ctx.shared_cfg.get(
+                    "bg_cache_bin_at_submit", ctx.cfg.bg_cache_bin_at_submit),
             })
 
         if cmd == "solver_params_set":
@@ -2119,6 +2121,10 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                                         error="tracking_min_recover out of range [3, 50]")
                 ctx.shared_cfg["tracking_min_recover"] = mr
                 updates["tracking_min_recover"] = mr
+            if "bg_cache_bin_at_submit" in args:
+                bs = bool(args["bg_cache_bin_at_submit"])
+                ctx.shared_cfg["bg_cache_bin_at_submit"] = bs
+                updates["bg_cache_bin_at_submit"] = bs
             if persist and updates:
                 cfg_mod.save_keys(updates)
             return MaintResponse(ok=True, result={**updates, "persisted": persist})

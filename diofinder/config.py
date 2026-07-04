@@ -27,7 +27,7 @@ DEFAULT_CONFIG_PATH = "/etc/diofinder/diofinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.11.25"
+    version: str = "0.11.26"
 
     # -------- Camera --------
     frame_width: int = 960
@@ -174,6 +174,16 @@ class Config:
     bg_cache_max_age_s: float = 60.0   # rebuild if model older than this
     bg_cache_fail_invalidate: int = 3  # consecutive solve failures (no IMU) that
                                        # invalidate the cache; 0 disables
+    # P5 (opt-in, default OFF; A/B before flipping): bin each frame to the
+    # detection resolution at SUBMIT and median-stack there, instead of
+    # stacking full-res and binning the median. ~2x less stack memory (uint16
+    # binned sums) and ~4x fewer median elements (the ~100-300 ms GIL-held
+    # rebuild). It's a DIFFERENT estimator (spatial-mean and temporal-median
+    # don't commute), offline-quantified within ~1-2% of the default's noise
+    # on real sky with matching star counts at the operating sigma; A/B on
+    # real sky (bg_cache_status.bin_at_submit + solve_stats) before making it
+    # the default. Live-mutable via shared_cfg. No effect at bin=1.
+    bg_cache_bin_at_submit: bool = False
 
     # -------- Tracking mode (experimental, opt-in) --------
     # After a run of confident full-frame solves, switch star DETECTION from

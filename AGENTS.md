@@ -338,10 +338,17 @@ them and are the only open work.
   `frame_get`. No maint round-trip / base64 for the live view, and zero cost
   when no browser is open. On-device before/after timing on `/frame.jpg` is
   still worth capturing but not required.
-- **P5 (bg_cache binned-resolution median stack)**: clear ~4× win, but the
-  estimator changes from bin(median) to median(bin) — re-verify the MAD
-  noise level against the calibrated sigma operating points on real frames
-  (bundle replay) before shipping.
+- **P5 — DONE (v0.11.26) opt-in; A/B before default.** `bg_cache_bin_at_submit`
+  (default OFF, live-mutable via `solver_params_set`): bins each frame to the
+  detection resolution at submit (uint16 block SUMS — exact, ~2× less stack
+  memory, ~4× fewer median elements) and median-stacks there. It IS a
+  different estimator (spatial-mean and temporal-median don't commute); the
+  offline quantification (`scratchpad/p5_quant*.py`, method preserved in
+  `tests/test_bg_cache_bin_at_submit.py`) put the noise divergence at ~1–2%
+  on real dark sky and injected light pollution, with identical u8 offsets and
+  matching star counts at the operating sigma. Validate on a clear night with
+  the background A/B + `solve_stats` (compare `bg_cache_status.bin_at_submit`
+  on/off), then flip the default in a follow-up.
 - **P9 (TRACKING fixed-cost trims)**: revisit only if tracking mode
   graduates from experimental/default-off. **Graduation gate now exists**:
   `tests/ab_tracking.py` (`diofinder-ctl ab-tracking`) does the on-sky FULL
