@@ -350,10 +350,12 @@ them and are the only open work.
   the background A/B + `solve_stats` (compare `bg_cache_status.bin_at_submit`
   on/off), then flip the default in a follow-up.
 - **P9 (TRACKING fixed-cost trims)**: revisit only if tracking mode
-  graduates from experimental/default-off. **Graduation gate now exists**:
-  `tests/ab_tracking.py` (`diofinder-ctl ab-tracking`) does the on-sky FULL
-  vs TRACKING A/B (rate, latency, pointing-agreement) — run it clear-sky
-  before flipping the default.
+  graduates from experimental/default-off. **Graduation gate exists** and is
+  now clickable in the web UI (v0.11.27): the Camera page → *Experimental A/B*
+  card runs `ab_tracking.run_ab` in a webui background thread and also exposes
+  the two live default-off toggles (tracking mode, P5 bin-at-submit) that were
+  previously CLI-only. `tests/ab_tracking.py` (`diofinder-ctl ab-tracking`)
+  remains the CLI equivalent. Run it clear-sky before flipping the default.
 - **P10 (camera request-API capture)**: picamera2 API variance across
   versions; needs on-device validation. The TTL `test_mode` half shipped.
 - **W6 (systemd `WatchdogSec` + `sd_notify`)**: `Type=notify` misconfigured

@@ -5,7 +5,41 @@ core. No daemon required.
 """
 import math
 
-from tests.ab_tracking import _summarize, _sky_offset_arcmin, _verdict
+import types
+
+from tests.ab_tracking import _summarize, _sky_offset_arcmin, _verdict, run_ab
+
+
+class _FakeMaint:
+    """Simulates the daemon for run_ab: tracking_status / solver_params_set /
+    solve_stats, returning FULL-tagged records while tracking is off and
+    TRACKING-tagged records while it's on (locks immediately)."""
+
+    def __init__(self, full_recs, track_recs, lock=True):
+        self.tracking = False
+        self.now = 1000.0
+        self.lock = lock
+        self.full_recs = full_recs
+        self.track_recs = track_recs
+        self.set_calls = []
+
+    def __call__(self, cmd, args=None, timeout=10.0):
+        self.now += 0.5
+        if cmd == "tracking_status":
+            state = "TRACKING" if (self.tracking and self.lock) else "FULL"
+            return types.SimpleNamespace(
+                ok=True, error=None,
+                result={"enabled": self.tracking, "state": state})
+        if cmd == "solver_params_set":
+            if args and "tracking_enabled" in args:
+                self.tracking = bool(args["tracking_enabled"])
+                self.set_calls.append(self.tracking)
+            return types.SimpleNamespace(ok=True, error=None, result=args or {})
+        if cmd == "solve_stats":
+            recs = self.track_recs if self.tracking else self.full_recs
+            return types.SimpleNamespace(
+                ok=True, error=None, result={"records": recs, "now": self.now})
+        return types.SimpleNamespace(ok=False, error="unknown", result=None)
 
 
 def _rec(epoch, tracked, solve_ms, matches, ra, dec, extract_ms=6.0):
@@ -84,3 +118,53 @@ def test_verdict_flags_unstable_spread():
     v = _verdict(full, track, full_rate=3.0, track_rate=3.2)
     assert v["correctness_ok"] is False
     assert any("spread" in r for r in v["reasons"])
+
+
+def test_run_ab_structured_result_and_restore():
+    full = [_rec(i, False, 12.0, 12, 100.0, 20.0) for i in range(15)]
+    track = [_rec(i, True, 3.0, 12, 100.001, 20.0) for i in range(15)]
+    fake = _FakeMaint(full, track)
+    progress = []
+    res = run_ab(0.0, 0.0, 1.0, maint_call=fake, progress=progress.append)
+    assert res["ok"] is True
+    assert res["full"]["n"] == 15 and res["track"]["n"] == 15
+    assert res["verdict"]["correctness_ok"] is True
+    assert res["verdict"]["recommend"] == "enable"
+    # Tracking was toggled on for phase B, then RESTORED to the original (off).
+    assert fake.set_calls[-1] is False
+    assert res["restored_to"] is False
+    assert progress  # progress callback fired
+
+
+def test_run_ab_aborts_when_not_solving():
+    fake = _FakeMaint(full_recs=[], track_recs=[])
+    res = run_ab(0.0, 0.0, 1.0, maint_call=fake)
+    assert res["ok"] is False
+    assert "not solving" in res["aborted"].lower()
+    assert fake.set_calls[-1] is False   # still restored
+
+
+def test_run_ab_aborts_when_never_locks():
+    full = [_rec(i, False, 12.0, 12, 100.0, 20.0) for i in range(10)]
+    fake = _FakeMaint(full, track_recs=[], lock=False)   # never reports TRACKING
+    res = run_ab(0.0, 0.0, 0.2, maint_call=fake)
+    assert res["ok"] is False
+    assert "never locked" in res["aborted"].lower()
+    assert fake.set_calls[-1] is False
+
+
+def test_run_ab_handles_maint_raising_midrun():
+    # A daemon error partway through must yield ok=False with the error set,
+    # and the finally must still attempt to restore tracking.
+    class _Raising(_FakeMaint):
+        def __call__(self, cmd, args=None, timeout=10.0):
+            if cmd == "solve_stats":
+                from diofinder.maint import MaintResponse
+                return MaintResponse(ok=False, error="solver did not respond")
+            return super().__call__(cmd, args, timeout)
+    full = [_rec(i, False, 12.0, 12, 100.0, 20.0) for i in range(5)]
+    fake = _Raising(full, [])
+    res = run_ab(0.0, 0.0, 1.0, maint_call=fake)
+    assert res["ok"] is False
+    assert res["error"] and "solve_stats" in res["error"]
+    assert fake.set_calls[-1] is False   # restored despite the error

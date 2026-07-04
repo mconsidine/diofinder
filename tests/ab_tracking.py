@@ -147,8 +147,22 @@ def _verdict(full, track, full_rate, track_rate,
 
 # ── on-device driver (maint socket) ─────────────────────────────────────────
 
-def _run(window_s, settle_s, lock_timeout_s):
-    from diofinder.maint import call as maint_call
+def run_ab(window_s, settle_s, lock_timeout_s, maint_call=None, progress=None):
+    """Drive the FULL vs TRACKING A/B and return a structured result dict.
+
+    Reused by both the CLI (below) and the web-UI worker, so it does NOT
+    print — it calls the optional ``progress(str)`` callback and returns a
+    dict. It captures the live ``tracking_enabled`` and RESTORES it before
+    returning (even on error / precondition abort).
+
+    Returns::
+
+        {"ok": bool, "error": str|None, "aborted": str|None,
+         "full": summary, "track": summary, "full_rate", "track_rate",
+         "n_fellback": int, "verdict": {...}, "window_s": ...}
+    """
+    if maint_call is None:
+        from diofinder.maint import call as maint_call  # noqa: PLW0642
 
     def m(cmd, args=None, timeout=10.0):
         r = maint_call(cmd, args, timeout=timeout)
@@ -156,88 +170,103 @@ def _run(window_s, settle_s, lock_timeout_s):
             raise RuntimeError(f"{cmd} failed: {r.error}")
         return r.result
 
-    def set_tracking(on):
-        m("solver_params_set", {"tracking_enabled": bool(on)})
-
-    # Capture the original live state so we can restore it.
-    orig = bool(m("tracking_status").get("enabled", False))
-    print(f"tracking currently {'ON' if orig else 'OFF'}; "
-          f"window={window_s:.0f}s per phase\n")
+    def emit(msg):
+        if progress:
+            progress(msg)
 
     def collect(phase_name):
         mark = m("solve_stats").get("now")
         t_end = time.monotonic() + window_s
         while time.monotonic() < t_end:
+            emit(f"{phase_name}: measuring… {max(0, int(t_end - time.monotonic()))}s left")
             time.sleep(0.5)
         res = m("solve_stats", {"after": mark})
         elapsed = max(1e-3, res.get("now") - mark)
         recs = [tuple(r) for r in res.get("records", [])]
-        print(f"  {phase_name}: {len(recs)} solves in {elapsed:.1f}s "
-              f"({len(recs)/elapsed:.2f}/s)")
         return recs, elapsed
 
+    result = {"ok": False, "error": None, "aborted": None, "window_s": window_s,
+              "full": {"n": 0}, "track": {"n": 0}, "full_rate": 0.0,
+              "track_rate": 0.0, "n_fellback": 0, "verdict": None}
+    orig = bool(m("tracking_status").get("enabled", False))
     try:
         # ── Phase A: FULL ──
-        print("Phase A — FULL (tracking OFF)…")
-        set_tracking(False)
+        emit("Phase A — FULL (tracking OFF)…")
+        m("solver_params_set", {"tracking_enabled": False})
         time.sleep(settle_s)
         full_recs, full_elapsed = collect("FULL")
         if not full_recs:
-            print("\nABORT: not solving in FULL mode. Point at a star field, "
-                  "focus until the Home page shows a solve, keep the scope "
-                  "stationary, and retry.")
-            return 1, orig
-        full_rate = len(full_recs) / full_elapsed
-        full = _summarize(full_recs)
-        # Moving-scope guard: sidereal drift over the window is < ~0.13 deg;
-        # anything much larger means the scope isn't stationary.
+            result["aborted"] = ("Not solving in FULL mode. Point at a star "
+                                 "field, focus until the Home page shows a "
+                                 "solve, keep the scope stationary, and retry.")
+            return result
+        result["full_rate"] = len(full_recs) / full_elapsed
+        result["full"] = full = _summarize(full_recs)
         if full["ra_spread"] > 1.0:
-            print(f"\nABORT: FULL RA spread is {full['ra_spread']:.2f} deg — "
-                  "the scope appears to be moving. Keep it stationary and "
-                  "retry.")
-            return 1, orig
+            result["aborted"] = (f"FULL RA spread is {full['ra_spread']:.2f} deg "
+                                 "— the scope appears to be moving. Keep it "
+                                 "stationary and retry.")
+            return result
 
         # ── Phase B: TRACKING ──
-        print("\nPhase B — TRACKING (tracking ON)…")
-        set_tracking(True)
-        # Wait for lock-in (state == TRACKING) before the measurement window.
+        emit("Phase B — TRACKING (tracking ON), waiting for lock-in…")
+        m("solver_params_set", {"tracking_enabled": True})
         t_lock = time.monotonic() + lock_timeout_s
         locked = False
         while time.monotonic() < t_lock:
-            st = m("tracking_status")
-            if st.get("state") == "TRACKING":
+            if m("tracking_status").get("state") == "TRACKING":
                 locked = True
                 break
             time.sleep(0.5)
         if not locked:
-            print(f"\nABORT: tracking never locked within {lock_timeout_s:.0f}s "
-                  "(state stayed FULL). Likely too few recoverable stars — "
-                  "check tracking_min_recover vs the live star count, or the "
-                  "wheel versions (needs olive-solve >= 0.1.6, sycamore >= 0.14).")
-            return 1, orig
-        track_recs, track_elapsed = collect("TRACKING(all)")
-        track_rate = len(track_recs) / track_elapsed
+            result["aborted"] = (
+                f"Tracking never locked within {lock_timeout_s:.0f}s. Likely "
+                "too few recoverable stars — check tracking_min_recover vs the "
+                "live star count, or the wheel versions (needs olive-solve "
+                ">= 0.1.6, sycamore >= 0.14).")
+            return result
+        track_recs, track_elapsed = collect("TRACKING")
+        result["track_rate"] = len(track_recs) / track_elapsed
         tracked = [r for r in track_recs if r[1]]
-        n_fellback = len(track_recs) - len(tracked)
-        if n_fellback:
-            print(f"    ({n_fellback} of {len(track_recs)} fell back to FULL)")
-        track = _summarize(tracked)
+        result["n_fellback"] = len(track_recs) - len(tracked)
+        result["track"] = track = _summarize(tracked)
 
-        # ── Report ──
-        v = _verdict(full, track, full_rate, track_rate)
-        _print_report(full, track, full_rate, track_rate, v)
-        return (0 if v["correctness_ok"] else 1), orig
+        result["verdict"] = _verdict(full, track, result["full_rate"],
+                                     result["track_rate"])
+        result["ok"] = True
+        return result
+    except RuntimeError as e:
+        result["error"] = str(e)
+        return result
     finally:
-        pass
+        # Always restore the live tracking state.
+        try:
+            maint_call("solver_params_set", {"tracking_enabled": orig})
+        except Exception:
+            pass
+        result["restored_to"] = orig
 
 
-def _print_report(full, track, full_rate, track_rate, v):
+def _print_report(res):
+    if res.get("aborted"):
+        print(f"\nABORT: {res['aborted']}")
+        return
+    if res.get("error"):
+        print(f"\nERROR: {res['error']}")
+        return
+    full, track = res["full"], res["track"]
+    v = res["verdict"]
+
     def row(label, a, b):
         print(f"  {label:<22} {a:>14}  {b:>14}")
+    print(f"\n  FULL: {full.get('n', 0)} solves @ {res['full_rate']:.2f}/s   "
+          f"TRACKING: {track.get('n', 0)} solves @ {res['track_rate']:.2f}/s"
+          + (f"  ({res['n_fellback']} fell back to FULL)"
+             if res.get("n_fellback") else ""))
     print("\n" + "=" * 54)
     print(f"  {'metric':<22} {'FULL':>14}  {'TRACKING':>14}")
     print("  " + "-" * 50)
-    row("solves/sec", f"{full_rate:.2f}", f"{track_rate:.2f}")
+    row("solves/sec", f"{res['full_rate']:.2f}", f"{res['track_rate']:.2f}")
     row("solve ms (p50)", f"{full.get('solve_ms_p50', 0):.2f}",
         f"{track.get('solve_ms_p50', 0):.2f}")
     row("solve ms (p90)", f"{full.get('solve_ms_p90', 0):.2f}",
@@ -272,9 +301,13 @@ def main(argv=None):
                     help="max seconds to wait for TRACKING lock-in (default 15)")
     args = ap.parse_args(argv)
 
-    orig = None
     try:
-        code, orig = _run(args.window, args.settle, args.lock_timeout)
+        res = run_ab(args.window, args.settle, args.lock_timeout,
+                     progress=lambda s: print(s))
+        _print_report(res)
+        code = 0 if (res.get("ok") and res["verdict"]["correctness_ok"]) else 1
+        if res.get("restored_to") is not None:
+            print(f"\nrestored tracking_enabled = {res['restored_to']}")
     except RuntimeError as e:
         print(f"\nERROR talking to the daemon: {e}\n"
               "Is diofinder running? (sudo systemctl status diofinder)")
@@ -282,16 +315,6 @@ def main(argv=None):
     except KeyboardInterrupt:
         print("\ninterrupted")
         code = 1
-    finally:
-        # Always restore the original live tracking state.
-        if orig is not None:
-            try:
-                from diofinder.maint import call as maint_call
-                maint_call("solver_params_set", {"tracking_enabled": orig})
-                print(f"\nrestored tracking_enabled = {orig}")
-            except Exception as e:
-                print(f"\nWARNING: could not restore tracking_enabled ({e}); "
-                      f"set it manually to {orig}")
     return code
 
 

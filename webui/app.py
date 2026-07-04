@@ -702,6 +702,88 @@ def autotune_apply():
     return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
 
 
+# ── Experimental A/B card: tracking mode + P5 bin-at-submit ──────────────────
+# Both are live-mutable solver toggles that had no webui control (CLI-only).
+# The tracking A/B reuses tests/ab_tracking.run_ab in a webui-side background
+# thread (it drives the maint socket and restores tracking_enabled on exit).
+_ab_lock = threading.Lock()
+_ab = {"running": False, "progress": "", "result": None, "error": None,
+       "started": None, "window": 30.0}
+
+
+def _ab_worker(window):
+    from tests.ab_tracking import run_ab
+    from diofinder.maint import call as maint_call
+
+    def prog(msg):
+        with _ab_lock:
+            _ab["progress"] = msg
+    try:
+        res = run_ab(window, 3.0, 15.0, maint_call=maint_call, progress=prog)
+        with _ab_lock:
+            _ab["result"] = res
+            _ab["error"] = res.get("error") or res.get("aborted")
+    except Exception as e:   # never leave the card stuck "running"
+        with _ab_lock:
+            _ab["error"] = str(e)
+    finally:
+        with _ab_lock:
+            _ab["running"] = False
+            _ab["progress"] = "done"
+
+
+@app.route("/abtracking/start", methods=["POST"])
+def abtracking_start():
+    """Run the FULL-vs-TRACKING A/B on the live sky (background, ~70 s)."""
+    try:
+        window = float(request.form.get("window", 30.0))
+    except (TypeError, ValueError):
+        window = 30.0
+    window = max(5.0, min(120.0, window))
+    with _ab_lock:
+        if _ab["running"]:
+            return jsonify({"ok": False,
+                            "error": "an A/B run is already in progress"}), 409
+        _ab.update(running=True, progress="starting…", result=None, error=None,
+                   window=window, started=datetime.now().strftime("%H:%M:%S"))
+    threading.Thread(target=_ab_worker, args=(window,), daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/abtracking")
+def api_abtracking():
+    """Tracking-A/B progress / result for the Camera-page poller."""
+    with _ab_lock:
+        return jsonify(dict(_ab))
+
+
+@app.route("/api/tracking")
+def api_tracking():
+    """Live tracking-mode status (state + counters) for the card readout."""
+    r = _safe_call("tracking_status")
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
+@app.route("/tracking/set", methods=["POST"])
+def tracking_set():
+    """Toggle live tracking mode (optionally persist)."""
+    enabled = request.form.get("enabled") in ("1", "true", "on", "yes")
+    persist = request.form.get("persist") in ("1", "true", "on", "yes")
+    r = _safe_call("solver_params_set",
+                   {"tracking_enabled": enabled, "persist": persist})
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
+@app.route("/bincache/set", methods=["POST"])
+def bincache_set():
+    """Toggle the P5 bin-at-submit bg_cache stack path (optionally persist)."""
+    enabled = request.form.get("enabled") in ("1", "true", "on", "yes")
+    persist = request.form.get("persist") in ("1", "true", "on", "yes")
+    r = _safe_call("solver_params_set",
+                   {"bg_cache_bin_at_submit": enabled, "persist": persist})
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
 @app.route("/calibration/reset", methods=["POST"])
 def calibration_reset():
     """Reset the FOV rolling-window calibration and redirect to the dashboard."""
