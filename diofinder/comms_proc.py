@@ -39,7 +39,9 @@ from queue import Empty
 
 from diofinder import config as cfg_mod
 from diofinder.align import AlignRequest, AlignResult, CommsAlignState
-from diofinder.imu_math import quat_delta_rotvec, alpha_beta_step
+from diofinder.imu_math import (quat_delta_rotvec, alpha_beta_step,
+                                rotvec_to_quat, quat_mul, quat_to_radec)
+from diofinder.imu_frame import apply_rotation as _imu_apply_rotation
 from diofinder.maint import MaintRequest, MaintResponse, SOCKET_PATH
 from diofinder.worker_cmds import (
     SolverCmd, CameraCmd,
@@ -925,10 +927,17 @@ def _watchdog_loop(ctx, interval_s=5.0):
         log.info("Solver watchdog disabled by config")
         return
     timeout_s = float(getattr(cfg, "watchdog_timeout_s", 30.0))
+    # Generous one-shot deadline for the FIRST publish: a solver that wedges
+    # during startup (corrupt DB, import hang) previously never armed the
+    # watchdog and sat silent forever. 300 s covers the slowest legitimate
+    # first DB load on an SD card with a wide margin.
+    first_publish_deadline_s = 300.0
+    started_mono = time.monotonic()
     armed = False
     last_epoch = 0.0
     last_change_mono = time.monotonic()
-    log.info("Solver watchdog armed (timeout=%.0fs)", timeout_s)
+    log.info("Solver watchdog armed (timeout=%.0fs, first-publish deadline=%.0fs)",
+             timeout_s, first_publish_deadline_s)
     while True:
         time.sleep(interval_s)
         try:
@@ -942,6 +951,13 @@ def _watchdog_loop(ctx, interval_s=5.0):
                 armed = True
                 last_epoch = epoch
                 last_change_mono = now
+            elif now - started_mono > first_publish_deadline_s:
+                log.critical(
+                    "Solver watchdog: no FIRST solution published within "
+                    "%.0fs of startup; solver appears wedged during init. "
+                    "Exiting so systemd restarts the unit.",
+                    first_publish_deadline_s)
+                os._exit(1)
             continue
         if epoch != last_epoch:
             last_epoch = epoch
@@ -1083,10 +1099,6 @@ def _imu_predict(shared_cfg):
     """Return (ra_deg, dec_deg) predicted from IMU rotation since last solve, or None if unavailable."""
     if not shared_cfg.get("imu_available", False):
         return None
-    if shared_cfg.get("imu_calib_n", 0) < 3:
-        return None
-    if shared_cfg.get("imu_calib_quality", 0.0) < 0.85:
-        return None
     q_now  = shared_cfg.get("imu_q")
     imu_t  = shared_cfg.get("imu_t", 0.0)
     if q_now is None or time.monotonic() - imu_t > 2.0:
@@ -1096,19 +1108,37 @@ def _imu_predict(shared_cfg):
         # Atomic tuple (v0.11.20+ solver): one RPC, and immune to a solve
         # landing between reads (the split keys could pair a new quaternion
         # with the previous solve's RA/Dec — a degrees-scale pointing error
-        # exactly at post-slew re-anchor).
-        q_ref, ra_ref, dec_ref, roll_ref_v, ref_t = ref
+        # exactly at post-slew re-anchor). v0.11.23 appends the solved sky
+        # quaternion as a 6th element for the exact frame-corrected path.
+        q_ref, ra_ref, dec_ref, roll_ref_v, ref_t = ref[:5]
+        sky_q_ref = ref[5] if len(ref) >= 6 else None
     else:
         q_ref   = shared_cfg.get("imu_ref_q")
         ra_ref  = shared_cfg.get("imu_ref_ra_deg")
         dec_ref = shared_cfg.get("imu_ref_dec_deg")
         roll_ref_v = None
         ref_t   = shared_cfg.get("imu_ref_t", 0.0)
+        sky_q_ref = None
     if q_ref is None or ra_ref is None or time.monotonic() - ref_t > 120.0:
         return None
-    C_flat = shared_cfg.get("imu_calib_C")
-    if C_flat is None or len(C_flat) != 6:
-        return None
+    # Exact frame-corrected path (v0.11.23): when the solver has published a
+    # quality-gated IMU-body -> camera rotation fit AND the reference carries
+    # the solved sky quaternion, predict by exact quaternion composition —
+    # the same construction the solve hint uses (imu_frame fit pairs). No
+    # small-angle approximation, so no 5-degree clamp and no pole guard; the
+    # C-matrix calibration is not needed at all on this path.
+    R9 = shared_cfg.get("imu_frame_R")
+    use_frame = (R9 is not None and len(R9) == 9 and sky_q_ref is not None)
+    if not use_frame:
+        # Legacy small-angle C-matrix path needs its calibration to be
+        # present and healthy.
+        if shared_cfg.get("imu_calib_n", 0) < 3:
+            return None
+        if shared_cfg.get("imu_calib_quality", 0.0) < 0.85:
+            return None
+        C_flat = shared_cfg.get("imu_calib_C")
+        if C_flat is None or len(C_flat) != 6:
+            return None
     # Rotation-rate motion gate: parked = report the solved position (None);
     # moving (or moved with no re-anchoring solve yet) = predict. See
     # _imu_motion_engaged for the full rationale.
@@ -1118,6 +1148,10 @@ def _imu_predict(shared_cfg):
                                    rate_gate_dps=rate_gate):
             return None
     r = quat_delta_rotvec(q_now, q_ref)
+    if use_frame:
+        r_cam = _imu_apply_rotation(R9, r)
+        q_pred = quat_mul(rotvec_to_quat(r_cam), sky_q_ref)
+        return quat_to_radec(q_pred)
     c = C_flat
     dr = c[0]*r[0] + c[1]*r[1] + c[2]*r[2]
     du = c[3]*r[0] + c[4]*r[1] + c[5]*r[2]

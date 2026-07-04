@@ -219,6 +219,95 @@ def test_imu_predict_rate_gate_is_tunable():
     assert out is None
 
 
+def test_quat_to_radec_matches_rotation_matrix_row0():
+    # Convention pin: boresight celestial vector is ROW 0 of R(q). Compare
+    # against an independent numpy rotation-matrix construction.
+    import numpy as np
+    from diofinder.imu_math import quat_to_radec, rotvec_to_quat
+    rnd = random.Random(7)
+    for _ in range(20):
+        r = tuple(rnd.uniform(-2.0, 2.0) for _ in range(3))
+        w, x, y, z = rotvec_to_quat(r)
+        R = np.array([
+            [1 - 2*(y*y + z*z), 2*(x*y - z*w),     2*(x*z + y*w)],
+            [2*(x*y + z*w),     1 - 2*(x*x + z*z), 2*(y*z - x*w)],
+            [2*(x*z - y*w),     2*(y*z + x*w),     1 - 2*(x*x + y*y)],
+        ])
+        bx, by, bz = R[0]
+        ra_exp = math.degrees(math.atan2(by, bx)) % 360.0
+        dec_exp = math.degrees(math.asin(bz))
+        ra, dec = quat_to_radec((w, x, y, z))
+        assert ra == pytest.approx(ra_exp, abs=1e-9)
+        assert dec == pytest.approx(dec_exp, abs=1e-9)
+
+
+def test_imu_predict_frame_path_exact_large_slew():
+    # v0.11.23 exact path: with the solver-published body->camera fit and the
+    # solved sky quaternion in imu_ref, a 20-degree slew on a 90-degree
+    # mounting predicts the true boresight exactly — no 5-degree clamp, no
+    # C-matrix calibration keys needed at all.
+    import numpy as np
+    from diofinder.imu_math import (rotvec_to_quat, quat_to_rotvec, quat_mul,
+                                    quat_to_radec)
+    _reset_rate_state()
+    ang = math.radians(90.0)
+    R = np.array([[math.cos(ang), -math.sin(ang), 0.0],
+                  [math.sin(ang),  math.cos(ang), 0.0],
+                  [0.0, 0.0, 1.0]])                     # mounting about z
+    q_sky_ref = rotvec_to_quat((0.2, -0.4, 0.3))        # arbitrary attitude
+    ra_ref, dec_ref = quat_to_radec(q_sky_ref)
+    d_cam = rotvec_to_quat((0.0, math.radians(20.0), 0.0))   # 20 deg slew
+    truth = quat_to_radec(quat_mul(d_cam, q_sky_ref))
+    r_imu = R.T @ np.asarray(quat_to_rotvec(d_cam))     # what the IMU sees
+
+    now = time.monotonic()
+    t0, ref_t = now - 1.6, now - 1.7
+
+    def cfg(frac, imu_t):
+        q_now = rotvec_to_quat(tuple(frac * v for v in r_imu))
+        return {
+            "imu_available": True,
+            "imu_q": q_now,
+            "imu_t": imu_t,
+            "imu_ref": ((1.0, 0.0, 0.0, 0.0), ra_ref, dec_ref, 0.0, ref_t,
+                        q_sky_ref),
+            "imu_frame_R": [float(v) for v in R.reshape(-1)],
+        }
+
+    out = None
+    for dt, frac in [(0.0, 0.0), (0.8, 0.5), (1.6, 1.0)]:
+        out = comms_proc._imu_predict(cfg(frac, t0 + dt))
+    assert out is not None
+    assert out[0] == pytest.approx(truth[0], abs=1e-6)
+    assert out[1] == pytest.approx(truth[1], abs=1e-6)
+
+    # Sanity: the raw body-frame delta on this mounting lands far from truth,
+    # so the frame correction is doing real work (not a no-op scenario).
+    naive = quat_to_radec(quat_mul(rotvec_to_quat(tuple(r_imu)), q_sky_ref))
+    err = math.hypot(wrap180(naive[0] - truth[0]), naive[1] - truth[1])
+    assert err > 10.0
+
+
+def test_imu_predict_accepts_5_and_6_tuple_refs():
+    # Backward/forward compat of the atomic imu_ref tuple: a 5-tuple (pre
+    # v0.11.23 solver) and a 6-tuple with sky_q=None both take the legacy
+    # C-matrix path and agree with the split-key result.
+    now = time.monotonic()
+    t0, ref_t = now - 1.6, now - 1.7
+    base = ((1.0, 0.0, 0.0, 0.0), 100.0, 20.0, 0.0, ref_t)
+    for ref in (base, base + (None,)):
+        _reset_rate_state()
+        out = None
+        for dt, deg in [(0.0, 0.0), (0.8, 0.4), (1.6, 0.8)]:
+            c = _cfg_rotated(deg, imu_t=t0 + dt, ref_t=ref_t)
+            c["imu_ref"] = ref
+            out = comms_proc._imu_predict(c)
+        assert out is not None
+        assert out[0] == pytest.approx(
+            100.0 + 0.8 / math.cos(math.radians(20.0)), abs=0.1)
+        assert out[1] == pytest.approx(20.0, abs=0.05)
+
+
 def test_smoothed_wrapper_resnaps_after_stale_gap(monkeypatch):
     comms_proc._imu_filt_state.clear()
     cfg = {"imu_t": 1.0, "imu_ref_t": 100.0, "_z": (10.0, 5.0)}
