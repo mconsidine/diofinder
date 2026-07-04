@@ -198,14 +198,31 @@ def capture_dark_mask(read_frame, n_frames: int, shape,
                       interval_s: float = 0.3, k: float = 5.0) -> HotPixelMask:
     """Median-stack ``n_frames`` from ``read_frame()`` and build a mask.
 
-    ``read_frame`` is a no-arg callable returning a fresh 2-D uint8 frame copy
-    (None to skip). ``shape`` is the expected frame shape. The lens should be
-    capped (this is a dark capture). Returns a HotPixelMask (not yet saved).
+    ``read_frame`` is a callable returning a fresh 2-D uint8 frame copy
+    (None to skip); when it supports the solver reader's
+    ``(with_seq=True, after_seq=N)`` protocol the capture chains sequence
+    numbers so every stacked frame is UNIQUE — the old wall-clock-only
+    sampling re-read the same frame at long exposures (16 reads at 0.9 s
+    exposure = only ~5-6 distinct frames), silently weakening the mask's MAD
+    statistics (audit 2026-07 F-L2). ``shape`` is the expected frame shape.
+    The lens should be capped (this is a dark capture). Returns a
+    HotPixelMask (not yet saved).
     """
     frames = []
     deadline_each = max(0.0, float(interval_s))
+    last_seq = -1
+    chain_seq = True
     for _ in range(max(1, int(n_frames))):
-        fr = read_frame()
+        fr = None
+        if chain_seq:
+            try:
+                res = read_frame(with_seq=True, after_seq=last_seq)
+                if res is not None:
+                    fr, last_seq = res
+            except TypeError:
+                chain_seq = False    # plain no-arg reader (tests, older API)
+        if not chain_seq:
+            fr = read_frame()
         if fr is not None and fr.shape == tuple(shape):
             frames.append(np.asarray(fr, dtype=np.uint8))
         time.sleep(deadline_each)

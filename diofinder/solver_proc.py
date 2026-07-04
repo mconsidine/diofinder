@@ -165,12 +165,23 @@ def _drain_align_queue(q, response_q):
     except Exception:
         pass
     for old_req in superseded:
-        response_q.put(AlignResult(
-            success=False,
-            error_message="superseded by a newer sync request",
-            completed_at=time.monotonic(),
-        ))
+        _align_reply(response_q, old_req, False,
+                     error_message="superseded by a newer sync request")
     return latest
+
+
+def _align_reply(response_q, req, success, **kw):
+    """Echo the request id and NEVER block: a full response queue (comms not
+    draining) blocking the solver here stalled the publish epoch and tripped
+    the watchdog — a restart triggered purely by queued sync spam (audit
+    2026-07 W2)."""
+    try:
+        response_q.put_nowait(AlignResult(
+            success=success,
+            request_id=getattr(req, "request_id", 0),
+            completed_at=time.monotonic(), **kw))
+    except Exception:
+        log.warning("align response queue full — result dropped")
 
 
 def _drain_cmd_queue(q):
@@ -204,6 +215,7 @@ class _SolverState:
         self.frames_tracked = 0
         self.frames_full = 0
         self.tracking_recover_fail = 0
+        self.tracking_solve_fail = 0
         self.tracking_enabled = bool(getattr(cfg, "tracking_enabled", False))
         # Latch so the "tetra3 extractor unavailable" fallback warns only once.
         self.tetra3_backend_warned = False
@@ -262,9 +274,17 @@ def _handle_solver_cmd(cmd, calibrator, polar,
                         state.solver_t3 = _tetra3.Tetra3(prev_db_path)
                         log.warning("set_db failed (%s); previous db reloaded", e)
                     except Exception as e2:
+                        # Double-fault: no database at all. Publishing empty
+                        # solutions would keep the watchdog epoch fresh, so
+                        # the old "log CRITICAL and limp on" left a zombie
+                        # that extracted stars but never solved until a
+                        # manual restart (audit 2026-07 W3/F1). Exit instead:
+                        # systemd restarts the unit, which loads the
+                        # configured db at startup.
                         log.critical("set_db failed AND previous db reload "
-                                     "failed (%s / %s) — solver has no db "
-                                     "until restart", e, e2)
+                                     "failed (%s / %s) — exiting so systemd "
+                                     "restarts with the configured db", e, e2)
+                        os._exit(1)
                 return SolverCmdReply(request_id=cmd.request_id, ok=False,
                                       error=f"failed to load {db_path}: {e}")
             finally:
@@ -284,32 +304,43 @@ def _handle_solver_cmd(cmd, calibrator, polar,
             n = int(cmd.args.get("frames", 16) or 16)
             n = max(2, min(64, n))
             shape = (cfg.frame_height, cfg.frame_width)
+            # Mark the solver busy for the watchdog, like set_db: 64 frames x
+            # 0.3 s + the median stack is ~20 s of no publishes — thin margin
+            # against the 30 s default and NEGATIVE against a user-lowered
+            # watchdog_timeout_s (audit 2026-07 W-L3).
+            if shared_cfg is not None:
+                shared_cfg["solver_busy_t"] = time.monotonic()
             try:
-                mask = _hp.capture_dark_mask(state.read_frame, n, shape)
-                if _hp.implausibly_large(mask.count, shape):
-                    # The mask saw light: lens not capped, or a light leak.
-                    # Saving it would silently break every subsequent solve
-                    # (observed: a 195k-pixel mask -> healthy star counts,
-                    # zero solves). MAD-collapse on a clean capped frame is
-                    # handled by MIN_THRESH_DN in hot_pixel.py, so by the
-                    # time this trips the capture genuinely saw light.
-                    return SolverCmdReply(
-                        request_id=cmd.request_id, ok=False,
-                        error=(f"dark capture flagged {mask.count} pixels "
-                               f"(~{100.0 * mask.count / (shape[0] * shape[1]):.0f}% "
-                               "of the frame) — the sensor saw light, not hot "
-                               "pixels. Cap or cover the lens completely "
-                               "(check for light leaks) and retry. "
-                               "The existing mask was left unchanged."))
-                mask.save(_hp.DEFAULT_MASK_PATH)
-                state.hot_pixel_mask = mask
-            except Exception as e:
-                return SolverCmdReply(request_id=cmd.request_id, ok=False,
-                                      error=f"dark capture failed: {e}")
-            log.info("Hot-pixel mask captured: %d pixels from %d frames",
-                     mask.count, n)
-            return SolverCmdReply(request_id=cmd.request_id, ok=True, result={
-                "count": mask.count, "frames": n, "path": _hp.DEFAULT_MASK_PATH})
+                try:
+                    mask = _hp.capture_dark_mask(state.read_frame, n, shape)
+                    if _hp.implausibly_large(mask.count, shape):
+                        # The mask saw light: lens not capped, or a light leak.
+                        # Saving it would silently break every subsequent solve
+                        # (observed: a 195k-pixel mask -> healthy star counts,
+                        # zero solves). MAD-collapse on a clean capped frame is
+                        # handled by MIN_THRESH_DN in hot_pixel.py, so by the
+                        # time this trips the capture genuinely saw light.
+                        return SolverCmdReply(
+                            request_id=cmd.request_id, ok=False,
+                            error=(f"dark capture flagged {mask.count} pixels "
+                                   f"(~{100.0 * mask.count / (shape[0] * shape[1]):.0f}% "
+                                   "of the frame) — the sensor saw light, not hot "
+                                   "pixels. Cap or cover the lens completely "
+                                   "(check for light leaks) and retry. "
+                                   "The existing mask was left unchanged."))
+                    mask.save(_hp.DEFAULT_MASK_PATH)
+                    state.hot_pixel_mask = mask
+                except Exception as e:
+                    return SolverCmdReply(request_id=cmd.request_id, ok=False,
+                                          error=f"dark capture failed: {e}")
+                log.info("Hot-pixel mask captured: %d pixels from %d frames",
+                         mask.count, n)
+                return SolverCmdReply(request_id=cmd.request_id, ok=True, result={
+                    "count": mask.count, "frames": n,
+                    "path": _hp.DEFAULT_MASK_PATH})
+            finally:
+                if shared_cfg is not None:
+                    shared_cfg["solver_busy_t"] = 0.0
 
         if cmd.op == SOLVER_OP_HOT_PIXEL_STATUS:
             from diofinder import hot_pixel as _hp
@@ -370,6 +401,7 @@ def _handle_solver_cmd(cmd, calibrator, polar,
                 "frames_tracked": int(state.frames_tracked),
                 "frames_full":    int(state.frames_full),
                 "recover_fail":   int(state.tracking_recover_fail),
+                "solve_fail":     int(state.tracking_solve_fail),
             })
 
         if cmd.op == SOLVER_OP_BG_CACHE_STATUS:
@@ -494,9 +526,15 @@ def _handle_solver_cmd(cmd, calibrator, polar,
             return SolverCmdReply(request_id=cmd.request_id, ok=True,
                                   result=calibrator.get_status())
         if cmd.op == SOLVER_OP_CALIBRATION_RESET:
-            calibrator.force_recalibrate()
+            persisted = calibrator.force_recalibrate()
+            result = {"state": calibrator.state.value,
+                      "persisted": bool(persisted)}
+            if not persisted:
+                result["warning"] = ("reset applied live but NOT persisted "
+                                     "(conf write failed) — it will revert "
+                                     "on restart")
             return SolverCmdReply(request_id=cmd.request_id, ok=True,
-                                  result={"state": calibrator.state.value})
+                                  result=result)
         if cmd.op == SOLVER_OP_POLAR_START:
             polar.start()
             return SolverCmdReply(request_id=cmd.request_id, ok=True,
@@ -835,6 +873,9 @@ def solver_main(slots, latest_solution, shared_cfg,
     frames_tracked      = 0       # counters for tracking_status
     frames_full         = 0
     tracking_recover_fail = 0
+    tracking_solve_fail   = 0     # verify/solve failures while TRACKING (F3)
+    tracking_fail_episodes = 0    # drives the relock backoff (audit F3)
+    tracking_run_len      = 0     # consecutive tracked frames this episode
     # Capability-probe: only pass strict_hint to the solver when it accepts it.
     try:
         import inspect as _inspect
@@ -855,6 +896,9 @@ def solver_main(slots, latest_solution, shared_cfg,
 
     fail_streak = 0
     dark_streak = 0
+    camera_stale_streak = 0
+    fallback_fires = 0        # loose-retry fires (audit F2 escalation cadence)
+    pending_gate_fire = False # gate fired on a raise path; retry next attempt
     solve_count = 0
     frame_seq = -1   # last frame sequence processed; gates re-work on stale frames
     _last_health_t = 0.0      # throttle for the exposure/contrast health warning
@@ -878,9 +922,37 @@ def solver_main(slots, latest_solution, shared_cfg,
             # re-extracting and re-solving an identical frame when a solve
             # finishes faster than the exposure-limited frame period. On a
             # camera stall the 5 s timeout still returns the current frame so
-            # housekeeping runs and the watchdog epoch keeps advancing.
+            # command housekeeping keeps running — but a sustained stall now
+            # freezes the publish epoch (below) instead of masquerading as a
+            # live camera.
+            prev_seq = frame_seq
             idx, frame_seq = slots.acquire_read_slot(timeout=5.0, after_seq=frame_seq)
             t0  = time.monotonic()
+
+            # Camera-stall detection (audit 2026-07 W1): the timeout path
+            # above returns the CURRENT frame with an unchanged seq. A
+            # blocking (non-raising) capture stall therefore shows up as
+            # consecutive same-seq returns — the only place in the system
+            # that can see it. After ~30 s stop publishing so the watchdog
+            # epoch goes stale and systemd restarts the unit, instead of
+            # re-solving the frozen frame forever and serving stale pointing
+            # as live. Threshold: 6 x 5 s timeouts; even a 10 s exposure
+            # produces a new frame every frame period, so a healthy slow
+            # camera never accumulates more than ~2.
+            if prev_seq >= 0 and frame_seq == prev_seq:
+                camera_stale_streak += 1
+                if camera_stale_streak >= 6:
+                    if (camera_stale_streak == 6
+                            or camera_stale_streak % 12 == 0):
+                        log.critical(
+                            "camera appears stalled: no new frame for ~%.0f s "
+                            "(seq stuck at %d) — freezing the publish epoch "
+                            "so the watchdog restarts the unit",
+                            camera_stale_streak * 5.0, frame_seq)
+                    slots.release_read_slot()
+                    continue
+            else:
+                camera_stale_streak = 0
 
             # Subsampled peak: the <20 gate is about overall illumination and
             # the >=250 saturation check (auto-exposure) is about regions, not
@@ -973,8 +1045,17 @@ def solver_main(slots, latest_solution, shared_cfg,
             # cache refills within one stack (8 frames) after switching back.
             if extractor_backend != "tetra3":
                 bg_cache.submit_frame(frame_buf)
-            if snap.get("imu_available", False):
-                bg_cache.note_motion(get_imu_qt(snap)[0])
+            _imu_q_snap, _imu_t_snap = get_imu_qt(snap)
+            if (snap.get("imu_available", False)
+                    and time.monotonic() - _imu_t_snap < 2.0):
+                # Staleness gate (audit 2026-07 W5): an IMU wedged in a kernel
+                # I2C read leaves imu_available=True with a FROZEN quaternion.
+                # Feeding that to note_motion means slews are never detected
+                # AND the fail-streak invalidation stays disabled ("IMU-less
+                # only") — a stale background model then suppresses the new
+                # field's stars on every slew, unlogged. The 2 s freshness
+                # window matches the hint/prediction gates.
+                bg_cache.note_motion(_imu_q_snap)
             else:
                 # Un-latch _imu_feeding so solver-derived slew detection and
                 # the fail-streak invalidation take over if the IMU dies
@@ -1111,6 +1192,8 @@ def solver_main(slots, latest_solution, shared_cfg,
                         # Not enough recovered -> fall back to FULL this frame
                         # and drop the lock so we re-acquire blind.
                         tracking_recover_fail += 1
+                        tracking_fail_episodes += 1
+                        tracking_run_len = 0
                         tracking_state = TRACK_FULL
                         tracking_good_run = 0
                         tracking_prev_xy = []
@@ -1178,14 +1261,12 @@ def solver_main(slots, latest_solution, shared_cfg,
                             if _raw else None
                         )
             except Exception as e:
-                log.warning("centroid extraction raised: %s", e)
+                if fail_streak == 0 or (fail_streak + 1) % 20 == 0:
+                    log.warning("centroid extraction raised: %s", e)
                 latest_solution.update(_empty_solution(peak=local_peak))
                 if align_req is not None:
-                    align_response_q.put(AlignResult(
-                        success=False,
-                        error_message=f"centroid extraction raised: {e}",
-                        completed_at=time.monotonic(),
-                    ))
+                    _align_reply(align_response_q, align_req, False,
+                                 error_message=f"centroid extraction raised: {e}")
                 fail_streak += 1
                 # Same failure bookkeeping as a NoMatch: without it an
                 # exception-class failure (e.g. a poisoned cache model) never
@@ -1208,6 +1289,7 @@ def solver_main(slots, latest_solution, shared_cfg,
             state.frames_tracked = frames_tracked
             state.frames_full = frames_full
             state.tracking_recover_fail = tracking_recover_fail
+            state.tracking_solve_fail = tracking_solve_fail
 
             # --- Step 2: star-count gate -------------------------------------
             min_c = snap.get("min_centroids", cfg.min_centroids)
@@ -1216,12 +1298,13 @@ def solver_main(slots, latest_solution, shared_cfg,
                     stars=n_stars, peak=local_peak,
                     solve_ms=extract_ms, status=TOO_FEW))
                 if align_req is not None:
-                    align_response_q.put(AlignResult(
-                        success=False,
-                        error_message=f"too few stars ({n_stars}<{min_c})",
-                        completed_at=time.monotonic(),
-                    ))
+                    _align_reply(align_response_q, align_req, False,
+                                 error_message=f"too few stars ({n_stars}<{min_c})")
                 fail_streak += 1
+                if served_by_tracking:
+                    tracking_solve_fail += 1
+                    tracking_fail_episodes += 1
+                    tracking_run_len = 0
                 if fail_streak == 1 or fail_streak % 20 == 0:
                     log.info(
                         "no solve: too few stars (%d<%d) peak=%d ext=%.0fms",
@@ -1310,18 +1393,31 @@ def solver_main(slots, latest_solution, shared_cfg,
                         **_solve_kw,
                     )
             except Exception as e:
-                log.warning("solve_from_centroids raised: %s", e)
+                if fail_streak == 0 or (fail_streak + 1) % 20 == 0:
+                    log.warning("solve_from_centroids raised: %s", e)
                 latest_solution.update(_empty_solution(
                     stars=n_stars, peak=local_peak,
                     solve_ms=extract_ms, status=NO_MATCH))
                 if align_req is not None:
-                    align_response_q.put(AlignResult(
-                        success=False,
-                        error_message=f"solver raised: {e}",
-                        completed_at=time.monotonic(),
-                    ))
+                    _align_reply(align_response_q, align_req, False,
+                                 error_message=f"solver raised: {e}")
                 fail_streak += 1
-                fallback_gate.note_failure()   # counts toward the loose retry
+                if served_by_tracking:
+                    # A tracked verify/solve failure says "the tight attitude
+                    # check failed", not "the FOV window excludes reality" —
+                    # keep it out of the FallbackGate streak (audit F3); the
+                    # next frame re-acquires with the FULL solver anyway.
+                    tracking_solve_fail += 1
+                    tracking_fail_episodes += 1
+                    tracking_run_len = 0
+                else:
+                    # A raise counts toward the loose retry like a NoMatch.
+                    # The fire signal can't run the retry here (no solution
+                    # flow), so carry it to the next attempt — otherwise an
+                    # exception-class failure streak (NaN centroid, wheel API
+                    # mismatch) never triggers the escape hatch (audit F5).
+                    if fallback_gate.note_failure():
+                        pending_gate_fire = True
                 bg_cache.note_solve_result(None, False)
                 tracking_state = TRACK_FULL
                 tracking_good_run = 0
@@ -1336,17 +1432,36 @@ def solver_main(slots, latest_solution, shared_cfg,
             status_int = _OLIVE_STATUS.get(status_str, NO_MATCH)
             solve_count += 1
 
-            if soln.get("RA") is None and fallback_gate.note_failure():
+            gate_fired = False
+            if soln.get("RA") is None and not served_by_tracking:
+                gate_fired = fallback_gate.note_failure() or pending_gate_fire
+                pending_gate_fire = False
+            if gate_fired:
                 # Loose blind retry: same centroids, the LOOSE FOV window and
                 # no attitude hint. One call escapes both self-sustaining
                 # failure modes — a committed FOV that excludes reality
                 # (calibrator starves: it only learns from successes) and a
                 # poisoned hint (wheels without the blind-fallback pass).
+                fallback_fires += 1
                 retry_kw = dict(_solve_kw)
-                retry_kw["fov_max_error"] = max(
-                    float(snap.get("fov_max_error_deg",
-                                         cfg.fov_max_error_deg)),
-                    float(retry_kw.get("fov_max_error") or 0.0))
+                if fallback_fires % 3 == 0:
+                    # Every 3rd fire, escalate to a FULLY blind FOV search:
+                    # the loose window is only +/-fov_max_error_deg (0.3 deg)
+                    # around the SAME committed estimate, which can never
+                    # recover from a lens change (13.5 -> 6.8 deg swaps every
+                    # solve outside it forever, and force_recalibrate needs a
+                    # SUCCESS to fire). fov_estimate=None lets olive-solve
+                    # search the database's full FOV range (audit 2026-07 F2).
+                    retry_kw["fov_estimate"] = None
+                    retry_kw["fov_max_error"] = None
+                    log.warning(
+                        "fallback fire #%d: escalating to full-range blind "
+                        "FOV search", fallback_fires)
+                else:
+                    retry_kw["fov_max_error"] = max(
+                        float(snap.get("fov_max_error_deg",
+                                             cfg.fov_max_error_deg)),
+                        float(retry_kw.get("fov_max_error") or 0.0))
                 retry_kw.pop("attitude_hint", None)
                 retry_kw.pop("hint_uncertainty_deg", None)
                 if SOLVER_HAS_STRICT_HINT:
@@ -1385,11 +1500,8 @@ def solver_main(slots, latest_solution, shared_cfg,
                     stars=n_stars, peak=local_peak,
                     solve_ms=elapsed_ms, status=status_int))
                 if align_req is not None:
-                    align_response_q.put(AlignResult(
-                        success=False,
-                        error_message=f"no match (status={status_str})",
-                        completed_at=time.monotonic(),
-                    ))
+                    _align_reply(align_response_q, align_req, False,
+                                 error_message=f"no match (status={status_str})")
                 fail_streak += 1
                 if fail_streak == 1 or fail_streak % 20 == 0:
                     log.info(
@@ -1400,6 +1512,10 @@ def solver_main(slots, latest_solution, shared_cfg,
                 if cfg.save_failed_frames and frame_snapshot is not None:
                     _save_frame(frame_snapshot, cfg, f"failed_{status_str}")
                 bg_cache.note_solve_result(None, False)
+                if served_by_tracking:
+                    tracking_solve_fail += 1
+                    tracking_fail_episodes += 1
+                    tracking_run_len = 0
                 tracking_state = TRACK_FULL
                 tracking_good_run = 0
                 tracking_prev_xy = []
@@ -1427,8 +1543,20 @@ def solver_main(slots, latest_solution, shared_cfg,
             if tracking_on:
                 tracking_prev_xy = _tracking_mod.centroids_to_xy(centroids)
                 tracking_good_run += 1
+                if served_by_tracking:
+                    tracking_run_len += 1
+                    if tracking_run_len >= 20:
+                        # A sustained healthy episode clears the backoff.
+                        tracking_fail_episodes = 0
+                # Relock backoff (audit F3): without it a systematic verify
+                # failure produced 3 good solves -> lock -> 1 failed tracked
+                # frame -> repeat forever, dropping one pointing frame in
+                # four invisibly. Each failed episode doubles the
+                # consecutive-solves requirement (capped at 8x).
+                _lock_needed = track_lock_frames * (
+                    2 ** min(tracking_fail_episodes, 3))
                 if (tracking_state == TRACK_FULL
-                        and tracking_good_run >= track_lock_frames
+                        and tracking_good_run >= _lock_needed
                         and len(tracking_prev_xy) >= track_min_recover):
                     tracking_state = TRACK_TRACKING
             else:
@@ -1486,30 +1614,22 @@ def solver_main(slots, latest_solution, shared_cfg,
                 xt = soln.get("x_target")
                 yt = soln.get("y_target")
                 if xt is None or yt is None:
-                    align_response_q.put(AlignResult(
-                        success=False,
-                        error_message="no x_target/y_target in solution",
-                        completed_at=time.monotonic(),
-                    ))
+                    _align_reply(align_response_q, align_req, False,
+                                 error_message="no x_target/y_target in solution")
                 else:
                     x = xt[0] if hasattr(xt, "__len__") else xt
                     y = yt[0] if hasattr(yt, "__len__") else yt
                     if x is None or y is None:
-                        align_response_q.put(AlignResult(
-                            success=False,
-                            error_message="target outside camera FOV",
-                            completed_at=time.monotonic(),
-                        ))
+                        _align_reply(align_response_q, align_req, False,
+                                     error_message="target outside camera FOV")
                     else:
                         log.info(
                             "ALIGN: (%.4f, %.4f) -> pixel (y=%.2f, x=%.2f)",
                             align_req.target_ra_deg,
                             align_req.target_dec_deg, y, x)
-                        align_response_q.put(AlignResult(
-                            success=True,
-                            boresight_y=float(y), boresight_x=float(x),
-                            completed_at=time.monotonic(),
-                        ))
+                        _align_reply(align_response_q, align_req, True,
+                                     boresight_y=float(y),
+                                     boresight_x=float(x))
 
             if cfg.save_solved_frames and frame_snapshot is not None:
                 _save_frame(frame_snapshot, cfg, "solved")

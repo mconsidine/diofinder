@@ -297,7 +297,12 @@ class FovCalibrator:
                 "fov_calibrated_stddev": self.params.fov_convergence_stddev,
             })
         except Exception as e:
+            # Report the failure to the caller: the in-memory reset applied,
+            # but a restart resurrects the old committed calibration — the
+            # UI must not claim an unconditional success (audit 2026-07 F6).
             log.warning("Could not persist calibration reset: %s", e)
+            return False
+        return True
         self._log_state_change()
 
 

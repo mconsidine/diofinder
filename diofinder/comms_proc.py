@@ -35,7 +35,7 @@ import statistics
 import subprocess
 import threading
 import time
-from queue import Empty
+from queue import Empty, Full
 
 from diofinder import config as cfg_mod
 from diofinder.align import AlignRequest, AlignResult, CommsAlignState
@@ -184,20 +184,45 @@ def _wait_for_reply(reply_q, request_id, timeout_s=5.0):
     return None
 
 
-def _call_solver(op, args, solver_cmd_q, solver_cmd_reply_q, timeout_s=5.0):
-    """Send op/args to solver_proc and return the SolverCmdReply, or None on timeout."""
+def _call_solver(op, args, solver_cmd_q, solver_cmd_reply_q, timeout_s=8.0):
+    """Send op/args to solver_proc and return the SolverCmdReply, or None on timeout.
+
+    Default 8 s: the solver drains commands once per loop iteration, and the
+    loop can legitimately sit 5 s inside its frame wait — the old 5 s default
+    raced that window and returned spurious "solver did not respond" at long
+    exposures (audit 2026-07 W4)."""
     rid = next(_request_id_seq)
     with _solver_call_lock:
         solver_cmd_q.put(SolverCmd(op=op, args=args or {}, request_id=rid))
         return _wait_for_reply(solver_cmd_reply_q, rid, timeout_s=timeout_s)
 
 
-def _call_camera(op, args, camera_cmd_q, camera_cmd_reply_q, timeout_s=2.0):
+# Last exposure comms observed (from any camera reply carrying exposure_s).
+# Scales the camera RPC timeout: camera_proc drains its command queue once
+# per loop iteration, each of which blocks ~one exposure inside capture, so a
+# fixed 2 s timeout made EVERY camera RPC (auto-exposure reads, UI controls,
+# dark-capture snapshots) time out at exposures over ~2 s (audit 2026-07 W4).
+# Plain float assignment is GIL-atomic; no lock needed.
+_last_exposure_s = 0.5
+
+
+def _call_camera(op, args, camera_cmd_q, camera_cmd_reply_q, timeout_s=None):
     """Send op/args to camera_proc and return the CameraCmdReply, or None on timeout."""
+    global _last_exposure_s
+    if timeout_s is None:
+        timeout_s = max(2.0, 2.0 + 2.0 * _last_exposure_s)
     rid = next(_request_id_seq)
     with _camera_call_lock:
         camera_cmd_q.put(CameraCmd(op=op, args=args or {}, request_id=rid))
-        return _wait_for_reply(camera_cmd_reply_q, rid, timeout_s=timeout_s)
+        reply = _wait_for_reply(camera_cmd_reply_q, rid, timeout_s=timeout_s)
+    try:
+        if reply is not None and reply.ok and isinstance(reply.result, dict):
+            v = reply.result.get("exposure_s")
+            if v:
+                _last_exposure_s = float(v)
+    except Exception:
+        pass
+    return reply
 
 
 # Auto-exposure / gain controller tunables.
@@ -875,8 +900,14 @@ def _auto_tune_run(ctx, params):
             ctx.cfg.gain = updates["gain"]
             try:
                 cfg_mod.save_keys(updates)
+                result["persisted"] = True
             except Exception as e:
+                # Surface it: a silent ok=True here is the "settings saved !=
+                # settings in force" class — live values applied, but a
+                # restart reverts them (audit 2026-07 F4).
                 log.warning("auto-tune could not persist: %s", e)
+                result["persisted"] = False
+                result["persist_error"] = str(e)
             # Save a labelled, reversible override artifact for this mode (the
             # factory preset stays untouched). The values applied live above
             # now also match the override -> lineage reads "tuned".
@@ -981,6 +1012,11 @@ def _watchdog_loop(ctx, interval_s=5.0):
             os._exit(1)
 
 
+# Monotonic :CM# correlation ids. Only touched from the LX200 handler on the
+# comms main thread — no lock needed.
+_align_req_seq = itertools.count(1)
+
+
 def _do_alignment(align_state, cfg, shared_cfg,
                   align_request_q, align_response_q):
     """Execute :CM# alignment: send target to solver, wait for result, persist boresight."""
@@ -994,16 +1030,32 @@ def _do_alignment(align_state, cfg, shared_cfg,
     except Empty:
         pass
 
-    align_request_q.put(req)
-    log.info("Alignment requested: RA=%.4f Dec=%.4f",
-             req.target_ra_deg, req.target_dec_deg)
+    req.request_id = next(_align_req_seq)
+    try:
+        # NEVER block: with the solver not consuming (dark frames keep
+        # requests queued), a 5th retry's blocking put wedged the comms main
+        # thread forever — no LX200 client could be served again, and nothing
+        # restarts a blocked-but-alive thread (audit 2026-07 W2).
+        align_request_q.put_nowait(req)
+    except Full:
+        align_state.reset()
+        log.warning("align request queue full (solver not consuming — dark "
+                    "frames / mid-slew?); replying busy")
+        return "align fail: solver busy#"
+    log.info("Alignment requested: RA=%.4f Dec=%.4f (id %d)",
+             req.target_ra_deg, req.target_dec_deg, req.request_id)
 
     deadline = time.monotonic() + CommsAlignState.DEFAULT_TIMEOUT_S
     result = None
     while time.monotonic() < deadline:
         try:
             candidate = align_response_q.get(timeout=0.5)
-            if candidate.completed_at >= req.requested_at:
+            # Strict correlation: only THIS request's echo counts. The old
+            # completed_at >= requested_at check accepted a late result from
+            # a PREVIOUS sync — in the worst interleaving a success computed
+            # for the old target was persisted as the new sync's boresight
+            # (audit 2026-07 W2).
+            if getattr(candidate, "request_id", 0) == req.request_id:
                 result = candidate; break
         except Empty:
             continue
@@ -1718,10 +1770,12 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 if r is not None and r.ok:
                     setattr(ctx.cfg, cam_key, float(val))
                     updates[cam_key] = float(val)
+            persist_ok, persist_err = True, None
             try:
                 cfg_mod.save_keys(updates)
             except Exception as e:
                 log.warning("auto_tune_apply_last could not persist: %s", e)
+                persist_ok, persist_err = False, str(e)
             override = None
             try:
                 override = seeing_mod.save_override(mode, dict(updates),
@@ -1731,8 +1785,11 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             _invalidate_solver_cache()
             _at_set(result={**result, "committed": True})
             log.info("auto-tune apply-last (override saved): %s", updates)
-            return MaintResponse(ok=True, result={
-                "applied": updates, "mode": mode, "override": override})
+            _r = {"applied": updates, "mode": mode, "override": override,
+                  "persisted": persist_ok}
+            if persist_err:
+                _r["persist_error"] = persist_err
+            return MaintResponse(ok=True, result=_r)
 
         if cmd == "tuning_set":
             # Toggle the libcamera tuning profile. Takes effect on the NEXT
@@ -2165,17 +2222,25 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
 
             ctx.cfg.seeing_mode = mode
             ctx.shared_cfg["seeing_mode"] = mode
+            persist_ok, persist_err = True, None
             try:
                 cfg_mod.save_keys(persisted)
             except Exception as e:
+                # Applied live but NOT persisted: without surfacing this, a
+                # read-only SD (post-power-blip remount) made the toggle
+                # silently revert on the next restart (audit 2026-07 F4).
                 log.warning("Could not persist seeing preset: %s", e)
+                persist_ok, persist_err = False, str(e)
 
             _invalidate_solver_cache()
-            log.info("Seeing preset -> %s (db=%s override=%s)",
-                     mode, db_token, override_applied)
-            return MaintResponse(ok=True, result={
-                "mode": mode, "applied": persisted, "db": db_result,
-                "override_applied": override_applied})
+            log.info("Seeing preset -> %s (db=%s override=%s persisted=%s)",
+                     mode, db_token, override_applied, persist_ok)
+            result = {"mode": mode, "applied": persisted, "db": db_result,
+                      "override_applied": override_applied,
+                      "persisted": persist_ok}
+            if persist_err:
+                result["persist_error"] = persist_err
+            return MaintResponse(ok=True, result=result)
 
         if cmd == "seeing_override_save":
             mode = str(args.get("mode") or ctx.shared_cfg.get(
@@ -2237,29 +2302,33 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             want_s = _opt_float("exposure_s")
             want_g = _opt_float("gain")
 
+            # Pause AE FIRST and put the camera set + settle inside the
+            # try: the old order let an AE cycle move gain during the ~2 s
+            # settle (the "fixed worst-case" mask was then captured at a
+            # different point than requested), and an exception in the setup
+            # window left the camera parked at the worst-case setting with
+            # AE resumed against it (audit 2026-07 F7).
             snap_s = snap_g = None
-            if want_s is not None or want_g is not None:
-                snap = _call_camera(CAMERA_OP_GET_EXPOSURE, {},
-                                    ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
-                snap_s = (float(snap.result.get("exposure_s", ctx.cfg.exposure_s))
-                          if (snap and snap.ok) else ctx.cfg.exposure_s)
-                snap_g = (float(snap.result.get("gain", ctx.cfg.gain))
-                          if (snap and snap.ok) else ctx.cfg.gain)
-                if want_s is not None:
-                    _call_camera(CAMERA_OP_SET_EXPOSURE, {"exposure_s": want_s},
-                                 ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
-                if want_g is not None:
-                    _call_camera(CAMERA_OP_SET_GAIN, {"gain": want_g},
-                                 ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
-                # Let the new setting flush through a few frames before stacking.
-                settle_s = want_s if want_s is not None else (snap_s or 0.5)
-                time.sleep(max(0.5, 2.0 * settle_s))
-
-            # Pause AE for the whole capture (refcounted): an AE step mid
-            # dark-capture changes the pedestal within the stack at ANY
-            # operating point, not just the fixed worst-case one.
             _ae_pause()
             try:
+                if want_s is not None or want_g is not None:
+                    snap = _call_camera(CAMERA_OP_GET_EXPOSURE, {},
+                                        ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+                    snap_s = (float(snap.result.get("exposure_s", ctx.cfg.exposure_s))
+                              if (snap and snap.ok) else ctx.cfg.exposure_s)
+                    snap_g = (float(snap.result.get("gain", ctx.cfg.gain))
+                              if (snap and snap.ok) else ctx.cfg.gain)
+                    if want_s is not None:
+                        _call_camera(CAMERA_OP_SET_EXPOSURE, {"exposure_s": want_s},
+                                     ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+                    if want_g is not None:
+                        _call_camera(CAMERA_OP_SET_GAIN, {"gain": want_g},
+                                     ctx.camera_cmd_q, ctx.camera_cmd_reply_q)
+                    # Let the new setting flush through a few frames before
+                    # stacking.
+                    settle_s = want_s if want_s is not None else (snap_s or 0.5)
+                    time.sleep(max(0.5, 2.0 * settle_s))
+
                 reply = _call_solver(SOLVER_OP_DARK_CAPTURE, {"frames": frames},
                                      ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
                                      timeout_s=max(30.0, frames * 0.6 + 10.0))
