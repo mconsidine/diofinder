@@ -248,90 +248,19 @@ Each task below is self-contained: context, design, files, and acceptance
 criteria. Update this file (remove/annotate the task) in the same PR that
 implements one.
 
-### Task A (diagnostics) — FrameSlots-aware web-UI frame reads
+*(Both tasks below shipped in v0.11.22 — kept as one-line records; see git
+history for the full specs.)*
 
-**Problem.** Three webui code paths read camera frames from POSIX shared
-memory directly and always take slot 0: `debug_collect` (~`webui/app.py:1609`),
-`frame_jpg` (~`:1296`), `_bgrun_capture` (~`:1811`). Slot 0 is frequently the
-camera's active write target, so captured frames can be **torn** (top half
-exposure N, bottom half N−1) and bursts advance only when slot 0 happens to be
-rewritten — breaking the "≥ bg_cache_stack consecutive frames" premise debug
-bundles are built on. The webui runs in a **separate systemd unit** and cannot
-see the daemon's `multiprocessing.Value` slot state, which is why it cheats.
-
-**Design.** Do NOT plumb `FrameSlots` into comms (verified: `comms_main` does
-not receive it, and the FrameSlots protocol has a single reader slot — the
-solver). Instead reuse the solver's existing safe read path:
-`_SolverState.read_frame` already returns a fresh, bracketed frame copy (it is
-what `dark_capture` uses). Add a solver op `SOLVER_OP_FRAME_GET` in
-`diofinder/solver_proc.py::_handle_solver_cmd` returning the frame (raw bytes
-+ shape + seq), a comms maint command `frame_get` that forwards it (frame is
-960×760 u8 ≈ 730 KB; the maint protocol ships JSON — base64 it, ~1 MB, fine
-over the unix socket), and replace the three webui SHM readers with
-`_safe_call("frame_get")`. Keep the direct-SHM path only as a fallback when
-the daemon is down, labeling such frames `"unsynced"` in bundle metadata. For
-the 12-frame burst, call `frame_get` in a loop and use the returned `seq` to
-assert consecutiveness (skip/retry on gaps).
-
-**Files.** `diofinder/solver_proc.py` (+op), `diofinder/worker_cmds.py`
-(+constant), `diofinder/comms_proc.py` (+command), `webui/app.py` (three
-readers), `CLAUDE.md` (maint command list), tests: solver-op unit test with a
-stub `read_frame`; bundle metadata assertion.
-
-**Acceptance.** Debug-bundle frames are bracketed reads (no torn frames by
-construction); burst frames are strictly consecutive `seq`s; webui still
-serves a frame when the daemon is stopped (fallback labeled).
-
-### Task B (optimization) — IMU hint in the camera frame (full fix for the body-frame hint)
-
-**Problem.** `solver_proc._imu_propagate_hint` composes the IMU's rotation
-delta directly onto the last solved sky attitude, implicitly assuming the IMU
-body frame ≡ camera frame. The mounting misalignment makes the hint direction
-wrong by up to 2× the slew angle (measured on-sky: 39.5° hint error for a
-22.5° slew, 1.76×). Mitigations shipped: cone widened to 2.5× the measured
-angle (v0.11.18), hint dropped after 5 consecutive failures (v0.11.20),
-olive-solve ≥ 0.1.3 falls back to a blind pass. Cost today: a wasted hinted
-pass after large slews; the hint never actually *helps* re-acquisition.
-
-**Design.** Estimate the fixed rotation between IMU-delta space and sky-delta
-space from data already collected, then conjugate the delta through it:
-
-1. `solver_proc._imu_update_reference` already harvests per-solve-pair motion:
-   it stores `(r_imu[3], cam_r, cam_u)` in `shared_cfg["imu_calib_pairs"]` and
-   fits the linearized 3×2 matrix `imu_calib_C` (used by LX200 pointing).
-   Extend the stored pairs with the **full 3-D sky rotation vector**
-   `r_sky[3]` (compute the delta quaternion between consecutive solved
-   attitudes — `soln["quaternion"]` is available — and convert via
-   `quat_delta_rotvec`, already in `diofinder/imu_math.py`).
-2. New pure function in `diofinder/imu_math.py`:
-   `fit_frame_rotation(pairs) -> (R 3x3, quality)` solving the Wahba/Kabsch
-   problem over the rotation-vector pairs (SVD; enforce `det(R)=+1`).
-   Quality gating is the load-bearing part: require ≥ 3 pairs, R² ≥ ~0.9, and
-   **axis diversity** (the r_imu set must span ≥ 2 non-collinear directions —
-   check the second singular value / condition number; alt-only slewing makes
-   the fit degenerate about that axis). Rolling window (last ~20 pairs)
-   handles slow BNO055 heading drift.
-3. Solver publishes `shared_cfg["imu_frame_R"]` (9 floats) + quality after
-   each refit. `_imu_propagate_hint`: when a good R exists, transform
-   `r_delta_cam = R @ r_delta_imu`, rebuild the delta quaternion, compose;
-   tighten the cone to `max(2°, 1.2× angle)`. When absent/degraded, current
-   behavior (2.5× cone) unchanged.
-4. Optional phase 2 (separate PR): use the same R for the comms LX200
-   prediction, replacing the 2-D `imu_calib_C` linearization (better roll
-   handling); keep `imu_calib_C` published for the webui quality display.
-
-**Constraints.** Pure-numpy, hardware-free tests (synthetic mountings: 90°
-rotations, arbitrary tilts → hint error collapses from ~1.76× to <0.1× slew;
-degenerate-coverage refusal; drift re-learn). Keep IPC discipline: reads from
-the frame snapshot, one batched publish. Never regress the fallback path.
-
-**Files.** `diofinder/imu_math.py`, `diofinder/solver_proc.py`,
-`tests/test_imu_smoothing.py` or a new `tests/test_frame_rotation.py`,
-`CLAUDE.md` + `docs/imu.md` (flowchart mentions the transform).
-
-**Acceptance.** With a synthetic 90°-mounted IMU and a 20° slew, the hinted
-attitude is within 2° of truth (was ~35°); all existing IMU tests pass; the
-transform disengages (falls back) on collinear-axis histories.
+- **Task A (done, v0.11.22)**: webui frame reads now go through the solver's
+  FrameSlots-bracketed `frame_get` maint command (`after_seq` chaining for
+  strictly consecutive burst frames; bundles record `frames_synced`); the
+  direct-SHM read survives only as a labeled daemon-down fallback.
+- **Task B (done, v0.11.22)**: `diofinder/imu_frame.py` Kabsch-fits the
+  IMU-body→camera rotation from solve-pair rotation vectors (quality-gated:
+  pairs≥4, axis diversity, R²) and the solve hint conjugates the IMU delta
+  through it (cone 1.2× when active, 2.5× fallback otherwise). Phase 2 —
+  using the same fit for the LX200 pointing prediction in comms — remains
+  open as an optional improvement.
 
 ### Accepted-by-design (do NOT "fix" without a new reason)
 

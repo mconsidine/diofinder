@@ -26,7 +26,9 @@ import numpy as np
 from diofinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
 from diofinder.align import AlignResult
 from diofinder.calibration import FovCalibrator, FallbackGate
-from diofinder.imu_math import quat_delta_rotvec
+from diofinder.imu_math import (quat_delta_rotvec, quat_to_rotvec,
+                                rotvec_to_quat)
+from diofinder import imu_frame as _imu_frame
 from diofinder.polar_run import PolarAligner
 from diofinder import frame_health
 from multiprocessing import shared_memory
@@ -218,6 +220,7 @@ def _handle_solver_cmd(cmd, calibrator, polar,
         SOLVER_OP_SOLVE_CENTROIDS, SOLVER_OP_BG_CACHE_STATUS,
         SOLVER_OP_SET_DB, SOLVER_OP_DARK_CAPTURE,
         SOLVER_OP_HOT_PIXEL_STATUS, SOLVER_OP_HOT_PIXEL_CLEAR,
+        SOLVER_OP_FRAME_GET,
         SOLVER_OP_TRACKING_STATUS,
         SOLVER_OP_AUTO_TUNE_EVAL,
     )
@@ -337,6 +340,22 @@ def _handle_solver_cmd(cmd, calibrator, polar,
             log.info("Hot-pixel mask cleared")
             return SolverCmdReply(request_id=cmd.request_id, ok=True,
                                   result={"count": 0, "loaded": False})
+
+        if cmd.op == SOLVER_OP_FRAME_GET:
+            if state is None or state.read_frame is None:
+                return SolverCmdReply(request_id=cmd.request_id, ok=False,
+                                      error="frame source unavailable")
+            after = int(cmd.args.get("after_seq", -1))
+            res = state.read_frame(with_seq=True, after_seq=after)
+            if res is None:
+                return SolverCmdReply(request_id=cmd.request_id, ok=False,
+                                      error="no frame published yet")
+            frame, seq = res
+            return SolverCmdReply(request_id=cmd.request_id, ok=True, result={
+                "shape": [int(frame.shape[0]), int(frame.shape[1])],
+                "seq": int(seq),
+                "data": frame.tobytes(),
+            })
 
         if cmd.op == SOLVER_OP_TRACKING_STATUS:
             if state is None:
@@ -541,25 +560,33 @@ def _imu_propagate_hint(last_sky_q, last_imu_q, shared_cfg):
     yh = wd*ys - xd*zs + yd*ws + zd*xs
     zh = wd*zs + xd*ys - yd*xs + zd*ws
 
-    # Uncertainty: 2.5x the measured rotation angle, floor 2 deg. The delta is
-    # applied in the IMU BODY frame, not the camera frame, so the hint attitude
-    # error grows with the slew size in a mounting-dependent direction —
-    # measured on-sky: a 22.5 deg slew put the hint 39.5 deg from truth (1.76x),
-    # outside the old 1.5x cone. olive-solve >= 0.1.3 falls back to a blind
-    # pass when the hinted pass matches nothing, but on older wheels an
-    # out-of-cone hint is a hard NoMatch, and even on current wheels a cone
-    # that never contains truth just wastes the hinted pass. 2.5x keeps truth
-    # inside for any mounting (worst case is 2x when the IMU and camera frames
-    # are fully perpendicular). The real fix — conjugating the delta into the
-    # camera frame via the solve-pair mounting rotation — is future work.
     angle_deg = math.degrees(2.0 * math.acos(min(1.0, abs(wd))))
-    uncertainty_deg = max(2.0, angle_deg * 2.5)
+    # Frame-corrected hint (quality-gated fit published by
+    # _imu_update_reference): conjugate the body-frame delta into the CAMERA
+    # frame so the hint points AT the truth instead of merely containing it
+    # in a wide cone — the raw body-frame delta was measured on-sky landing
+    # 1.76x the slew angle away. With the transform active the cone tightens
+    # to 1.2x; without it the defensive 2.5x cone keeps truth inside for any
+    # mounting (worst case 2x). olive-solve >= 0.1.3's blind fallback still
+    # backstops both paths.
+    R9 = shared_cfg.get("imu_frame_R")
+    if R9:
+        rx, ry, rz = quat_to_rotvec((wd, xd, yd, zd))
+        wd, xd, yd, zd = rotvec_to_quat(_imu_frame.apply_rotation(R9, (rx, ry, rz)))
+        # Recompose the hint with the camera-frame delta.
+        wh = wd*ws - xd*xs - yd*ys - zd*zs
+        xh = wd*xs + xd*ws + yd*zs - zd*ys
+        yh = wd*ys - xd*zs + yd*ws + zd*xs
+        zh = wd*zs + xd*ys - yd*xs + zd*ws
+        uncertainty_deg = max(2.0, angle_deg * 1.2)
+    else:
+        uncertainty_deg = max(2.0, angle_deg * 2.5)
 
     return (wh, xh, yh, zh), uncertainty_deg
 
 
 def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
-                          snap=None):
+                          snap=None, sky_q=None, prev_sky_q=None):
     """Record current IMU quaternion alongside the just-solved sky position.
     comms_proc uses these pairs to predict pointing between solves.
 
@@ -613,7 +640,16 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
     cam_r =  dra_rad * cos_r + ddec_rad * sin_r
     cam_u = -dra_rad * sin_r + ddec_rad * cos_r
     pairs = list(src.get("imu_calib_pairs", []))
-    pairs.append((r_imu[0], r_imu[1], r_imu[2], cam_r, cam_u))
+    # Full 3-D sky rotation vector (from consecutive SOLVED attitudes) rides
+    # along with the 2-D projection: it feeds the frame-rotation fit that
+    # lets the solve hint apply the IMU delta in the CAMERA frame instead of
+    # the body frame (r_sky = R r_imu for a fixed mounting). Pairs without a
+    # quaternion history stay 5-tuples and are skipped by that fit.
+    entry = (r_imu[0], r_imu[1], r_imu[2], cam_r, cam_u)
+    if sky_q is not None and prev_sky_q is not None:
+        r_sky3 = quat_delta_rotvec(tuple(sky_q), tuple(prev_sky_q))
+        entry = entry + (r_sky3[0], r_sky3[1], r_sky3[2])
+    pairs.append(entry)
     if len(pairs) > 20:
         pairs = pairs[-20:]
     if len(pairs) >= 3:
@@ -628,6 +664,16 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
         shared_cfg["imu_calib_quality"] = r2
     shared_cfg["imu_calib_pairs"] = pairs
     shared_cfg["imu_calib_n"]     = len(pairs)
+    # IMU-body -> camera frame rotation (quality-gated Kabsch fit over the
+    # 3-D pairs). Published only when demonstrably good; the hint path falls
+    # back to the wide-cone body-frame behavior otherwise.
+    full = [p for p in pairs if len(p) >= 8]
+    if len(full) >= _imu_frame.MIN_PAIRS:
+        R9, quality = _imu_frame.fit_frame_rotation(
+            [p[0:3] for p in full], [p[5:8] for p in full])
+        shared_cfg["imu_frame_R"] = R9
+        shared_cfg["imu_frame_quality"] = (
+            quality if R9 is not None else {"rejected": str(quality)})
 
 
 def solver_main(slots, latest_solution, shared_cfg,
@@ -730,12 +776,21 @@ def solver_main(slots, latest_solution, shared_cfg,
     bufs = [np.ndarray((cfg.frame_height, cfg.frame_width), dtype=np.uint8,
                         buffer=s.buf) for s in shms]
 
-    def _read_current_frame():
-        """Copy the most-recent published SHM frame (for dark capture)."""
-        i = slots.latest_ready.value
-        if i is None or i < 0:
+    def _read_current_frame(with_seq=False, after_seq=-1):
+        """Copy the most-recent published SHM frame via the FrameSlots
+        protocol. Claiming the read slot means the camera cannot rewrite the
+        buffer mid-copy (the old bare latest_ready read could return a torn
+        frame). ``after_seq >= 0`` waits (bounded) for a frame NEWER than
+        that sequence — the frame_get burst path chains it for strictly
+        consecutive frames. Called from the solver-command handler, which
+        runs between frames, so the loop's own read slot is never held here.
+        """
+        idx, seq = slots.acquire_read_slot(timeout=2.0, after_seq=after_seq)
+        if idx is None or idx < 0:
             return None
-        return np.array(bufs[i], dtype=np.uint8, copy=True)
+        frame = np.array(bufs[idx], dtype=np.uint8, copy=True)
+        slots.release_read_slot()
+        return (frame, seq) if with_seq else frame
     state.read_frame = _read_current_frame
 
     # ---- Pre-allocate hot-path buffers -------------------------------------
@@ -1287,7 +1342,9 @@ def solver_main(slots, latest_solution, shared_cfg,
 
             # Update attitude hint state for next frame
             q_solved = soln.get("quaternion")
+            prev_sky_q_for_ref = None
             if q_solved is not None:
+                prev_sky_q_for_ref = last_sky_q    # previous solve's attitude
                 last_sky_q       = tuple(q_solved)
                 last_solve_imu_q = snap.get("imu_q")
             # --- Tracking-mode bookkeeping (success) -------------------------
@@ -1350,7 +1407,9 @@ def solver_main(slots, latest_solution, shared_cfg,
                 star=star,
             ))
             _imu_update_reference(
-                shared_cfg, ra_out, dec_out, soln.get("Roll", 0.0), snap=snap)
+                shared_cfg, ra_out, dec_out, soln.get("Roll", 0.0), snap=snap,
+                sky_q=(tuple(q_solved) if q_solved is not None else None),
+                prev_sky_q=prev_sky_q_for_ref)
 
             if align_req is not None:
                 xt = soln.get("x_target")
