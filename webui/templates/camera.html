@@ -242,6 +242,46 @@
   </div>
 
   <div class="card expert-only">
+    <h2>Experimental A/B (tracking &amp; bg-cache)</h2>
+    <p class="hint" style="margin:0 0 8px">
+      Two live, default-off optimizations. Toggle them here (no restart). For
+      tracking mode, run the on-sky A/B first: point at a star field, focus
+      until it solves, and keep the scope <strong>stationary</strong> — the run
+      compares FULL vs TRACKING and tells you whether pointing stays correct.
+    </p>
+
+    <div style="margin-bottom:10px;">
+      <label>
+        <input type="checkbox" id="trk-enable"
+               {% if solver_params and solver_params.tracking_enabled %}checked{% endif %}>
+        <strong>ROI tracking mode</strong>
+      </label>
+      <span id="trk-status" class="hint" style="margin-left:10px;"></span>
+    </div>
+
+    <div style="margin-bottom:12px;">
+      <label>A/B window (s)
+        <input type="number" id="ab-window" value="30" min="5" max="120" step="5"
+               style="width:5em;">
+      </label>
+      <button type="button" class="btn" id="ab-start" style="margin-left:8px;">
+        Run tracking A/B</button>
+      <span id="ab-note" class="hint" style="margin-left:8px;"></span>
+      <pre id="ab-result" class="hint"
+           style="margin-top:8px;white-space:pre-wrap;"></pre>
+    </div>
+
+    <div>
+      <label>
+        <input type="checkbox" id="bin-enable"
+               {% if solver_params and solver_params.bg_cache_bin_at_submit %}checked{% endif %}>
+        <strong>bg-cache bin-at-submit</strong> (P5)
+      </label>
+      <span id="bin-status" class="hint" style="margin-left:10px;"></span>
+    </div>
+  </div>
+
+  <div class="card expert-only">
     <h2>Solver Parameters</h2>
     {% if solver_params %}
       <form method="post" action="{{ url_for('solver_params_set') }}"
@@ -889,6 +929,91 @@ setInterval(syncCameraState, 3000);
     } catch(e) { ast.textContent = 'Error: ' + e.message; }
     this.disabled = false;
   });
+
+  // --- Experimental A/B card: tracking mode + P5 bin-at-submit --------------
+  async function abPost(url, obj) {
+    const r = await fetch(url, {method: 'POST', body: new URLSearchParams(obj)});
+    return r.json();
+  }
+  const trkEnable = document.getElementById('trk-enable');
+  if (trkEnable) trkEnable.addEventListener('change', async () => {
+    await abPost('/tracking/set', {enabled: trkEnable.checked ? '1' : '0'});
+    refreshTrk();
+  });
+  const binEnable = document.getElementById('bin-enable');
+  if (binEnable) binEnable.addEventListener('change', async () => {
+    await abPost('/bincache/set', {enabled: binEnable.checked ? '1' : '0'});
+    refreshBin();
+  });
+  async function refreshTrk() {
+    const el = document.getElementById('trk-status');
+    if (!el) return;
+    try {
+      const r = await (await fetch('/api/tracking')).json();
+      if (r.ok && r.result) {
+        const t = r.result;
+        el.textContent = `state ${t.state} · tracked ${t.frames_tracked}`
+          + ` · full ${t.frames_full} · solve-fail ${t.solve_fail ?? 0}`;
+        if (trkEnable) trkEnable.checked = !!t.enabled;
+      }
+    } catch (e) {}
+  }
+  async function refreshBin() {
+    const el = document.getElementById('bin-status');
+    if (!el) return;
+    try {
+      const r = await (await fetch('/api/bgcache')).json();
+      if (r.ok && r.result)
+        el.textContent = r.result.bin_at_submit
+          ? 'active' : 'inactive (default full-res stack)';
+    } catch (e) {}
+  }
+  function pad(s, n) { s = String(s); return s.length >= n ? s : ' '.repeat(n - s.length) + s; }
+  function fmtAb(res) {
+    if (!res) return '';
+    if (res.aborted) return 'ABORT: ' + res.aborted;
+    if (res.error) return 'ERROR: ' + res.error;
+    const f = res.full || {}, t = res.track || {}, v = res.verdict || {};
+    const row = (l, a, b) => l.padEnd(15) + pad(a, 11) + pad(b, 12) + '\n';
+    let s = row('', 'FULL', 'TRACKING');
+    s += row('solves/sec', res.full_rate.toFixed(2), res.track_rate.toFixed(2));
+    s += row('solve ms p50', (f.solve_ms_p50 || 0).toFixed(2), (t.solve_ms_p50 || 0).toFixed(2));
+    s += row('matches p50', (f.matches_p50 || 0), (t.matches_p50 || 0));
+    if (res.n_fellback) s += `(${res.n_fellback} tracked frames fell back to FULL)\n`;
+    if (v.offset_arcmin != null) s += `pointing offset: ${v.offset_arcmin.toFixed(1)}'\n`;
+    s += `\nCORRECTNESS: ${v.correctness_ok ? 'PASS' : 'FAIL'}`
+       + `    RECOMMEND: ${(v.recommend || '').toUpperCase()}\n`;
+    (v.reasons || []).forEach(r => { s += '  - ' + r + '\n'; });
+    return s;
+  }
+  let abPoll = null;
+  const abStart = document.getElementById('ab-start');
+  if (abStart) abStart.addEventListener('click', async () => {
+    const w = document.getElementById('ab-window').value || '30';
+    document.getElementById('ab-result').textContent = '';
+    const j = await abPost('/abtracking/start', {window: w});
+    if (!j.ok) { document.getElementById('ab-note').textContent = j.error || 'busy'; return; }
+    abStart.disabled = true;
+    document.getElementById('ab-note').textContent = 'running…';
+    if (abPoll) clearInterval(abPoll);
+    abPoll = setInterval(pollAb, 1000);
+  });
+  async function pollAb() {
+    try {
+      const s = await (await fetch('/api/abtracking')).json();
+      const note = document.getElementById('ab-note');
+      if (s.running) { note.textContent = s.progress || 'running…'; return; }
+      clearInterval(abPoll); abPoll = null;
+      if (abStart) abStart.disabled = false;
+      note.textContent = '';
+      document.getElementById('ab-result').textContent = fmtAb(s.result);
+      refreshTrk();
+    } catch (e) {}
+  }
+  if (trkEnable || binEnable) {
+    setInterval(() => { refreshTrk(); refreshBin(); }, 3000);
+    refreshTrk(); refreshBin();
+  }
 })();
 </script>
 

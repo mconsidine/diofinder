@@ -674,13 +674,23 @@ they A/B-toggle live without a restart.
 ### How to A/B it
 
 **On-sky A/B harness (the graduation gate).** `tests/ab_tracking.py`
-(`diofinder-ctl ab-tracking`) runs the comparison in flight: point the scope
-at a star field, focus until it solves, keep it **stationary**, then
+(`diofinder-ctl ab-tracking`, or the **Camera page → Experimental A/B card**,
+v0.11.27) runs the comparison in flight: point the scope at a star field,
+focus until it solves, keep it **stationary**, then
 
 ```bash
 sudo python3 /opt/diofinder/tests/ab_tracking.py --window 30
 # or: diofinder-ctl ab-tracking --window 30
 ```
+
+The reusable driver is `ab_tracking.run_ab(window, settle, lock_timeout,
+maint_call, progress)` → a structured result dict (it restores
+`tracking_enabled` on exit); the CLI, and the web UI's `_ab_worker`
+background thread (`/abtracking/start` + `/api/abtracking` poller), both wrap
+it. The Experimental A/B card also exposes the two live default-off toggles
+that were otherwise CLI-only — **ROI tracking mode** (`/tracking/set`, with a
+live `tracking_status` readout) and **bg-cache bin-at-submit** (P5,
+`/bincache/set`, with the `bg_cache_status.bin_at_submit` badge).
 
 It drives a FULL window then a TRACKING window on the same field (changing
 only the *live* `tracking_enabled`, restored on exit), and reports solve rate,
