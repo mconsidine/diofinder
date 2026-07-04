@@ -18,12 +18,15 @@
 
 ```
 diofinder_main.py (launcher, CPU 0)
+  │── imu_thread (daemon, in-process) — BNO055 quaternion reader at 20 Hz
   │
   ├── camera_proc   (CPU 3)          — captures frames → shared memory
   ├── solver_proc   (CPUs 1+2+3)     — extracts stars, plate-solves
   └── comms_proc    (CPU 0)          — LX200 TCP server + maintenance socket
-        └── imu_thread (daemon)      — BNO055 quaternion reader at 20 Hz
 ```
+
+The IMU thread runs inside the **launcher** process (same CPU 0 as comms,
+but no GIL contention with the LX200 handler).
 
 comms/webui share CPU 0 with the kernel (both are I/O-bound; kernel+IRQ load
 is far below one core), freeing CPU 1 as a third solver core. CPU affinity is set with `os.sched_setaffinity`.
@@ -80,7 +83,7 @@ LX200-pointing consumers, and the calibration loop).
 | `auto_exposure_target_matches` | int | comms (via `seeing_set`) | comms auto-exposure thread |
 | `auto_exposure_max_s` | float | comms (via `seeing_set`) | comms auto-exposure thread |
 | `auto_exposure_max_gain` | float | comms (via `seeing_set`) | comms auto-exposure thread |
-| `auto_exposure_peak_floor` | float | comms (via maint) | comms auto-exposure thread |
+| `auto_exposure_peak_floor` | float | *(no writer yet — config-only today; see docs/audit-2026-07.md F-M4)* | comms auto-exposure thread |
 | `imu_rate_gate_dps` | float | comms (seed from cfg) | comms LX200 pointing (rate gate in `_imu_predict`) |
 | `star_name_brightest` | bool | comms (via maint `solver_params_set`) | solver (centered-star naming) |
 | `imu_available` | bool | imu_thread | comms, webui |
@@ -176,7 +179,7 @@ stage-by-stage analysis: `docs/imx477-tuning-comparison.md`.
 The solver accumulates a rolling window of 30 solved FOV measurements.
 Once the window standard deviation falls below `fov_calibrated_stddev` (default
 0.05°), `fov_calibrated` is set `true` in the config file and the search
-tolerance tightens from `fov_max_error_deg` (1.0°) to
+tolerance tightens from `fov_max_error_deg` (0.3° since v0.11.21) to
 `fov_calibrated_max_error_deg` (0.1°). This makes subsequent solves faster
 and more robust against false positives.
 
