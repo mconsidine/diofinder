@@ -270,6 +270,12 @@ star_name_radius_deg: 2.0
 # Rotation-rate gate (deg/s) that distinguishes a real pan from parked gyro
 # drift. Live-mutable via shared_cfg.
 imu_rate_gate_dps: 0.1
+# Exact quaternion pointing prediction (v0.11.23). true = use the
+# frame-corrected exact composition when a quality IMU body->camera fit is
+# available; false = force the legacy C-matrix small-angle path (pre-v0.11.23
+# behavior). Flip to false if the LX200 crosshair looks wrong during a slew.
+# Live-mutable via solver_params_set.
+imu_exact_predict: true
 
 # ---- Shutdown ----
 shutdown_grace_s: 2.0

@@ -87,6 +87,7 @@ LX200-pointing consumers, and the calibration loop).
 | `auto_exposure_max_gain` | float | comms (via `seeing_set`) | comms auto-exposure thread |
 | `auto_exposure_peak_floor` | float | comms (via maint `auto_exposure_set {"peak_floor":...}`) | comms auto-exposure thread |
 | `imu_rate_gate_dps` | float | comms (seed from cfg) | comms LX200 pointing (rate gate in `_imu_predict`) |
+| `imu_exact_predict` | bool | comms (seed from cfg; `solver_params_set`) | comms LX200 pointing (kill switch for the exact quaternion path; false → legacy C-matrix) |
 | `display_wanted_until` | float (monotonic) | comms (via maint `display_start` keepalive) | solver (demand-gates the `diofinder_display` write; no viewer → no copy) |
 | `star_name_brightest` | bool | comms (via maint `solver_params_set`) | solver (centered-star naming) |
 | `imu_available` | bool | imu_thread | comms, webui |
@@ -389,7 +390,11 @@ delta conjugated through the fit, composed onto the reference attitude,
 converted via `imu_math.quat_to_radec` (boresight = row 0 of R(q)) — with no
 small-angle approximation, no 5° clamp, no pole guard, and no dependence on
 the C-matrix calibration. The legacy C-matrix small-angle path remains the
-fallback (5-tuple refs / no fit).
+fallback (5-tuple refs / no fit). **Kill switch** (v0.11.28):
+`imu_exact_predict=false` (`solver_params_set`, or the conf, seeded into
+shared_cfg at comms start) forces the C-matrix path even when a fit is
+present — a field-reversible fallback to the pre-v0.11.23 behavior if the
+crosshair looks wrong during a slew.
 
 Detection is routed through `diofinder/bg_cache.py::BackgroundCache`, not by calling
 `detect_stars` directly. This gives three composable background strategies, all
@@ -916,10 +921,14 @@ hot-pixel rejection during slews, when the temporal cache is offline.
 ## Solver-hang watchdog & IPC cleanup
 
 `comms_proc._watchdog_loop` (daemon thread, gated by `watchdog_enabled`)
-watches `latest_solution["epoch_monotonic"]`. The solver publishes every frame
-including dark ones, so if the epoch stops advancing for `watchdog_timeout_s`
-(default 30) the solver is hung: it logs CRITICAL and `os._exit(1)` so systemd
-restarts the unit. A **blocking** camera stall (capture that hangs rather
+watches `latest_solution["epoch_monotonic"]`. The solver publishes every
+bright frame, and dark (starless) frames publish a heartbeat at most once per
+`_DARK_PUBLISH_FLOOR_S` (3 s) — a **time** floor, not the old every-Nth-frame
+throttle, which at a long manual exposure (> 6 s) + a dark scene multiplied
+the epoch gap past the 30 s watchdog and spuriously restarted the unit
+(v0.11.28 fix; `_dark_publish_due` is pure/unit-tested). If the epoch stops
+advancing for `watchdog_timeout_s` (default 30) the solver is hung: it logs
+CRITICAL and `os._exit(1)` so systemd restarts the unit. A **blocking** camera stall (capture that hangs rather
 than raises) is detected by the solver since v0.11.24: consecutive same-seq
 timeout returns from `acquire_read_slot` for ~30 s freeze the publish epoch,
 which converts the stall into a watchdog restart instead of re-solving the
