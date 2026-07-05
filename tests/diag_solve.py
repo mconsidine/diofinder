@@ -186,6 +186,17 @@ if _BUNDLE_EFF:
         match_threshold = float(_mp['match_threshold'])
 
 # Explicit CLI overrides win over config / bundle / --match-runtime.
+# `is not None` (not truthiness) matters here: 0 is a value a caller could
+# legitimately pass for --sigma/--fov-err/--timeout, and a falsy check would
+# silently discard it.
+if args.fov is not None:
+    fov = args.fov
+if args.fov_err is not None:
+    fov_err = args.fov_err
+if args.sigma is not None:
+    sigma = args.sigma
+if args.timeout is not None:
+    timeout = args.timeout
 if args.bin:
     det_bin = args.bin
 if args.backend:

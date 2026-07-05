@@ -234,9 +234,9 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.33)
+## 6. Current state (as of v0.11.34)
 
-Released through **v0.11.33** (latest). All 150 unit tests pass. The
+Released through **v0.11.34** (latest). All 150 unit tests pass. The
 operational backlog is empty; the remaining items below are deferred
 optimizations/robustness items with stated gating reasons (see section 7).
 
@@ -305,7 +305,24 @@ good) and v0.11.27:
   wrong on-sky — a field-reversible fallback to pre-v0.11.23 behavior with no
   downgrade.
 
-### v0.11.33 — diofinder-factory-reset ModuleNotFoundError fix
+### v0.11.34 — diag_solve.py --bundle silently ignored --fov/--sigma/--fov-err/--timeout
+
+Found while confirming CLI-arg handling: `tests/diag_solve.py --bundle X.zip
+--fov 13.5 --sigma 10` displayed `FOV=13.64° ... sigma=4.0` — the bundle's
+own recorded `effective_params.json` values, not the CLI args. Root cause:
+the bundle-hydration block (lines ~165-186) unconditionally overwrites
+`sigma`/`fov`/`fov_err`/`timeout` from the bundle *after* they were set from
+CLI args, and the "explicit CLI overrides win over config / bundle" section
+right after it only actually re-applied `--bin`/`--backend` — the comment's
+claim was false for the other four flags. Reproduced empirically (zipped a
+real debug bundle from a prior session, ran the script twice with/without
+the fix) rather than just reading the code.
+
+**Fix**: `--fov`/`--fov-err`/`--sigma`/`--timeout` are now re-applied after
+the bundle block too, guarded with `is not None` (not truthiness — 0 is a
+value a caller could legitimately pass and a falsy check would silently
+discard it). Verified both directions: CLI values now win when passed,
+and the bundle's own values are still used when they aren't.
 
 User-reported live, immediately after the v0.11.32 fix landed: the Factory
 reset button now got as far as actually running the script (proving the
