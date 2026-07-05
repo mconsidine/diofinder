@@ -478,6 +478,16 @@ power cut can never truncate the conf. Float values are formatted `%.10g`
 (the old `%.6f` rendered any float < 5e-7 as `0.000000` — a persisted
 `match_threshold: 1e-7` round-tripped to 0.0, which admits no match at all).
 
+**Directory permission requirement (v0.11.30 fix)**: the `.lock` sidecar and
+the `.tmp` file used for the atomic replace are both *new* files created next
+to `diofinder.conf`, so the unprivileged `diofinder` user needs write
+permission on the **`/etc/diofinder` directory itself**, not just on the conf
+file — a distinction the installer got wrong (it `chown`ed only the file) and
+that broke every settings-persist call with `PermissionError` on
+`diofinder.conf.lock`. If you ever see that error, `sudo chown
+diofinder:diofinder /etc/diofinder` fixes it immediately;
+`scripts/install.sh` and `scripts/firstboot.sh` both self-heal it now.
+
 New keys (this release):
 
 | Key | Default | Notes |

@@ -23,6 +23,16 @@ DONE_MARKER=/var/lib/diofinder/firstboot.done
 LOG "Running boot-time setup"
 mkdir -p /var/lib/diofinder /etc/diofinder
 
+# Self-heal a directory-ownership bug present since v0.11.20: save_keys()
+# needs to create a sibling .lock and .tmp file next to diofinder.conf,
+# which requires write permission on the DIRECTORY, not just the conf file.
+# install.sh historically chowned only the conf file, leaving the directory
+# root:root on any device provisioned before this fix -- every settings
+# persist (webui Save, :St/:Sg, alignment, calibration) failed with
+# PermissionError. Runs every boot (idempotent) so already-deployed devices
+# repair themselves after a `diofinder-update` + reboot, no reimage needed.
+chown diofinder:diofinder /etc/diofinder 2>/dev/null || true
+
 # --- Hardware sanity check ----------------------------------------------------
 
 MODEL_FILE=/proc/device-tree/model

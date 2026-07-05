@@ -222,9 +222,9 @@ Conf migrations apply at the next service start.
 
 ---
 
-## 6. Current state (as of v0.11.29)
+## 6. Current state (as of v0.11.30)
 
-Released through **v0.11.29** (latest). All 146 unit tests pass. The
+Released through **v0.11.30** (latest). All 146 unit tests pass. The
 operational backlog is empty; the remaining items below are deferred
 optimizations/robustness items with stated gating reasons (see section 7).
 
@@ -292,6 +292,36 @@ good) and v0.11.27:
   C-matrix pointing path if the v0.11.23 exact quaternion prediction looks
   wrong on-sky — a field-reversible fallback to pre-v0.11.23 behavior with no
   downgrade.
+
+### v0.11.30 — /etc/diofinder directory-ownership fix
+
+Reported live: every webui "Save" (and `:St`/`:Sg`, alignment persist, auto
+calibration commit — any path through `config.save_keys`) failed with
+`PermissionError: [Errno 13] Permission denied:
+'/etc/diofinder/diofinder.conf.lock'`.
+
+Root cause, in `scripts/install.sh` and `scripts/firstboot.sh`: both did
+`mkdir -p /etc/diofinder` as root with no `chown` on the directory itself —
+only the `diofinder.conf` file inside it got `-o/-g $DIOFINDER_USER`. Since
+v0.11.20, `save_keys()` writes via a same-directory temp file + `os.replace`
+and serializes with a sibling `.lock` file (both **new** files needing
+directory-level write permission, not just file-level) — so on a
+root:root 755 directory, the unprivileged `diofinder` user (which owns and
+runs both `diofinder.service` and `diofinder-webui.service`) could edit the
+existing conf file directly but could never create the `.tmp`/`.lock`
+siblings next to it. This has silently broken every settings-persist path on
+every device provisioned by the installer since v0.11.20.
+
+**Fix**: `install.sh` now `chown`s `/etc/diofinder` itself (unconditionally,
+not just on first install, so upgrading an already-broken device also
+repairs it); `firstboot.sh` (runs every boot, already idempotent by design)
+also self-heals it, so an already-deployed device fixes itself after a
+`diofinder-update` + reboot — no reimage required.
+
+**Immediate workaround for an affected device** (before the next update):
+```bash
+sudo chown diofinder:diofinder /etc/diofinder
+```
 
 ### v0.11.29 — auto-exposure peak-floor deadlock fix
 
