@@ -149,6 +149,20 @@ def migrate(path: Optional[str] = None) -> dict:
     return updates
 
 
+def _default_conf_path(default_path: Optional[str] = None) -> Optional[str]:
+    """Resolve the shipped diofinder.conf.default: an explicit path if given
+    and it exists, else the installed checkout location, else the
+    repo-relative path (dev/test checkouts). None if neither exists."""
+    if default_path is not None:
+        return default_path if os.path.exists(default_path) else None
+    for cand in ("/opt/diofinder/etc/diofinder.conf.default",
+                 os.path.join(os.path.dirname(__file__), "..",
+                              "etc", "diofinder.conf.default")):
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
 def diff_from_default(conf_path: Optional[str] = None,
                       default_path: Optional[str] = None) -> list:
     """[(key, current, shipped_default)] for every key that differs from the
@@ -159,16 +173,8 @@ def diff_from_default(conf_path: Optional[str] = None,
     entirely — they are normal and listed last."""
     p = conf_path or os.environ.get("DIOFINDER_CONFIG",
                                     cfg_mod.DEFAULT_CONFIG_PATH)
-    d = default_path
-    if d is None:
-        # Installed checkout location first, then the repo-relative path.
-        for cand in ("/opt/diofinder/etc/diofinder.conf.default",
-                     os.path.join(os.path.dirname(__file__), "..",
-                                  "etc", "diofinder.conf.default")):
-            if os.path.exists(cand):
-                d = cand
-                break
-    if d is None or not os.path.exists(p) or not os.path.exists(d):
+    d = _default_conf_path(default_path)
+    if d is None or not os.path.exists(p):
         return []
     conf, dflt = _parse_conf(p), _parse_conf(d)
     diffs = []
@@ -181,6 +187,37 @@ def diff_from_default(conf_path: Optional[str] = None,
     extras = [(k, v, "<not in default>")
               for k, v in conf.items() if k not in dflt]
     return diffs + sorted(extras)
+
+
+def factory_reset(conf_path: Optional[str] = None,
+                  default_path: Optional[str] = None) -> str:
+    """Overwrite the live conf with the shipped diofinder.conf.default,
+    verbatim (comments and all) — a true factory reset, unlike ``save_keys``
+    which merges specific keys into the existing file. Cross-process safe:
+    takes the same ``.lock`` sidecar ``save_keys`` uses (so a concurrent
+    solver-side calibration commit or comms-side persist can never race it),
+    and writes via a same-directory temp file + ``os.replace`` so a power cut
+    mid-write can't leave a truncated conf.
+
+    Returns the default path used. Raises ``FileNotFoundError`` if the
+    shipped default can't be located — callers must not treat a non-raising
+    return as "reset" on a partial/missing install.
+    """
+    import fcntl
+    from pathlib import Path
+    d = _default_conf_path(default_path)
+    if d is None:
+        raise FileNotFoundError("shipped diofinder.conf.default not found")
+    p = Path(conf_path or os.environ.get("DIOFINDER_CONFIG",
+                                        cfg_mod.DEFAULT_CONFIG_PATH))
+    content = Path(d).read_text()
+    lock_path = p.parent / (p.name + ".lock")
+    with open(lock_path, "w") as lf:
+        fcntl.flock(lf, fcntl.LOCK_EX)
+        tmp = p.parent / (p.name + ".tmp")
+        tmp.write_text(content)
+        os.replace(tmp, p)
+    return d
 
 
 def _norm(v: str) -> str:

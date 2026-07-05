@@ -1,0 +1,7 @@
+# Allow the diofinder web UI to trigger a full factory reset without a
+# password prompt. Scoped to just this one helper script (see
+# diofinder-factory-reset for what it does: restores diofinder.conf.default,
+# optionally clears the seeing overrides / hot-pixel mask, restarts the
+# service). The trailing "*" allows its optional --clear-* flags, same
+# pattern as station.sh in diofinder-wifi.
+diofinder ALL=(root) NOPASSWD: /usr/local/bin/diofinder-factory-reset *

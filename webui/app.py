@@ -1315,6 +1315,72 @@ def api_update_log():
                     "commit": _running_commit()})
 
 
+# ---- Factory reset ------------------------------------------------------------
+
+FACTORY_RESET_LOG = "/var/lib/diofinder/last-factory-reset.log"
+
+
+@app.route("/factory_reset", methods=["POST"])
+def factory_reset():
+    """Restore diofinder.conf to the shipped default and restart the service.
+
+    Fires diofinder-factory-reset in the background (detached via
+    systemd-run, same reasoning as /update: the script restarts this very
+    webui, so running it inside the request's own cgroup would kill it
+    before it finishes) and shows a page that polls the log until done.
+    """
+    cmd = ["sudo", "/usr/local/bin/diofinder-factory-reset"]
+    if request.form.get("clear_overrides"):
+        cmd.append("--clear-overrides")
+    if request.form.get("clear_hot_pixel_mask"):
+        cmd.append("--clear-hot-pixel-mask")
+    try:
+        logf = open(FACTORY_RESET_LOG, "w")
+        logf.write(f"$ {' '.join(cmd)}\n"
+                   f"started: {datetime.now().isoformat(timespec='seconds')}\n\n")
+        logf.flush()
+        out = logf
+    except OSError:
+        out = subprocess.DEVNULL
+    run_cmd = (["sudo", "systemd-run", "--collect",
+                "--unit=diofinder-factory-reset",
+                "--property=StandardOutput=append:" + FACTORY_RESET_LOG,
+                "--property=StandardError=append:" + FACTORY_RESET_LOG]
+               + cmd[1:])
+    try:
+        probe = subprocess.run(["systemd-run", "--version"],
+                               capture_output=True, timeout=5)
+        use_systemd = probe.returncode == 0
+    except Exception:
+        use_systemd = False
+    try:
+        if use_systemd:
+            r = subprocess.run(run_cmd, capture_output=True, text=True,
+                               timeout=15)
+            if r.returncode != 0:
+                use_systemd = False
+        if not use_systemd:
+            subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT,
+                             start_new_session=True)
+    except FileNotFoundError:
+        return "diofinder-factory-reset not installed", 500
+    return render_template("factory_reset_running.html")
+
+
+@app.route("/api/factory_reset/log")
+def api_factory_reset_log():
+    """Tail of the last factory-reset run + terminal state, for the running page."""
+    try:
+        with open(FACTORY_RESET_LOG) as f:
+            text = f.read()
+    except OSError:
+        text = ""
+    low = text.lower()
+    done = ("complete" in low) or ("error" in low)
+    ok = done and ("complete" in low) and ("error" not in low)
+    return jsonify({"log": text, "done": done, "ok": ok})
+
+
 
 # ---- Config view ------------------------------------------------------------
 

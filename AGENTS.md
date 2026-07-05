@@ -222,9 +222,9 @@ Conf migrations apply at the next service start.
 
 ---
 
-## 6. Current state (as of v0.11.30)
+## 6. Current state (as of v0.11.31)
 
-Released through **v0.11.30** (latest). All 146 unit tests pass. The
+Released through **v0.11.31** (latest). All 150 unit tests pass. The
 operational backlog is empty; the remaining items below are deferred
 optimizations/robustness items with stated gating reasons (see section 7).
 
@@ -292,6 +292,38 @@ good) and v0.11.27:
   C-matrix pointing path if the v0.11.23 exact quaternion prediction looks
   wrong on-sky — a field-reversible fallback to pre-v0.11.23 behavior with no
   downgrade.
+
+### v0.11.31 — webui "Factory reset" control
+
+User request: a one-click way to restore all settings to fresh-image values
+from the webui, available in both novice and expert mode.
+
+- **`diofinder/conf_migrate.py::factory_reset()`**: overwrites the live conf
+  with the shipped `diofinder.conf.default` **verbatim** (a full-file
+  replace, not a per-key merge like `save_keys`), using the same
+  `.lock`-sidecar + temp-file + `os.replace` discipline. Unit-tested in
+  `tests/test_conf_migrate.py` (verbatim overwrite, works when the live conf
+  is missing, raises when the default can't be found, leaves no `.tmp`
+  behind).
+- **`scripts/diofinder-factory-reset`** (new, root-only via a scoped sudoers
+  drop-in mirroring `station.sh *`): calls `factory_reset()`, re-chowns the
+  conf + its `.lock` to `diofinder:diofinder` (it ran as root — the same
+  directory-ownership bug class as v0.11.30, just scoped to two files),
+  optionally deletes `seeing_overrides.json` / `hot_pixel_mask.npz`
+  (`--clear-overrides` / `--clear-hot-pixel-mask`), then restarts
+  `diofinder.service` and `diofinder-webui.service` so restart-only keys
+  (detect_bin, sensor mode, tuning file) actually take effect.
+- **webui**: `/factory_reset` (Config page → "Factory reset" card, a plain
+  `.card` — deliberately **not** `expert-only` — with two default-checked
+  clear-artifact checkboxes and a JS confirm) fires the script detached via
+  `systemd-run`, exactly like `/update` does, since the script restarts the
+  very webui servicing the request. `/api/factory_reset/log` polls a log
+  file for the running page, mirroring the update-log pattern.
+- **`diofinder-update`** gained two general fixes needed to actually ship
+  this to already-deployed devices: the CLI-wrapper resync loop now includes
+  `diofinder-factory-reset`, and a new sudoers-drop-in resync step (with a
+  `visudo -cf` syntax gate — a malformed drop-in breaks ALL sudo on the box)
+  was added, since OTA previously never resynced `/etc/sudoers.d/*` at all.
 
 ### v0.11.30 — /etc/diofinder directory-ownership fix
 
