@@ -18,6 +18,10 @@ set -euo pipefail
 DIOFINDER_DIR=/opt/diofinder
 REPO=mconsidine/diofinder
 
+# Preserved for the self-update re-exec below -- the parsing loop consumes
+# the positional params, so this is the only copy of the original invocation.
+ORIG_ARGS=("$@")
+
 TARGET_VERSION="latest"
 REF=""
 while [ $# -gt 0 ]; do
@@ -74,6 +78,27 @@ else
   fi
   LOG "Updating to $TAG"
   sudo -u diofinder git checkout --quiet "$TAG"
+fi
+
+# --- Self-update guard ---------------------------------------------------------
+# The checkout above may have fetched a NEWER diofinder-update than the one
+# currently running ($0, resolved to /usr/local/bin/diofinder-update in the
+# normal invocation path) -- e.g. this exact release added a new CLI-wrapper
+# name and a new sudoers-resync step below. Without handing off, this run
+# would finish using its OLD in-memory logic: it would still git-sync the new
+# script/sudoers files onto disk at $DIOFINDER_DIR, but never actually
+# install/resync them anywhere, because the code performing that resync is
+# the stale copy already loaded. That left a real gap (v0.11.31:
+# diofinder-factory-reset landed in the webui and in the checkout, but
+# "command not found" on the box because the OLD update script's wrapper list
+# didn't know its name yet). Re-exec into the freshly fetched script instead
+# of finishing this run stale; the guard var stops a second hand-off once the
+# running copy already matches (idempotent re-fetch/re-checkout is cheap).
+if [ -z "${DIOFINDER_UPDATE_REEXEC:-}" ] \
+   && ! cmp -s "$0" "$DIOFINDER_DIR/scripts/diofinder-update" 2>/dev/null; then
+  LOG "Newer diofinder-update fetched -- handing off to it"
+  export DIOFINDER_UPDATE_REEXEC=1
+  exec bash "$DIOFINDER_DIR/scripts/diofinder-update" "${ORIG_ARGS[@]}"
 fi
 
 # --- Refresh Python dependencies ----------------------------------------------
