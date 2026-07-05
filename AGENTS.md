@@ -222,12 +222,11 @@ Conf migrations apply at the next service start.
 
 ---
 
-## 6. Current state (as of v0.11.21, 2026-07-03)
+## 6. Current state (as of v0.11.29)
 
-Released: **v0.11.21** (latest, recommended), v0.11.20, v0.11.17, v0.11.15
-and earlier. `olive` == v0.11.21 with no unreleased work. All 160 unit tests
-pass. The operational backlog is empty; the remaining items below are an
-optimization and a diagnostics-fidelity improvement.
+Released through **v0.11.29** (latest). All 146 unit tests pass. The
+operational backlog is empty; the remaining items below are deferred
+optimizations/robustness items with stated gating reasons (see section 7).
 
 Recent-history summary (details in each PR, #99–#103):
 - v0.11.17: hot-pixel mask sanity guard; FOV recenter 13.64→13.54.
@@ -293,6 +292,34 @@ good) and v0.11.27:
   C-matrix pointing path if the v0.11.23 exact quaternion prediction looks
   wrong on-sky — a field-reversible fallback to pre-v0.11.23 behavior with no
   downgrade.
+
+### v0.11.29 — auto-exposure peak-floor deadlock fix
+
+Traced from real device logs (a debug bundle spanning three re-acquisition
+episodes, 146/45/198 consecutive failed solves) while investigating whether
+efficiency work should target the solver's hint/blind-fallback path or the
+auto-exposure controller. The 146-fail episode (~4.5 min) showed `peak`
+pinned at 20-22 — deep under `auto_exposure_peak_floor` (70) — while the
+lost-in-space star-count fallback reported 183-353 "stars" (0 matches, ever):
+at that peak, a `sigma * noise` threshold against a MAD-floored noise
+estimate (0.50 DN) sits only ~2.5 DN above background, trivial for
+quantization/read noise near black to trip. `_auto_exposure_decision`
+(comms_proc.py) treated the inflated count as "over-served" and the
+low-contrast guard correctly suppressed the reduction that branch would
+otherwise apply — but nothing forced a *raise*, since the raise branch
+(step 3, "starved") is only reached when the metric reads low, which it
+never did. Net effect: a genuinely starved, unsolved frame could get stuck
+holding forever. (The 45-fail/198-fail episodes in the same bundle were a
+different, already-fixed issue — pre-v0.11.18 gain-hunting oscillation;
+stale data, not a live concern.)
+
+**Fix**: `_auto_exposure_decision` now forces the starved/raise branch
+whenever `not solved and low_contrast`, regardless of what the star-count
+metric reads — peak, not the noise-corrupted count, drives the decision at
+that operating point. Four new cases in `tests/test_auto_exposure.py`
+reproduce the exact deadlock (forced gain raise, forced exposure stretch at
+max gain, at-ceiling no-op, and a sanity check that the *solved* low-contrast
+case is unaffected).
 
 ### July 2026 audit — status after v0.11.24
 

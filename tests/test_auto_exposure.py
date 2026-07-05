@@ -131,6 +131,44 @@ class AutoExposureDecisionTests(unittest.TestCase):
         self.assertIn("gain", action)
         self.assertLess(action["gain"], 4.0)
 
+    def test_unsolved_low_contrast_forces_raise_despite_high_star_count(self):
+        # The bundle deadlock: not solving, peak crushed under the floor, but
+        # the star-count fallback is noise-inflated (a sigma*noise threshold
+        # against a floored noise estimate trips on pure quantization noise
+        # near black) so it reads as "over-served". Left to the star-count
+        # metric alone this would hold (or even reduce); it must instead be
+        # treated as starved and raise, since peak — not the corrupted count
+        # — is the trustworthy signal here. Reproduces observed live values
+        # (peak~21, "stars" 183-353, matches=0, stuck ~146 failed solves).
+        action = _decide(solved=False, matches=0, stars=250, target_stars=20,
+                         peak=21, cur_g=4.0, max_g=16.0, peak_floor=70)
+        self.assertIn("gain", action)
+        self.assertGreater(action["gain"], 4.0)
+
+    def test_unsolved_low_contrast_stretches_exposure_at_max_gain(self):
+        # Same deadlock, but gain is already maxed -> stretch exposure instead
+        # of giving up (mirrors the ordinary starved ladder).
+        action = _decide(solved=False, matches=0, stars=250, target_stars=20,
+                         peak=21, cur_s=0.2, max_s=0.5, cur_g=16.0, max_g=16.0,
+                         peak_floor=70)
+        self.assertIn("exposure_s", action)
+        self.assertGreater(action["exposure_s"], 0.2)
+
+    def test_unsolved_low_contrast_at_both_ceilings_is_noop(self):
+        # Both axes maxed out -> nothing left to do, but must not fall through
+        # to the over-served branch and reduce.
+        self.assertIsNone(_decide(solved=False, matches=0, stars=250,
+                                  target_stars=20, peak=21, cur_s=0.5, max_s=0.5,
+                                  cur_g=16.0, max_g=16.0, peak_floor=70))
+
+    def test_solved_low_contrast_high_matches_still_holds(self):
+        # Sanity check that the fix is scoped to the unsolved case: a SOLVED
+        # frame with an abundance of real matches at low contrast must still
+        # hold (this is the pre-existing guard, unchanged).
+        action = _decide(solved=True, matches=20, target_matches=10,
+                         peak=45, cur_g=4.0, min_g=1.0, peak_floor=70)
+        self.assertIsNone(action)
+
     def test_saturation_overrides_low_contrast(self):
         # Defensive: a clipped frame (peak>=250) is never "low contrast".
         action = _decide(solved=True, matches=20, target_matches=10,
