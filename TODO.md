@@ -150,6 +150,22 @@ build date is embedded at build time (see `.github/workflows/release.yml`).
 
 ## Tactical TODOs
 
+### WebUI has no authentication (open decision, needs a deliberate call)
+Every route — including destructive ones like `/factory_reset`, `/update`,
+and `/wifi` — is open to anyone who can reach the Flask process, over plain
+HTTP, with no login/API-key/`before_request` auth check anywhere
+(`webui/app.py` binds `0.0.0.0:80`). This was a reasonable default when the
+webui was mostly read-only pages; it's less reasonable now that Factory
+Reset and Update are one tap away for anyone on the same network. Two
+legitimate paths, needs a decision rather than staying implicit:
+- **Add** a lightweight shared-secret/PIN gate in front of the destructive
+  routes — small, self-contained, no need for full user accounts.
+- **Formally rule out** — "single-user device, the AP/home network IS the
+  trust boundary" is a defensible call for a hobby device nobody else can
+  reach, but should be a deliberate decision, not silence.
+Leaning toward adding the lightweight gate, since it's cheap and Factory
+Reset/Update are genuinely one accidental tap away today.
+
 ### Dark frame and hot pixel calibration
 **DONE (hot-pixel half):** `diofinder/hot_pixel.py` + `dark_capture` /
 `hot_pixel_status` / `hot_pixel_clear` maint commands + Camera-page button.

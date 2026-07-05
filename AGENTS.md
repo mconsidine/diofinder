@@ -574,6 +574,31 @@ them and are the only open work.
   Revisit only if a future measurement shows the bound above no longer holds
   (e.g. the fail-streak threshold changes, or hinted attempts get
   meaningfully more expensive).
+- **Deep-sky-object (Messier/NGC/etc.) catalog.** diofinder is a *pointing*
+  finder, not a planning tool; its actual client (SkySafari, via LX200) already
+  owns the full DSO catalog and displays it once diofinder reports where the
+  scope is pointed. Duplicating that catalog here (beyond the existing
+  brightest-star `star_names.csv` "centered star" label) would be redundant
+  with the client's job for no user-facing gain.
+- **HTTPS/TLS for the webui.** It's a local AP/home-network tool with no
+  public exposure; self-signed-cert warnings and the mDNS/cert-hostname
+  mismatch aren't worth the complexity here. Revisit only if the device is
+  ever exposed beyond a trusted local network.
+- **ASCOM/INDI protocol support alongside LX200.** LX200 already covers the
+  real client (SkySafari); a second pointing-protocol surface is ongoing
+  maintenance burden (another server, another set of quirks) for no
+  additional user-facing capability.
+- **Auto-focus motor control.** There is no focuser hardware interface
+  anywhere in this project — `/focus` is a manual-focus *assistant* (Laplacian
+  variance + zoomed crop), not a driver. Motorized autofocus is a new
+  hardware project (stepper-driven focuser + driver), not a software feature
+  of a finder scope; out of scope unless that hardware exists.
+- **Full per-pixel dark-frame subtraction** in `camera_proc.py` (subtract a
+  captured dark from every frame before publish). `TODO.md`'s own assessment
+  already concluded the existing hot-pixel repair (`hot_pixel.py`, 8-neighbor
+  mean fill from a capped-lens dark capture) covers the dominant fake-star
+  case for a finder; the added per-frame cost isn't justified by the marginal
+  accuracy gain full subtraction would add.
 
 ---
 
