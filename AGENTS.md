@@ -234,9 +234,9 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.32)
+## 6. Current state (as of v0.11.33)
 
-Released through **v0.11.32** (latest). All 150 unit tests pass. The
+Released through **v0.11.33** (latest). All 150 unit tests pass. The
 operational backlog is empty; the remaining items below are deferred
 optimizations/robustness items with stated gating reasons (see section 7).
 
@@ -304,6 +304,28 @@ good) and v0.11.27:
   C-matrix pointing path if the v0.11.23 exact quaternion prediction looks
   wrong on-sky — a field-reversible fallback to pre-v0.11.23 behavior with no
   downgrade.
+
+### v0.11.33 — diofinder-factory-reset ModuleNotFoundError fix
+
+User-reported live, immediately after the v0.11.32 fix landed: the Factory
+reset button now got as far as actually running the script (proving the
+v0.11.32 self-update/resync fixes worked), but failed with
+`ModuleNotFoundError: No module named 'diofinder'` from the embedded
+`"$VENV_PY" -c "from diofinder.conf_migrate import factory_reset; ..."`
+call. Root cause: the `diofinder` package is never `pip install`-ed into the
+venv — every existing entry point relies on either `-m module` execution
+from `WorkingDirectory=$DIOFINDER_DIR` (the systemd units) or a cwd/
+PYTHONPATH that already includes it (`diofinder-update` does `cd
+"$DIOFINDER_DIR"` near the top and never leaves it). `diofinder-factory-reset`
+was the one new script that invoked a bare `python -c` with neither — and
+since it's launched detached via `systemd-run` from the webui, its cwd has
+no reason to already be `$DIOFINDER_DIR`. Fixed by setting
+`PYTHONPATH="$DIOFINDER_DIR"` for that one invocation. Audited every other
+`venv/bin/python -c`/`-m` call in `install.sh`/`firstboot.sh`/
+`diofinder-update` for the same landmine — all the others either import
+pip-installed third-party wheels (`tetra3`, `tetra3rs`, `star_detect`, no
+cwd dependency) or already run after an established `cd`/`-m` context, so
+this was an isolated bug scoped to the one new script.
 
 ### v0.11.32 — diofinder-update self-update guard (post-v0.11.31 field report)
 
