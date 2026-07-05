@@ -755,6 +755,20 @@ decision lives in `_auto_exposure_decision` (unit-tested in
   starves detection, so the floor parks the steady point with margin. `peak == 0`
   (dark/mid-slew frame) carries no contrast info and does not trip it.
   Live-mutable via `shared_cfg`.
+* **Forced raise when unsolved and low-contrast** (v0.11.29): while lost in
+  space, the star-count fallback is not just untrustworthy below the peak
+  floor — it can be actively backwards. A near-black, quantization-limited
+  frame lets a `sigma * noise` threshold trip on pure noise (the noise floor
+  itself is often clamped, e.g. MAD-floored at 0.5 DN, so the threshold sits
+  only a couple of DN above background), so the raw star count can look
+  *plentiful* while matching nothing. Treated as an ordinary "over-served"
+  reading, that count would suppress the raise the frame actually needs and
+  the low-contrast guard would only hold — a real deadlock observed live
+  (peak pinned 20-22, "stars" 183-353, 0 matches, stuck ~4.5 minutes / 146
+  consecutive failed solves). `not solved and low_contrast` is now forced
+  into the starved/raise branch regardless of what the star count reads —
+  peak, not the corrupted count, drives the decision at that operating
+  point. Unit-tested in `tests/test_auto_exposure.py`.
 * **Raise debounce** (`_AE_RAISE_DEBOUNCE`, default 2; pure helper
   `_ae_apply_raise_debounce`, unit-tested): a brightness *raise* (gain-up or
   exposure-up) only takes effect after it has been the intended action for N

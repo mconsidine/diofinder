@@ -280,6 +280,18 @@ def _auto_exposure_decision(*, solved, stars, matches, peak,
         instead of reducing. This is the asymmetric partner of the saturation
         guard and prevents the over-reduction failure observed on faint sky
         (peak walked 84 -> 45 -> 29 until detection starved).
+      * low-contrast **and not solving** -> the raw star-count fallback is not
+        just untrustworthy here, it is actively backwards: a near-black,
+        quantization-limited frame lets a sigma*noise threshold trip on pure
+        noise (the noise floor itself is clamped, e.g. MAD-floored at 0.5 DN,
+        so the threshold sits only a couple of DN above background), producing
+        a count that looks *plentiful* while matching nothing. Treated as an
+        ordinary "over-served" reading, that count would suppress the raise
+        this frame actually needs. So this state is forced into the starved
+        branch instead — peak, not the corrupted count, drives the decision.
+        Observed live: peak pinned at 20-22 (floor is 70), "stars" 183-353,
+        matches 0, stuck for ~4.5 minutes / 146 consecutive failed solves
+        before an unrelated exposure change broke the deadlock.
       * settled but exposure has drifted off ``nominal_s`` with gain headroom to
         compensate -> nudge exposure one step back toward nominal, letting the
         gain ladder restore brightness next cycle, so a temporary stretch never
@@ -318,7 +330,11 @@ def _auto_exposure_decision(*, solved, stars, matches, peak,
         metric, target = stars, target_stars
 
     # 3. Starved — gain first; stretch exposure only when gain is maxed out.
-    if metric < _AE_STARVED_FRAC * target:
+    #    An unsolved, low-contrast frame is forced into this branch even if
+    #    the star-count metric looks well above target — see the low-contrast
+    #    docstring note above.
+    starved = metric < _AE_STARVED_FRAC * target or (not solved and low_contrast)
+    if starved:
         if cur_g < max_g:
             new_g = min(max_g, cur_g * _AE_GAIN_STEP)
             if new_g != cur_g:
