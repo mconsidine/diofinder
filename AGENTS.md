@@ -215,16 +215,28 @@ conf.default + CLAUDE.md updated, migrations added for changed defaults.
 `diofinder-update` (OTA): git-syncs the code, refreshes wheels from latest
 releases (honors `OLIVE_SOLVE_TAG`/`SYCAMORE_TAG` env pins), prints a
 per-wheel refresh summary and a conf divergence report, resyncs CLI wrappers +
-systemd units, restarts. Wheel refresh failures are non-fatal but loudly
-reported — **always confirm the wheel summary** when an update was meant to
-pick up solver/extractor fixes. Requires internet (station mode, not AP mode).
-Conf migrations apply at the next service start.
+systemd units + sudoers drop-ins, restarts. Wheel refresh failures are
+non-fatal but loudly reported — **always confirm the wheel summary** when an
+update was meant to pick up solver/extractor fixes. Requires internet
+(station mode, not AP mode). Conf migrations apply at the next service start.
+
+**Self-update guard (v0.11.32)**: right after checkout, the script compares
+itself (`$0`) against the freshly fetched `scripts/diofinder-update` and, if
+they differ, hands off via `exec` to the fetched copy (guarded by
+`DIOFINDER_UPDATE_REEXEC` against a loop) instead of finishing the run with
+stale in-memory resync logic. Without this, a release that adds a new CLI
+wrapper name or sudoers drop-in only reaches an already-deployed device on a
+**second** `diofinder-update` run — the first run's OLD script git-syncs the
+new files onto disk but doesn't yet know to install them anywhere (this bit
+v0.11.31: `diofinder-factory-reset` shipped in the webui and the checkout,
+but `command not found` on the box, because the OLD update script's wrapper
+list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.31)
+## 6. Current state (as of v0.11.32)
 
-Released through **v0.11.31** (latest). All 150 unit tests pass. The
+Released through **v0.11.32** (latest). All 150 unit tests pass. The
 operational backlog is empty; the remaining items below are deferred
 optimizations/robustness items with stated gating reasons (see section 7).
 
@@ -292,6 +304,34 @@ good) and v0.11.27:
   C-matrix pointing path if the v0.11.23 exact quaternion prediction looks
   wrong on-sky — a field-reversible fallback to pre-v0.11.23 behavior with no
   downgrade.
+
+### v0.11.32 — diofinder-update self-update guard (post-v0.11.31 field report)
+
+User-reported live: clicking the new v0.11.31 "Factory reset" button gave
+`sudo: /usr/local/bin/diofinder-factory-reset: command not found`, despite
+the webui clearly running v0.11.31 code (the card/route only exist there).
+Root cause: the device's ALREADY-INSTALLED (pre-v0.11.31) `diofinder-update`
+performed the OTA — it git-synced the v0.11.31 checkout onto disk (new
+script, new sudoers file, all present in `/opt/diofinder`), but the CLI
+wrapper/sudoers *resync logic that would install them* is itself part of the
+diofinder-update script, and the copy that was RUNNING was still the OLD
+one, whose wrapper list didn't know `diofinder-factory-reset` existed yet
+(and which had no sudoers-resync step at all, pre-v0.11.31). Any release
+that adds a new wrapper name or sudoers drop-in has this exact gap.
+
+**Fix**: `diofinder-update` now re-execs itself (`exec bash
+$DIOFINDER_DIR/scripts/diofinder-update`, guarded by
+`DIOFINDER_UPDATE_REEXEC` against a loop) immediately after checkout if the
+freshly fetched script differs from the one currently running — so a single
+`diofinder-update` invocation always finishes using up-to-date resync logic,
+never a second run required. Immediate fix for anyone already stuck on
+v0.11.31: run `sudo diofinder-update` once more (the first run already
+resynced `diofinder-update` itself, so the second run uses the new logic and
+finishes installing what was missing), or manually:
+```bash
+sudo install -m 755 /opt/diofinder/scripts/diofinder-factory-reset /usr/local/bin/diofinder-factory-reset
+sudo install -m 440 /opt/diofinder/etc/sudoers.d/diofinder-factory-reset /etc/sudoers.d/diofinder-factory-reset
+```
 
 ### v0.11.31 — webui "Factory reset" control
 
