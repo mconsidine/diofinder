@@ -488,6 +488,24 @@ that broke every settings-persist call with `PermissionError` on
 diofinder:diofinder /etc/diofinder` fixes it immediately;
 `scripts/install.sh` and `scripts/firstboot.sh` both self-heal it now.
 
+**Factory reset (v0.11.31)**: `conf_migrate.factory_reset()` overwrites the
+live conf with the shipped `diofinder.conf.default` **verbatim** — unlike
+`save_keys`, which merges specific keys into the existing file, this is a
+full-file replace (same `.lock`/temp-file/`os.replace` discipline). The webui
+Config page's "Factory reset" card (visible in both novice and expert mode —
+it is a page-level action, not a per-key edit) posts to `/factory_reset`,
+which — like `/update` — runs `sudo /usr/local/bin/diofinder-factory-reset`
+detached via `systemd-run` (outside the maint socket, since the script
+restarts the very daemon that would otherwise service the request) with
+optional `--clear-overrides`/`--clear-hot-pixel-mask` flags from the
+checkboxes, then restarts both `diofinder.service` and
+`diofinder-webui.service`. The script re-chowns the conf + its `.lock` to
+`diofinder:diofinder` after writing (it runs as root) — the same
+directory-ownership class of bug as the v0.11.30 fix, just scoped to these
+two files. Does not touch the star database, the code checkout, or Wi-Fi
+(NetworkManager-managed, not in this file); latitude/longitude ARE in the
+conf and do reset to 0/0.
+
 New keys (this release):
 
 | Key | Default | Notes |
@@ -988,6 +1006,7 @@ set in `diofinder.conf`.
 | `/var/lib/diofinder/version` | Running release tag + ISO date. Stamped at image build (`install.sh`, from `DIOFINDER_VERSION`) and rewritten by `diofinder-update`. The `version` maint command resolves it as: this file → `git describe` of `/opt/diofinder` → in-code `cfg.version` (so a fresh burn reports its real tag instead of the stale default). |
 | `/usr/local/bin/diofinder-ctl` | CLI wrapper for the maint socket |
 | `/usr/local/bin/diofinder-update` | OTA update script (`--ref BRANCH` to track a branch; `webui Update` page wraps it). Images are git-provisioned by `install.sh` so OTA works on imaged devices. |
+| `/usr/local/bin/diofinder-factory-reset` | Restores `diofinder.conf` from the shipped `diofinder.conf.default` and restarts the service; `--clear-overrides`/`--clear-hot-pixel-mask` additionally delete those artifacts. The webui's Config-page "Factory reset" card wraps it (`/factory_reset`). Runs outside the maint socket (like `/update`) since it restarts the very daemon that hosts it. |
 | `/usr/local/bin/diofinder-bg-setup` | Show/set background mode + sizes via the maint socket |
 | `/usr/local/bin/diofinder-bg-test` | On-device background-mode A/B on saved/live frames; `--solve` adds live-solver match rates |
 | `/usr/local/bin/ap.sh` | Switch wlan0 to access-point mode |

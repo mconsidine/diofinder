@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Factory Reset Running{% endblock %}
+{% block content %}
+<h2>Factory reset running</h2>
+<p class="hint">Restoring settings and restarting the service (including this
+   web UI), so this page may blink — it keeps polling the reset log below and
+   shows the result when it finishes.</p>
+
+<pre class="logs" id="rlog" style="max-height:55vh;">starting…</pre>
+<p id="rstatus" style="min-height:1.4em; font-weight:500;"></p>
+<p>
+  <a class="btn btn-primary" href="{{ url_for('dashboard') }}">Back to Status</a>
+  <a class="btn" href="{{ url_for('config_page') }}">Config page</a>
+</p>
+
+<script>
+let _done = false;
+async function poll() {
+  try {
+    const r = await fetch('/api/factory_reset/log', {cache: 'no-store'});
+    if (!r.ok) return;
+    const d = await r.json();
+    const pre = document.getElementById('rlog');
+    pre.textContent = d.log && d.log.trim() ? d.log : '(no output yet…)';
+    pre.scrollTop = pre.scrollHeight;
+    if (d.done && !_done) {
+      _done = true;
+      const st = document.getElementById('rstatus');
+      if (d.ok) {
+        st.textContent = '✓ Factory reset complete';
+        st.style.color = '#44cc44';
+      } else {
+        st.textContent = '✗ Factory reset failed — read the log above.';
+        st.style.color = '#ff5500';
+      }
+    }
+  } catch (e) {
+    /* webui is restarting mid-reset — keep polling, it will come back */
+  }
+}
+setInterval(poll, 1500);
+poll();
+</script>
+{% endblock %}

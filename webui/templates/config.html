@@ -13,6 +13,32 @@
   <div class="alert alert-error">Could not read config file: {{ cfg_error }}</div>
 {% endif %}
 
+<div class="card" style="margin-bottom:1rem; border:1px solid #882200;">
+  <h3 style="margin:0 0 8px 0; font-size:1rem; color:#882200;">Factory reset</h3>
+  <p class="hint">
+    Restores every setting in <code>{{ path }}</code> to the values shipped
+    with this release &mdash; the same file installed on a fresh image &mdash;
+    then restarts the service so it takes effect immediately. This does
+    <strong>not</strong> touch the star database, the code checkout, or your
+    Wi-Fi connection (that's stored outside this file). Latitude/longitude
+    <strong>are</strong> part of this conf and will reset to 0/0 &mdash;
+    re-set them afterward (SkySafari does this automatically, or
+    <code>diofinder-ctl polar set-latitude</code>).
+  </p>
+  <form method="post" action="{{ url_for('factory_reset') }}"
+        onsubmit="return confirm('Reset ALL settings to factory defaults and restart the service now? This cannot be undone.');">
+    <label style="display:block; margin:6px 0;">
+      <input type="checkbox" name="clear_overrides" value="1" checked>
+      Also clear saved Good/Bad seeing overrides
+    </label>
+    <label style="display:block; margin:6px 0 12px 0;">
+      <input type="checkbox" name="clear_hot_pixel_mask" value="1" checked>
+      Also clear the captured hot-pixel mask
+    </label>
+    <button type="submit" class="btn btn-warning">Factory reset</button>
+  </form>
+</div>
+
 <div class="card" style="margin-bottom:1rem;">
   <h3 style="margin:0 0 8px 0; font-size:1rem;">Runtime Status</h3>
   {% if daemon_ok %}

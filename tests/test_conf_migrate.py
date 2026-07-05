@@ -86,5 +86,38 @@ class DiffTests(unittest.TestCase):
             self.assertEqual(keys["my_extra"][1], "<not in default>")
 
 
+class FactoryResetTests(unittest.TestCase):
+    def test_overwrites_live_conf_with_default_verbatim(self):
+        with tempfile.TemporaryDirectory() as d:
+            dflt = _write(d, "a: 1\nb: 2\n# a comment\n", "default.conf")
+            live = _write(d, "a: 999\nc: user_added\n", "live.conf")
+            used = conf_migrate.factory_reset(live, dflt)
+            self.assertEqual(used, dflt)
+            self.assertEqual(open(live).read(), open(dflt).read())
+
+    def test_works_when_live_conf_is_missing(self):
+        # A true factory reset should recreate the conf, not require one to
+        # already exist (unlike save_keys, which is a merge-into-existing op).
+        with tempfile.TemporaryDirectory() as d:
+            dflt = _write(d, "a: 1\n", "default.conf")
+            live = os.path.join(d, "live.conf")
+            self.assertFalse(os.path.exists(live))
+            conf_migrate.factory_reset(live, dflt)
+            self.assertEqual(open(live).read(), "a: 1\n")
+
+    def test_raises_when_default_missing(self):
+        with tempfile.TemporaryDirectory() as d:
+            live = _write(d, "a: 1\n", "live.conf")
+            with self.assertRaises(FileNotFoundError):
+                conf_migrate.factory_reset(live, os.path.join(d, "nope.conf"))
+
+    def test_leaves_no_tmp_file_behind(self):
+        with tempfile.TemporaryDirectory() as d:
+            dflt = _write(d, "a: 1\n", "default.conf")
+            live = _write(d, "a: 2\n", "live.conf")
+            conf_migrate.factory_reset(live, dflt)
+            self.assertFalse(os.path.exists(live + ".tmp"))
+
+
 if __name__ == "__main__":
     unittest.main()

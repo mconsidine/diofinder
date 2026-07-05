@@ -201,9 +201,9 @@ esac
 # so overwriting the *running* diofinder-update is safe (this process keeps its
 # original open file).
 LOG "Refreshing CLI wrapper scripts"
-for s in diofinder-update diofinder-db-update diofinder-ctl diofinder-bg-setup \
-         diofinder-bg-test diofinder-gadget-connect diofinder-set-time \
-         ap.sh station.sh; do
+for s in diofinder-update diofinder-factory-reset diofinder-db-update \
+         diofinder-ctl diofinder-bg-setup diofinder-bg-test \
+         diofinder-gadget-connect diofinder-set-time ap.sh station.sh; do
   src="$DIOFINDER_DIR/scripts/$s"
   [ -f "$src" ] || continue
   tmp=$(mktemp "/usr/local/bin/.$s.XXXXXX") || continue
@@ -239,6 +239,31 @@ done
 if [ "$units_changed" = 1 ]; then
   systemctl daemon-reload || LOG "WARN: daemon-reload failed"
 fi
+
+# --- Refresh sudoers drop-ins -------------------------------------------------
+# install.sh copies these at image-build time; OTA must resync them too, or a
+# newly added scoped permission (e.g. diofinder-factory-reset) never reaches
+# an already-deployed device even after THIS update ships the script and
+# webui button that need it. Validated with visudo before install -- a
+# malformed sudoers.d file breaks ALL sudo on the box, so a failed check is
+# refused rather than risked. Tolerant of a read-only /etc, like the units
+# refresh above.
+LOG "Refreshing sudoers drop-ins"
+for s in "$DIOFINDER_DIR"/etc/sudoers.d/*; do
+  [ -f "$s" ] || continue
+  base=$(basename "$s")
+  if ! cmp -s "$s" "/etc/sudoers.d/$base" 2>/dev/null; then
+    if ! visudo -cf "$s" >/dev/null 2>&1; then
+      LOG "  WARN: $base failed visudo syntax check -- not installed"
+      continue
+    fi
+    if install -m 440 "$s" "/etc/sudoers.d/$base" 2>/dev/null; then
+      LOG "  updated $base"
+    else
+      LOG "  WARN: could not refresh $base (read-only /etc?)"
+    fi
+  fi
+done
 
 # --- Record version & restart -------------------------------------------------
 

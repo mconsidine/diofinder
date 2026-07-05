@@ -1,0 +1,70 @@
+#!/bin/bash
+# diofinder factory reset.
+# Restores /etc/diofinder/diofinder.conf to the shipped
+# diofinder.conf.default and restarts the service so the fresh config takes
+# effect immediately -- several keys (detect_bin, sensor mode, tuning file)
+# are only read at process startup, so a rewritten conf alone would leave
+# the running daemon on its old settings until the next reboot.
+#
+# Usage:
+#   sudo /usr/local/bin/diofinder-factory-reset [--clear-overrides] [--clear-hot-pixel-mask]
+#
+# --clear-overrides       also delete the saved Good/Bad seeing overrides
+#                         (/var/lib/diofinder/seeing_overrides.json)
+# --clear-hot-pixel-mask  also delete the captured hot-pixel mask
+#                         (/var/lib/diofinder/hot_pixel_mask.npz)
+#
+# Neither the conf reset nor the two --clear-* flags touch the star
+# database, boresight-independent hardware calibration, or anything under
+# /opt/diofinder (the code checkout) -- this resets SETTINGS, not the
+# install.
+
+set -euo pipefail
+
+DIOFINDER_DIR=/opt/diofinder
+CONF=/etc/diofinder/diofinder.conf
+VENV_PY="$DIOFINDER_DIR/venv/bin/python"
+
+CLEAR_OVERRIDES=0
+CLEAR_HOTPIXEL=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --clear-overrides)      CLEAR_OVERRIDES=1; shift ;;
+    --clear-hot-pixel-mask) CLEAR_HOTPIXEL=1; shift ;;
+    *) echo "[factory-reset] ERROR: unknown argument: $1" >&2; exit 1 ;;
+  esac
+done
+
+LOG()  { echo "[factory-reset] $*"; }
+FAIL() { echo "[factory-reset] ERROR: $*" >&2; exit 1; }
+
+[ "$EUID" -eq 0 ] || FAIL "must run as root"
+
+LOG "Restoring $CONF from the shipped default"
+"$VENV_PY" -c "
+from diofinder.conf_migrate import factory_reset
+factory_reset()
+" || FAIL "could not restore diofinder.conf.default"
+# factory_reset() ran as root (this whole script does); re-own the conf and
+# its .lock sidecar so the unprivileged diofinder user (which owns
+# diofinder.service / diofinder-webui.service) can still read AND WRITE
+# them afterward -- the same directory-ownership class of bug fixed in
+# v0.11.30, just scoped to these two files instead of the parent directory.
+chown diofinder:diofinder "$CONF" "${CONF}.lock" 2>/dev/null || true
+
+if [ "$CLEAR_OVERRIDES" -eq 1 ]; then
+  LOG "Clearing saved seeing overrides"
+  rm -f /var/lib/diofinder/seeing_overrides.json
+fi
+
+if [ "$CLEAR_HOTPIXEL" -eq 1 ]; then
+  LOG "Clearing hot-pixel mask"
+  rm -f /var/lib/diofinder/hot_pixel_mask.npz
+fi
+
+LOG "Restarting diofinder services"
+systemctl daemon-reload || LOG "WARN: daemon-reload failed"
+systemctl restart diofinder.service
+systemctl restart diofinder-webui.service
+
+LOG "Factory reset complete"
