@@ -559,6 +559,21 @@ them and are the only open work.
 - `detect_bin` is restart-only (the temporal cache is built at one binning).
 - The Legacy preset is intentionally a faithful re-creation of the eFinder_cli
   baseline, including its weaknesses.
+- **olive-solve's hint-fallback re-enumeration** (measured 4.8×-120× cost per
+  hint-rejected attempt vs. blind, `olive-solve/tetra3/src/solver.rs` two-pass
+  loop ~1973-2116): considered and rejected. diofinder drops the attitude hint
+  entirely once `fail_streak >= 5` (`solver_proc.py` ~line 1453), so the
+  redundant re-enumeration can only occur on frames 1-5 of a reacquisition
+  episode — never later, never in steady state. At those absolute magnitudes
+  (microseconds-to-single-digit-milliseconds per attempt) the total waste is
+  tens of milliseconds at most per episode, against episodes that in real
+  device logs ran for minutes and were dominated by the auto-exposure
+  peak-floor deadlock (fixed v0.11.29). The engineering risk of the fix
+  (shared mutable undistorted-centroid state refined across passes, the
+  parallel-search determinism guarantee) is disproportionate to that payoff.
+  Revisit only if a future measurement shows the bound above no longer holds
+  (e.g. the fail-streak threshold changes, or hinted attempts get
+  meaningfully more expensive).
 
 ---
 
