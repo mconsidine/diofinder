@@ -234,9 +234,9 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.34)
+## 6. Current state (as of v0.11.35)
 
-Released through **v0.11.34** (latest). All 150 unit tests pass. The
+Released through **v0.11.35** (latest). All 150 unit tests pass. The
 operational backlog is empty; the remaining items below are deferred
 optimizations/robustness items with stated gating reasons (see section 7).
 
@@ -304,6 +304,34 @@ good) and v0.11.27:
   C-matrix pointing path if the v0.11.23 exact quaternion prediction looks
   wrong on-sky — a field-reversible fallback to pre-v0.11.23 behavior with no
   downgrade.
+
+### v0.11.35 — Home page "Detection" controls redirected away from Home
+
+User-reported: changing an entry under the Home page's "Detection" card
+(star detector, detection sensitivity, sky background) left the user on the
+Camera or Background page instead of reloading Home. Root cause: three route
+handlers (`bgtest_set`, `solver_params_set`, `seeing_set`) each had their own
+ad-hoc, incomplete `next`-redirect whitelist, none of which included
+`home_page` — despite `home.html`'s Detection card forms passing
+`next=home_page`. `bgtest_set` fell back to `bgtest_page` (Background);
+`solver_params_set` fell back to `camera_page` (Camera). `seeing_set` had the
+same gap but was masked by an accidental double-redirect through the
+deprecated `dashboard` shim (`dashboard` → `home_page`), so it happened to
+still work — fragile, not a deliberate whitelist.
+
+The file already has a shared, correct helper for exactly this
+(`_redirect_next(default)` + `_NEXT_ENDPOINTS`, used consistently by
+`testmode_set` and others) — these three handlers just weren't using it.
+
+**Fix**: all three now call `_redirect_next(default)` instead of their own
+inline whitelist checks. Added `bgtest_page` to `_NEXT_ENDPOINTS` (previously
+only reachable via the "no `next` given" fallback, never explicitly
+whitelisted). Swept every other `request.form.get("next")` / redirect call
+site in `webui/app.py` for the same class of bug: `seeing_override_save`/
+`seeing_override_clear` (config_page-only, whitelist already correct) and
+`hotpixel_capture`/`hotpixel_clear` (narrower two-way switch matching their
+actual template usage exactly) were checked and found already consistent —
+left unchanged.
 
 ### v0.11.34 — diag_solve.py --bundle silently ignored --fov/--sigma/--fov-err/--timeout
 

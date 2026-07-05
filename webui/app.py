@@ -318,7 +318,8 @@ def boresight_center():
     return redirect(url_for("dashboard"))
 
 
-_NEXT_ENDPOINTS = {"dashboard", "camera_page", "home_page", "utilities_page"}
+_NEXT_ENDPOINTS = {"dashboard", "camera_page", "home_page", "utilities_page",
+                   "bgtest_page"}
 
 
 def _redirect_next(default):
@@ -431,10 +432,7 @@ def bgtest_set():
     r = _safe_call("solver_params_set", params)
     if not r.ok:
         return r.error, 500
-    nxt = request.form.get("next") or "bgtest_page"
-    if nxt not in ("bgtest_page", "camera_page", "dashboard"):
-        nxt = "bgtest_page"
-    return redirect(url_for(nxt))
+    return _redirect_next("bgtest_page")
 
 
 @app.route("/api/bgcache")
@@ -551,10 +549,7 @@ def seeing_set():
     r = _safe_call("seeing_set", args)
     if not r.ok:
         return r.error, 500
-    nxt = request.form.get("next") or "dashboard"
-    if nxt not in ("dashboard", "config_page", "camera_page"):
-        nxt = "dashboard"
-    return redirect(url_for(nxt))
+    return _redirect_next("dashboard")
 
 
 @app.route("/seeing/override/save", methods=["POST"])
@@ -1012,10 +1007,7 @@ def solver_params_set():
         r = _safe_call("match_params_set", margs)
         if not r.ok:
             return r.error, 400
-    nxt = request.form.get("next") or "camera_page"
-    if nxt not in ("camera_page", "dashboard"):
-        nxt = "camera_page"
-    return redirect(url_for(nxt))
+    return _redirect_next("camera_page")
 
 
 # ---- Wi-Fi ------------------------------------------------------------------
