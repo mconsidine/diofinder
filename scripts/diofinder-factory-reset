@@ -41,7 +41,13 @@ FAIL() { echo "[factory-reset] ERROR: $*" >&2; exit 1; }
 [ "$EUID" -eq 0 ] || FAIL "must run as root"
 
 LOG "Restoring $CONF from the shipped default"
-"$VENV_PY" -c "
+# The `diofinder` package is never pip-installed into the venv -- every
+# entry point relies on either `-m` from WorkingDirectory=$DIOFINDER_DIR
+# (the systemd units) or an explicit PYTHONPATH. This script is launched
+# detached (systemd-run from the webui) with no reason to already be
+# sitting in $DIOFINDER_DIR, so a bare `-c` here fails with "No module
+# named 'diofinder'" regardless of which venv's python runs it.
+PYTHONPATH="$DIOFINDER_DIR" "$VENV_PY" -c "
 from diofinder.conf_migrate import factory_reset
 factory_reset()
 " || FAIL "could not restore diofinder.conf.default"
