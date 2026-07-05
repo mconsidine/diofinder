@@ -367,8 +367,19 @@ fi
 
 chown -R "$DIOFINDER_USER:$DIOFINDER_USER" /var/lib/diofinder
 
+mkdir -p /etc/diofinder
+# The directory itself, not just diofinder.conf, must be owned by
+# $DIOFINDER_USER: save_keys() (diofinder/config.py) creates a sibling
+# .lock file and a .tmp file for its atomic replace, both of which need
+# directory-level write permission, not just file-level. Installing the
+# conf file with -o/-g alone left the directory root:root 755, so every
+# settings-persist call (any webui Save button, :St/:Sg, alignment, auto
+# calibration) failed with PermissionError on a freshly imaged or
+# reprovisioned device. Unconditional (not just on first install) so an
+# upgrade of an already-broken device is also repaired.
+chown "$DIOFINDER_USER:$DIOFINDER_USER" /etc/diofinder
+
 if [ ! -f /etc/diofinder/diofinder.conf ]; then
-  mkdir -p /etc/diofinder
   install -m 644 -o "$DIOFINDER_USER" -g "$DIOFINDER_USER" \
     "$DIOFINDER_DIR/etc/diofinder.conf.default" /etc/diofinder/diofinder.conf
 fi
