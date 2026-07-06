@@ -234,13 +234,28 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.39)
+## 6. Current state (as of v0.11.40)
 
-Released through **v0.11.39** (latest). All 218 unit tests pass. The
+Released through **v0.11.40** (latest). All 218 unit tests pass. The
 operational backlog is empty; the remaining items below are deferred
 optimizations/robustness items with stated gating reasons (see section 7).
 
 Recent-history summary (details in each PR, #99–#103):
+- v0.11.40: wheel-refresh-only release, picking up sycamore-extract v0.14.1
+  (no diofinder code change). That upstream release removes a vestigial
+  per-row floor scan for `bg_mode="top_hat"` and the `bg_image` temporal
+  cache path — both already fully flatten the detection image to a
+  near-zero background before the matched-filter gate runs, so the trailing
+  row-percentile floor was re-measuring ~0 rather than doing real work.
+  Verified upstream via multi-seed synthetic A/B (including adversarial
+  per-row-bias / fast row-oscillation scenes) to be byte-identical
+  before/after for those two paths; `row_column_percentile`,
+  `block_percentile`, `uniform_mean`, and the `block_offsets` cached path
+  were audited and deliberately left unchanged (uniform_mean in particular
+  showed a real false-negative regression under the same adversarial test
+  when the floor was zeroed). No diofinder-side behavior change beyond
+  picking up the new wheel; `SYCAMORE_TAG` is unset, so this and future
+  image builds / OTA updates always resolve "latest" automatically.
 - v0.11.39: fix `/update` and `/factory_reset` **always** falling back to
   a sandboxed subprocess instead of using their `systemd-run` escape hatch —
   a deterministic bug (not a rare "stale unit" collision as first suspected),
