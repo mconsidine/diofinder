@@ -177,6 +177,19 @@ def apply_preset(mode: str, cfg) -> Dict[str, Any]:
     return preset
 
 
+def display_presets(cfg) -> Dict[str, Dict[str, Any]]:
+    """All presets with star_db resolved to a concrete db name.
+
+    SEEING_PRESETS stores star_db as the token "standard"/"deep"; every other
+    key is a plain, directly-comparable value. Read-only views that put a
+    preset side by side with effective_values()'s "in use" column (which
+    reports cfg.solver_db, a concrete db name) need the same resolution here,
+    or star_db renders as an unresolved token next to a real filename while
+    every other row lines up.
+    """
+    return {mode: apply_preset(mode, cfg) for mode in SEEING_PRESETS}
+
+
 def effective_values(cfg, shared_cfg=None) -> Dict[str, Any]:
     """Return the current effective value of every preset-controlled key.
 

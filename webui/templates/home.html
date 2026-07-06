@@ -46,16 +46,31 @@
   <div class="card">
     <h2>Exposure</h2>
     {% if exposure %}
-      <form method="post" action="{{ url_for('exposure_set') }}">
-        <input type="hidden" name="next" value="home_page">
-        <label>Exposure (seconds)
-          <input type="number" step="any" min="0.001" max="10" name="exposure_s"
-                 value="{{ exposure.exposure_s }}" style="width:6em;"></label>
-        <label style="margin-left:8px;">Gain (1&ndash;64)
-          <input type="number" step="1" min="1" max="64" name="gain"
-                 value="{{ exposure.gain }}" style="width:5em;"></label>
-        <button type="submit" class="btn">Apply &amp; save</button>
-      </form>
+      <label>
+        Exposure (seconds)
+        <div class="stepper-row">
+          <button type="button" class="step-btn" onclick="stepExp(-1)">&#8722;</button>
+          <input type="range" id="exp_slider" min="-3" max="1" step="0.001"
+                 value="{{ (exposure.exposure_s | float) | log10 }}"
+                 oninput="expSliderChange(this.value)">
+          <input type="number" step="any" min="0.001" max="10"
+                 id="exp_num" value="{{ exposure.exposure_s }}">
+          <button type="button" class="step-btn" onclick="stepExp(1)">&#43;</button>
+        </div>
+      </label>
+      <label>
+        Gain (1&ndash;64)
+        <div class="stepper-row">
+          <button type="button" class="step-btn" onclick="stepGain(-1)">&#8722;</button>
+          <input type="range" id="gain_slider" min="1" max="64" step="1"
+                 value="{{ exposure.gain }}"
+                 oninput="gainSliderChange(this.value)">
+          <input type="number" step="1" min="1" max="64"
+                 id="gain_num" value="{{ exposure.gain }}">
+          <button type="button" class="step-btn" onclick="stepGain(1)">&#43;</button>
+        </div>
+      </label>
+      <p id="exp-status" class="hint" style="min-height:1.2em;">&nbsp;</p>
       <form method="post" action="{{ url_for('autoexposure_set') }}" style="margin-top:8px;">
         <input type="hidden" name="next" value="home_page">
         <input type="hidden" name="enabled"
@@ -125,14 +140,21 @@
         </select>
       </form>
     </div>
-    <form method="post" action="{{ url_for('solver_params_set') }}" style="margin-bottom:8px;">
-      <input type="hidden" name="next" value="home_page">
-      <span class="label">Detection sensitivity</span>
-      <input type="number" name="detect_sigma" min="2" max="12" step="0.5"
-             value="{{ '%.1f'|format(_sigma|float) }}" style="width:5em;">
-      <span class="hint">sigma</span>
-      <button type="submit" class="btn">Apply</button>
-    </form>
+    <div style="margin-bottom:8px;">
+      <label>
+        Detection sensitivity
+        <div class="stepper-row">
+          <button type="button" class="step-btn" onclick="stepSigma(-1)">&#8722;</button>
+          <input type="range" id="sigma_slider" min="1" max="16" step="0.5"
+                 value="{{ '%.1f'|format(_sigma|float) }}"
+                 oninput="sigmaSliderChange(this.value)">
+          <input type="number" step="0.5" min="1" max="16"
+                 id="sigma_num" value="{{ '%.1f'|format(_sigma|float) }}">
+          <button type="button" class="step-btn" onclick="stepSigma(1)">&#43;</button>
+        </div>
+      </label>
+      <p id="solver-status" class="hint" style="min-height:1.2em;">&nbsp;</p>
+    </div>
     <div>
       <span class="label">Sky background</span>
       <form method="post" action="{{ url_for('bgtest_set') }}" style="display:inline;">
@@ -375,6 +397,98 @@ async function refreshHome(){
 })();
 setInterval(refreshHome, 1250);
 refreshHome();
+
+// --- Exposure / gain / sigma controls ----------------------------------------
+// Slider + step buttons + direct-entry, live-applying via /api/camera/set
+// (session-only, not persisted) — same pattern as the Focus page.
+function debounce(fn, ms) {
+  let t;
+  return function(...args) { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+}
+function setCtlStatus(id, msg, ok) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.textContent = msg;
+  el.style.color = ok ? '#44cc44' : '#ff5500';
+  if (ok) setTimeout(() => { if (el.textContent === msg) el.textContent = ' '; }, 2000);
+}
+async function applyCtlParams(params, statusId) {
+  setCtlStatus(statusId, 'Applying…', true);
+  try {
+    const r = await fetch('/api/camera/set', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(params),
+    });
+    const data = await r.json();
+    if (data.ok) setCtlStatus(statusId, 'Applied', true);
+    else setCtlStatus(statusId, 'Error: ' + (data.errors || []).join(', '), false);
+  } catch(e) {
+    setCtlStatus(statusId, 'Error: ' + e.message, false);
+  }
+}
+const applyExp   = debounce(s => applyCtlParams({exposure_s: s},  'exp-status'),    400);
+const applyGain  = debounce(g => applyCtlParams({gain: g},        'exp-status'),    400);
+const applySigma = debounce(v => applyCtlParams({detect_sigma: v},'solver-status'), 400);
+
+function expSliderChange(v) {
+  const s = Math.pow(10, parseFloat(v));
+  document.getElementById('exp_num').value = s.toFixed(4).replace(/\.?0+$/, '');
+  applyExp(s);
+}
+function expNumChange(v) {
+  const s = parseFloat(v);
+  if (s > 0) { document.getElementById('exp_slider').value = Math.log10(s); applyExp(s); }
+}
+function gainSliderChange(v) {
+  const g = Math.round(v);
+  document.getElementById('gain_num').value = g;
+  applyGain(g);
+}
+function gainNumChange(v) {
+  const g = Math.round(parseFloat(v));
+  document.getElementById('gain_slider').value = g;
+  applyGain(g);
+}
+function sigmaSliderChange(v) {
+  const s = parseFloat(v);
+  document.getElementById('sigma_num').value = s.toFixed(1);
+  applySigma(s);
+}
+function sigmaNumChange(v) {
+  document.getElementById('sigma_slider').value = v;
+  applySigma(parseFloat(v));
+}
+function stepExp(dir) {
+  const el = document.getElementById('exp_num');
+  if (!el) return;
+  const s = Math.max(0.001, Math.min(10, parseFloat(el.value || 0.2) + dir * 0.05));
+  el.value = parseFloat(s.toFixed(3));
+  document.getElementById('exp_slider').value = Math.log10(s);
+  applyExp(s);
+}
+function stepGain(dir) {
+  const el = document.getElementById('gain_num');
+  if (!el) return;
+  const g = Math.max(1, Math.min(64, Math.round(parseFloat(el.value || 1)) + dir));
+  el.value = g;
+  document.getElementById('gain_slider').value = g;
+  applyGain(g);
+}
+function stepSigma(dir) {
+  const el = document.getElementById('sigma_num');
+  if (!el) return;
+  const s = Math.max(1, Math.min(16, parseFloat(el.value || 5) + dir));
+  el.value = s.toFixed(1);
+  document.getElementById('sigma_slider').value = s;
+  applySigma(s);
+}
+const expNum = document.getElementById('exp_num');
+const gainNum = document.getElementById('gain_num');
+const sigmaNum = document.getElementById('sigma_num');
+if (expNum)   expNum.addEventListener('input',   e => expNumChange(e.target.value));
+if (gainNum)  gainNum.addEventListener('input',  e => gainNumChange(e.target.value));
+if (sigmaNum) sigmaNum.addEventListener('input', e => sigmaNumChange(e.target.value));
 
 // Debug bundle: POST /debug/collect builds the 12-frame-burst ZIP and streams
 // it back as a download (a copy is also saved on the device).

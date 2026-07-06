@@ -2221,7 +2221,7 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 return MaintResponse(ok=False, error=f"seeing_get failed: {e}")
             return MaintResponse(ok=True, result={
                 "mode": mode,
-                "presets": seeing_mod.SEEING_PRESETS,
+                "presets": seeing_mod.display_presets(ctx.cfg),
                 "rationale": seeing_mod.PRESET_RATIONALE,
                 "effective": effective,
                 "drift": drift,
