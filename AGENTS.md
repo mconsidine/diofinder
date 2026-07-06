@@ -234,13 +234,29 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.36)
+## 6. Current state (as of v0.11.38)
 
-Released through **v0.11.36** (latest). All 150 unit tests pass. The
+Released through **v0.11.38** (latest). All 218 unit tests pass. The
 operational backlog is empty; the remaining items below are deferred
 optimizations/robustness items with stated gating reasons (see section 7).
 
 Recent-history summary (details in each PR, #99–#103):
+- v0.11.38: webui nits — nav label/URL mismatches ("Settings"->"Utilities",
+  `/camera`->`/advanced` to match its existing "Advanced" label); a
+  `seeing.display_presets(cfg)` helper so the Utilities/Config "Current
+  settings" table resolves `star_db`'s preset token ("standard"/"deep") to
+  the same concrete db filename the "in use" column already shows (every
+  other row compared like-for-like; star_db alone didn't); Home page
+  exposure/gain/detection-sigma controls converted from plain number inputs
+  + full-page-reload forms to the slider + step-button + direct-entry
+  pattern already used on the Focus page (live-apply via `/api/camera/set`),
+  with sigma's range narrowed to 1-16 on this control specifically (daemon
+  still accepts 0-20 elsewhere).
+- v0.11.37: retag-only; a corrective rebuild of v0.11.36's image after
+  discovering `OLIVE_SOLVE_TAG`/`SYCAMORE_TAG` repo variables had been
+  pinning every image build to stale olive-solve v0.1.2 / sycamore v0.12.0
+  wheels (both variables have since been deleted; new builds now correctly
+  resolve "latest"). No diofinder code change from v0.11.36.
 - v0.11.36: version-only release to pick up **olive-solve v0.1.7** (no
   diofinder code changes). The new wheel ports five solver micro-optimizations
   from upstream `oakamil/olive-solve` — an early-rejection SVD pre-pass and
