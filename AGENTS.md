@@ -234,13 +234,35 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.38)
+## 6. Current state (as of v0.11.39)
 
-Released through **v0.11.38** (latest). All 218 unit tests pass. The
+Released through **v0.11.39** (latest). All 218 unit tests pass. The
 operational backlog is empty; the remaining items below are deferred
 optimizations/robustness items with stated gating reasons (see section 7).
 
 Recent-history summary (details in each PR, #99–#103):
+- v0.11.39: fix `/update` and `/factory_reset` **always** falling back to
+  a sandboxed subprocess instead of using their `systemd-run` escape hatch —
+  a deterministic bug (not a rare "stale unit" collision as first suspected),
+  root-caused via the sudoers drop-ins: `sudo systemd-run ... /usr/local/bin/
+  diofinder-update` was authorized on the command sudo is actually asked to
+  run (`systemd-run`), not on `diofinder-update` appearing later as one of
+  systemd-run's own arguments, and the sudoers grant only ever covered the
+  bare script path. So `sudo systemd-run ...` silently failed non-interactive
+  auth on *every* webui-triggered update/factory-reset, always falling back
+  to a plain `Popen` that inherits `diofinder-webui.service`'s
+  `ProtectSystem=full`/`ProtectHome=true` sandbox — hence the recurring
+  `mktemp: ... Read-only file system` (CLI wrapper resync) and `unable to
+  access '/home/diofinder/.config/git/...'` (git) warnings on every update.
+  Fix: two new root-owned wrapper scripts, `diofinder-update-launcher` and
+  `diofinder-factory-reset-launcher`, each with its own scoped sudoers grant
+  and each doing nothing but the `systemd-run --collect --unit=... /usr/
+  local/bin/diofinder-{update,factory-reset} "$@"` call — since *that* is the
+  exact command sudo authorizes, the escape hatch actually fires now. Existing
+  devices need one direct-SSH `sudo /usr/local/bin/diofinder-update --ref
+  olive` to bootstrap the new launcher scripts onto `/usr/local/bin` (a
+  webui-triggered update can't write there until it has them); after that,
+  webui-triggered updates self-heal.
 - v0.11.38: webui nits — nav label/URL mismatches ("Settings"->"Utilities",
   `/camera`->`/advanced` to match its existing "Advanced" label); a
   `seeing.display_presets(cfg)` helper so the Utilities/Config "Current

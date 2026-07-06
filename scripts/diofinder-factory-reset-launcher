@@ -1,0 +1,15 @@
+#!/bin/bash
+# diofinder-factory-reset-launcher: root helper invoked (via sudo) by the web
+# UI's /factory_reset route. Same reasoning as diofinder-update-launcher: it
+# hands diofinder-factory-reset off to systemd-run in its own transient unit
+# so it escapes diofinder-webui.service's ProtectSystem=full/ProtectHome=true
+# sandbox and cgroup, and so the sudoers grant that authorizes this exact
+# script covers the systemd-run invocation instead of silently failing it
+# (sudo matches on the command it's asked to run, not on
+# diofinder-factory-reset appearing later as one of systemd-run's arguments).
+set -euo pipefail
+LOG="/var/lib/diofinder/last-factory-reset.log"
+exec systemd-run --collect --unit=diofinder-factory-reset \
+  --property=StandardOutput=append:"$LOG" \
+  --property=StandardError=append:"$LOG" \
+  /usr/local/bin/diofinder-factory-reset "$@"

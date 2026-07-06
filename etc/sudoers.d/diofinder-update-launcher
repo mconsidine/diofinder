@@ -1,0 +1,8 @@
+# Allow the diofinder user to run diofinder-update-launcher without a
+# password, and only that script. This is a SEPARATE grant from
+# diofinder-update itself, scoped to the exact command the web UI's
+# /update route actually invokes: sudo authorizes on the command it's
+# asked to run (diofinder-update-launcher), not on diofinder-update
+# appearing later as one of the launcher's own systemd-run arguments.
+# See diofinder-update-launcher for the full explanation.
+diofinder ALL=(root) NOPASSWD: /usr/local/bin/diofinder-update-launcher *

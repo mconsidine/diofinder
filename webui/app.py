@@ -1243,31 +1243,30 @@ def update_page():
             out = logf
         except OSError:
             out = subprocess.DEVNULL
-        # systemd-run puts the updater in its OWN transient unit: outside
-        # this webui unit's ProtectSystem=full sandbox (so the wrapper-script
-        # and systemd-unit resync actually happen) and outside its cgroup (so
-        # restarting the webui mid-update no longer kills the updater before
-        # it prints completion + the wheel summary). Fallback to a plain
-        # detached Popen when systemd-run is unavailable (dev boxes).
-        run_cmd = (["sudo", "systemd-run", "--collect",
-                    "--unit=diofinder-ota-update",
-                    "--property=StandardOutput=append:" + UPDATE_LOG,
-                    "--property=StandardError=append:" + UPDATE_LOG]
-                   + cmd[1:])
+        # diofinder-update-launcher puts the updater in its OWN transient
+        # systemd unit: outside this webui unit's ProtectSystem=full sandbox
+        # (so the wrapper-script and systemd-unit resync actually happen) and
+        # outside its cgroup (so restarting the webui mid-update no longer
+        # kills the updater before it prints completion + the wheel summary).
+        # It must be a separate sudo-authorized SCRIPT, not `sudo systemd-run
+        # ...` inlined here: sudo authorizes on the command it's asked to run
+        # (systemd-run), not on diofinder-update appearing later as one of
+        # systemd-run's own arguments, so a grant scoped to diofinder-update
+        # alone silently never covers this call — see
+        # diofinder-update-launcher for the full explanation. Fallback to a
+        # plain detached Popen (sandboxed, but the update itself still
+        # succeeds) if the launcher isn't installed yet or sudo denies it.
+        run_cmd = ["sudo", "/usr/local/bin/diofinder-update-launcher"] + cmd[2:]
+        use_launcher = True
         try:
-            probe = subprocess.run(["systemd-run", "--version"],
-                                   capture_output=True, timeout=5)
-            use_systemd = probe.returncode == 0
+            r = subprocess.run(run_cmd, capture_output=True, text=True,
+                               timeout=15)
+            if r.returncode != 0:
+                use_launcher = False
         except Exception:
-            use_systemd = False
+            use_launcher = False
         try:
-            if use_systemd:
-                r = subprocess.run(run_cmd, capture_output=True, text=True,
-                                   timeout=15)
-                if r.returncode != 0:
-                    # e.g. a previous transient unit still loaded — fall back.
-                    use_systemd = False
-            if not use_systemd:
+            if not use_launcher:
                 subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT,
                                  start_new_session=True)
         except FileNotFoundError:
@@ -1316,10 +1315,11 @@ FACTORY_RESET_LOG = "/var/lib/diofinder/last-factory-reset.log"
 def factory_reset():
     """Restore diofinder.conf to the shipped default and restart the service.
 
-    Fires diofinder-factory-reset in the background (detached via
-    systemd-run, same reasoning as /update: the script restarts this very
-    webui, so running it inside the request's own cgroup would kill it
-    before it finishes) and shows a page that polls the log until done.
+    Fires diofinder-factory-reset in the background via
+    diofinder-factory-reset-launcher (detached in its own systemd unit, same
+    reasoning as /update: the script restarts this very webui, so running it
+    inside the request's own cgroup would kill it before it finishes) and
+    shows a page that polls the log until done.
     """
     cmd = ["sudo", "/usr/local/bin/diofinder-factory-reset"]
     if request.form.get("clear_overrides"):
@@ -1334,24 +1334,19 @@ def factory_reset():
         out = logf
     except OSError:
         out = subprocess.DEVNULL
-    run_cmd = (["sudo", "systemd-run", "--collect",
-                "--unit=diofinder-factory-reset",
-                "--property=StandardOutput=append:" + FACTORY_RESET_LOG,
-                "--property=StandardError=append:" + FACTORY_RESET_LOG]
-               + cmd[1:])
+    # See diofinder-update-launcher for why this must be a separate
+    # sudo-authorized script rather than `sudo systemd-run ...` inlined here.
+    run_cmd = ["sudo", "/usr/local/bin/diofinder-factory-reset-launcher"] + cmd[2:]
+    use_launcher = True
     try:
-        probe = subprocess.run(["systemd-run", "--version"],
-                               capture_output=True, timeout=5)
-        use_systemd = probe.returncode == 0
+        r = subprocess.run(run_cmd, capture_output=True, text=True,
+                           timeout=15)
+        if r.returncode != 0:
+            use_launcher = False
     except Exception:
-        use_systemd = False
+        use_launcher = False
     try:
-        if use_systemd:
-            r = subprocess.run(run_cmd, capture_output=True, text=True,
-                               timeout=15)
-            if r.returncode != 0:
-                use_systemd = False
-        if not use_systemd:
+        if not use_launcher:
             subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT,
                              start_new_session=True)
     except FileNotFoundError:
