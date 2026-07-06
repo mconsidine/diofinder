@@ -788,9 +788,9 @@ def calibration_reset():
     return redirect(url_for("dashboard"))
 
 
-@app.route("/camera")
+@app.route("/advanced")
 def camera_page():
-    """Camera and solver settings page."""
+    """Camera and solver settings page (nav label: Advanced)."""
     exposure      = _safe_call("exposure_get")
     solver_params = _safe_call("solver_params_get")
     hotpix        = _safe_call("hot_pixel_status")
