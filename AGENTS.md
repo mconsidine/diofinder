@@ -234,13 +234,25 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.35)
+## 6. Current state (as of v0.11.36)
 
-Released through **v0.11.35** (latest). All 150 unit tests pass. The
+Released through **v0.11.36** (latest). All 150 unit tests pass. The
 operational backlog is empty; the remaining items below are deferred
 optimizations/robustness items with stated gating reasons (see section 7).
 
 Recent-history summary (details in each PR, #99–#103):
+- v0.11.36: version-only release to pick up **olive-solve v0.1.7** (no
+  diofinder code changes). The new wheel ports five solver micro-optimizations
+  from upstream `oakamil/olive-solve` — an early-rejection SVD pre-pass and
+  ImmutableKdTree switch in `try_pattern_combo`/`verify_and_build_solution`,
+  reciprocal-multiply and Cramer's-rule refinements, and a lazy-verification
+  early-break — all algebraically/output-equivalent, so no behavioral change
+  is expected on-device; see `mconsidine/olive-solve` AGENTS.md §5 for the
+  full writeup. `OLIVE_SOLVE_TAG` is unset (tracks latest), so `diofinder-update`
+  and new image builds pick it up automatically regardless of this release,
+  but cutting a diofinder release keeps the shipped wheel version visible in
+  the Home/Update pages and debug bundles per the v0.11.18 wheel-diagnostics
+  policy.
 - v0.11.17: hot-pixel mask sanity guard; FOV recenter 13.64→13.54.
 - v0.11.18: dark-capture MAD floor; wheel-version visibility everywhere;
   AE reversal damping; hint cone 1.5×→2.5×.
