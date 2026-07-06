@@ -1,0 +1,6 @@
+# Allow the diofinder user to run diofinder-factory-reset-launcher without a
+# password, and only that script. Separate grant from diofinder-factory-reset
+# itself, scoped to the exact command the web UI's /factory_reset route
+# actually invokes -- see diofinder-update-launcher (its sibling) for why a
+# grant on the wrapped script doesn't cover the launcher's systemd-run call.
+diofinder ALL=(root) NOPASSWD: /usr/local/bin/diofinder-factory-reset-launcher *

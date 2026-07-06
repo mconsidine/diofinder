@@ -1,0 +1,25 @@
+#!/bin/bash
+# diofinder-update-launcher: root helper invoked (via sudo) by the web UI's
+# /update route. Its only job is to hand diofinder-update off to systemd-run
+# in its OWN transient unit, so the update escapes diofinder-webui.service's
+# ProtectSystem=full / ProtectHome=true sandbox (needed for the CLI-wrapper /
+# systemd-unit / sudoers resync steps to actually write) and its cgroup (so
+# restarting the webui mid-update doesn't kill the updater before it finishes
+# and prints the wheel summary).
+#
+# Why this script exists instead of the web UI running
+# `sudo systemd-run ... /usr/local/bin/diofinder-update` directly: sudo
+# authorizes based on the command it is asked to run (systemd-run here), not
+# on diofinder-update appearing later as one of systemd-run's own arguments.
+# The sudoers grant for /usr/local/bin/diofinder-update alone never covered
+# that invocation, so `sudo systemd-run ...` always failed (no NOPASSWD entry
+# for systemd-run) and the web UI silently, deterministically fell back to a
+# plain subprocess -- still sandboxed by diofinder-webui.service -- on every
+# single webui-triggered update. This script IS the thing sudoers grants
+# instead, closing that gap without widening the grant to all of systemd-run.
+set -euo pipefail
+LOG="/var/lib/diofinder/last-update.log"
+exec systemd-run --collect --unit=diofinder-ota-update \
+  --property=StandardOutput=append:"$LOG" \
+  --property=StandardError=append:"$LOG" \
+  /usr/local/bin/diofinder-update "$@"

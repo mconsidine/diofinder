@@ -226,8 +226,9 @@ esac
 # so overwriting the *running* diofinder-update is safe (this process keeps its
 # original open file).
 LOG "Refreshing CLI wrapper scripts"
-for s in diofinder-update diofinder-factory-reset diofinder-db-update \
-         diofinder-ctl diofinder-bg-setup diofinder-bg-test \
+for s in diofinder-update diofinder-update-launcher \
+         diofinder-factory-reset diofinder-factory-reset-launcher \
+         diofinder-db-update diofinder-ctl diofinder-bg-setup diofinder-bg-test \
          diofinder-gadget-connect diofinder-set-time ap.sh station.sh; do
   src="$DIOFINDER_DIR/scripts/$s"
   [ -f "$src" ] || continue
