@@ -115,6 +115,13 @@ sudo -u diofinder "$DIOFINDER_DIR/venv/bin/pip" install --quiet --upgrade \
 VENDOR_WHEELS="$DIOFINDER_DIR/vendor/wheels"
 WHEEL_TMP=$(mktemp -d)
 trap 'rm -rf "$WHEEL_TMP"' EXIT
+# mktemp -d defaults to 0700, owned by whoever invoked this script (root, via
+# sudo). The wheel is later installed by "sudo -u diofinder pip install", so
+# without this the diofinder user can't even traverse into the directory to
+# read the file it just downloaded -- every fresh download (not served from
+# vendor/wheels/, not already-current) failed with a Permission denied on the
+# downloaded .whl until this was added.
+chmod 755 "$WHEEL_TMP"
 
 # Print the download URL of the first release asset matching a glob.
 # Honors OLIVE_SOLVE_TAG / SYCAMORE_TAG env pins (same variables release.yml

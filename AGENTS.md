@@ -234,13 +234,25 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.40)
+## 6. Current state (as of v0.11.41)
 
-Released through **v0.11.40** (latest). All 218 unit tests pass. The
+Released through **v0.11.41** (latest). All 218 unit tests pass. The
 operational backlog is empty; the remaining items below are deferred
 optimizations/robustness items with stated gating reasons (see section 7).
 
 Recent-history summary (details in each PR, #99–#103):
+- v0.11.41: fix `diofinder-update` failing to actually install a freshly
+  *downloaded* wheel (surfaced trying to pick up v0.11.40's sycamore-extract
+  v0.14.1 bump): `WHEEL_TMP=$(mktemp -d)` defaults to mode 0700 owned by
+  root (the script runs via `sudo`), but the wheel is installed by `sudo -u
+  diofinder pip install ... "$whl"` — the unprivileged `diofinder` user
+  can't even traverse into a 0700 root-owned directory, so every download
+  (as opposed to a `vendor/wheels/` override or an already-current skip)
+  failed with `Permission denied` on the just-downloaded `.whl`, silently
+  keeping the old wheel installed. This is why v0.11.40 alone wasn't enough
+  to get sycamore-extract v0.14.1 onto a device — the download itself
+  worked (confirmed by GitHub's `releases/latest`), only the local install
+  step failed. Fix: `chmod 755 "$WHEEL_TMP"` right after creating it.
 - v0.11.40: wheel-refresh-only release, picking up sycamore-extract v0.14.1
   (no diofinder code change). That upstream release removes a vestigial
   per-row floor scan for `bg_mode="top_hat"` and the `bg_image` temporal
