@@ -99,9 +99,16 @@ def _daemon_frame(after_seq=-1, timeout=8.0):
 # Direct display-SHM reader for the live view (P4): no maint round-trip, no
 # base64, no solver-thread theft. Lazily attached; falls back to frame_get
 # when the segment is absent (older daemon) or a read is torn.
-_display_reader = {"r": None, "hw": None}
+_display_reader = {"r": None, "hw": None, "ino": None,
+                   "last_seq": -1, "last_new": 0.0}
+_display_lock = threading.Lock()
 _display_keepalive = {"ts": 0.0}
 _DISPLAY_KEEPALIVE_S = 2.0
+# A fast-path frame whose seq hasn't advanced in this long is treated as
+# stale and the poll is served by frame_get instead. Comfortably above the
+# longest sane frame period (multi-second manual exposures) so a slow but
+# healthy writer never trips it.
+_DISPLAY_STALE_S = 15.0
 
 
 def _live_frame(timeout=3.0):
@@ -112,7 +119,25 @@ def _live_frame(timeout=3.0):
     ``frame_get`` maint path (the authoritative FrameSlots-bracketed read) on
     any miss. Returns (frame u8 | None, seq, synced). Bursts / debug bundles
     deliberately keep using ``_daemon_frame`` — the display segment is a
-    best-effort preview, not a strictly-consecutive source."""
+    best-effort preview, not a strictly-consecutive source.
+
+    The daemon unlinks and RECREATES the segment on every restart
+    (``ExecStartPre`` rm + ``display_shm.create``), which orphans a
+    long-lived reader: it would keep returning the last frame ever written
+    to the old mapping — with a valid, never-advancing seq — forever. Three
+    guards keep the view live across daemon restarts without restarting the
+    webui (the frozen-live-view-until-webui-restart bug):
+
+    * the /dev/shm inode of the segment is checked each poll (one stat);
+      a change, or the file disappearing, drops the reader so the next
+      poll re-attaches to the daemon's CURRENT segment;
+    * a frame whose seq hasn't advanced in ``_DISPLAY_STALE_S`` is served
+      via frame_get instead (covers a live segment whose writer stopped);
+    * a failed attach is no longer sticky — when the webui boots before
+      the daemon has created the segment, the attach retries every poll
+      (cheap: one failed stat) instead of permanently disabling the fast
+      path with only ``hw`` recorded.
+    """
     import time as _t
     from diofinder import display_shm
     now = _t.monotonic()
@@ -124,24 +149,49 @@ def _live_frame(timeout=3.0):
         hw = (ecfg.frame_height, ecfg.frame_width)
     except Exception:
         hw = (760, 960)
-    if _display_reader["hw"] != hw:
-        # (Re)attach if the reader is missing or the frame geometry changed.
-        old = _display_reader["r"]
-        if old is not None:
-            try:
-                old.close()
-            except Exception:
-                pass
+    with _display_lock:
         try:
-            _display_reader["r"] = display_shm.DisplayReader(hw[0], hw[1])
-            _display_reader["hw"] = hw
-        except Exception:
-            _display_reader["r"] = None
-    reader = _display_reader["r"]
-    if reader is not None and reader.available:
-        got = reader.read()
-        if got is not None:
-            return got[0], got[1], True
+            ino = os.stat(
+                "/dev/shm/" + display_shm.DISPLAY_SHM_NAME).st_ino
+        except OSError:
+            ino = None
+        reader = _display_reader["r"]
+        if (reader is None or _display_reader["hw"] != hw
+                or _display_reader["ino"] != ino):
+            # (Re)attach: reader missing, frame geometry changed, or the
+            # daemon recreated the segment (inode changed / file gone).
+            if reader is not None:
+                try:
+                    reader.close()
+                except Exception:
+                    pass
+                _display_reader["r"] = None
+            reader = None
+            if ino is not None:
+                try:
+                    cand = display_shm.DisplayReader(hw[0], hw[1])
+                except Exception:
+                    cand = None
+                if cand is not None and cand.available:
+                    _display_reader.update(
+                        r=cand, hw=hw, ino=ino, last_seq=-1, last_new=now)
+                    reader = cand
+                elif cand is not None:
+                    cand.close()
+        if reader is not None:
+            got = reader.read()
+            if got is not None:
+                frame, seq = got
+                if seq != _display_reader["last_seq"]:
+                    _display_reader["last_seq"] = seq
+                    _display_reader["last_new"] = now
+                    return frame, seq, True
+                if now - _display_reader["last_new"] <= _DISPLAY_STALE_S:
+                    return frame, seq, True
+                # Same seq past the stale window: the writer stopped (or
+                # this mapping is orphaned in a way the inode check can't
+                # see). Serve the authoritative maint path until the seq
+                # advances again.
     # Fall back to the maint path (also covers the first frame or two before
     # the solver has armed the segment).
     return _daemon_frame(timeout=timeout)

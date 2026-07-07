@@ -86,6 +86,12 @@ class DisplayWriter:
                     self._shm.buf, self.height, self.width)
                 self._shape[0] = self.height
                 self._shape[1] = self.width
+                # Resume the generation count from whatever is already
+                # published, so a writer attaching to a non-fresh segment
+                # never re-issues a seq a reader has already seen (a
+                # repeated/backwards seq reads as "no new frame" to a
+                # last-seq-tracking consumer).
+                self._gen = (int(self._seq[0]) + 1) // 2
         except FileNotFoundError:
             self._shm = None
         except Exception:

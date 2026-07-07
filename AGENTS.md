@@ -234,13 +234,36 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.41)
+## 6. Current state (as of v0.11.42)
 
-Released through **v0.11.41** (latest). All 218 unit tests pass. The
+Released through **v0.11.42** (latest). All 224 unit tests pass. The
 operational backlog is empty; the remaining items below are deferred
 optimizations/robustness items with stated gating reasons (see section 7).
 
 Recent-history summary (details in each PR, #99–#103):
+- v0.11.42: fix the live view freezing until `diofinder-webui` is manually
+  restarted (observed on v0.11.41 boot). Root cause: every
+  `diofinder.service` (re)start unlinks and RECREATES
+  `/dev/shm/diofinder_display` (`ExecStartPre` rm + `display_shm.create`),
+  but the webui's long-lived `DisplayReader` kept its mapping to the OLD
+  segment — `available` stayed True and `read()` kept returning the last
+  frame ever written there, with a valid never-advancing seq, which
+  `_live_frame` served as fresh forever. Any daemon restart under an open
+  browser (watchdog restart, failed first start at boot while the camera
+  stack comes up) froze the view. Fixes in `webui/app.py::_live_frame`:
+  (1) the segment's /dev/shm inode is checked each poll — a change or the
+  file disappearing drops the reader so the next poll re-attaches to the
+  daemon's CURRENT segment; (2) a frame whose seq hasn't advanced in 15 s
+  is served via `frame_get` instead (writer-stopped backstop);
+  (3) an attach that finds no segment is no longer sticky — previously a
+  webui that booted before the daemon recorded `hw` with an unavailable
+  reader and never retried, permanently disabling the fast path
+  (`After=diofinder.service` only orders process start; the launcher takes
+  tens of seconds on the Zero 2W before creating segments). Also hardened
+  `DisplayWriter` to resume its generation counter from the segment's
+  current seq so a writer attaching to a non-fresh segment never re-issues
+  an already-seen seq. Regression-tested in `tests/test_live_frame.py`
+  (real segment, stubbed maint; the recreate-under-reader case is pinned).
 - v0.11.41: fix `diofinder-update` failing to actually install a freshly
   *downloaded* wheel (surfaced trying to pick up v0.11.40's sycamore-extract
   v0.14.1 bump): `WHEEL_TMP=$(mktemp -d)` defaults to mode 0700 owned by
