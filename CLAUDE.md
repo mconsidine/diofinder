@@ -347,6 +347,18 @@ on `frame_get` — the display segment is a best-effort preview, not a
 strictly-consecutive source. Round-trip unit-tested in
 `tests/test_display_shm.py`.
 
+**Daemon-restart survival (v0.11.42)**: every `diofinder.service` (re)start
+unlinks and recreates the segment, which orphans a long-lived reader — it
+would keep serving the last frame ever written to the old mapping, with a
+valid never-advancing seq, forever (the live-view-frozen-until-webui-restart
+bug). `_live_frame` therefore (1) stats the segment's `/dev/shm` inode each
+poll and re-attaches when it changes or disappears, (2) serves `frame_get`
+instead once a seq has been frozen > 15 s (writer-stopped backstop), and
+(3) retries a failed attach every poll instead of stickily recording `hw`
+with an unavailable reader (webui-boots-before-daemon race). `DisplayWriter`
+resumes its generation counter from the segment's current seq on attach.
+Regression tests: `tests/test_live_frame.py`.
+
 ---
 
 ## Extraction
