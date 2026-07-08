@@ -234,13 +234,26 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.43)
+## 6. Current state (as of v0.11.44)
 
-Released through **v0.11.43** (latest). All 224 unit tests pass. The
+Released through **v0.11.44** (latest). All 224 unit tests pass. The
 operational backlog is empty; the remaining items below are deferred
 optimizations/robustness items with stated gating reasons (see section 7).
 
 Recent-history summary (details in each PR, #99–#103):
+- v0.11.44: gain sliders/number-inputs/step-buttons on Home, Focus, and
+  Advanced were capped at 64, well above the IMX477's real analog-gain
+  ceiling (`MAX_ANALOG_GAIN = 22.26` in `camera_proc.py`, the driver's
+  documented register limit) — a request above the real cap was silently
+  rejected by the backend (a confusing "out of range" error at the top of
+  the slider, not a graceful clamp). All three pages' gain controls
+  (slider `max`, number-input `max`, and the `stepGain` JS clamp) now cap
+  at 22, matching the dark-capture gain field on the Advanced page, which
+  was already correctly capped. Exposure's minimum (0.001 s) was NOT
+  changed — unlike the gain ceiling, it isn't backed by a cited hardware
+  register limit in this codebase, and confirming the sensor's true floor
+  needs an on-device query of `picamera2`'s negotiated `ExposureTime`
+  control range, which wasn't done.
 - v0.11.43: auto-exposure now defaults **OFF** (`auto_exposure_enabled:
   false` in both the dataclass fallback and `diofinder.conf.default`) —
   exposure/gain stay where the user set them unless the controller is
