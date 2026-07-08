@@ -495,6 +495,33 @@
     <p class="muted">No burst archives yet. Run a capture on the Background page first.</p>
     {% endif %}
   </div>
+
+  {# ---- Downloads: debug bundle + saved burst archives. Visible in both
+        novice and expert mode — downloads are read-only page-level actions,
+        like the Config page's factory-reset card. ---- #}
+  <div class="card" id="downloads-card">
+    <h2>Downloads</h2>
+    <p class="hint" style="margin:0 0 8px 0;">
+      Debug bundle: a <strong>12-frame burst</strong> of raw frames plus the
+      current settings, logs, and solve state in one ZIP (same as the Home
+      page button). Below it, every saved burst archive from the Background
+      A/B page.
+    </p>
+    <button id="cam-debug-btn" class="btn btn-primary">Download debug bundle</button>
+    <span id="cam-debug-status" style="margin-left:8px;font-size:0.85rem;color:#888;"></span>
+    {% if bursts %}
+    <ul style="margin:10px 0 0; padding-left:1.2em; font-size:0.9rem;">
+      {% for b in bursts %}
+      <li style="margin:2px 0;">
+        <a href="{{ url_for('bgtest_run_download') }}?name={{ b.name }}">{{ b.name }}</a>
+        <span class="muted">({{ (b.size / 1048576) | round(1) }} MB)</span>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="muted" style="margin:10px 0 0;">No saved burst archives yet.</p>
+    {% endif %}
+  </div>
 </section>
 
 <script>
@@ -1014,6 +1041,46 @@ setInterval(syncCameraState, 3000);
     setInterval(() => { refreshTrk(); refreshBin(); }, 3000);
     refreshTrk(); refreshBin();
   }
+})();
+
+// --- Downloads: debug bundle (same flow as the Home page button) --------------
+(function () {
+  const btn = document.getElementById('cam-debug-btn');
+  const st  = document.getElementById('cam-debug-status');
+  if (!btn) return;
+  btn.addEventListener('click', async function () {
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = 'Collecting… (~15 s)';
+    st.textContent = '';
+    try {
+      const r = await fetch('/debug/collect', {method: 'POST'});
+      if (!r.ok) { st.textContent = 'Error: server returned ' + r.status; }
+      else {
+        const blob = await r.blob();
+        const n = new Date();
+        const ts = n.getFullYear().toString()
+          + String(n.getMonth() + 1).padStart(2, '0')
+          + String(n.getDate()).padStart(2, '0')
+          + String(n.getHours()).padStart(2, '0')
+          + String(n.getMinutes()).padStart(2, '0')
+          + String(n.getSeconds()).padStart(2, '0');
+        const fn = `diofinder_debug_${ts}.zip`;
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = fn;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(a.href);
+        st.textContent = '✓ ' + fn;
+      }
+    } catch (e) {
+      st.textContent = 'Error: ' + e.message;
+    }
+    btn.textContent = label;
+    btn.disabled = false;
+  });
 })();
 </script>
 
