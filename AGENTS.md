@@ -234,13 +234,26 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.44)
+## 6. Current state (as of v0.11.45)
 
-Released through **v0.11.44** (latest). All 224 unit tests pass. The
+Released through **v0.11.45** (latest). All 224 unit tests pass. The
 operational backlog is empty; the remaining items below are deferred
 optimizations/robustness items with stated gating reasons (see section 7).
 
 Recent-history summary (details in each PR, #99–#103):
+- v0.11.45: fix the dark-frame Exposure field on the Advanced page
+  rejecting round values (e.g. 0.9, its own default) and snapping to
+  0.851 / 0.901. Cause: a browser `<input type="number">` validates
+  against `min + n×step`, and the field had `min="0.001" step="0.05"` —
+  0.001 is not a multiple of 0.05, so the entire step grid was offset by
+  0.001 and no `.05`-aligned value (including the default 0.9) was
+  reachable. Changed that field to `step="any"`, matching the sibling
+  main-exposure number input (which was already `step="any"`) — the two
+  had diverged. Audited **every** stepped number input across all
+  templates programmatically: this was the only off-grid one; all others
+  have `min` as an exact multiple of `step` (slider-paired fields all
+  align min to the slider step), so their round/default values are
+  reachable and were left unchanged.
 - v0.11.44: gain sliders/number-inputs/step-buttons on Home, Focus, and
   Advanced were capped at 64, well above the IMX477's real analog-gain
   ceiling (`MAX_ANALOG_GAIN = 22.26` in `camera_proc.py`, the driver's
