@@ -85,13 +85,13 @@
       </div>
       <div style="flex:1 1 220px;">
         <label>
-          Gain (1–64)
+          Gain (1–22)
           <div class="stepper-row">
             <button type="button" class="step-btn" onclick="stepGain(-1)">&#8722;</button>
-            <input type="range" id="gain_slider" min="1" max="64" step="1"
+            <input type="range" id="gain_slider" min="1" max="22" step="1"
                    value="{{ exposure.gain }}"
                    oninput="gainSliderChange(this.value)">
-            <input type="number" step="1" min="1" max="64"
+            <input type="number" step="1" min="1" max="22"
                    name="gain" id="gain_num"
                    value="{{ exposure.gain }}">
             <button type="button" class="step-btn" onclick="stepGain(1)">&#43;</button>
@@ -247,7 +247,7 @@ function stepExp(dir) {
 function stepGain(dir) {
   const el = document.getElementById('gain_num');
   if (!el) return;
-  const g = Math.max(1, Math.min(64, Math.round(parseFloat(el.value || 1)) + dir));
+  const g = Math.max(1, Math.min(22, Math.round(parseFloat(el.value || 1)) + dir));
   el.value = g;
   document.getElementById('gain_slider').value = g;
   applyGain(g);
