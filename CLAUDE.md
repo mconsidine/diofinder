@@ -527,7 +527,7 @@ New keys (this release):
 | `detect_max_axis_ratio` | `0.0` | Trail rejection; 0→`float("inf")` (off), else 1.5–10.0. |
 | `detect_local_noise` | `true` | Per-window noise in the matched filter (sycamore≥0.12). |
 | `star_db_deep` | `""` | Optional deeper-magnitude db for the Bad preset; applied only if the file exists. |
-| `auto_exposure_enabled` | `true` | **Flipped to ON** this release. |
+| `auto_exposure_enabled` | `false` | **Default OFF since v0.11.43** (was ON v0.11.x–v0.11.42): exposure/gain stay where the user set them unless the controller is explicitly enabled (Camera page toggle / `auto_exposure_set`). Existing devices keep whatever their conf has persisted. |
 | `watchdog_enabled` | `true` | Solver-hang watchdog (comms thread). |
 | `watchdog_timeout_s` | `30.0` | Staleness before the solver is declared hung. |
 | `extractor_backend` | `sycamore` | Centroid extractor: `sycamore` (matched filter + bg_cache) or `tetra3` (AstroKeith's olive-solve `get_centroids_from_image`). Live-mutable; set by the Legacy preset. |

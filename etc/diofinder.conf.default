@@ -31,10 +31,11 @@ camera_tuning_file: /usr/share/libcamera/ipa/rpi/vc4/imx477_finder.json
 # auto_exposure_target_stars (within min/max) every ~5 s, backing off when
 # the frame saturates. Toggle live from the Camera page or:
 #   diofinder-ctl raw '{"cmd":"auto_exposure_set","args":{"enabled":true}}'
-# auto_exposure_enabled defaults ON. auto_exposure_target_stars and
+# auto_exposure_enabled defaults OFF (since v0.11.43) -- exposure/gain stay
+# where you set them unless you opt in. auto_exposure_target_stars and
 # auto_exposure_max_s are live-mutable (changed by seeing presets / Camera page
 # without a restart); auto_exposure_min_s is the fixed floor.
-auto_exposure_enabled: true
+auto_exposure_enabled: false
 auto_exposure_target_stars: 20
 auto_exposure_min_s: 0.05
 auto_exposure_max_s: 1.0

@@ -234,13 +234,23 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.42)
+## 6. Current state (as of v0.11.43)
 
-Released through **v0.11.42** (latest). All 224 unit tests pass. The
+Released through **v0.11.43** (latest). All 224 unit tests pass. The
 operational backlog is empty; the remaining items below are deferred
 optimizations/robustness items with stated gating reasons (see section 7).
 
 Recent-history summary (details in each PR, #99–#103):
+- v0.11.43: auto-exposure now defaults **OFF** (`auto_exposure_enabled:
+  false` in both the dataclass fallback and `diofinder.conf.default`) —
+  exposure/gain stay where the user set them unless the controller is
+  explicitly enabled (Camera-page toggle / `auto_exposure_set`; both
+  persist). Devices with an existing conf keep their persisted value —
+  toggle once in the webui (or factory-reset) to adopt the new default.
+  Also added a **Downloads card to the Advanced page** (visible in novice
+  AND expert mode, like the factory-reset card): the debug-bundle button
+  (same `/debug/collect` flow as Home) plus direct download links for every
+  saved `bg_ab_*.zip` burst archive (`/bgtest/run/download?name=...`).
 - v0.11.42: fix the live view freezing until `diofinder-webui` is manually
   restarted (observed on v0.11.41 boot). Root cause: every
   `diofinder.service` (re)start unlinks and RECREATES

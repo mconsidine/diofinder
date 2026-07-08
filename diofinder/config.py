@@ -27,7 +27,7 @@ DEFAULT_CONFIG_PATH = "/etc/diofinder/diofinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.11.42"
+    version: str = "0.11.43"
 
     # -------- Camera --------
     frame_width: int = 960
@@ -53,10 +53,10 @@ class Config:
     exposure_s: float = 0.2
     gain: float = 5.0
 
-    # Auto-exposure defaults ON: a finder usually wants the exposure tracking
-    # the target star count without a manual nudge. Toggle off on the Camera
-    # page if you prefer a fixed exposure.
-    auto_exposure_enabled: bool = True
+    # Auto-exposure defaults OFF (since v0.11.43): exposure/gain stay where
+    # the user set them unless the controller is explicitly enabled on the
+    # Camera page (or via auto_exposure_set).
+    auto_exposure_enabled: bool = False
     # auto_exposure_target_stars and auto_exposure_max_s are live-mutable via
     # shared_cfg (the controller reads them each cycle; seeing presets write
     # them). The min floor stays config-only.
