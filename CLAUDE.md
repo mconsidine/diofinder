@@ -585,6 +585,26 @@ consecutive frames), not just a single snapshot. Raw PNGs are saved for every
 frame; the large arcsinh **display JPGs are capped at the first 2** to keep the
 bundle email-friendly.
 
+**Exact per-frame timing & attitude (v0.11.46).** `diofinder/frame_meta.py`:
+the camera captures each frame via a picamera2 *request* and publishes the
+libcamera metadata — `SensorTimestamp` (CLOCK_BOOTTIME ns at first-row readout
+start), actual `ExposureTime`, actual `AnalogueGain` — into a small
+`shared_cfg["frame_meta"]` ring keyed by FrameSlots seq, together with the
+measured boottime→wall offset. Consumers derive
+`exposure_start = SensorTimestamp + wall_offset − ExposureTime` to
+millisecond accuracy. `frame_get` replies attach the matching entry (`meta`),
+and every published `latest_solution` carries the `seq` of the frame it came
+from. `debug_collect` uses both to write **`frames.json`** into the bundle:
+filename → {seq, `exposure_start_utc`, `readout_start_utc`, actual
+`exposure_s`/`gain`, the frame's **own** solve result (matched by seq — not
+the previous frame's, which is what the older `ref_*` fields in `imu.json`
+record), and the IMU snapshot}. **`tests/bundle_solve.py BUNDLE.zip [--out
+FILE.json] [--db PATH]`** re-solves every bundled frame offline (same
+effective-params hydration as `diag_solve.py --bundle`, plus the loose-window
+retry) and emits a single JSON packet mapping each `frame_XX_raw.png` to
+solved RA/Dec/roll/FOV/matches merged with the bundle's exact capture
+metadata.
+
 * `seeing_set {"mode": "good"|"bad"}` (comms maint): switches the solver
   database **first** (the only fallible step — a set_db failure now aborts the
   toggle before anything is written, keeping it atomic; v0.11.20), then writes

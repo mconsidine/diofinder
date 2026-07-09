@@ -21,6 +21,7 @@ import time
 import numpy as np
 
 from diofinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
+from diofinder import frame_meta as _frame_meta
 from multiprocessing import shared_memory
 
 log = logging.getLogger("diofinder.camera")
@@ -295,6 +296,7 @@ def camera_main(slots, camera_cmd_q, camera_cmd_reply_q, cfg,
     frame_count = 0
     init_fails = 0
     last_log = time.monotonic()
+    meta_ring = ()   # bounded frame_meta ring, republished to shared_cfg
 
     try:
         test_mode_cached = False
@@ -372,7 +374,25 @@ def camera_main(slots, camera_cmd_q, camera_cmd_reply_q, cfg,
 
             idx = slots.acquire_write_slot()
             try:
-                arr = cam.capture_array("main")
+                # Request-based capture: identical frame delivery to
+                # capture_array, but the completed request also carries the
+                # libcamera per-frame metadata (SensorTimestamp /
+                # ExposureTime / AnalogueGain) — the exact capture timing
+                # published as frame_meta below. Fall back to the plain
+                # array capture on picamera2 builds without the request API.
+                frame_md = None
+                if hasattr(cam, "capture_request"):
+                    req = cam.capture_request()
+                    try:
+                        arr = req.make_array("main")
+                        try:
+                            frame_md = req.get_metadata()
+                        except Exception:
+                            frame_md = None
+                    finally:
+                        req.release()
+                else:
+                    arr = cam.capture_array("main")
                 np.copyto(bufs[idx], arr[:cfg.frame_height, :cfg.frame_width])
             except Exception as e:
                 # Do NOT publish: the slot holds an old frame, and publishing
@@ -383,7 +403,19 @@ def camera_main(slots, camera_cmd_q, camera_cmd_reply_q, cfg,
                 log.error("Camera capture failed: %s", e)
                 time.sleep(0.5)
                 continue
-            slots.publish(idx)
+            seq = slots.publish(idx)
+            if frame_md is not None and shared_cfg is not None:
+                # Exact per-frame capture record keyed by seq (consumed by
+                # frame_get / debug bundles). Best-effort: a metadata hiccup
+                # must never break frame delivery.
+                try:
+                    entry = _frame_meta.make_entry(
+                        seq, frame_md, _frame_meta.wall_offset_ns())
+                    if entry is not None:
+                        meta_ring = _frame_meta.push(meta_ring, entry)
+                        shared_cfg["frame_meta"] = meta_ring
+                except Exception:
+                    pass
 
             frame_count += 1
             now = time.monotonic()

@@ -234,13 +234,33 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.45)
+## 6. Current state (as of v0.11.46)
 
-Released through **v0.11.45** (latest). All 224 unit tests pass. The
+Released through **v0.11.46** (latest). All 237 unit tests pass. The
 operational backlog is empty; the remaining items below are deferred
 optimizations/robustness items with stated gating reasons (see section 7).
 
 Recent-history summary (details in each PR, #99–#103):
+- v0.11.46: exact per-frame timing + per-frame RA/Dec in debug bundles.
+  New `diofinder/frame_meta.py`: the camera now captures via a picamera2
+  *request* (fallback to `capture_array` on old picamera2) and publishes
+  each frame's libcamera metadata — `SensorTimestamp` (CLOCK_BOOTTIME ns at
+  first-row readout start), ACTUAL `ExposureTime`, ACTUAL `AnalogueGain` —
+  into a `shared_cfg["frame_meta"]` ring keyed by FrameSlots seq
+  (`publish()` now returns the seq), plus the measured boottime→wall
+  offset, so consumers derive `exposure_start = SensorTimestamp +
+  wall_offset − ExposureTime` to ms accuracy. `frame_get` replies attach
+  the matching `meta`; every published `latest_solution` now carries the
+  `seq` of the frame it came from. `debug_collect` writes **`frames.json`**
+  (filename → seq, `exposure_start_utc`, actual exposure/gain, the frame's
+  OWN solve result matched by seq — the old `imu.json` `ref_*` fields were
+  the PREVIOUS solve, up to one frame period stale — plus the IMU
+  snapshot). New **`tests/bundle_solve.py`**: offline re-solve of every
+  bundled frame (same effective-params hydration as `diag_solve.py
+  --bundle`, plus the loose-window retry) emitting one JSON packet mapping
+  each `frame_XX_raw.png` to solved RA/Dec/roll/FOV/matches merged with
+  the capture metadata. Unit-tested in `tests/test_frame_meta.py` (+ seq
+  additions in `tests/test_frame_get.py`).
 - v0.11.45: fix the dark-frame Exposure field on the Advanced page
   rejecting round values (e.g. 0.9, its own default) and snapping to
   0.851 / 0.901. Cause: a browser `<input type="number">` validates
