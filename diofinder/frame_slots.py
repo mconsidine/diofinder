@@ -57,12 +57,15 @@ class FrameSlots:
         # Unreachable with NUM_BUFFERS=3
         raise RuntimeError("No free frame slot (should be impossible)")
 
-    def publish(self, idx: int) -> None:
-        """Camera: mark a slot as the newest available frame and wake solver."""
+    def publish(self, idx: int) -> int:
+        """Camera: mark a slot as the newest available frame and wake solver.
+        Returns the frame's new sequence number so the publisher can key
+        per-frame metadata (frame_meta) to it."""
         with self.cond:
             self.latest_ready.value = idx
             self.seq.value += 1
             self.cond.notify_all()
+            return self.seq.value
 
     def acquire_read_slot(self, timeout: float = None, after_seq: int = -1):
         """Solver: block until a frame *newer than* ``after_seq`` is published,

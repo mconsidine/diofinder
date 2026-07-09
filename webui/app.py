@@ -66,7 +66,7 @@ def _shm_frame_fallback(height, width):
     return None
 
 
-def _daemon_frame(after_seq=-1, timeout=8.0):
+def _daemon_frame(after_seq=-1, timeout=8.0, meta_out=None):
     """Newest camera frame via the daemon's frame_get maint command
     (FrameSlots-bracketed in the solver - can never be torn by a concurrent
     camera write).
@@ -74,7 +74,11 @@ def _daemon_frame(after_seq=-1, timeout=8.0):
     Returns (frame u8 ndarray | None, seq, synced). after_seq >= 0 waits
     solver-side for a frame NEWER than that sequence - chain it for strictly
     consecutive burst frames. Falls back to the direct-SHM read (seq -1,
-    synced False) when the daemon is unreachable."""
+    synced False) when the daemon is unreachable.
+
+    meta_out: optional dict; when given, its "meta" key receives the frame's
+    exact capture metadata (SensorTimestamp / actual exposure / actual gain,
+    from frame_get's "meta" field) or None on older daemons."""
     import base64
     import numpy as np
     r = _safe_call("frame_get", {"after_seq": int(after_seq)}, timeout=timeout)
@@ -84,6 +88,8 @@ def _daemon_frame(after_seq=-1, timeout=8.0):
             buf = base64.b64decode(r.result["data_b64"])
             fr = np.frombuffer(buf, dtype=np.uint8)
             if fr.size == int(shape[0]) * int(shape[1]) and fr.size > 0:
+                if meta_out is not None:
+                    meta_out["meta"] = r.result.get("meta")
                 return (fr.reshape(int(shape[0]), int(shape[1])).copy(),
                         int(r.result.get("seq", -1)), True)
         except Exception:
@@ -1906,12 +1912,34 @@ def debug_collect():
             # solver frames (the temporal-cache reconstruction premise)
             # and can never be torn. Direct-SHM fallback (daemon down) is
             # labeled unsynced in the bundle metadata.
-            fr, seq, synced = _daemon_frame(after_seq=_burst["last_seq"])
+            mo = {}
+            fr, seq, synced = _daemon_frame(after_seq=_burst["last_seq"],
+                                            meta_out=mo)
             if fr is not None and synced:
                 _burst["last_seq"] = seq
             elif fr is not None:
                 _burst["synced"] = False
-            return fr
+            return fr, (seq if synced else None), mo.get("meta")
+
+        def _solution_for_seq(seq, budget_s):
+            """Poll status until the published solution is for THIS frame
+            (matching seq) — the exact per-frame solve result, not the
+            previous frame's. Returns the solution dict or None (older
+            daemon without seq tagging, or the solve never landed)."""
+            import time as _t
+            deadline = _t.monotonic() + budget_s
+            while _t.monotonic() < deadline:
+                sr = _safe_call("status", timeout=1.0)
+                sol = (sr.result or {}).get("solution") if sr.ok else None
+                if sol and sol.get("seq") is not None:
+                    if int(sol["seq"]) >= int(seq):
+                        # ">" means the solver already moved on and this
+                        # frame's result was overwritten — report honestly.
+                        return sol if int(sol["seq"]) == int(seq) else None
+                elif sol is not None:
+                    return None      # daemon predates seq tagging
+                _t.sleep(0.1)
+            return None
 
         def _save_frame_pair(zf, idx, frame, with_display=True):
             # Raw grayscale PNG — the solver's food; saved for EVERY frame so an
@@ -1964,7 +1992,9 @@ def debug_collect():
         n_display = min(2, n_frames)
 
         frames_saved = 0
-        frame_imu = []   # per-frame IMU snapshot, sampled at capture time
+        frame_imu = []    # per-frame IMU snapshot, sampled at capture time
+        frames_map = {}   # filename -> exact per-frame record (frames.json)
+        from diofinder import frame_meta as _fm
         import time as _time, hashlib
         seen_hashes = set()
         # Bounded wall-clock budget so a slow camera (long exposure) can't hang
@@ -1972,7 +2002,7 @@ def debug_collect():
         per_frame_s = max(0.3, ecfg.exposure_s + 0.2)
         deadline = _time.monotonic() + min(40.0, n_frames * per_frame_s + 5.0)
         while frames_saved < n_frames and _time.monotonic() < deadline:
-            f = _capture_frame()
+            f, f_seq, f_meta = _capture_frame()
             if f is not None:
                 # Dedup identical SHM reads (slow frame rates re-read one slot);
                 # only genuinely new frames advance the burst.
@@ -1983,15 +2013,42 @@ def debug_collect():
                     try:
                         _save_frame_pair(zf, idx, f, with_display=(idx <= n_display))
                         frames_saved += 1
+                        # This frame's OWN solve result (matched by seq), not
+                        # the previous frame's — poll while the PNG for the
+                        # next frame would otherwise just be sleeping.
+                        sol = (_solution_for_seq(f_seq, budget_s=per_frame_s + 1.0)
+                               if f_seq is not None else None)
                         # Snapshot the IMU output as close to this frame as we
                         # can (maint round-trip; IMU runs at 20 Hz).
                         si = _safe_call("status")
-                        frame_imu.append({
+                        rec = {
                             "frame": f"frame_{idx:02d}",
                             "wall_time": datetime.now().isoformat(timespec="milliseconds"),
+                            "seq": f_seq,
                             "imu": (si.result.get("imu")
                                     if si.ok and si.result else None),
-                        })
+                        }
+                        frame_imu.append(rec)
+                        fname = f"frame_{idx:02d}_raw.png"
+                        entry = {
+                            "seq": f_seq,
+                            "saved_at": rec["wall_time"],
+                            "capture": f_meta,           # raw sensor metadata
+                            "imu": rec["imu"],
+                        }
+                        # Wall-clock exposure timing derived from the sensor's
+                        # own per-frame metadata (SensorTimestamp).
+                        entry.update(_fm.derive_times(f_meta))
+                        if sol is not None:
+                            entry["solution"] = {
+                                k: sol.get(k) for k in (
+                                    "solved", "status", "ra_deg", "dec_deg",
+                                    "roll_deg", "fov_deg", "stars", "matches",
+                                    "peak", "solve_ms", "seq")
+                                if k in sol}
+                        else:
+                            entry["solution"] = None
+                        frames_map[fname] = entry
                     except Exception:
                         pass
             if frames_saved < n_frames:
@@ -2053,6 +2110,12 @@ def debug_collect():
         zf.writestr("capture_info.txt", "\n".join(lines) + "\n")
         # Structured per-frame IMU for offline analysis / replay.
         zf.writestr("imu.json", json.dumps(frame_imu, indent=2))
+        # frames.json: filename -> exact per-frame record — seq, the sensor's
+        # own capture metadata (SensorTimestamp/actual exposure/actual gain),
+        # derived wall-clock exposure_start_utc, and THIS frame's solve
+        # result (matched by seq). The authoritative frame->data map;
+        # tests/bundle_solve.py merges/refreshes it offline.
+        zf.writestr("frames.json", json.dumps(frames_map, indent=2))
 
     # Save a copy to disk so scp/curl also works
     out_dir = pathlib.Path("/var/lib/diofinder")

@@ -29,6 +29,7 @@ from diofinder.calibration import FovCalibrator, FallbackGate
 from diofinder.imu_math import (quat_delta_rotvec, quat_to_rotvec,
                                 rotvec_to_quat, get_imu_qt)
 from diofinder import imu_frame as _imu_frame
+from diofinder import frame_meta as _frame_meta
 from diofinder.polar_run import PolarAligner
 from diofinder import frame_health
 from multiprocessing import shared_memory
@@ -144,17 +145,24 @@ def _save_frame(frame, cfg, label: str) -> None:
         log.warning("Could not save frame: %s", e)
 
 
-def _empty_solution(stars=0, peak=0, noise=0.0, solve_ms=0.0, status=0):
-    return {
+def _empty_solution(stars=0, peak=0, noise=0.0, solve_ms=0.0, status=0,
+                    seq=None):
+    sol = {
         "stars": int(stars), "matches": 0, "peak": int(peak),
         "noise": float(noise), "solve_ms": float(solve_ms),
         "solved": False, "status": int(status),
         "epoch_monotonic": time.monotonic(),
     }
+    if seq is not None:
+        # FrameSlots seq of the frame this result came from — lets consumers
+        # (debug bundles) match a fetched frame to ITS OWN solve result
+        # instead of the previous frame's.
+        sol["seq"] = int(seq)
+    return sol
 
 
 def _filled_solution(*, ra, dec, roll, fov, stars, matches,
-                     peak, noise, solve_ms, status, star=None):
+                     peak, noise, solve_ms, status, star=None, seq=None):
     sol = {
         "ra_deg": float(ra), "dec_deg": float(dec),
         "roll_deg": float(roll), "fov_deg": float(fov),
@@ -164,6 +172,8 @@ def _filled_solution(*, ra, dec, roll, fov, stars, matches,
         "status": int(status),
         "epoch_monotonic": time.monotonic(),
     }
+    if seq is not None:
+        sol["seq"] = int(seq)
     if star:
         sol["star_name"] = star["name"]
         sol["star_desig"] = star["desig"]
@@ -420,9 +430,17 @@ def _handle_solver_cmd(cmd, calibrator, polar,
                 return SolverCmdReply(request_id=cmd.request_id, ok=False,
                                       error="no frame published yet")
             frame, seq = res
+            # Exact capture metadata for THIS frame (SensorTimestamp /
+            # actual exposure / actual gain), when the camera published it.
+            try:
+                meta = _frame_meta.lookup(
+                    (shared_cfg or {}).get("frame_meta"), seq)
+            except Exception:
+                meta = None
             return SolverCmdReply(request_id=cmd.request_id, ok=True, result={
                 "shape": [int(frame.shape[0]), int(frame.shape[1])],
                 "seq": int(seq),
+                "meta": meta,
                 "data": frame.tobytes(),
             })
 
@@ -1059,7 +1077,8 @@ def solver_main(slots, latest_solution, shared_cfg,
                 # exposure it publishes every frame (each period already
                 # exceeds the floor) so the epoch never goes stale.
                 if _dark_publish_due(dark_streak, t0, last_dark_publish_t):
-                    latest_solution.update(_empty_solution(peak=local_peak))
+                    latest_solution.update(_empty_solution(peak=local_peak,
+                                                           seq=frame_seq))
                     last_dark_publish_t = t0
                 dark_streak += 1
                 continue
@@ -1366,7 +1385,8 @@ def solver_main(slots, latest_solution, shared_cfg,
             except Exception as e:
                 if fail_streak == 0 or (fail_streak + 1) % 20 == 0:
                     log.warning("centroid extraction raised: %s", e)
-                latest_solution.update(_empty_solution(peak=local_peak))
+                latest_solution.update(_empty_solution(peak=local_peak,
+                                                       seq=frame_seq))
                 if align_req is not None:
                     _align_reply(align_response_q, align_req, False,
                                  error_message=f"centroid extraction raised: {e}")
@@ -1399,7 +1419,7 @@ def solver_main(slots, latest_solution, shared_cfg,
             if n_stars < min_c:
                 latest_solution.update(_empty_solution(
                     stars=n_stars, peak=local_peak,
-                    solve_ms=extract_ms, status=TOO_FEW))
+                    solve_ms=extract_ms, status=TOO_FEW, seq=frame_seq))
                 if align_req is not None:
                     _align_reply(align_response_q, align_req, False,
                                  error_message=f"too few stars ({n_stars}<{min_c})")
@@ -1500,7 +1520,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                     log.warning("solve_from_centroids raised: %s", e)
                 latest_solution.update(_empty_solution(
                     stars=n_stars, peak=local_peak,
-                    solve_ms=extract_ms, status=NO_MATCH))
+                    solve_ms=extract_ms, status=NO_MATCH, seq=frame_seq))
                 if align_req is not None:
                     _align_reply(align_response_q, align_req, False,
                                  error_message=f"solver raised: {e}")
@@ -1603,7 +1623,7 @@ def solver_main(slots, latest_solution, shared_cfg,
             if soln.get("RA") is None:
                 latest_solution.update(_empty_solution(
                     stars=n_stars, peak=local_peak,
-                    solve_ms=elapsed_ms, status=status_int))
+                    solve_ms=elapsed_ms, status=status_int, seq=frame_seq))
                 if align_req is not None:
                     _align_reply(align_response_q, align_req, False,
                                  error_message=f"no match (status={status_str})")
@@ -1715,7 +1735,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                 stars=n_stars, matches=n_matches,
                 peak=local_peak, noise=0.0,
                 solve_ms=elapsed_ms, status=MATCH_FOUND,
-                star=star,
+                star=star, seq=frame_seq,
             ))
             _imu_update_reference(
                 shared_cfg, ra_out, dec_out, soln.get("Roll", 0.0), snap=snap,
