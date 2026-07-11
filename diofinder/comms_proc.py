@@ -38,6 +38,7 @@ import time
 from queue import Empty, Full
 
 from diofinder import config as cfg_mod
+from diofinder import bg_modes as bg_modes_mod
 from diofinder.align import AlignRequest, AlignResult, CommsAlignState
 from diofinder.imu_math import (quat_delta_rotvec, alpha_beta_step,
                                 rotvec_to_quat, quat_mul, quat_to_radec,
@@ -1985,10 +1986,8 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 updates["detect_sigma"] = sigma
             if "detect_bg_mode" in args:
                 mode = str(args["detect_bg_mode"]).strip().lower()
-                valid_modes = ("row_percentile", "line_median", "top_hat",
-                               "column_percentile", "row_column_percentile",
-                               "block_percentile", "uniform_mean",
-                               "temporal_median")
+                # Single source of truth for mode names (bg_modes registry).
+                valid_modes = bg_modes_mod.MODE_NAMES
                 if mode not in valid_modes:
                     return MaintResponse(ok=False,
                                         error=f"detect_bg_mode must be one of "

@@ -153,14 +153,11 @@
         {% set bgm = solver_params.detect_bg_mode %}
         <label>Mode
           <select name="bg_mode" id="bg_mode_sel">
-            <option value="row_percentile" {{ 'selected' if bgm == 'row_percentile' }}>row_percentile (default, fastest)</option>
-            <option value="line_median" {{ 'selected' if bgm == 'line_median' }}>line_median (robust row correction)</option>
-            <option value="column_percentile" {{ 'selected' if bgm == 'column_percentile' }}>column_percentile (vertical gradient)</option>
-            <option value="row_column_percentile" {{ 'selected' if bgm == 'row_column_percentile' }}>row_column_percentile (separable 2-D)</option>
-            <option value="block_percentile" {{ 'selected' if bgm == 'block_percentile' }}>block_percentile (2-D tiles, light pollution)</option>
-            <option value="uniform_mean" {{ 'selected' if bgm == 'uniform_mean' }}>uniform_mean (tetra3-compatible)</option>
-            <option value="top_hat" {{ 'selected' if bgm == 'top_hat' }}>top_hat (morphological, slowest)</option>
-            <option value="temporal_median" {{ 'selected' if bgm == 'temporal_median' }}>temporal_median (2-D stack, sycamore&ge;0.13)</option>
+            {# Registry-rendered (bg_modes.for_ui) — same source as the
+               Background page and the engine's cache logic. #}
+            {% for m in bg_modes %}
+            <option value="{{ m.name }}" {{ 'selected' if bgm == m.name }}>{{ m.label }}</option>
+            {% endfor %}
           </select>
         </label>
         <button type="submit" class="btn">Apply &amp; save</button>

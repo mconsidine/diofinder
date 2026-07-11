@@ -41,6 +41,8 @@ from typing import Optional, Tuple
 import numpy as np
 import star_detect
 
+from diofinder import bg_modes as _bg_modes
+
 log = logging.getLogger("diofinder.bg_cache")
 
 # --- Capability probe ------------------------------------------------------
@@ -87,8 +89,10 @@ HAS_BG_IMAGE = HAS_CACHE and bool(getattr(star_detect, "HAS_BG_IMAGE", False))
 # (handled separately in detect()). column_percentile,
 # row_column_percentile, and uniform_mean need full-image spatial
 # preprocessing and always force the per-frame path.
+# Derived from the bg_modes registry (v0.11.48) — the single source of
+# truth for per-mode facts; do not hand-edit a mode list here.
 CACHE_COMPATIBLE_MODES = frozenset(
-    {"row_percentile", "line_median", "top_hat"})
+    name for name, d in _bg_modes.MODES.items() if d["cache_kind"] == "row")
 
 
 class CacheState(Enum):
@@ -691,10 +695,12 @@ class BackgroundCache:
 def _model_kind(bg_mode: str) -> str:
     """Which cached-model kind a given bg_mode wants: 'image' (temporal_median
     on a sycamore>=0.13 wheel), 'block' (block_percentile on a capable wheel)
-    or 'row' (everything else that composes with the cache)."""
-    if bg_mode == "temporal_median" and HAS_BG_IMAGE:
+    or 'row' (everything else that composes with the cache). Registry-driven
+    (bg_modes.MODES) with the wheel-capability gate applied here."""
+    kind = (_bg_modes.MODES.get(bg_mode) or {}).get("cache_kind")
+    if kind == "image" and HAS_BG_IMAGE:
         return "image"
-    if bg_mode == "block_percentile" and HAS_BLOCK_CACHE:
+    if kind == "block" and HAS_BLOCK_CACHE:
         return "block"
     return "row"
 
@@ -738,10 +744,13 @@ def resolve_effective(stats: dict, requested_mode: str,
     if requested == "top_hat" and not stats.get("tophat_supported", True):
         effective = "line_median"
 
-    # Which cached path could serve this mode, per detect()'s candidacy rules.
-    if requested == "temporal_median" and stats.get("bg_image_supported"):
+    # Which cached path could serve this mode, per detect()'s candidacy
+    # rules — registry-driven (bg_modes.MODES cache_kind + the wheel flags
+    # the stats snapshot reports).
+    kind = (_bg_modes.MODES.get(requested) or {}).get("cache_kind")
+    if kind == "image" and stats.get("bg_image_supported"):
         want = ("cached-image", "image")
-    elif requested == "block_percentile" and stats.get("block_cache_supported"):
+    elif kind == "block" and stats.get("block_cache_supported"):
         want = ("cached-block", "block")
     elif effective in CACHE_COMPATIBLE_MODES:
         want = ("cached-row", "row")
@@ -751,8 +760,7 @@ def resolve_effective(stats: dict, requested_mode: str,
     path, reason = "per-frame", None
     if want is None:
         reason = ("mode needs full-frame spatial preprocessing — never "
-                  "cached" if requested not in ("temporal_median",
-                                                "block_percentile")
+                  "cached" if kind is None
                   else "installed sycamore wheel lacks this cached path")
     elif not enabled:
         reason = "temporal cache disabled (bg_cache_enabled: false)"
