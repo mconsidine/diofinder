@@ -558,6 +558,7 @@ class BackgroundCache:
             "bin_at_submit": self._bin_at_submit,   # P5 opt-in (A/B)
             "block_cache_supported": HAS_BLOCK_CACHE,
             "bg_image_supported": HAS_BG_IMAGE,
+            "tophat_supported": HAS_TOPHAT,
         }
 
     # ----- worker ----------------------------------------------------------
@@ -703,3 +704,98 @@ def _angular_distance(q1, q2) -> float:
     w2, x2, y2, z2 = q2
     dot = abs(w1 * w2 + x1 * x2 + y1 * y2 + z1 * z2)
     return 2.0 * math.acos(min(1.0, dot))
+
+
+def resolve_effective(stats: dict, requested_mode: str,
+                      noise_mode: str = "mad") -> dict:
+    """Resolve what background subtraction is ACTUALLY doing right now.
+
+    The answer to "is a cached background being used, and which kind?" was
+    previously spread across this module's internals, wheel capabilities, and
+    the live cache state — nowhere composed into one statement. This derives
+    it from the SAME facts ``detect()`` decides with (a ``stats()`` snapshot
+    plus the requested mode/noise_mode), so it cannot drift from the engine.
+
+    Pure on its inputs (unit-tested without a wheel or camera). Returns::
+
+        {requested_mode, effective_mode, path, reason, summary}
+
+    ``path`` is one of ``cached-image`` / ``cached-block`` / ``cached-row`` /
+    ``per-frame``; ``effective_mode`` differs from ``requested_mode`` only on
+    a wheel-capability degradation (top_hat -> line_median on pre-0.9 wheels;
+    temporal_median -> block_percentile whenever the image cache can't serve).
+    ``reason`` explains a per-frame path in one phrase; ``summary`` is the
+    single human sentence the web UI shows verbatim.
+    """
+    requested = str(requested_mode or stats.get("active_bg_mode")
+                    or "row_percentile")
+    effective = requested
+    enabled = bool(stats.get("enabled"))
+    state = str(stats.get("state") or "NONE")
+
+    # Wheel-capability degradations (mirrors detect()'s want_tophat gate and
+    # the temporal_median per-frame fallback).
+    if requested == "top_hat" and not stats.get("tophat_supported", True):
+        effective = "line_median"
+
+    # Which cached path could serve this mode, per detect()'s candidacy rules.
+    if requested == "temporal_median" and stats.get("bg_image_supported"):
+        want = ("cached-image", "image")
+    elif requested == "block_percentile" and stats.get("block_cache_supported"):
+        want = ("cached-block", "block")
+    elif effective in CACHE_COMPATIBLE_MODES:
+        want = ("cached-row", "row")
+    else:
+        want = None
+
+    path, reason = "per-frame", None
+    if want is None:
+        reason = ("mode needs full-frame spatial preprocessing — never "
+                  "cached" if requested not in ("temporal_median",
+                                                "block_percentile")
+                  else "installed sycamore wheel lacks this cached path")
+    elif not enabled:
+        reason = "temporal cache disabled (bg_cache_enabled: false)"
+    elif noise_mode and noise_mode != "mad":
+        reason = (f"noise_mode={noise_mode} can't use the cached MAD model — "
+                  "kept per-frame for a consistent threshold")
+    elif state != "STEADY":
+        reason = ("collecting the first frame stack" if state == "WARMING_UP"
+                  else "moving / model stale — rebuilding" if state == "SLEWING"
+                  else f"cache state {state}")
+    elif not stats.get("has_model"):
+        reason = "no model built yet"
+    elif stats.get("model_kind") != want[1]:
+        reason = (f"model kind '{stats.get('model_kind')}' != wanted "
+                  f"'{want[1]}' — rebuilding for the new mode")
+    else:
+        path = want[0]
+
+    # temporal_median has no per-frame form: off the image cache it runs as
+    # per-frame block_percentile (documented degradation).
+    if requested == "temporal_median" and path != "cached-image":
+        effective = "block_percentile"
+
+    served_c = int(stats.get("served_cached") or 0)
+    served_f = int(stats.get("served_fallback") or 0)
+    total = served_c + served_f
+    age = stats.get("model_age_s")
+    if path == "per-frame":
+        head = (f"{requested} per-frame" +
+                (f" (as {effective})" if effective != requested else "") +
+                f" — {reason}")
+    else:
+        kind_lbl = {"cached-image": "full-image temporal cache",
+                    "cached-block": "block-grid temporal cache",
+                    "cached-row": "per-row temporal cache"}[path]
+        head = (f"{requested} via {kind_lbl} ({state}" +
+                (f", model {age:.0f}s old" if age is not None else "") + ")")
+    if total:
+        pct = f"{100.0 * served_c / total:.0f}%"
+        summary = (f"{head}; served {pct} cached "
+                   f"({served_c} cached / {served_f} per-frame)")
+    else:
+        summary = f"{head}; no detections served yet"
+
+    return {"requested_mode": requested, "effective_mode": effective,
+            "path": path, "reason": reason, "summary": summary}

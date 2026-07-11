@@ -145,6 +145,8 @@
       <a class="expert-only" href="{{ url_for('bgtest_page') }}">Background page</a>
       has previews, a live A/B test, and per-mode notes.
     </p>
+    <p id="bg-effective" class="hint"
+       style="margin:0 0 8px; font-weight:600;">&nbsp;</p>
     {% if solver_params %}
       <form method="post" action="{{ url_for('bgtest_set') }}">
         <input type="hidden" name="next" value="camera_page">
@@ -1041,6 +1043,23 @@ setInterval(syncCameraState, 3000);
     setInterval(() => { refreshTrk(); refreshBin(); }, 3000);
     refreshTrk(); refreshBin();
   }
+})();
+
+// --- Background: resolved effective-path one-liner (same line as the
+// Background page's Temporal-cache card; computed solver-side) ---------------
+(function () {
+  const el = document.getElementById('bg-effective');
+  if (!el) return;
+  async function refresh() {
+    try {
+      const j = await (await fetch('/api/bgcache')).json();
+      el.textContent = (j.ok && j.result && j.result.resolved &&
+                        j.result.resolved.summary)
+        ? j.result.resolved.summary : '\u00a0';
+    } catch (e) { /* leave the previous text */ }
+  }
+  setInterval(refresh, 3000);
+  refresh();
 })();
 
 // --- Downloads: debug bundle (same flow as the Home page button) --------------

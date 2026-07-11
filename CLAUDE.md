@@ -268,8 +268,13 @@ sweep — see the Auto-exposure / gain controller section),
 `tuning_set` (switch the libcamera tuning profile — `finder` (default) /
 `scientific` / `standard`; restart required — see **Libcamera tuning** below),
 `bg_cache_status` (live temporal-cache
-snapshot — state, model age, model kind row/block, served-cached vs fallback
-counters), `solve_centroids` (plate-solve a caller-supplied centroid list on
+snapshot — state, model age, model kind row/block/image, served-cached vs
+fallback counters, plus `resolved` (v0.11.47): the effective-background
+resolver — requested mode → effective mode → the path actually serving
+detection this instant (cached-row/block/image or per-frame) with the reason
+and a one-sentence `summary`, computed by `bg_cache.resolve_effective` from
+the same facts `detect()` decides with; the Background and Advanced pages
+render it verbatim), `solve_centroids` (plate-solve a caller-supplied centroid list on
 the live solver's resident database — no second DB, used by
 `diag_background --solve` and the web-UI background A/B), and the hot-pixel
 trio: `dark_capture {"frames":N, "exposure_s"?, "gain"?}` (cap the lens;

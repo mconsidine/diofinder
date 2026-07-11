@@ -271,9 +271,17 @@ async function bgCacheRefresh() {
     var j = await (await fetch('{{ url_for("api_bgcache") }}')).json();
     if (!j.ok || !j.result) { el.textContent = 'unavailable: ' + (j.error || '?'); return; }
     var s = j.result;
-    if (!s.enabled) { el.innerHTML = '<strong>disabled</strong> (set bg_cache_enabled: true)'; return; }
+    // Lead with the resolved one-liner: requested mode -> the path actually
+    // serving detection right now (computed solver-side from the same facts
+    // the engine decides with, so this line can't drift from reality).
+    var lead = (s.resolved && s.resolved.summary)
+      ? '<strong>' + s.resolved.summary + '</strong><br>' : '';
+    if (!s.enabled) {
+      el.innerHTML = lead || '<strong>disabled</strong> (set bg_cache_enabled: true)';
+      return;
+    }
     var age = (s.model_age_s == null) ? '—' : s.model_age_s + 's';
-    el.innerHTML =
+    el.innerHTML = lead +
       'state: <strong>' + s.state + '</strong>' +
       ' &nbsp;|&nbsp; model: ' + (s.has_model ? (s.n_frames + ' frames, noise ' + s.noise + ', age ' + age) : 'none') +
       ' &nbsp;|&nbsp; builds: ' + s.builds +
