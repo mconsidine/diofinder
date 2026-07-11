@@ -234,13 +234,32 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.46)
+## 6. Current state (as of v0.11.47)
 
-Released through **v0.11.46** (latest). All 237 unit tests pass. The
+Released through **v0.11.47** (latest). All 250 unit tests pass. The
 operational backlog is empty; the remaining items below are deferred
 optimizations/robustness items with stated gating reasons (see section 7).
 
 Recent-history summary (details in each PR, #99–#103):
+- v0.11.47: background-subtraction legibility, step 1 of 3 (the
+  "effective background" resolver). New pure
+  `bg_cache.resolve_effective(stats, requested_mode, noise_mode)` composes
+  the scattered facts (mode cache-candidacy, wheel capabilities, enabled
+  flag, noise-mode force, WARMING/SLEWING/model-kind state) into
+  {requested_mode, effective_mode, path, reason, summary} — the one
+  sentence answering "is a cached background actually serving detection
+  right now, and which kind?". Embedded in `bg_cache_status` replies as
+  `resolved` (computed solver-side from the same facts `detect()` uses, so
+  the UI cannot drift from the engine); the Background page's
+  Temporal-cache card leads with it and the Advanced page's
+  Background-mode card shows it live (`#bg-effective`, /api/bgcache
+  poller). Decision matrix pinned in `tests/test_bg_resolve.py`
+  (13 cases: steady row/block/image, never-cached modes, noise_mode
+  force, disabled, warming/slewing, model-kind mismatch mid-switch,
+  wheel degradations incl. temporal_median→block_percentile, minimal
+  stats). Steps 2 (declarative mode registry feeding both pages' menus)
+  and 3 (solver-side preview op replacing the webui's reimplemented
+  `_compute_background`) are planned follow-ups.
 - v0.11.46: exact per-frame timing + per-frame RA/Dec in debug bundles.
   New `diofinder/frame_meta.py`: the camera now captures via a picamera2
   *request* (fallback to `capture_array` on old picamera2) and publishes

@@ -474,8 +474,22 @@ def _handle_solver_cmd(cmd, calibrator, polar,
             if bg_cache is None:
                 return SolverCmdReply(request_id=cmd.request_id, ok=True,
                                       result={"enabled": False, "state": "NONE"})
+            st = bg_cache.stats()
+            # Resolved truth: requested mode -> effective mode -> the path
+            # actually serving detection right now, with the reason. Computed
+            # HERE from the same facts detect() uses so the UI can't drift.
+            try:
+                from diofinder.bg_cache import resolve_effective
+                scfg = shared_cfg or {}
+                req = scfg.get("detect_bg_mode",
+                               getattr(cfg, "detect_bg_mode", None))
+                nm = scfg.get("detect_noise_mode",
+                              getattr(cfg, "detect_noise_mode", "mad"))
+                st["resolved"] = resolve_effective(st, req, nm)
+            except Exception:
+                st["resolved"] = None
             return SolverCmdReply(request_id=cmd.request_id, ok=True,
-                                  result=bg_cache.stats())
+                                  result=st)
         if cmd.op == SOLVER_OP_SOLVE_CENTROIDS:
             if state is not None and state.solver_t3 is not None:
                 solver_t3 = state.solver_t3
