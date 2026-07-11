@@ -56,34 +56,15 @@
         <td><label for="bg_mode">Mode</label></td>
         <td>
           <select name="bg_mode" id="bg_mode" onchange="toggleBgExtra(this)">
-            <option value="row_percentile"
-              {% if params and params.detect_bg_mode == 'row_percentile' %}selected{% endif %}>
-              row_percentile (default, fastest)
+            {# Rendered from the bg_modes registry — the same source that
+               drives the engine's cache logic and comms validation, so this
+               menu can never diverge from the Advanced page again. #}
+            {% for m in bg_modes %}
+            <option value="{{ m.name }}"
+              {% if params and params.detect_bg_mode == m.name %}selected{% endif %}>
+              {{ m.label }}
             </option>
-            <option value="line_median"
-              {% if params and params.detect_bg_mode == 'line_median' %}selected{% endif %}>
-              line_median (robust row correction)
-            </option>
-            <option value="column_percentile"
-              {% if params and params.detect_bg_mode == 'column_percentile' %}selected{% endif %}>
-              column_percentile (vertical gradient removal)
-            </option>
-            <option value="row_column_percentile"
-              {% if params and params.detect_bg_mode == 'row_column_percentile' %}selected{% endif %}>
-              row_column_percentile (separable 2-D)
-            </option>
-            <option value="block_percentile"
-              {% if params and params.detect_bg_mode == 'block_percentile' %}selected{% endif %}>
-              block_percentile (bilinear tile median, fast 2-D)
-            </option>
-            <option value="uniform_mean"
-              {% if params and params.detect_bg_mode == 'uniform_mean' %}selected{% endif %}>
-              uniform_mean (sliding-window mean, tetra3-compatible)
-            </option>
-            <option value="top_hat"
-              {% if params and params.detect_bg_mode == 'top_hat' %}selected{% endif %}>
-              top_hat (morphological, slowest)
-            </option>
+            {% endfor %}
           </select>
         </td>
       </tr>
@@ -192,13 +173,10 @@
   <p style="margin:0 0 10px 0;">
     <label>Method
       <select id="prev_mode">
-        <option value="row_percentile">row_percentile</option>
-        <option value="column_percentile">column_percentile</option>
-        <option value="row_column_percentile">row_column_percentile</option>
-        <option value="line_median" selected>line_median</option>
-        <option value="block_percentile">block_percentile</option>
-        <option value="uniform_mean">uniform_mean</option>
-        <option value="top_hat">top_hat</option>
+        {% for m in bg_modes if m.per_frame_form %}
+        <option value="{{ m.name }}"
+                {% if m.name == 'line_median' %}selected{% endif %}>{{ m.name }}</option>
+        {% endfor %}
       </select>
     </label>
     &nbsp;&nbsp;
@@ -253,15 +231,22 @@
 </div>
 
 <script>
+// Per-mode UI facts from the bg_modes registry (size knob + noise-row
+// relevance), rendered server-side so this map matches the engine's table.
+var BG_MODE_UI = {
+  {% for m in bg_modes %}'{{ m.name }}': {size: {{ m.size_param | tojson }}, noise: {{ m.noise_row | tojson }}}{{ ',' if not loop.last }}
+  {% endfor %}
+};
+var BG_SIZE_ROWS = {'detect_tophat_radius': 'tophat-row',
+                    'detect_bg_block_size': 'block-row',
+                    'detect_uniform_filter_size': 'uniform-row'};
 function toggleBgExtra(sel) {
-  document.getElementById('tophat-row').style.display =
-    (sel.value === 'top_hat') ? '' : 'none';
-  document.getElementById('block-row').style.display =
-    (sel.value === 'block_percentile') ? '' : 'none';
-  document.getElementById('uniform-row').style.display =
-    (sel.value === 'uniform_mean') ? '' : 'none';
-  document.getElementById('noise-row').style.display =
-    (sel.value === 'uniform_mean' || sel.value === 'block_percentile') ? '' : 'none';
+  var ui = BG_MODE_UI[sel.value] || {size: null, noise: false};
+  for (var param in BG_SIZE_ROWS) {
+    document.getElementById(BG_SIZE_ROWS[param]).style.display =
+      (ui.size === param) ? '' : 'none';
+  }
+  document.getElementById('noise-row').style.display = ui.noise ? '' : 'none';
 }
 
 async function bgCacheRefresh() {

@@ -417,7 +417,10 @@ Detection is routed through `diofinder/bg_cache.py::BackgroundCache`, not by cal
 `detect_stars` directly. This gives three composable background strategies, all
 toggleable from config (and live-overridable via `shared_cfg`):
 
-- **Per-frame background mode** (`detect_bg_mode`): seven modes available:
+- **Per-frame background mode** (`detect_bg_mode`): seven modes available
+  (all per-mode facts — cache kind, size param, UI labels — live in the
+  `diofinder/bg_modes.py` registry since v0.11.48; bg_cache, comms
+  validation, and both web menus derive from it):
   - `row_percentile` — default, cheapest; per-row percentile floor
   - `line_median` — robust to per-row offset / vignetting
   - `column_percentile` — per-column percentile floor (sycamore >= 0.10.0)

@@ -29,6 +29,8 @@ except ImportError:
     sys.path.insert(0, ".")
     from diofinder.maint import call as maint_call, MaintResponse
 
+from diofinder import bg_modes as bg_modes_mod
+
 log = logging.getLogger("diofinder.webui")
 
 app = Flask(__name__,
@@ -456,6 +458,7 @@ def bgtest_page():
         "bgtest.html",
         params=(r.result if r.ok else None),
         error=(r.error if not r.ok else None),
+        bg_modes=bg_modes_mod.for_ui(),
     )
 
 
@@ -860,6 +863,7 @@ def camera_page():
         hotpix=(hotpix.result if hotpix.ok else None),
         seeing=(seeing.result if seeing.ok else None),
         bursts=_list_bursts(),
+        bg_modes=bg_modes_mod.for_ui(),
     )
 
 

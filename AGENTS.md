@@ -234,13 +234,30 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.47)
+## 6. Current state (as of v0.11.48)
 
-Released through **v0.11.47** (latest). All 250 unit tests pass. The
+Released through **v0.11.48** (latest). All 258 unit tests pass. The
 operational backlog is empty; the remaining items below are deferred
 optimizations/robustness items with stated gating reasons (see section 7).
 
 Recent-history summary (details in each PR, #99–#103):
+- v0.11.48: background-mode registry (legibility step 2 of 3). New pure
+  `diofinder/bg_modes.py` — ONE declarative table of per-mode facts
+  (cache_kind row/block/image/None, size_param, per_frame_form, noise_row,
+  label) that everything now derives from: `bg_cache`'s
+  `CACHE_COMPATIBLE_MODES` / `_model_kind` / `resolve_effective`
+  cache-candidacy, comms' `solver_params_set` mode validation, and BOTH
+  web pages' mode menus (rendered from `bg_modes.for_ui()`), replacing
+  four hand-synchronized copies. Fixes the menu drift this consolidation
+  exists for: `temporal_median` now appears on the Background page's
+  apply menu (it was Advanced-only); the Background preview menu is
+  limited to modes with a per-frame form (temporal_median IS the cache —
+  its honest preview arrives with step 3's solver-side preview op); the
+  size-row/noise-row toggling JS is generated from the registry
+  (BG_MODE_UI map) instead of hardcoded mode names. The module is
+  deliberately stdlib-pure (importable by comms/webui without native
+  wheels — pinned by test). Derivation-equality with the historical
+  hand-maintained sets pinned in `tests/test_bg_modes.py` (8 tests).
 - v0.11.47: background-subtraction legibility, step 1 of 3 (the
   "effective background" resolver). New pure
   `bg_cache.resolve_effective(stats, requested_mode, noise_mode)` composes
