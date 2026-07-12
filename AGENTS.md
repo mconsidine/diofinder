@@ -234,13 +234,32 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.48)
+## 6. Current state (as of v0.11.49)
 
-Released through **v0.11.48** (latest). All 258 unit tests pass. The
+Released through **v0.11.49** (latest). All 270 unit tests pass. The
 operational backlog is empty; the remaining items below are deferred
 optimizations/robustness items with stated gating reasons (see section 7).
 
 Recent-history summary (details in each PR, #99–#103):
+- v0.11.49: solver-side background-preview op (legibility step 3 of 3, the
+  final step). New `bg_cache.preview_background()` — the single home for
+  background-preview math — and `SOLVER_OP_BG_PREVIEW` / the `bg_preview`
+  maint command feed the webui Background page's `/bg.jpg` A/B, which no
+  longer reimplements `_compute_background` (deleted). Decisive win: the
+  preview can now render the solver's **live cached temporal-median stack**
+  (`_model.bg_image`) — which exists only in the solver process, so no other
+  process could ever show it (the "I can't see what a temporal-median frame
+  looks like" gap). Spatial modes still reconstruct per-frame (the A/B tool
+  is unchanged); `temporal_median` shows the real stack, degrading to
+  per-frame `block_percentile` only when no stack is built yet (the same
+  documented degradation `detect()` uses). The Background page's preview
+  menu now includes `temporal_median`, and `/api/bgpreview` labels what the
+  render is actually showing. The status-page live-view "detection view"
+  overlay (`/frame.jpg?sub=1`) no longer reimplements the detector either —
+  it uses a cheap per-row-median flat subtraction (a rough, polled,
+  downsampled visualization; the accurate per-mode A/B is the Background
+  page). Pure reconstruction helpers + routing pinned in
+  `tests/test_bg_preview.py` (12 tests).
 - v0.11.48: background-mode registry (legibility step 2 of 3). New pure
   `diofinder/bg_modes.py` — ONE declarative table of per-mode facts
   (cache_kind row/block/image/None, size_param, per_frame_form, noise_row,

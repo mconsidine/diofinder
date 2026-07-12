@@ -88,6 +88,13 @@ SOLVER_OP_HOT_PIXEL_CLEAR = "hot_pixel_clear"
 # the FrameSlots protocol so it can never be torn by a concurrent camera
 # write. Serves webui frame displays, debug bundles, and A/B captures.
 SOLVER_OP_FRAME_GET = "frame_get"
+# Reconstruct the background a bg mode subtracts, for the webui Background
+# page's visual A/B. Returns the paired frame + full-res background bytes for
+# the SAME seq (so the subtracted view is consistent), plus preview metadata.
+# Uniquely, temporal_median renders the solver's live cached median stack,
+# which cannot be seen from any other process. args: {mode?, tophat_radius?,
+# bg_block_size?, uniform_filter_size?, noise_mode?}.
+SOLVER_OP_BG_PREVIEW = "bg_preview"
 
 
 # ----- Camera commands -----

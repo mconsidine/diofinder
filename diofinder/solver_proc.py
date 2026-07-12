@@ -268,7 +268,7 @@ def _handle_solver_cmd(cmd, calibrator, polar,
         SOLVER_OP_SOLVE_CENTROIDS, SOLVER_OP_BG_CACHE_STATUS,
         SOLVER_OP_SET_DB, SOLVER_OP_DARK_CAPTURE,
         SOLVER_OP_HOT_PIXEL_STATUS, SOLVER_OP_HOT_PIXEL_CLEAR,
-        SOLVER_OP_FRAME_GET,
+        SOLVER_OP_FRAME_GET, SOLVER_OP_BG_PREVIEW,
         SOLVER_OP_TRACKING_STATUS, SOLVER_OP_SOLVE_STATS,
         SOLVER_OP_AUTO_TUNE_EVAL,
     )
@@ -443,6 +443,48 @@ def _handle_solver_cmd(cmd, calibrator, polar,
                 "meta": meta,
                 "data": frame.tobytes(),
             })
+
+        if cmd.op == SOLVER_OP_BG_PREVIEW:
+            if bg_cache is None or state is None or state.read_frame is None:
+                return SolverCmdReply(request_id=cmd.request_id, ok=False,
+                                      error="bg preview unavailable")
+            res = state.read_frame(with_seq=True)
+            if res is None:
+                return SolverCmdReply(request_id=cmd.request_id, ok=False,
+                                      error="no frame published yet")
+            frame, seq = res
+            a = cmd.args
+            scfg = shared_cfg or {}
+
+            def _pick(argk, cfgk, cast):
+                if argk in a and a[argk] is not None:
+                    return cast(a[argk])
+                return cast(scfg.get(cfgk, getattr(cfg, cfgk)))
+            bg_mode = _pick("mode", "detect_bg_mode", str)
+            tophat_radius = _pick("tophat_radius", "detect_tophat_radius", int)
+            bg_block_size = _pick("bg_block_size", "detect_bg_block_size", int)
+            uniform_filter_size = _pick(
+                "uniform_filter_size", "detect_uniform_filter_size", int)
+            noise_mode = _pick("noise_mode", "detect_noise_mode", str)
+            try:
+                bg_u8, info = bg_cache.preview_background(
+                    frame, bg_mode=bg_mode, tophat_radius=tophat_radius,
+                    bg_block_size=bg_block_size,
+                    uniform_filter_size=uniform_filter_size,
+                    noise_mode=noise_mode)
+            except Exception as e:
+                return SolverCmdReply(
+                    request_id=cmd.request_id, ok=False,
+                    error=f"bg preview failed: {type(e).__name__}: {e}")
+            result = dict(info)
+            result.update({
+                "shape": [int(frame.shape[0]), int(frame.shape[1])],
+                "seq": int(seq),
+                "frame": frame.tobytes(),
+                "bg": np.ascontiguousarray(bg_u8).tobytes(),
+            })
+            return SolverCmdReply(request_id=cmd.request_id, ok=True,
+                                  result=result)
 
         if cmd.op == SOLVER_OP_TRACKING_STATUS:
             if state is None:

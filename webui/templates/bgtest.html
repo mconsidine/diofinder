@@ -167,13 +167,15 @@
   <p style="font-size:0.85rem; margin:0 0 10px 0;">
     See what each method computes as the background, or the
     background-<em>subtracted</em> frame (what detection effectively sees), from
-    the current live frame. Compare methods and tune the size. (Webui-side
-    approximation of the detector's internals.)
+    the current live frame. Compare methods and tune the size. Reconstructed by
+    the live solver (the same module that owns detection);
+    <strong>temporal_median</strong> renders the solver's actual cached median
+    stack.
   </p>
   <p style="margin:0 0 10px 0;">
     <label>Method
       <select id="prev_mode">
-        {% for m in bg_modes if m.per_frame_form %}
+        {% for m in bg_modes %}
         <option value="{{ m.name }}"
                 {% if m.name == 'line_median' %}selected{% endif %}>{{ m.name }}</option>
         {% endfor %}
@@ -278,20 +280,28 @@ async function bgCacheRefresh() {
 setInterval(bgCacheRefresh, 2000);
 bgCacheRefresh();
 
-function bgPreview() {
+async function bgPreview() {
   var mode = document.getElementById('prev_mode').value;
   var kind = document.getElementById('prev_kind').value;
   var size = document.getElementById('prev_size').value;
   var img = document.getElementById('prev_img');
   var msg = document.getElementById('prev_msg');
   msg.textContent = 'rendering…';
-  img.onload = function () { img.style.display = ''; msg.textContent = ''; };
+  img.onload = function () { img.style.display = ''; };
   img.onerror = function () { img.style.display = 'none'; msg.textContent = 'camera not running?'; };
   img.src = '{{ url_for("bg_jpg") }}?mode=' + encodeURIComponent(mode) +
             '&kind=' + encodeURIComponent(kind) +
             '&radius=' + encodeURIComponent(size) +
             '&block=' + encodeURIComponent(size) +
             '&window=' + encodeURIComponent(size) + '&t=' + Date.now();
+  // Label what the render is actually showing (e.g. the live temporal-median
+  // stack's frame count/age, or the per-frame degradation when none exists).
+  try {
+    var j = await (await fetch('{{ url_for("api_bgpreview") }}?mode=' +
+                               encodeURIComponent(mode))).json();
+    msg.textContent = (j.ok && j.result && j.result.preview_source)
+      ? 'showing: ' + j.result.preview_source : '';
+  } catch (e) { msg.textContent = ''; }
 }
 var bgRunPoll = null;
 async function bgRunStart() {

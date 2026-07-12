@@ -53,7 +53,7 @@ from diofinder.worker_cmds import (
     SOLVER_OP_SOLVE_CENTROIDS, SOLVER_OP_BG_CACHE_STATUS,
     SOLVER_OP_SET_DB, SOLVER_OP_DARK_CAPTURE,
     SOLVER_OP_HOT_PIXEL_STATUS, SOLVER_OP_HOT_PIXEL_CLEAR,
-    SOLVER_OP_FRAME_GET,
+    SOLVER_OP_FRAME_GET, SOLVER_OP_BG_PREVIEW,
     SOLVER_OP_TRACKING_STATUS, SOLVER_OP_SOLVE_STATS,
     SOLVER_OP_AUTO_TUNE_EVAL,
     CAMERA_OP_GET_EXPOSURE, CAMERA_OP_SET_EXPOSURE, CAMERA_OP_SET_GAIN,
@@ -2487,6 +2487,25 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             import base64
             r = dict(reply.result)
             r["data_b64"] = base64.b64encode(r.pop("data")).decode("ascii")
+            return MaintResponse(ok=True, result=r)
+
+        if cmd == "bg_preview":
+            # Reconstruct the background a mode subtracts, for the Background
+            # page's visual A/B. Returns the paired frame + full-res background
+            # for the SAME seq (consistent subtracted view) plus preview meta;
+            # temporal_median renders the solver's live cached median stack,
+            # which no other process can see.
+            reply = _call_solver(SOLVER_OP_BG_PREVIEW, dict(args),
+                                 ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
+                                 timeout_s=6.0)
+            if reply is None:
+                return MaintResponse(ok=False, error="solver did not respond")
+            if not reply.ok:
+                return MaintResponse(ok=False, error=reply.error)
+            import base64
+            r = dict(reply.result)
+            r["frame_b64"] = base64.b64encode(r.pop("frame")).decode("ascii")
+            r["bg_b64"] = base64.b64encode(r.pop("bg")).decode("ascii")
             return MaintResponse(ok=True, result=r)
 
         if cmd == "hot_pixel_status":
