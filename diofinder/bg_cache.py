@@ -565,6 +565,59 @@ class BackgroundCache:
             "tophat_supported": HAS_TOPHAT,
         }
 
+    def preview_background(self, image_u8, *, bg_mode=None, tophat_radius=12,
+                           bg_block_size=0, uniform_filter_size=0,
+                           noise_mode="mad"):
+        """Reconstruct, at full frame resolution, the background the requested
+        mode subtracts from ``image_u8`` — for the Background page's visual
+        A/B. Read-only: never submits the frame or mutates cache state.
+
+        Returns ``(bg_u8_fullres, info)``. ``info`` carries the requested mode,
+        a human ``preview_source`` phrase, the model noise, and the live
+        effective-path ``summary`` (so the page can label exactly what
+        detection is using, independent of the mode being previewed).
+
+        Spatial modes are recomputed per-frame from this frame (so the A/B
+        compares modes without changing the live pipeline). ``temporal_median``
+        has no per-frame form: its only faithful preview is the live cached
+        stack (``_model.bg_image``), which lives only in this process — when no
+        stack is built yet it degrades to per-frame ``block_percentile``, the
+        same documented degradation ``detect()`` uses."""
+        h, w = image_u8.shape
+        req = str(bg_mode or self._active_bg_mode or "row_percentile")
+        m = self._model
+        st = self.stats()
+        if req == "temporal_median":
+            if m is not None and m.bg_image is not None and HAS_BG_IMAGE:
+                bg = _upsample_binned(m.bg_image, h, w, m.bin)
+                source = ("live temporal-median stack "
+                          f"({m.n_frames} frames, "
+                          f"{round(time.monotonic() - m.epoch, 1)}s old)")
+            else:
+                bg = _per_frame_background(
+                    image_u8, "block_percentile", block_size=bg_block_size)
+                source = ("no temporal-median stack built yet — showing "
+                          "per-frame block_percentile (the live degradation)")
+        else:
+            bg = _per_frame_background(
+                image_u8, req, tophat_radius=tophat_radius,
+                block_size=bg_block_size, uniform_size=uniform_filter_size)
+            source = f"per-frame {req}"
+        bg_u8 = np.clip(np.rint(bg), 0, 255).astype(np.uint8)
+        try:
+            summary = resolve_effective(
+                st, st.get("active_bg_mode"), noise_mode).get("summary")
+        except Exception:
+            summary = None
+        return bg_u8, {
+            "requested_mode": req,
+            "preview_source": source,
+            "noise": st.get("noise"),
+            "model_kind": st.get("model_kind"),
+            "model_age_s": st.get("model_age_s"),
+            "summary": summary,
+        }
+
     # ----- worker ----------------------------------------------------------
     def _worker_loop(self):
         last_build = 0.0
@@ -690,6 +743,119 @@ class BackgroundCache:
 
         row_offsets = star_detect.compute_row_medians_py(time_med)
         return BgModel(row_offsets=row_offsets, **common)
+
+
+# --- Background preview (webui /bg.jpg) ------------------------------------
+# These reconstruct, at full frame resolution, the background a given mode
+# subtracts — for the Background page's visual A/B and, uniquely, so the live
+# temporal-median stack (which exists ONLY in this process's memory) can be
+# rendered. This is the single home for background-preview math: the webui
+# used to reimplement it (and had no temporal_median case, so it silently
+# showed line_median). All pure numpy (scipy only for uniform_mean/top_hat)
+# so they unit-test without a wheel or camera.
+
+def _fit_1d(a: np.ndarray, n: int) -> np.ndarray:
+    """Crop or edge-pad a 1-D array to length n."""
+    if a.shape[0] == n:
+        return a
+    if a.shape[0] > n:
+        return a[:n]
+    return np.concatenate([a, np.full(n - a.shape[0], a[-1], a.dtype)])
+
+
+def _fit_to(a: np.ndarray, h: int, w: int) -> np.ndarray:
+    """Crop or edge-pad a 2-D array to (h, w) — the binned model may be a few
+    pixels short of the full frame after the bin reshape truncation."""
+    ah, aw = a.shape
+    if ah > h:
+        a = a[:h]
+    elif ah < h:
+        a = np.vstack([a, np.repeat(a[-1:], h - ah, axis=0)])
+    if aw > w:
+        a = a[:, :w]
+    elif aw < w:
+        a = np.hstack([a, np.repeat(a[:, -1:], w - aw, axis=1)])
+    return a
+
+
+def _upsample_binned(a_u8: np.ndarray, h: int, w: int, bin: int) -> np.ndarray:
+    """Nearest-neighbour upsample a binned (h//bin, w//bin) model image to the
+    full (h, w) frame — how the temporal-median stack maps back onto pixels."""
+    b = max(1, int(bin))
+    a = np.asarray(a_u8, dtype=np.float32)
+    up = np.repeat(np.repeat(a, b, axis=0), b, axis=1)
+    return _fit_to(up, h, w)
+
+
+def _broadcast_rows(rows_u8: np.ndarray, h: int, w: int, bin: int) -> np.ndarray:
+    """Expand a per-(binned-)row floor to the full (h, w) frame."""
+    b = max(1, int(bin))
+    r = _fit_1d(np.repeat(np.asarray(rows_u8, dtype=np.float32), b), h)
+    return np.repeat(r[:, None], w, axis=1)
+
+
+def _bilinear_to(grid_u8: np.ndarray, h: int, w: int) -> np.ndarray:
+    """Bilinearly interpolate a block-median grid to the full (h, w) frame —
+    the same reconstruction block_percentile applies to its tile medians."""
+    grid = np.asarray(grid_u8, dtype=np.float32)
+    gh, gw = grid.shape
+    if gh == 1 and gw == 1:
+        return np.full((h, w), float(grid[0, 0]), np.float32)
+    ys = np.linspace(0, gh - 1, h)
+    xs = np.linspace(0, gw - 1, w)
+    y0 = np.floor(ys).astype(int)
+    x0 = np.floor(xs).astype(int)
+    y1 = np.minimum(y0 + 1, gh - 1)
+    x1 = np.minimum(x0 + 1, gw - 1)
+    wy = (ys - y0)[:, None]
+    wx = (xs - x0)[None, :]
+    top = grid[np.ix_(y0, x0)] * (1 - wx) + grid[np.ix_(y0, x1)] * wx
+    bot = grid[np.ix_(y1, x0)] * (1 - wx) + grid[np.ix_(y1, x1)] * wx
+    return top * (1 - wy) + bot * wy
+
+
+def _per_frame_background(frame_u8: np.ndarray, mode: str, *,
+                          tophat_radius: int = 12, block_size: int = 32,
+                          uniform_size: int = 25) -> np.ndarray:
+    """Reconstruct the per-frame background for a spatial mode from a single
+    frame (float32, full resolution). Faithful for the percentile/median
+    modes; uniform_mean/top_hat use scipy with a rectangular window and fall
+    back to line_median if scipy is missing. Unknown modes -> line_median."""
+    f = frame_u8.astype(np.float32)
+    h, w = f.shape
+    if mode == "row_percentile":
+        return np.repeat(np.percentile(f, 25, axis=1)[:, None], w, axis=1)
+    if mode == "column_percentile":
+        return np.repeat(np.percentile(f, 25, axis=0)[None, :], h, axis=0)
+    if mode == "row_column_percentile":
+        rf = np.percentile(f, 25, axis=1)[:, None]
+        cf = np.percentile(f, 25, axis=0)[None, :]
+        g = float(np.percentile(f, 25))
+        return np.clip(rf + cf - g, 0.0, None)
+    if mode == "block_percentile":
+        bs = max(4, int(block_size) or 32)
+        bg = np.empty((h, w), np.float32)
+        for y0 in range(0, h, bs):
+            for x0 in range(0, w, bs):
+                y1, x1 = min(h, y0 + bs), min(w, x0 + bs)
+                bg[y0:y1, x0:x1] = np.percentile(f[y0:y1, x0:x1], 25)
+        return bg
+    if mode == "uniform_mean":
+        try:
+            from scipy import ndimage
+            return ndimage.uniform_filter(
+                f, size=max(3, int(uniform_size) or 25), mode="nearest")
+        except Exception:
+            pass
+    if mode == "top_hat":
+        try:
+            from scipy import ndimage
+            k = 2 * max(1, int(tophat_radius)) + 1
+            return ndimage.grey_opening(f, size=(k, k))
+        except Exception:
+            pass
+    # line_median and any unknown/scipy-missing fallback.
+    return np.repeat(np.median(f, axis=1)[:, None], w, axis=1)
 
 
 def _model_kind(bg_mode: str) -> str:

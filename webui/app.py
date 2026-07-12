@@ -501,95 +501,79 @@ def api_bgcache():
     return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
 
 
-def _compute_background(frame, mode, *, tophat_radius=12, block_size=32,
-                        uniform_size=25):
-    """Webui-side visual approximation of the background each bg mode subtracts.
+def _bg_preview_arrays(mode, kind):
+    """Fetch the paired frame + reconstructed background from the solver's
+    bg_preview op (the single home for background-preview math — the webui no
+    longer reimplements it, and this is the only way to render the live
+    temporal-median stack, which exists only in the solver process).
 
-    Faithful for the percentile/median modes; uniform_mean/top_hat use scipy
-    (uniform_filter / grey_opening) with a rectangular window; unknown modes
-    fall back to line_median. For preview/overlay only, not the detector."""
+    Returns (out_float, lo, hi, meta) or (None, 0, 0, error_string)."""
     import numpy as np
-    H, W = frame.shape
-    f = frame.astype(np.float32)
-    if mode == "row_percentile":
-        return np.repeat(np.percentile(f, 25, axis=1)[:, None], W, axis=1)
-    if mode == "column_percentile":
-        return np.repeat(np.percentile(f, 25, axis=0)[None, :], H, axis=0)
-    if mode == "row_column_percentile":
-        rf = np.percentile(f, 25, axis=1)[:, None]
-        cf = np.percentile(f, 25, axis=0)[None, :]
-        g = float(np.percentile(f, 25))
-        return np.clip(rf + cf - g, 0.0, None)
-    if mode == "block_percentile":
-        bs = max(4, int(block_size) or 32)
-        bg = np.empty((H, W), np.float32)
-        for y0 in range(0, H, bs):
-            for x0 in range(0, W, bs):
-                y1, x1 = min(H, y0 + bs), min(W, x0 + bs)
-                bg[y0:y1, x0:x1] = np.percentile(f[y0:y1, x0:x1], 25)
-        return bg
-    if mode == "uniform_mean":
-        try:
-            from scipy import ndimage
-            return ndimage.uniform_filter(f, size=max(3, int(uniform_size) or 25),
-                                          mode="nearest")
-        except Exception:
-            pass
-    if mode == "top_hat":
-        try:
-            from scipy import ndimage
-            k = 2 * max(1, int(tophat_radius)) + 1
-            return ndimage.grey_opening(frame, size=(k, k)).astype(np.float32)
-        except Exception:
-            pass
-    # line_median (default) and any unknown/scipy-missing fallback
-    return np.repeat(np.median(f, axis=1)[:, None], W, axis=1)
+    args = {"mode": mode}
+    for qname, argk in (("radius", "tophat_radius"),
+                        ("block", "bg_block_size"),
+                        ("window", "uniform_filter_size")):
+        v = request.args.get(qname)
+        if v is not None:
+            try:
+                args[argk] = max(1, min(400, int(v)))
+            except (ValueError, TypeError):
+                pass
+    r = _safe_call("bg_preview", args)
+    if not r.ok:
+        return None, 0, 0, (r.error or "bg preview unavailable")
+    res = r.result or {}
+    try:
+        import base64
+        h, w = int(res["shape"][0]), int(res["shape"][1])
+        frame = np.frombuffer(
+            base64.b64decode(res["frame_b64"]), np.uint8).reshape(h, w)
+        bg = np.frombuffer(
+            base64.b64decode(res["bg_b64"]), np.uint8).reshape(h, w).astype(np.float32)
+    except Exception as e:
+        return None, 0, 0, f"malformed bg preview: {e}"
+    if kind == "bg":
+        out = bg
+        lo, hi = float(np.percentile(out, 1)), float(np.percentile(out, 99))
+    else:
+        out = np.clip(frame.astype(np.float32) - bg, 0.0, None)
+        lo, hi = 0.0, max(float(np.percentile(out, 99.5)), 8.0)
+    return out, lo, max(hi, lo + 1.0), res
 
 
 @app.route("/bg.jpg")
 def bg_jpg():
     """Render the computed background, or the background-subtracted frame, for a
-    chosen bg mode from a live SHM frame. Compare methods / tune sizes visually."""
+    chosen bg mode. The background is reconstructed by the solver's bg_preview
+    op (webui no longer reimplements it); temporal_median shows the live cached
+    median stack. Compare methods / tune sizes visually."""
     import numpy as np
-    from multiprocessing import shared_memory, resource_tracker as _rt
     from PIL import Image
-    try:
-        ecfg = _load_cfg_cached()
-        W, H = ecfg.frame_width, ecfg.frame_height
-    except Exception:
-        ecfg, W, H = None, 960, 760
-
-    frame, _seq, _synced = _daemon_frame(timeout=3.0)
-    if frame is None:
-        return "camera not running", 503, {"Content-Type": "text/plain"}
-
     mode = request.args.get("mode", "line_median")
     kind = request.args.get("kind", "sub")
-
-    def _ai(name, default):
-        try:
-            return max(1, min(400, int(request.args.get(name, default))))
-        except (ValueError, TypeError):
-            return default
-    bg = _compute_background(
-        frame, mode,
-        tophat_radius=_ai("radius", getattr(ecfg, "detect_tophat_radius", 12) or 12),
-        block_size=_ai("block", getattr(ecfg, "detect_bg_block_size", 0) or 32),
-        uniform_size=_ai("window", getattr(ecfg, "detect_uniform_filter_size", 0) or 25),
-    )
-    f = frame.astype(np.float32)
-    if kind == "bg":
-        out = bg
-        lo, hi = float(np.percentile(out, 1)), float(np.percentile(out, 99))
-    else:
-        out = np.clip(f - bg, 0.0, None)
-        lo, hi = 0.0, max(float(np.percentile(out, 99.5)), 8.0)
-    hi = max(hi, lo + 1.0)
+    out, lo, hi, meta = _bg_preview_arrays(mode, kind)
+    if out is None:
+        return meta, 503, {"Content-Type": "text/plain"}
     disp = np.clip((out - lo) / (hi - lo) * 255.0, 0, 255).astype(np.uint8)
     buf = io.BytesIO()
     Image.fromarray(disp, mode="L").save(buf, format="JPEG", quality=80)
     buf.seek(0)
     return send_file(buf, mimetype="image/jpeg")
+
+
+@app.route("/api/bgpreview")
+def api_bgpreview():
+    """Preview metadata only (no image bytes) so the Background page can label
+    what the /bg.jpg render is actually showing — e.g. the live temporal-median
+    stack's frame count/age, or the per-frame degradation when none is built."""
+    mode = request.args.get("mode", "line_median")
+    r = _safe_call("bg_preview", {"mode": mode})
+    if not r.ok:
+        return jsonify({"ok": False, "error": r.error})
+    res = dict(r.result or {})
+    res.pop("frame_b64", None)
+    res.pop("bg_b64", None)
+    return jsonify({"ok": True, "result": res})
 
 
 # ---- Seeing presets ---------------------------------------------------------
@@ -1630,16 +1614,14 @@ def frame_jpg():
     work = frame[::ds, ::ds] if ds > 1 else frame
 
     if request.args.get("sub") in ("1", "true", "yes", "on"):
-        # Detection view: subtract the active background mode so the live image
-        # shows what star detection effectively sees (stars on a flat field).
-        # Size parameters are scaled to the downsampled grid.
-        bgmode = request.args.get("bgmode") or getattr(ecfg, "detect_bg_mode", "line_median")
-        bg = _compute_background(
-            work, bgmode,
-            tophat_radius=max(1, (getattr(ecfg, "detect_tophat_radius", 12) or 12) // ds),
-            block_size=max(4, (getattr(ecfg, "detect_bg_block_size", 0) or 32) // ds),
-            uniform_size=max(3, (getattr(ecfg, "detect_uniform_filter_size", 0) or 25) // ds))
-        signal = np.clip(work.astype(np.float32) - bg, 0.0, None)
+        # Detection view: a cheap per-row-median flat-field subtraction so the
+        # live overlay shows stars popping on a flat background — a rough,
+        # mode-agnostic visualization for the status page (polled, downsampled).
+        # The accurate, mode-specific, temporal-median-aware A/B lives on the
+        # Background page (the solver bg_preview op); this overlay deliberately
+        # does NOT reimplement the detector's per-mode background.
+        row_med = np.median(work.astype(np.float32), axis=1)[:, None]
+        signal = np.clip(work.astype(np.float32) - row_med, 0.0, None)
     else:
         sky     = float(np.percentile(work, 50))
         signal  = np.clip(work.astype(np.float32) - sky, 0.0, None)

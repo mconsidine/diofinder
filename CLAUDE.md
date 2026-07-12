@@ -274,7 +274,15 @@ resolver — requested mode → effective mode → the path actually serving
 detection this instant (cached-row/block/image or per-frame) with the reason
 and a one-sentence `summary`, computed by `bg_cache.resolve_effective` from
 the same facts `detect()` decides with; the Background and Advanced pages
-render it verbatim), `solve_centroids` (plate-solve a caller-supplied centroid list on
+render it verbatim), `bg_preview` (v0.11.49: reconstruct at full frame
+resolution the background a mode subtracts, for the Background page's `/bg.jpg`
+visual A/B — returns the paired frame + background bytes for one seq plus a
+`preview_source` label. Backed by `bg_cache.preview_background` (the single home
+for preview math; the webui no longer reimplements `_compute_background`).
+Spatial modes reconstruct per-frame; **`temporal_median` renders the solver's
+live cached median stack** (`_model.bg_image`) — the only way to see it, since
+it exists only in the solver process — degrading to per-frame `block_percentile`
+when no stack is built yet), `solve_centroids` (plate-solve a caller-supplied centroid list on
 the live solver's resident database — no second DB, used by
 `diag_background --solve` and the web-UI background A/B), and the hot-pixel
 trio: `dark_capture {"frames":N, "exposure_s"?, "gain"?}` (cap the lens;
