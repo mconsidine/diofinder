@@ -360,11 +360,27 @@ async function refreshHome(){
       }
       _set('dash-star', t);
     } else {
-      _set('ra', '—'); _set('dec', '—'); _set('matches', '—'); _set('solve_ms', '—');
+      // Not solving right now. If a prior solve is still HELD (the last RA/Dec
+      // lingers in latest_solution — the same value the LX200 reports to
+      // SkySafari), show it dimmed with its age instead of blanking, so the
+      // web UI matches the crosshair and says how old it is.
+      const age = d.status.result.pointing_age_s;
+      const held = (sol.ra_deg != null && sol.dec_deg != null);
+      if (held){ _set('ra', formatHMS(sol.ra_deg / 15)); _set('dec', formatDMS(sol.dec_deg)); }
+      else     { _set('ra', '—'); _set('dec', '—'); }
+      _set('matches', '—'); _set('solve_ms', '—');
       _set('fov', '—'); _set('roll', '—'); _set('dash-star', '—');
       _set('stars', sol.stars || 0); _set('peak', sol.peak || 0);
       const se = document.getElementById('status');
-      if (se){ const s = sol.status || 0; se.textContent = (_LBL[s] || ('code ' + s)); se.style.color = '#ff7700'; }
+      if (se){
+        const s = sol.status || 0;
+        if (held && age != null){
+          se.textContent = 'holding — last solve ' + age + 's ago';
+        } else {
+          se.textContent = (_LBL[s] || ('code ' + s));
+        }
+        se.style.color = '#ff7700';
+      }
     }
     // IMU (expert card)
     const imu = d.status.result.imu;
