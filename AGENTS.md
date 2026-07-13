@@ -234,13 +234,35 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.49)
+## 6. Current state (as of v0.11.50)
 
-Released through **v0.11.49** (latest). All 270 unit tests pass. The
-operational backlog is empty; the remaining items below are deferred
-optimizations/robustness items with stated gating reasons (see section 7).
+Released through **v0.11.50** (latest). All 276 unit tests pass.
 
 Recent-history summary (details in each PR, #99–#103):
+- v0.11.50: UI/diagnostics batch (no change to the solve/pointing math).
+  (1) **Live `imu_rate_gate_dps` setter** — the IMU motion gate is now
+  tunable through `solver_params_get`/`set` (Camera-page "IMU pointing
+  gate" slider + `diofinder-ctl`), no conf-edit/restart; raise it to stop
+  a parked scope's SkySafari crosshair jitter. (2) **Debug-bundle burst
+  fix** — `debug_collect` returned ~5–6 frames of the requested 12 since
+  v0.11.46 (the per-frame solve-poll plus a redundant trailing sleep
+  tripled per-frame cost against a budget sized for one exposure period);
+  dropped the redundant sleep — `after_seq` already paces the loop — and
+  sized the budget to the real ~2×-per-frame cost. (3) **Honest
+  live-view message** — `/frame.jpg` failures previously always showed
+  "camera not running?"; the frame path is solver-serviced, so a busy/
+  behind solver or a long exposure looks identical to a dead camera. New
+  `/api/liveview_health` (`_liveview_miss_reason`, unit-tested) reasons
+  from the solution-epoch age and reports the real cause (daemon down /
+  starting up / solver behind — camera fine / genuine stall). (4)
+  **Relabelled** the Home/Camera "detection view" toggle to "flat-field
+  preview" (it's a per-row-median flat subtraction, not the configured
+  bg mode — the Background page is the accurate per-mode view).
+  Also carries `tests/ab_plane_background.py`, the shelved pure-Python
+  plane-fit background A/B experiment (no native mode shipped — on real
+  sky, `block_percentile` already matched it).
+  Deferred to a validated follow-up: threaded LX200 server (#26),
+  hold-last-good stale pointing (#27), and the page-prose→tooltips sweep.
 - v0.11.49: solver-side background-preview op (legibility step 3 of 3, the
   final step). New `bg_cache.preview_background()` — the single home for
   background-preview math — and `SOLVER_OP_BG_PREVIEW` / the `bg_preview`

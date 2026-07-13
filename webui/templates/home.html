@@ -12,7 +12,7 @@
   <div class="card card-wide">
     <h2>Live view</h2>
     <p style="margin:4px 0;">
-      <label><input type="checkbox" id="sub-toggle"> Detection view (background subtracted)</label>
+      <label><input type="checkbox" id="sub-toggle"> Detection view (flat-field preview)</label>
     </p>
     <p style="margin:4px 0;" class="expert-only">
       <label><input type="checkbox" id="rotate-toggle"> Rotate view 180&deg; (display only)</label>
@@ -328,7 +328,14 @@ async function refreshHome(){
     next.onerror = function(){
       img.style.opacity = '0.25';
       const e = document.getElementById('live-ts');
-      if (e){ e.textContent = 'Frame unavailable — camera not running?'; e.style.color = '#ff7700'; }
+      if (e){
+        e.textContent = 'Frame unavailable…'; e.style.color = '#ff7700';
+        // Ask the daemon WHY instead of blaming the camera (the frame path is
+        // solver-serviced, so a busy solver / long exposure looks the same).
+        fetch('/api/liveview_health').then(r => r.json()).then(j => {
+          if (e) e.textContent = 'Frame unavailable — ' + (j.reason || 'camera not running?');
+        }).catch(() => {});
+      }
     };
     const st = document.getElementById('sub-toggle');
     next.src = '/frame.jpg?' + Date.now() + ((st && st.checked) ? '&sub=1' : '');

@@ -1131,7 +1131,9 @@ def _do_alignment(align_state, cfg, shared_cfg,
 # window would swamp slow pans). Once engaged, the prediction HOLDS until a
 # fresh solve re-anchors the reference after motion stops — otherwise the
 # report would jump back by the whole slew distance at the moment you stop.
-# Live-tunable via shared_cfg["imu_rate_gate_dps"].
+# Live-tunable via shared_cfg["imu_rate_gate_dps"] — set through
+# solver_params_get/set (v0.11.50: Camera-page "IMU pointing gate" slider /
+# diofinder-ctl), no restart. Raise it if a parked scope still jitters.
 _IMU_RATE_GATE_DPS = 0.1
 _IMU_RATE_BASELINE_S = 0.8
 _imu_rate_state = {}     # samples: deque[(imu_t, quat)], engaged, moving_t
@@ -1968,6 +1970,9 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "bg_cache_bin_at_submit", ctx.cfg.bg_cache_bin_at_submit),
                 "imu_exact_predict": ctx.shared_cfg.get(
                     "imu_exact_predict", ctx.cfg.imu_exact_predict),
+                "imu_rate_gate_dps": ctx.shared_cfg.get(
+                    "imu_rate_gate_dps",
+                    getattr(ctx.cfg, "imu_rate_gate_dps", _IMU_RATE_GATE_DPS)),
             })
 
         if cmd == "solver_params_set":
@@ -2150,6 +2155,18 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 ep = bool(args["imu_exact_predict"])
                 ctx.shared_cfg["imu_exact_predict"] = ep
                 updates["imu_exact_predict"] = ep
+            if "imu_rate_gate_dps" in args:
+                try:
+                    rg = float(args["imu_rate_gate_dps"])
+                except (ValueError, TypeError) as e:
+                    return MaintResponse(
+                        ok=False, error=f"imu_rate_gate_dps must be numeric: {e}")
+                if not (0.0 <= rg <= 10.0):
+                    return MaintResponse(
+                        ok=False, error="imu_rate_gate_dps out of range [0, 10]")
+                # Read live by _imu_predict's motion gate; no solver round-trip.
+                ctx.shared_cfg["imu_rate_gate_dps"] = rg
+                updates["imu_rate_gate_dps"] = rg
             if persist and updates:
                 cfg_mod.save_keys(updates)
             return MaintResponse(ok=True, result={**updates, "persisted": persist})

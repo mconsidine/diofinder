@@ -367,6 +367,52 @@ def api_status():
     })
 
 
+@app.route("/api/liveview_health")
+def api_liveview_health():
+    """Explain why the live view couldn't fetch a frame, instead of the browser
+    blindly guessing "camera not running". (Distinct from diofinder.frame_health,
+    which assesses a frame's exposure/content — this is about availability.)
+
+    The live-frame path (display SHM + the frame_get fallback) is serviced by
+    the SOLVER process, so a busy/behind solver — e.g. grinding on hard frames
+    low on the horizon — or a long exposure looks identical to a dead camera
+    from the browser's onerror handler. The solution epoch tells them apart:
+    it advances while the solver is alive (every solve, plus dark heartbeats),
+    so a fresh epoch means the camera is fine and the miss was transient, while
+    a stale one means the solver stalled or the camera stopped delivering."""
+    import time as _t
+    r = _safe_call("status", timeout=1.5)
+    if not r.ok or not r.result:
+        return jsonify({"ok": True, "reason": _liveview_miss_reason(None, ok=False)})
+    sol = (r.result.get("solution") or {})
+    epoch = sol.get("epoch_monotonic")
+    age = (_t.monotonic() - epoch) if epoch else None
+    return jsonify({"ok": True, "reason": _liveview_miss_reason(age, ok=True)})
+
+
+def _liveview_miss_reason(age, *, ok):
+    """Map (daemon reachable?, solution epoch age) -> a human explanation for a
+    live-view frame miss. Pure so the branch table is unit-testable.
+
+    `ok` False = the status call itself failed (daemon down). Otherwise `age`
+    is seconds since the last published solution (None = never published), the
+    signal that separates a busy/behind solver from a genuinely dead camera."""
+    if not ok:
+        return "daemon not responding (the service may be starting or restarting)"
+    if age is None:
+        return ("the solver hasn't published a frame yet — starting up "
+                "(can take a while in daylight)")
+    if age > 15.0:
+        return (f"no fresh frames for {int(age)}s — the solver has stalled or "
+                "the camera stopped delivering; check the service")
+    if age > 5.0:
+        return (f"the solver is behind (last update {int(age)}s ago), likely "
+                "grinding on hard frames — low on the horizon? The camera is "
+                "fine; the view will catch up")
+    return ("the frame server is momentarily busy (or a long exposure is "
+            "delivering frames slowly) — camera and solver are live")
+
+
 @app.route("/boresight/center", methods=["POST"])
 def boresight_center():
     """Reset boresight to the frame center and redirect to dashboard."""
@@ -933,7 +979,8 @@ def api_camera_set():
         except (ValueError, TypeError) as e:
             errors.append(f"gain invalid: {e}")
     _solver_float_keys = ("detect_sigma", "detect_kernel_sigma",
-                          "detect_max_axis_ratio", "fov_max_error_deg")
+                          "detect_max_axis_ratio", "fov_max_error_deg",
+                          "imu_rate_gate_dps")
     _solver_int_keys = ("solve_timeout_ms", "min_centroids", "max_solve_stars")
     _solver_extra = ("detect_local_noise", "extractor_backend",
                      "detect_bg_mode", "detect_noise_mode")
@@ -1032,6 +1079,11 @@ def solver_params_set():
             pargs["fov_max_error_deg"] = float(request.form["fov_max_error_deg"])
         except ValueError:
             return "fov_max_error_deg must be numeric", 400
+    if request.form.get("imu_rate_gate_dps") not in (None, ""):
+        try:
+            pargs["imu_rate_gate_dps"] = float(request.form["imu_rate_gate_dps"])
+        except ValueError:
+            return "imu_rate_gate_dps must be numeric", 400
     r = _safe_call("solver_params_set", pargs)
     if not r.ok:
         return r.error, 400
@@ -1984,11 +2036,18 @@ def debug_collect():
         import time as _time, hashlib
         seen_hashes = set()
         # Bounded wall-clock budget so a slow camera (long exposure) can't hang
-        # the download button: grab what we can, then stop.
+        # the download button. Each iteration costs ~2x per_frame_s -- the
+        # after_seq wait for a genuinely new frame PLUS the per-frame solution
+        # poll (v0.11.46) -- so the budget is sized to that, not to one exposure
+        # period. The old n_frames*per_frame_s+5 budget assumed ~1 period/frame
+        # and ran out at ~5-6 of 12 frames once the solve poll was added (and a
+        # redundant trailing sleep doubled the real per-frame cost again).
         per_frame_s = max(0.3, ecfg.exposure_s + 0.2)
-        deadline = _time.monotonic() + min(40.0, n_frames * per_frame_s + 5.0)
+        deadline = _time.monotonic() + min(
+            90.0, n_frames * (2.0 * per_frame_s + 1.5) + 5.0)
         while frames_saved < n_frames and _time.monotonic() < deadline:
             f, f_seq, f_meta = _capture_frame()
+            advanced = False
             if f is not None:
                 # Dedup identical SHM reads (slow frame rates re-read one slot);
                 # only genuinely new frames advance the burst.
@@ -1999,6 +2058,7 @@ def debug_collect():
                     try:
                         _save_frame_pair(zf, idx, f, with_display=(idx <= n_display))
                         frames_saved += 1
+                        advanced = True
                         # This frame's OWN solve result (matched by seq), not
                         # the previous frame's — poll while the PNG for the
                         # next frame would otherwise just be sleeping.
@@ -2037,8 +2097,13 @@ def debug_collect():
                         frames_map[fname] = entry
                     except Exception:
                         pass
-            if frames_saved < n_frames:
-                # Wait for the camera to deliver a genuinely new frame.
+            if not advanced and frames_saved < n_frames:
+                # No new frame this pass (a dup SHM re-read, or the unsynced
+                # direct-SHM fallback where after_seq can't pace us): back off
+                # so we don't busy-loop. When synced, _capture_frame's after_seq
+                # already blocks until the next frame, so a just-saved frame
+                # needs no extra sleep -- that redundant sleep is what halved
+                # the burst count.
                 _time.sleep(per_frame_s)
 
         # ── System summary ───────────────────────────────────────────────────
