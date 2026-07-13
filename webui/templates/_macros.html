@@ -1,0 +1,17 @@
+{#- Reusable info tooltip. Usage in a template:
+      {% from "_macros.html" import tip %}
+      <label>Detection sigma {{ tip("Threshold in noise <b>sigmas</b>. …") }}</label>
+
+    Collapses long explanatory prose behind an ⓘ icon (opens on tap / hover /
+    keyboard focus; closes on a second tap, a tap away, or Esc -- CSS in
+    style.css, JS in base.html). `text` may contain limited inline HTML
+    (<b>, <code>, <em>, <a>) and is rendered trusted, so only pass
+    template-authored strings, never user input.
+
+    KEEP INLINE (do NOT move into a tip): short labels, and anything safety- or
+    action-critical -- "cap the lens", "restart required", destructive-action
+    warnings. Help that matters at the moment of action shouldn't be a tap
+    away. -#}
+{% macro tip(text, label="More info") -%}
+<span class="tip"><button type="button" class="tip-btn" aria-label="{{ label }}" aria-expanded="false">i</button><span class="tip-pop" role="tooltip">{{ text | safe }}</span></span>
+{%- endmacro %}

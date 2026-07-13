@@ -58,6 +58,39 @@
     _applyModeButtons(
       document.documentElement.classList.contains('mode-expert')
         ? 'expert' : 'novice');
+
+    // Info tooltips: a tap/click on the ⓘ toggles its popover (hover and
+    // keyboard focus cover mouse/keyboard users). A second tap, a tap away, or
+    // Esc closes it. Blur-on-close releases :focus-within so the popover truly
+    // hides on touch; hover is gated to real hover devices in CSS so a phone's
+    // sticky-hover can't re-hold it open.
+    (function () {
+      function closeAll(except) {
+        document.querySelectorAll('.tip.open').forEach(function (t) {
+          if (t === except) return;
+          t.classList.remove('open');
+          var b = t.querySelector('.tip-btn');
+          if (b) b.setAttribute('aria-expanded', 'false');
+        });
+      }
+      document.addEventListener('click', function (e) {
+        var btn = e.target.closest ? e.target.closest('.tip-btn') : null;
+        if (btn) {
+          var tip = btn.closest('.tip');
+          var open = tip.classList.toggle('open');
+          btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+          if (!open) btn.blur();
+          closeAll(tip);
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+        if (!(e.target.closest && e.target.closest('.tip-pop'))) closeAll(null);
+      });
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape' || e.key === 'Esc') closeAll(null);
+      });
+    })();
   </script>
 </body>
 </html>

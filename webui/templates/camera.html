@@ -1,29 +1,22 @@
 {% extends "base.html" %}
+{% from "_macros.html" import tip %}
 {% block title %}diofinder Advanced{% endblock %}
 {% block content %}
 
 <section class="grid">
   <div class="card card-wide">
-    <h2>Live View</h2>
-    <p class="hint">
-      Red circle marks the boresight. Centre the target star inside it,
-      then tap <strong>Align</strong> in SkySafari to sync.
-    </p>
+    <h2>Live View {{ tip("Red circle marks the boresight. Centre the target star inside it, then tap <strong>Align</strong> in SkySafari to sync.") }}</h2>
     <p style="margin:4px 0;">
       <label>
         <input type="checkbox" id="sub-toggle">
-        Detection view (flat-field preview)
+        Detection view (flat-field preview) {{ tip("a quick per-row-median flat subtraction so stars pop — a rough preview, NOT the configured bg mode. For an accurate, mode-specific (and temporal-median) view use the Background page.") }}
       </label>
-      <span class="hint">&nbsp;a quick per-row-median flat subtraction so stars pop —
-      a rough preview, NOT the configured bg mode. For an accurate,
-      mode-specific (and temporal-median) view use the Background page.</span>
     </p>
     <p style="margin:4px 0;" class="expert-only">
       <label>
         <input type="checkbox" id="rotate-toggle">
-        Rotate view 180&deg; (display only)
+        Rotate view 180&deg; (display only) {{ tip("flips the live image only; detection &amp; solving are unaffected") }}
       </label>
-      <span class="hint">&nbsp;flips the live image only; detection &amp; solving are unaffected</span>
     </p>
     <div class="live-view">
       <img id="live-frame" src="/frame.jpg" alt="Camera frame"
@@ -106,12 +99,8 @@
   </div>
 
   <div class="card">
-    <h2>Seeing preset</h2>
+    <h2>Seeing preset {{ tip("One-tap night tuning. Applying a preset overwrites the detection / solve / exposure values below; you can still fine-tune any of them afterward.") }}</h2>
     {% set smode = seeing.mode if seeing else 'good' %}
-    <p class="hint" style="margin:0 0 8px">
-      One-tap night tuning. Applying a preset overwrites the detection / solve /
-      exposure values below; you can still fine-tune any of them afterward.
-    </p>
     <form method="post" action="{{ url_for('seeing_set') }}" style="display:inline;">
       <input type="hidden" name="mode" value="good">
       <input type="hidden" name="next" value="camera_page">
@@ -170,7 +159,7 @@
   </div>
 
   <div class="card expert-only">
-    <h2>Hot-pixel mask</h2>
+    <h2>Hot-pixel mask {{ tip("Capture at a fixed worst-case point (long exposure + high gain) so the mask covers every operating setting; the live exposure/gain is restored after. Blank either field to capture at the current live setting instead.") }}</h2>
     <p class="hint" style="margin:0 0 8px">
       <strong>Cap the lens first.</strong> Captures dark frames, finds hot
       pixels, and repairs them before each detection — rejects fake stars
@@ -180,11 +169,6 @@
       <p>Mask: <strong>{{ hotpix.count }}</strong> pixels
         {% if hotpix.loaded %}(loaded){% else %}(none){% endif %}</p>
     {% endif %}
-    <p class="hint" style="margin:0 0 8px">
-      Capture at a fixed worst-case point (long exposure + high gain) so the
-      mask covers every operating setting; the live exposure/gain is restored
-      after. Blank either field to capture at the current live setting instead.
-    </p>
     <form method="post" action="{{ url_for('hotpixel_capture') }}"
           onsubmit="return confirm('Lens capped? This captures dark frames.');">
       <label>Frames
@@ -209,16 +193,7 @@
   </div>
 
   <div class="card expert-only">
-    <h2>Auto-tune (current sky)</h2>
-    <p class="hint" style="margin:0 0 8px">
-      Point the finder at a star field and wait for detection, then sweep
-      exposure / gain / sigma / kernel / background to find the cheapest
-      settings that still solve reliably. Runs in the background (~1–3 min).
-      Leave it as a <em>dry run</em>, then <strong>Apply result</strong> once you
-      see the winner — or tick <em>Commit</em> to apply automatically when it
-      finishes. Applying saves this mode's <em>override</em> (the factory preset
-      stays untouched).
-    </p>
+    <h2>Auto-tune (current sky) {{ tip("Point the finder at a star field and wait for detection, then sweep exposure / gain / sigma / kernel / background to find the cheapest settings that still solve reliably. Runs in the background (~1–3 min). Leave it as a <em>dry run</em>, then <strong>Apply result</strong> once you see the winner — or tick <em>Commit</em> to apply automatically when it finishes. Applying saves this mode's <em>override</em> (the factory preset stays untouched).") }}</h2>
     <label>Mode
       <select id="at-mode">
         <option value="">current</option>
@@ -243,13 +218,7 @@
   </div>
 
   <div class="card expert-only">
-    <h2>Experimental A/B (tracking &amp; bg-cache)</h2>
-    <p class="hint" style="margin:0 0 8px">
-      Two live, default-off optimizations. Toggle them here (no restart). For
-      tracking mode, run the on-sky A/B first: point at a star field, focus
-      until it solves, and keep the scope <strong>stationary</strong> — the run
-      compares FULL vs TRACKING and tells you whether pointing stays correct.
-    </p>
+    <h2>Experimental A/B (tracking &amp; bg-cache) {{ tip("Two live, default-off optimizations. Toggle them here (no restart). For tracking mode, run the on-sky A/B first: point at a star field, focus until it solves, and keep the scope <strong>stationary</strong> — the run compares FULL vs TRACKING and tells you whether pointing stays correct.") }}</h2>
 
     <div style="margin-bottom:10px;">
       <label>
@@ -299,14 +268,7 @@
       </form>
       <form method="post" action="{{ url_for('solver_params_set') }}">
         <label class="expert-only">
-          Extractor backend
-          <p class="hint" style="margin:0 0 4px">
-            <code>sycamore</code> (matched filter + temporal cache) or
-            <code>tetra3</code> (AstroKeith's <code>get_centroids_from_image</code>).
-            Flips only the extractor, holding the solve params constant — for a
-            clean A/B against the Legacy preset. Applies live; Apply &amp; save
-            persists.
-          </p>
+          Extractor backend {{ tip("<code>sycamore</code> (matched filter + temporal cache) or <code>tetra3</code> (AstroKeith's <code>get_centroids_from_image</code>). Flips only the extractor, holding the solve params constant — for a clean A/B against the Legacy preset. Applies live; Apply &amp; save persists.") }}
           {% set _eb = solver_params.extractor_backend or 'sycamore' %}
           <select name="extractor_backend" id="backend_sel"
                   onchange="applyBackend(this.value)">
@@ -315,11 +277,7 @@
           </select>
         </label>
         <label>
-          Detection sigma
-          <p class="hint" style="margin:0 0 4px">
-            Star detection threshold in noise units. Lower finds fainter stars
-            but increases false positives. Default: 5.
-          </p>
+          Detection sigma {{ tip("Star detection threshold in noise units. Lower finds fainter stars but increases false positives. Default: 5.") }}
           <div class="stepper-row">
             <button type="button" class="step-btn" onclick="stepSigma(-1)">&#8722;</button>
             <input type="range" id="sigma_slider" min="0" max="20" step="0.5"
@@ -332,11 +290,7 @@
           </div>
         </label>
         <label>
-          Matched-filter kernel sigma
-          <p class="hint" style="margin:0 0 4px">
-            PSF width for the matched filter. Wider catches bloated stars in bad
-            seeing. Range 1.0–4.0 (sycamore &ge; 0.12). Default: 1.5.
-          </p>
+          Matched-filter kernel sigma {{ tip("PSF width for the matched filter. Wider catches bloated stars in bad seeing. Range 1.0–4.0 (sycamore &ge; 0.12). Default: 1.5.") }}
           <div class="slider-row">
             <input type="range" id="kernel_slider" min="1.0" max="4.0" step="0.1"
                    value="{{ solver_params.detect_kernel_sigma }}"
@@ -347,11 +301,7 @@
           </div>
         </label>
         <label class="expert-only">
-          Max axis ratio (trail rejection)
-          <p class="hint" style="margin:0 0 4px">
-            Reject elongated detections (satellites / aircraft). 0 = off,
-            otherwise 1.5–10.0. Loosen in bad seeing. Default: 0 (off).
-          </p>
+          Max axis ratio (trail rejection) {{ tip("Reject elongated detections (satellites / aircraft). 0 = off, otherwise 1.5–10.0. Loosen in bad seeing. Default: 0 (off).") }}
           <div class="slider-row">
             <input type="range" id="mar_slider" min="0" max="10" step="0.5"
                    value="{{ solver_params.detect_max_axis_ratio }}"
@@ -362,10 +312,7 @@
           </div>
         </label>
         <label class="expert-only">
-          Min stars to solve
-          <p class="hint" style="margin:0 0 4px">
-            Minimum detected stars before attempting a solve. Default: 8.
-          </p>
+          Min stars to solve {{ tip("Minimum detected stars before attempting a solve. Default: 8.") }}
           <div class="slider-row">
             <input type="range" id="minc_slider" min="4" max="20" step="1"
                    value="{{ solver_params.min_centroids }}"
@@ -376,12 +323,7 @@
           </div>
         </label>
         <label class="expert-only">
-          Max solve stars
-          <p class="hint" style="margin:0 0 4px">
-            Cap on centroids passed to the solver (brightest first). Lower =
-            faster blind solves &amp; fewer false matches. Range 4–200.
-            Default: 50.
-          </p>
+          Max solve stars {{ tip("Cap on centroids passed to the solver (brightest first). Lower = faster blind solves &amp; fewer false matches. Range 4–200. Default: 50.") }}
           <div class="slider-row">
             <input type="range" id="maxstars_slider" min="4" max="200" step="1"
                    value="{{ solver_params.max_solve_stars }}"
@@ -393,11 +335,7 @@
         </label>
         {% if match_params %}
         <label class="expert-only">
-          Match radius (fraction of FOV)
-          <p class="hint" style="margin:0 0 4px">
-            Catalog-match tolerance. Larger = more permissive. Range
-            0.005–0.05. Default: 0.01.
-          </p>
+          Match radius (fraction of FOV) {{ tip("Catalog-match tolerance. Larger = more permissive. Range 0.005–0.05. Default: 0.01.") }}
           <div class="slider-row">
             <input type="range" id="mradius_slider" min="0.005" max="0.05" step="0.001"
                    value="{{ match_params.match_radius }}"
@@ -408,11 +346,7 @@
           </div>
         </label>
         <label class="expert-only">
-          Match threshold (log scale)
-          <p class="hint" style="margin:0 0 4px">
-            Max false-positive probability accepted. Lower = stricter. Range
-            1e-9–1e-3. Default: 1e-5.
-          </p>
+          Match threshold (log scale) {{ tip("Max false-positive probability accepted. Lower = stricter. Range 1e-9–1e-3. Default: 1e-5.") }}
           <div class="slider-row">
             <input type="range" id="mthresh_slider" min="-9" max="-3" step="0.1"
                    value="{{ match_params.match_threshold | log10 }}"
@@ -424,10 +358,7 @@
         </label>
         {% endif %}
         <label class="expert-only">
-          Solve timeout (ms)
-          <p class="hint" style="margin:0 0 4px">
-            Maximum time the solver may spend per frame. Default: 1500 ms.
-          </p>
+          Solve timeout (ms) {{ tip("Maximum time the solver may spend per frame. Default: 1500 ms.") }}
           <div class="slider-row">
             <input type="range" id="timeout_slider" min="500" max="5000" step="100"
                    value="{{ solver_params.solve_timeout_ms }}"
@@ -438,13 +369,7 @@
           </div>
         </label>
         <label class="expert-only">
-          Uncalibrated FOV tolerance (°)
-          <p class="hint" style="margin:0 0 4px">
-            Blind-search FOV window used before calibration. Smaller = faster
-            blind solves when the FOV estimate is accurate. Range 0.05–5.0.
-            Default: 1.0. Once calibrated, the tight tolerance takes over
-            automatically.
-          </p>
+          Uncalibrated FOV tolerance (°) {{ tip("Blind-search FOV window used before calibration. Smaller = faster blind solves when the FOV estimate is accurate. Range 0.05–5.0. Default: 1.0. Once calibrated, the tight tolerance takes over automatically.") }}
           <div class="slider-row">
             <input type="range" id="foverr_slider" min="0.05" max="5.0" step="0.05"
                    value="{{ solver_params.fov_max_error_deg }}"
@@ -455,16 +380,7 @@
           </div>
         </label>
         <label>
-          IMU pointing gate (°/s)
-          <p class="hint" style="margin:0 0 4px">
-            Below this rotation rate the finder is judged <em>parked</em> and
-            reports the last <em>solved</em> position between solves, instead of
-            predicting from the live IMU — which is what removes SkySafari
-            crosshair jitter while the scope sits still. Raise it if a parked
-            scope still jitters (try 0.5); higher values (1–2) predict only
-            during an obvious slew. Lower it toward 0.1 to track slow manual
-            pans live. Default: 0.1.
-          </p>
+          IMU pointing gate (°/s) {{ tip("Below this rotation rate the finder is judged <em>parked</em> and reports the last <em>solved</em> position between solves, instead of predicting from the live IMU — which is what removes SkySafari crosshair jitter while the scope sits still. Raise it if a parked scope still jitters (try 0.5); higher values (1–2) predict only during an obvious slew. Lower it toward 0.1 to track slow manual pans live. Default: 0.1.") }}
           <div class="slider-row">
             <input type="range" id="imugate_slider" min="0.0" max="3.0" step="0.05"
                    value="{{ solver_params.imu_rate_gate_dps }}"
@@ -483,13 +399,7 @@
   </div>
 
   <div class="card expert-only" id="tune-card">
-    <h2>Tune from burst</h2>
-    <p class="hint" style="margin:0 0 8px 0;">
-      Replays a saved burst archive (from the Background A/B page) through the
-      live solver and finds the detection combination (background mode × sigma ×
-      kernel) that would have solved the most frames. Memory-safe — no second
-      database is loaded. Apply persists the winner live.
-    </p>
+    <h2>Tune from burst {{ tip("Replays a saved burst archive (from the Background A/B page) through the live solver and finds the detection combination (background mode × sigma × kernel) that would have solved the most frames. Memory-safe — no second database is loaded. Apply persists the winner live.") }}</h2>
     {% if bursts %}
     <div class="slider-row">
       <select id="tune-zip">
@@ -521,13 +431,7 @@
         novice and expert mode — downloads are read-only page-level actions,
         like the Config page's factory-reset card. ---- #}
   <div class="card" id="downloads-card">
-    <h2>Downloads</h2>
-    <p class="hint" style="margin:0 0 8px 0;">
-      Debug bundle: a <strong>12-frame burst</strong> of raw frames plus the
-      current settings, logs, and solve state in one ZIP (same as the Home
-      page button). Below it, every saved burst archive from the Background
-      A/B page.
-    </p>
+    <h2>Downloads {{ tip("Debug bundle: a <strong>12-frame burst</strong> of raw frames plus the current settings, logs, and solve state in one ZIP (same as the Home page button). Below it, every saved burst archive from the Background A/B page.") }}</h2>
     <button id="cam-debug-btn" class="btn btn-primary">Download debug bundle</button>
     <span id="cam-debug-status" style="margin-left:8px;font-size:0.85rem;color:#888;"></span>
     {% if bursts %}

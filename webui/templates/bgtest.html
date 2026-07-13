@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import tip %}
 {% block title %}diofinder Background Test{% endblock %}
 {% block content %}
 <h2>Background Compensation</h2>
@@ -39,13 +40,8 @@
 </div>
 
 <div class="card" style="margin-bottom:1rem;">
-  <h3 style="margin:0 0 10px 0; font-size:1rem;">Temporal cache (live)</h3>
+  <h3 style="margin:0 0 10px 0; font-size:1rem;">Temporal cache (live) {{ tip("On a stationary mount this should reach <strong>STEADY</strong> within a few seconds and &quot;served from cache&quot; should climb. SLEWING/WARMING_UP means it's using per-frame detection until a model is (re)built.") }}</h3>
   <div id="bgcache" style="font-size:0.9rem;">checking&hellip;</div>
-  <p class="hint" style="margin:8px 0 0 0;">
-    On a stationary mount this should reach <strong>STEADY</strong> within a few
-    seconds and "served from cache" should climb. SLEWING/WARMING_UP means it's
-    using per-frame detection until a model is (re)built.
-  </p>
 </div>
 
 <div class="card" style="margin-bottom:1rem;">
@@ -163,15 +159,7 @@
 </div>
 
 <div class="card" style="margin-bottom:1rem;">
-  <h3 style="margin:0 0 10px 0; font-size:1rem;">Background preview (live frame)</h3>
-  <p style="font-size:0.85rem; margin:0 0 10px 0;">
-    See what each method computes as the background, or the
-    background-<em>subtracted</em> frame (what detection effectively sees), from
-    the current live frame. Compare methods and tune the size. Reconstructed by
-    the live solver (the same module that owns detection);
-    <strong>temporal_median</strong> renders the solver's actual cached median
-    stack.
-  </p>
+  <h3 style="margin:0 0 10px 0; font-size:1rem;">Background preview (live frame) {{ tip("See what each method computes as the background, or the background-<em>subtracted</em> frame (what detection effectively sees), from the current live frame. Compare methods and tune the size. Reconstructed by the live solver (the same module that owns detection); <strong>temporal_median</strong> renders the solver's actual cached median stack.") }}</h3>
   <p style="margin:0 0 10px 0;">
     <label>Method
       <select id="prev_mode">

@@ -349,3 +349,51 @@ pre.logs, pre.config {
   .config-table tr { border-bottom: 1px solid #220000; margin-bottom: 0.5rem; }
   .config-desc { padding-left: 0; }
 }
+
+/* ---- Info tooltips (help text behind an ⓘ icon) --------------------------
+   Collapses long explanatory prose next to a label/heading; opens on tap
+   (touch), hover (mouse), or keyboard focus. Closes on a second tap, a tap
+   away, or Esc (JS in base.html). Night-vision red, like the rest. */
+.tip { position: relative; display: inline-flex; vertical-align: middle; }
+.tip-btn {
+  appearance: none; -webkit-appearance: none;
+  width: 1.15em; height: 1.15em; padding: 0; margin: 0 0.15em;
+  border: 1px solid #2d0000; border-radius: 50%;
+  background: transparent; color: #cc3333;
+  font-family: Georgia, "Times New Roman", serif;
+  font-style: italic; font-weight: 700; font-size: 0.82em; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer; flex: none; transition: color .12s, border-color .12s;
+}
+.tip-btn:hover, .tip-btn:focus-visible { color: #ff1111; border-color: #cc0000; }
+.tip-btn:focus-visible { outline: 2px solid #cc0000; outline-offset: 2px; }
+.tip-pop {
+  position: absolute; top: calc(100% + 8px); left: -0.4em; z-index: 40;
+  width: max-content; max-width: min(19rem, 74vw);
+  background: #1a0000; color: #dd4444;
+  border: 1px solid #3a0000; border-radius: 6px;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.82rem; line-height: 1.45; font-weight: 400; font-style: normal;
+  text-align: left; white-space: normal;
+  box-shadow: 0 8px 24px -6px rgba(0, 0, 0, 0.7);
+  opacity: 0; visibility: hidden; transform: translateY(-4px);
+  transition: opacity .15s, transform .15s, visibility .15s;
+}
+.tip-pop::before {
+  content: ""; position: absolute; top: -5px; left: 0.7em;
+  width: 9px; height: 9px; background: #1a0000;
+  border-left: 1px solid #3a0000; border-top: 1px solid #3a0000;
+  transform: rotate(45deg);
+}
+.tip-pop code {
+  background: #2d0000; padding: 0 0.25em; border-radius: 3px; color: #ff1111;
+}
+.tip-pop b, .tip-pop strong { color: #ff5555; font-weight: 600; }
+.tip-pop a { color: #ff5555; }
+.tip:focus-within .tip-pop, .tip.open .tip-pop {
+  opacity: 1; visibility: visible; transform: translateY(0);
+}
+@media (hover: hover) {
+  .tip:hover .tip-pop { opacity: 1; visibility: visible; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) { .tip-pop { transition: none; } }
