@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import tip %}
 {% block title %}diofinder Home{% endblock %}
 {% block content %}
 
@@ -217,7 +218,7 @@
 
   {# ---- Boresight ---- #}
   <div class="card expert-only">
-    <h2>Boresight</h2>
+    <h2>Boresight {{ tip("Use SkySafari &ldquo;Align&rdquo; on a known star for normal alignment.") }}</h2>
     {% if boresight %}
       <dl class="stats">
         <dt>X (pixels)</dt><dd>{{ "%.1f"|format(boresight.x) }}</dd>
@@ -227,7 +228,6 @@
     <form method="post" action="{{ url_for('boresight_center') }}">
       <button type="submit" class="btn btn-primary">Reset to center</button>
     </form>
-    <p class="hint">Use SkySafari &ldquo;Align&rdquo; on a known star for normal alignment.</p>
   </div>
 
   {# ---- Calibration ---- #}
@@ -277,12 +277,7 @@
 
   {# ---- Diagnostics (12-frame debug burst) ---- #}
   <div class="card expert-only">
-    <h2>Diagnostics</h2>
-    <p class="hint" style="margin:0 0 8px 0;">
-      Captures a <strong>12-frame burst</strong> of raw frames + the current
-      settings, logs, and solve state into a ZIP to email for support. Nothing
-      on the device is changed.
-    </p>
+    <h2>Diagnostics {{ tip("Captures a <strong>12-frame burst</strong> of raw frames + the current settings, logs, and solve state into a ZIP to email for support. Nothing on the device is changed.") }}</h2>
     <button id="home-debug-btn" class="btn btn-primary">Download debug bundle</button>
     <span id="home-debug-status" style="margin-left:8px;font-size:0.85rem;color:#888;"></span>
   </div>

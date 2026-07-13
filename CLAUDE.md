@@ -338,6 +338,18 @@ def my_endpoint():
 Templates live in `webui/templates/`. Static assets in `webui/static/`.
 The Jinja2 environment has a `log10` filter registered for log-scale sliders.
 
+**Info tooltips (v0.11.51).** Long explanatory prose on the settings pages is
+collapsed behind an ⓘ icon via one reusable macro: `{% from "_macros.html"
+import tip %}` then `{{ tip("Help <b>text</b>.") }}` next to a label/heading.
+Shared CSS (`static/style.css`, night-vision red) + JS (`base.html`: tap
+toggles, second tap / tap-away / Esc closes; blur-on-close + `@media
+(hover:hover)` keep touch honest). The text is rendered `| safe`, so pass only
+template-authored strings and escape any literal `"` as `&quot;`. **Keep inline
+(do not tooltip):** short labels, safety/action-critical warnings (cap the
+lens, park the mount, factory/calibration reset), the Config table's per-row
+descriptions, `.muted` "daemon not reachable" fallbacks, and live status
+lines.
+
 ### Live-view frame path (`diofinder_display`)
 
 The hot `/frame.jpg` poll uses a **dedicated display SHM segment**, not the

@@ -234,11 +234,23 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.50)
+## 6. Current state (as of v0.11.51)
 
-Released through **v0.11.50** (latest). All 276 unit tests pass.
+Released through **v0.11.51** (latest). All 276 unit tests pass.
 
 Recent-history summary (details in each PR, #99–#103):
+- v0.11.51: **web UI info tooltips.** Long explanatory prose on the settings
+  pages now collapses behind an ⓘ icon so the controls read at a glance and
+  the help is one tap away. One reusable Jinja macro (`_macros.html` `tip()`),
+  shared CSS (`static/style.css`, night-vision red like the rest) and JS
+  (`base.html`) — the popover opens on tap (touch), hover (mouse), or keyboard
+  focus, and closes on a second tap, a tap away, or Esc (blur-on-close +
+  `@media (hover:hover)` so a phone's sticky-hover can't re-hold it). Applied
+  across Camera/Advanced, Home, Background, and Config. Deliberately kept
+  INLINE: short labels, safety/action-critical warnings (cap the lens, leave
+  the mount parked, factory/calibration reset), the Config table's per-row
+  descriptions, `.muted` "daemon not reachable" fallbacks, and any live
+  status line. webui-only — needs `systemctl restart diofinder-webui` to show.
 - v0.11.50: UI/diagnostics batch (no change to the solve/pointing math).
   (1) **Live `imu_rate_gate_dps` setter** — the IMU motion gate is now
   tunable through `solver_params_get`/`set` (Camera-page "IMU pointing

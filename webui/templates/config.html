@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_macros.html" import tip %}
 {% block title %}diofinder Configuration{% endblock %}
 {% block content %}
 <h2>Configuration</h2>
@@ -84,7 +85,7 @@
 </div>
 
 <div class="card" style="margin-bottom:1rem;">
-  <h3 style="margin:0 0 8px 0; font-size:1rem;">Seeing preset</h3>
+  <h3 style="margin:0 0 8px 0; font-size:1rem;">Seeing preset</h3> {{ tip("Applying a preset loads the factory values for the detection / solve / exposure keys it controls (live, and persisted). A plain toggle always uses the factory preset; a saved <em>override</em> is applied only with the button below. Edit the Camera-page sliders to drift any value.") }}
   {% set smode = seeing.mode if seeing else 'good' %}
   <form method="post" action="{{ url_for('seeing_set') }}" style="display:inline;">
     <input type="hidden" name="mode" value="good">
@@ -104,13 +105,6 @@
     <button type="submit" class="btn"
             style="{{ 'background:#7755cc;color:#fff;' if smode == 'legacy' else '' }}">Legacy</button>
   </form>
-  <p class="hint" style="margin-top:6px;">
-    Applying a preset loads the factory values for the detection / solve /
-    exposure keys it controls (live, and persisted). A plain toggle always uses
-    the factory preset; a saved <em>override</em> is applied only with the
-    button below. Edit the Camera-page sliders to drift any value.
-  </p>
-
   {# ---- Lineage badge + override controls ---- #}
   {% set lin = seeing.lineage if seeing else None %}
   {% set src = lin.source if lin else 'factory' %}
