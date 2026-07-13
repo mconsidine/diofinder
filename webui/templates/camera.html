@@ -12,9 +12,11 @@
     <p style="margin:4px 0;">
       <label>
         <input type="checkbox" id="sub-toggle">
-        Detection view (background subtracted)
+        Detection view (flat-field preview)
       </label>
-      <span class="hint">&nbsp;shows what star detection sees, using the active bg mode</span>
+      <span class="hint">&nbsp;a quick per-row-median flat subtraction so stars pop —
+      a rough preview, NOT the configured bg mode. For an accurate,
+      mode-specific (and temporal-median) view use the Background page.</span>
     </p>
     <p style="margin:4px 0;" class="expert-only">
       <label>
@@ -452,6 +454,26 @@
                    value="{{ solver_params.fov_max_error_deg }}">
           </div>
         </label>
+        <label>
+          IMU pointing gate (°/s)
+          <p class="hint" style="margin:0 0 4px">
+            Below this rotation rate the finder is judged <em>parked</em> and
+            reports the last <em>solved</em> position between solves, instead of
+            predicting from the live IMU — which is what removes SkySafari
+            crosshair jitter while the scope sits still. Raise it if a parked
+            scope still jitters (try 0.5); higher values (1–2) predict only
+            during an obvious slew. Lower it toward 0.1 to track slow manual
+            pans live. Default: 0.1.
+          </p>
+          <div class="slider-row">
+            <input type="range" id="imugate_slider" min="0.0" max="3.0" step="0.05"
+                   value="{{ solver_params.imu_rate_gate_dps }}"
+                   oninput="imuGateSliderChange(this.value)">
+            <input type="number" step="0.05" min="0.0" max="10.0"
+                   name="imu_rate_gate_dps" id="imugate_num"
+                   value="{{ solver_params.imu_rate_gate_dps }}">
+          </div>
+        </label>
         <p id="solver-status" class="hint" style="min-height:1.2em;">&nbsp;</p>
         <button type="submit" class="btn">Apply &amp; save</button>
       </form>
@@ -557,7 +579,14 @@ async function refreshFrame() {
     next.onerror = function() {
       img.style.opacity = '0.25';
       const el = document.getElementById('live-ts');
-      if (el) { el.textContent = 'Frame unavailable — camera not running?'; el.style.color = '#ff7700'; }
+      if (el) {
+        el.textContent = 'Frame unavailable…'; el.style.color = '#ff7700';
+        // Ask the daemon WHY rather than blaming the camera (the frame path is
+        // solver-serviced, so a busy solver / long exposure looks the same).
+        fetch('/api/liveview_health').then(r => r.json()).then(j => {
+          if (el) el.textContent = 'Frame unavailable — ' + (j.reason || 'camera not running?');
+        }).catch(() => {});
+      }
     };
     var st = document.getElementById('sub-toggle');
     next.src = '/frame.jpg?' + Date.now() + ((st && st.checked) ? '&sub=1' : '');
@@ -645,6 +674,7 @@ const applyMar     = debounce(v => applyParams({detect_max_axis_ratio: v}, 'solv
 const applyMinc    = debounce(v => applyParams({min_centroids: v},         'solver-status'), 400);
 const applyMaxStars= debounce(v => applyParams({max_solve_stars: v},       'solver-status'), 400);
 const applyFovErr  = debounce(v => applyParams({fov_max_error_deg: v},     'solver-status'), 400);
+const applyImuGate = debounce(v => applyParams({imu_rate_gate_dps: v},     'solver-status'), 400);
 function applyBackend(v) { applyParams({extractor_backend: v}, 'solver-status'); }
 const applyMradius = debounce(v => applyParams({match_radius: v},          'solver-status'), 400);
 const applyMthresh = debounce(v => applyParams({match_threshold: v},       'solver-status'), 400);
@@ -668,6 +698,10 @@ function maxStarsSliderChange(v) {
 function fovErrSliderChange(v) {
   document.getElementById('foverr_num').value = parseFloat(v).toFixed(2);
   applyFovErr(parseFloat(v));
+}
+function imuGateSliderChange(v) {
+  document.getElementById('imugate_num').value = parseFloat(v).toFixed(2);
+  applyImuGate(parseFloat(v));
 }
 function mradiusSliderChange(v) {
   document.getElementById('mradius_num').value = parseFloat(v).toFixed(3);

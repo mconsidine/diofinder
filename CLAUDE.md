@@ -86,7 +86,7 @@ LX200-pointing consumers, and the calibration loop).
 | `auto_exposure_max_s` | float | comms (via `seeing_set`) | comms auto-exposure thread |
 | `auto_exposure_max_gain` | float | comms (via `seeing_set`) | comms auto-exposure thread |
 | `auto_exposure_peak_floor` | float | comms (via maint `auto_exposure_set {"peak_floor":...}`) | comms auto-exposure thread |
-| `imu_rate_gate_dps` | float | comms (seed from cfg) | comms LX200 pointing (rate gate in `_imu_predict`) |
+| `imu_rate_gate_dps` | float | comms (seed from cfg; live via `solver_params_set` — Camera-page "IMU pointing gate" slider, v0.11.50) | comms LX200 pointing (rate gate in `_imu_predict`; raise to stop a parked scope's SkySafari jitter) |
 | `imu_exact_predict` | bool | comms (seed from cfg; `solver_params_set`) | comms LX200 pointing (kill switch for the exact quaternion path; false → legacy C-matrix) |
 | `display_wanted_until` | float (monotonic) | comms (via maint `display_start` keepalive) | solver (demand-gates the `diofinder_display` write; no viewer → no copy) |
 | `star_name_brightest` | bool | comms (via maint `solver_params_set`) | solver (centered-star naming) |
