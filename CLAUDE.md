@@ -236,6 +236,18 @@ All LX200 handling lives in `diofinder/comms_proc.py::_handle_lx200_command`.
 
 There is no registration table — the function is a plain if/elif chain.
 
+**Threaded server (v0.11.52).** `_serve_lx200` serves each connection in its
+own bounded thread (`_serve_lx200_client`, cap `_LX200_MAX_CLIENTS`=8), not
+one-at-a-time — a blocking `:CM#` align or a half-open phone can't starve other
+clients' `:GR/:GD` polls (the reconnect→broken-pipe storm). `_handle_lx200_command`
+runs concurrently across connections; the only shared-mutation hazard is the
+`:CM#` align exchange on the shared `align_response_q`, serialized by
+`_align_lock`. `:GR/:GD` **hold the last solved RA/Dec** during a solve drought
+(it lingers in `latest_solution` because `_empty_solution` omits `ra_deg` and
+the publish is a dict *merge*); the `status` maint result exposes
+`pointing_age_s` + `pointing_stale` (> `_POINTING_STALE_S`=10 s) so the web UI
+can flag a held-but-old crosshair.
+
 ---
 
 ## Adding a maintenance socket command

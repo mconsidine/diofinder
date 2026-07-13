@@ -1044,9 +1044,15 @@ def _watchdog_loop(ctx, interval_s=5.0):
             os._exit(1)
 
 
-# Monotonic :CM# correlation ids. Only touched from the LX200 handler on the
-# comms main thread — no lock needed.
+# Monotonic :CM# correlation ids. `next()` on an itertools.count is atomic
+# under the GIL, so id generation is thread-safe. But the align exchange
+# (drain align_response_q -> put request -> wait for the matching reply) must
+# not interleave across the per-connection LX200 threads (v0.11.52): a second
+# thread's initial queue-drain could eat the first's in-flight response,
+# stranding it. _align_lock serializes the whole exchange (alignment is a rare,
+# user-initiated tap, so serializing costs nothing).
 _align_req_seq = itertools.count(1)
+_align_lock = threading.Lock()
 
 
 def _do_alignment(align_state, cfg, shared_cfg,
@@ -1056,41 +1062,45 @@ def _do_alignment(align_state, cfg, shared_cfg,
     if req is None:
         return "no align target#"
 
-    try:
-        while True:
-            align_response_q.get_nowait()
-    except Empty:
-        pass
-
-    req.request_id = next(_align_req_seq)
-    try:
-        # NEVER block: with the solver not consuming (dark frames keep
-        # requests queued), a 5th retry's blocking put wedged the comms main
-        # thread forever — no LX200 client could be served again, and nothing
-        # restarts a blocked-but-alive thread (audit 2026-07 W2).
-        align_request_q.put_nowait(req)
-    except Full:
-        align_state.reset()
-        log.warning("align request queue full (solver not consuming — dark "
-                    "frames / mid-slew?); replying busy")
-        return "align fail: solver busy#"
-    log.info("Alignment requested: RA=%.4f Dec=%.4f (id %d)",
-             req.target_ra_deg, req.target_dec_deg, req.request_id)
-
-    deadline = time.monotonic() + CommsAlignState.DEFAULT_TIMEOUT_S
-    result = None
-    while time.monotonic() < deadline:
+    # Serialize the whole shared-queue exchange: with per-connection LX200
+    # threads (v0.11.52), a second align's initial drain could otherwise eat
+    # the first's in-flight response off the shared align_response_q.
+    with _align_lock:
         try:
-            candidate = align_response_q.get(timeout=0.5)
-            # Strict correlation: only THIS request's echo counts. The old
-            # completed_at >= requested_at check accepted a late result from
-            # a PREVIOUS sync — in the worst interleaving a success computed
-            # for the old target was persisted as the new sync's boresight
-            # (audit 2026-07 W2).
-            if getattr(candidate, "request_id", 0) == req.request_id:
-                result = candidate; break
+            while True:
+                align_response_q.get_nowait()
         except Empty:
-            continue
+            pass
+
+        req.request_id = next(_align_req_seq)
+        try:
+            # NEVER block: with the solver not consuming (dark frames keep
+            # requests queued), a 5th retry's blocking put wedged the comms
+            # thread forever — no LX200 client could be served again, and
+            # nothing restarts a blocked-but-alive thread (audit 2026-07 W2).
+            align_request_q.put_nowait(req)
+        except Full:
+            align_state.reset()
+            log.warning("align request queue full (solver not consuming — dark "
+                        "frames / mid-slew?); replying busy")
+            return "align fail: solver busy#"
+        log.info("Alignment requested: RA=%.4f Dec=%.4f (id %d)",
+                 req.target_ra_deg, req.target_dec_deg, req.request_id)
+
+        deadline = time.monotonic() + CommsAlignState.DEFAULT_TIMEOUT_S
+        result = None
+        while time.monotonic() < deadline:
+            try:
+                candidate = align_response_q.get(timeout=0.5)
+                # Strict correlation: only THIS request's echo counts. The old
+                # completed_at >= requested_at check accepted a late result from
+                # a PREVIOUS sync — in the worst interleaving a success computed
+                # for the old target was persisted as the new sync's boresight
+                # (audit 2026-07 W2).
+                if getattr(candidate, "request_id", 0) == req.request_id:
+                    result = candidate; break
+            except Empty:
+                continue
 
     align_state.reset()
 
@@ -1137,6 +1147,11 @@ def _do_alignment(align_state, cfg, shared_cfg,
 _IMU_RATE_GATE_DPS = 0.1
 _IMU_RATE_BASELINE_S = 0.8
 _imu_rate_state = {}     # samples: deque[(imu_t, quat)], engaged, moving_t
+
+# Pointing is "stale" (surfaced to the web UI, not the LX200 wire) when the
+# last solution is older than this. ~1-2 Hz solving means >10 s = several
+# missed solves, i.e. a genuine drought worth flagging.
+_POINTING_STALE_S = 10.0
 
 
 def _imu_motion_engaged(state, q_now, imu_t, ref_t,
@@ -1536,8 +1551,21 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 ref_ra   = scfg.get("imu_ref_ra_deg")
                 ref_dec  = scfg.get("imu_ref_dec_deg")
                 ref_roll = scfg.get("imu_ref_roll_deg")
+            # Pointing staleness: the LX200 :GR/:GD path already holds the last
+            # solved position when no fresh solve/prediction is available, so a
+            # solve drought (e.g. low on the horizon) never blanks SkySafari —
+            # but nothing told the USER the crosshair was minutes old. Surface
+            # the age of the last solution + a stale flag so the web UI can say
+            # so (v0.11.52). Cross-process monotonic is comparable (same
+            # CLOCK_MONOTONIC origin), as the watchdog already relies on.
+            _sol_epoch = sol.get("epoch_monotonic")
+            _sol_age = (time.monotonic() - _sol_epoch) if _sol_epoch else None
             return MaintResponse(ok=True, result={
                 "solution":  sol,
+                "pointing_age_s": (round(_sol_age, 1)
+                                   if _sol_age is not None else None),
+                "pointing_stale": bool(_sol_age is not None
+                                       and _sol_age > _POINTING_STALE_S),
                 "boresight": {
                     "y": scfg.get("boresight_y", ctx.cfg.boresight_y),
                     "x": scfg.get("boresight_x", ctx.cfg.boresight_x),
@@ -2711,57 +2739,100 @@ def _serve_maint_socket(ctx, socket_path=None):
         t.start()
 
 
-def _serve_lx200(latest_solution, shared_cfg, cfg,
-                 align_request_q, align_response_q, ctx):
-    """Bind the LX200 TCP socket and serve clients, one active connection at a time."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("0.0.0.0", cfg.lx200_port))
-    sock.listen(8)
-    log.info("LX200 server listening on :%d", cfg.lx200_port)
-    while True:
-        client, addr = sock.accept()
+# Per-connection LX200 threads are capped so a looping/garbage client can't
+# spawn threads without bound. SkySafari uses 1-2; 8 is generous. Dead
+# half-open connections are reaped by TCP keepalive (~25 s) and the recv
+# timeout, freeing slots.
+_LX200_MAX_CLIENTS = 8
+
+
+def _serve_lx200_client(client, addr, latest_solution, shared_cfg, cfg,
+                        align_request_q, align_response_q, ctx, sem):
+    """Serve one LX200 connection to completion, in its own thread (v0.11.52).
+
+    One thread per connection means a blocking :CM# align — or a half-open
+    phone the old single-connection server would sit and wait on — can no
+    longer starve other clients' :GR/:GD polls (the poll-timeout ->
+    reconnect -> broken-pipe storm). Releases its client slot on exit."""
+    try:
         client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         client.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
         try:
             client.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE,  10)
             client.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL,  5)
             client.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT,    3)
-        except AttributeError:
+        except (AttributeError, OSError):
             pass
         client.settimeout(cfg.lx200_client_timeout_s)
         log.debug("LX200 client from %s", addr)
         align_state = CommsAlignState()
         time_state  = {}
+        buf = b""
+        while True:
+            chunk = client.recv(256)
+            if not chunk:
+                break
+            buf += chunk
+            if len(buf) > 4096:
+                # LX200 commands are tens of bytes; 4 KB with no '#' is
+                # a garbage-spewing client on the network-exposed port
+                # (audit 2026-07 W-L5).
+                log.warning("LX200 client sent %d bytes with no '#' — "
+                            "dropping connection", len(buf))
+                break
+            while b"#" in buf:
+                raw, _, buf = buf.partition(b"#")
+                cmd = raw.decode("ascii", errors="ignore").strip()
+                if not cmd.startswith(":"):
+                    continue
+                reply = _handle_lx200_command(
+                    cmd, latest_solution, align_state, time_state, cfg,
+                    shared_cfg, align_request_q, align_response_q, ctx)
+                if reply:
+                    client.sendall(reply)
+    except socket.timeout:
+        log.info("LX200 client %s timed out", addr)
+    except Exception as e:
+        log.warning("LX200 client %s error: %s", addr, e)
+    finally:
+        try: client.close()
+        except Exception: pass
+        sem.release()
+
+
+def _serve_lx200(latest_solution, shared_cfg, cfg,
+                 align_request_q, align_response_q, ctx):
+    """Bind the LX200 TCP socket and serve each connection in its own thread
+    (bounded to _LX200_MAX_CLIENTS)."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", cfg.lx200_port))
+    sock.listen(8)
+    sem = threading.BoundedSemaphore(_LX200_MAX_CLIENTS)
+    log.info("LX200 server listening on :%d (per-connection threads, max %d)",
+             cfg.lx200_port, _LX200_MAX_CLIENTS)
+    while True:
+        client, addr = sock.accept()
+        if not sem.acquire(blocking=False):
+            # At the client cap — almost always stale half-open connections a
+            # phone left behind, which keepalive/recv-timeout will reap soon.
+            # Drop the newcomer rather than block the accept loop.
+            log.warning("LX200 at client cap (%d); dropping %s",
+                        _LX200_MAX_CLIENTS, addr)
+            try: client.close()
+            except Exception: pass
+            continue
         try:
-            buf = b""
-            while True:
-                chunk = client.recv(256)
-                if not chunk:
-                    break
-                buf += chunk
-                if len(buf) > 4096:
-                    # LX200 commands are tens of bytes; 4 KB with no '#' is
-                    # a garbage-spewing client on the network-exposed port
-                    # (audit 2026-07 W-L5).
-                    log.warning("LX200 client sent %d bytes with no '#' — "
-                                "dropping connection", len(buf))
-                    break
-                while b"#" in buf:
-                    raw, _, buf = buf.partition(b"#")
-                    cmd = raw.decode("ascii", errors="ignore").strip()
-                    if not cmd.startswith(":"):
-                        continue
-                    reply = _handle_lx200_command(
-                        cmd, latest_solution, align_state, time_state, cfg,
-                        shared_cfg, align_request_q, align_response_q, ctx)
-                    if reply:
-                        client.sendall(reply)
-        except socket.timeout:
-            log.info("LX200 client %s timed out", addr)
+            threading.Thread(
+                target=_serve_lx200_client,
+                args=(client, addr, latest_solution, shared_cfg, cfg,
+                      align_request_q, align_response_q, ctx, sem),
+                name="lx200-client", daemon=True).start()
         except Exception as e:
-            log.warning("LX200 client %s error: %s", addr, e)
-        finally:
+            # Thread spawn failed (resource exhaustion): release the slot we
+            # took so it doesn't leak, and drop the client.
+            log.error("LX200 client thread spawn failed: %s", e)
+            sem.release()
             try: client.close()
             except Exception: pass
 

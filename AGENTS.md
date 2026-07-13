@@ -234,11 +234,29 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.51)
+## 6. Current state (as of v0.11.52)
 
-Released through **v0.11.51** (latest). All 276 unit tests pass.
+Released through **v0.11.52** (latest).
 
 Recent-history summary (details in each PR, #99–#103):
+- v0.11.52: **low-horizon resilience — threaded LX200 server + pointing
+  staleness.** (1) `_serve_lx200` now serves each connection in its own
+  bounded thread (`_serve_lx200_client`, cap `_LX200_MAX_CLIENTS`=8)
+  instead of one-at-a-time, so a blocking `:CM#` align or a half-open
+  phone can no longer starve other clients' `:GR/:GD` polls — the
+  poll-timeout → reconnect → broken-pipe storm seen during a low-horizon
+  solve drought. The `:CM#` align exchange is serialized by `_align_lock`
+  so concurrent aligns can't eat each other's response off the shared
+  `align_response_q`. (2) The `status` maint result gains `pointing_age_s`
+  + `pointing_stale` (> `_POINTING_STALE_S`=10 s): the LX200 already holds
+  the last solved RA/Dec during a drought (it lingers in `latest_solution`
+  because `_empty_solution` omits `ra_deg` and the publish is a dict
+  merge), so SkySafari never blanks — but the web UI used to show `—`.
+  Home now shows the held position dimmed with "holding — last solve N s
+  ago" so the page matches the crosshair and says how old it is. comms +
+  webui only; no change to the solve math. (Verified by byte-compile,
+  template compile, and the pure-logic suite; the socket/IPC paths aren't
+  unit-covered.)
 - v0.11.51: **web UI info tooltips.** Long explanatory prose on the settings
   pages now collapses behind an ⓘ icon so the controls read at a glance and
   the help is one tap away. One reusable Jinja macro (`_macros.html` `tip()`),
