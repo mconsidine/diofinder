@@ -86,22 +86,41 @@ Each accepted sync records the pushed coords + time + mount reply as the new
 
 **Two epoch facts, both must be pinned:**
 
-1. **Finder solution epoch** — is `latest_solution.ra_deg/dec_deg` J2000 or
-   JNow, and is it boresight-corrected? (It should be boresight-corrected — the
-   scope's actual pointing.) **Prerequisite to verify in code** before wiring
-   the conversion.
+1. **Finder solution epoch — determined: J2000 (ICRS).** The solver databases
+   are built (in `astro_databases`) from **Gaia DR3 + Hipparcos**, which are in
+   the **ICRS** frame (≈ J2000 to ~tens of mas — J2000 for any finder purpose).
+   Positions are proper-motion-propagated to epoch 2026.0, but that is the
+   *position* epoch, not a rotation of the axes to equinox-of-date, so the frame
+   stays J2000. olive-solve returns that frame unmodified, and diofinder applies
+   **no precession anywhere** (verified: `_filled_solution` stores
+   `float(ra)/float(dec)` raw; a package-wide grep for precess/nutation/j2000/
+   jnow finds nothing). So `latest_solution.ra_deg/dec_deg` are **J2000/ICRS**,
+   and boresight-corrected (the solver solves at the boresight target pixel).
+   *Recommended empirical confirmation:* point at a bright named star and check
+   diofinder's RA/Dec against its J2000 vs JNow coords (they differ ~15–20′ in
+   2026).
 2. **Mount epoch** — **OnStepX uses JNow** (confirmed). But OnStepX's coordinate
    epoch is itself configurable on the mount side (JNow default, J2000
    possible), so the finder must **match whatever the mount is set to.**
 
-The conversion is `(finder epoch) -> (mount epoch)`. If the finder solves in
-J2000 and the mount wants JNow, apply precession first (first-order Newcomb, as
-in the eFinder `Coordinates.precess`, is ~1′ accurate — fine for a finder; use a
-proper routine if we want better). Getting it wrong is a ~15–20′ error in 2026 —
-small but real for a GoTo sync.
+So the concrete conversion is **J2000 → JNow** (finder J2000 → OnStepX JNow):
+apply precession. Because the catalog's position epoch (~2026) already matches
+the equinox-of-date target (~2026), a plain mean-place precession is
+self-consistent; nutation (~9″) and aberration (~20″) are below finder relevance
+and can be skipped. Prefer IAU 1976 precession (ζ, z, θ; sub-arcsecond, ~15
+lines, no dependency) over the eFinder first-order Newcomb (~1′). Getting the
+epoch wrong is a ~15–20′ error in 2026 — small for a finder, but a real
+systematic bias fed into a GoTo model.
 
-> **Note:** the eFinder `onstepx_serial.py` reference sends raw coordinates with
-> **no precession** — a latent correctness bug we must not copy.
+> **eFinder bug not to copy:** the `onstepx_serial.py` reference sends raw
+> coordinates with **no precession** at all.
+
+> **SkySafari implication:** because diofinder reports J2000 with no precession
+> and SkySafari's LX200 interface conventionally expects JNow, there may already
+> be a ~15–20′ epoch offset in the SkySafari crosshair today — tolerable on a
+> 13.6° finder and largely absorbed by an align, but worth confirming how the
+> SkySafari scope/epoch is set. The recommended empirical star check above
+> answers this at the same time.
 
 ### Should the epoch be a web UI toggle? — **Yes, as a setup field.**
 
@@ -117,6 +136,32 @@ small but real for a GoTo sync.
   a user setting — it is not exposed.
 
 Config key: `onstep_epoch` (`jnow` default / `j2000`).
+
+### Cost, implementation language, and whether it's even needed
+
+**Overhead: negligible.** The conversion is a handful of trig ops (a 3×3
+precession rotation) run **once per sync** — at most every ~15 s in auto mode,
+or per button-press in manual mode. It is **not** a per-frame path:
+microseconds, ~100,000× cheaper than the solve it follows and run far less
+often. It never touches the solve/detect hot loop.
+
+**Language: Python.** Because it is once-per-sync (not per pixel/frame), it lives
+in `comms_proc` (Python) beside the sync logic — pure `math`, no FFI, no astropy
+(too heavy for the Pi Zero and overkill), trivially unit-testable against known
+precession values. Rust is for the per-frame pixel/solve hot paths; a
+once-per-sync coordinate rotation is the opposite case. **No Rust.**
+
+**Does it need doing, or does boresight calibration compensate? It must be done —
+boresight does NOT compensate.** Boresight (`:CM#` align) is a **constant** pixel
+offset; precession is a **position-dependent** frame rotation (the J2000↔JNow
+shift varies with RA and Dec across the sky). A boresight/align absorbs the
+*local* epoch offset at one point, but cannot track it as it changes across the
+sky. For the finder's own job (put the target near the centre of a 13.6° FOV) a
+local align makes the few-arcminute residual tolerable — which is why the finder
+works today despite reporting J2000. But feeding a **GoTo mount**, an
+uncorrected epoch injects a ~15–20′ systematic error that carries into every
+subsequent slew. So the sync must send coordinates in the mount's epoch; since
+the cost is microseconds, there is no reason not to.
 
 ---
 
@@ -248,9 +293,11 @@ possible paths, in order of attractiveness:
 
 ## 12. Prerequisites / open questions
 
-1. **Epoch + boresight of `latest_solution`** — confirm whether
-   `ra_deg/dec_deg` are J2000 or JNow and that they're boresight-corrected.
-   Decides the §4 conversion. (Mount side is confirmed JNow.)
+1. **Epoch + boresight of `latest_solution` — RESOLVED (§4): J2000/ICRS,
+   boresight-corrected.** diofinder applies no precession; the frame is the
+   Gaia/Hipparcos catalog frame (ICRS ≈ J2000). Mount side is JNow, so the sync
+   precesses **J2000 → JNow** (Python, negligible cost, boresight does not
+   substitute). Empirical star check recommended to confirm on-sky.
 2. **Serial vs TCP as the shipped default.** Serial is topology-independent
    (finder ↔ OnStepX colocated on the OTA, no shared network) — recommended
    primary. TCP is there for WiFi OnStepX but reintroduces the network-topology
