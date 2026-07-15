@@ -234,11 +234,27 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.52)
+## 6. Current state (as of v0.11.53)
 
-Released through **v0.11.52** (latest).
+Released through **v0.11.53** (latest).
 
 Recent-history summary (details in each PR, #99–#103):
+- v0.11.53: **report JNow to SkySafari — epoch-consistent boundary.** diofinder
+  solves in **J2000/ICRS** (Gaia/Hipparcos catalog frame) and applied no
+  precession, but SkySafari's LX200 link (and OnStepX) use **JNow**, so the
+  crosshair carried a ~15–22′ (2026) offset only a local align hid. New pure
+  `diofinder/precession.py` (IAU 1976, `math`-only) converts at the comms I/O
+  boundary: **outbound** `:GR/:GD` J2000→JNow (`_report_radec`, covers the
+  IMU-predicted path too), **inbound** the `:CM#` align target JNow→J2000
+  (`_do_alignment`), so the align stays epoch-consistent and the boresight
+  settles to its true mechanical value. The internal pipeline stays J2000; only
+  the boundary converts. `status` gains `report_ra_deg/dec_deg` so the web UI
+  matches SkySafari (and labels the epoch). **Behavior change on update:
+  pointing shifts by the precession amount — re-align once.** Kill switch
+  `report_epoch: j2000` (config / `solver_params_set`, like `imu_exact_predict`)
+  reverts to the raw J2000 frame. Cost is a once-per-report 3×3 rotation
+  (negligible). Reuses the same helper the future OnStep sync needs. Pinned by
+  `tests/test_precession.py` + `tests/test_report_epoch.py` (9 tests).
 - v0.11.52: **low-horizon resilience — threaded LX200 server + pointing
   staleness.** (1) `_serve_lx200` now serves each connection in its own
   bounded thread (`_serve_lx200_client`, cap `_LX200_MAX_CLIENTS`=8)
