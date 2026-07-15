@@ -122,6 +122,19 @@ systematic bias fed into a GoTo model.
 > SkySafari scope/epoch is set. The recommended empirical star check above
 > answers this at the same time.
 
+> **STATUS UPDATE (v0.11.53, shipped 2026-07-15):** the SkySafari epoch offset
+> above was **confirmed real** (SkySafari was set to "Use Current Epoch" = JNow)
+> and **fixed**. `diofinder/precession.py` (IAU 1976, `math`-only — exactly the
+> ζ/z/θ recommendation here) now converts at the comms boundary:
+> `_report_radec` does J2000→JNow outbound (`:GR/:GD` + status), `_do_alignment`
+> does JNow→J2000 for the `:CM#` target, gated by `shared_cfg["report_epoch"]`
+> (`jnow` default, `j2000` kill switch). **The OnStep sync should reuse this
+> machinery verbatim** — `_report_radec` for the outbound sync coordinate and
+> `precession.jnow_to_j2000` for any inbound mount target — rather than
+> reimplement the conversion. The `report_epoch` config key already exists; the
+> mount-epoch setup field below is a *separate* per-mount value (the mount could
+> be J2000 while SkySafari is JNow), so keep them distinct.
+
 ### Should the epoch be a web UI toggle? — **Yes, as a setup field.**
 
 - OnStepX defaults to JNow but can be configured either way, and LX200 has **no

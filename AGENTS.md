@@ -236,7 +236,17 @@ list didn't have its name yet).
 
 ## 6. Current state (as of v0.11.53)
 
-Released through **v0.11.53** (latest).
+Released through **v0.11.53** (latest). `olive` carries no unreleased *code* at
+this point; the only post-v0.11.53 additions are **documentation** (design
+specs, no release cut — see below).
+
+**Design docs added post-v0.11.53 (doc-only, not yet a feature):**
+`docs/onstep-design.md` (mount-sync output spec — OnStepX/LX200 v1, Alpaca for
+SkyWatcher in §11) and `docs/networking.md` (field-networking topologies +
+deferred AP-fallback/IP-display/hotspot-join UX). Both are indexed as
+forward-looking work in §7 → "Designed but not built". The v0.11.53 epoch
+boundary (`diofinder/precession.py`) was cut partly as the shared prerequisite
+the OnStep sync needs.
 
 Recent-history summary (details in each PR, #99–#103):
 - v0.11.53: **report JNow to SkySafari — epoch-consistent boundary.** diofinder
@@ -857,6 +867,45 @@ them and are the only open work.
 - **F2 (partial)**: the escalated full-range blind retry shipped; making
   the Config-page reset also restore `fov_deg` is still open (the docs now
   tell lens-changers to set `fov_deg` manually).
+
+### Designed but not built — forward-looking work (next-session pickup)
+
+These are **designed, spec'd, and ready to build** — the design docs are the
+durable record, this list is the index. None ships without an explicit "build
+it" from the user (v0.11.53's epoch boundary already landed the shared
+prerequisite the OnStep work needed). Nothing here is a bug or a regression.
+
+- **OnStep / mount sync output** — full spec in **`docs/onstep-design.md`**.
+  The finder is currently an LX200 *server* only (no outbound `socket.connect`
+  anywhere in `diofinder/`); this adds an outbound path that plate-solves →
+  syncs a mount's pointing model. Design highlights: a dialect-pluggable
+  `MountLink` abstraction, an `_onstep_loop` comms thread, a manual-default +
+  gated-auto push policy, **sync-only (no GoTo) for v1**, and epoch handling
+  that is now **already solved** — v0.11.53 shipped `diofinder/precession.py`
+  and the J2000⇄JNow comms boundary the OnStep sync reuses verbatim
+  (`_report_radec` outbound, `jnow_to_j2000` for inbound targets). OnStepX is
+  LX200-native (`:Sr`/`:Sd`/`:CM#`), so it's the v1 target; the serial bridge
+  rides the OTA USB link. **This is the most-likely next feature.**
+- **Multi-mount / SkyWatcher (Alpaca)** — `docs/onstep-design.md` §11.
+  SkyWatcher mounts speak **SynScan, not LX200**, so they can't be driven
+  through the same LX200 dialect; the assessment recommends an **ASCOM Alpaca**
+  client as the second `MountLink` dialect (Alpaca is HTTP/JSON, mount-agnostic,
+  and covers SkyWatcher + most modern WiFi mounts). Build only after the OnStep
+  LX200 dialect proves the `MountLink` seam.
+- **Field-networking UX** — analysis + deferred items in **`docs/networking.md`**
+  (new this session). Today's boot behaviour (AP default, `station.sh` to join a
+  network, boot-only `diofinder-ensure-ap` fallback, `diofinder.local` mDNS,
+  USB serial console) all works; three webui/systemd-level improvements are
+  designed but unbuilt, in priority order:
+  1. **Mid-session AP-fallback watchdog** — re-assert the self-AP if a station
+     link drops mid-session (closes the boot-only gap in `diofinder-ensure-ap`).
+     **Highest-value field-robustness item.**
+  2. **Show the current station IP prominently** in the web UI, so the
+     SkySafari numeric-IP entry is copy-paste (the phone-as-hotspot topology
+     gives the finder a DHCP address the user must otherwise hunt for).
+  3. **"Join my phone's hotspot" helper** on the WiFi page (enter SSID/pass
+     once), with the AP-fallback behaviour explained inline.
+  All three are pure config/UX — no change to the solve/pointing path.
 
 ### Accepted-by-design (do NOT "fix" without a new reason)
 
