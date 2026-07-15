@@ -293,11 +293,13 @@ possible paths, in order of attractiveness:
 
 ## 12. Prerequisites / open questions
 
-1. **Epoch + boresight of `latest_solution` — RESOLVED (§4): J2000/ICRS,
-   boresight-corrected.** diofinder applies no precession; the frame is the
-   Gaia/Hipparcos catalog frame (ICRS ≈ J2000). Mount side is JNow, so the sync
-   precesses **J2000 → JNow** (Python, negligible cost, boresight does not
-   substitute). Empirical star check recommended to confirm on-sky.
+1. **Epoch + boresight of `latest_solution` — RESOLVED (§4) and BUILT (v0.11.53).**
+   Determined J2000/ICRS, boresight-corrected (diofinder applies no precession;
+   the frame is the Gaia/Hipparcos catalog frame). The J2000⇄JNow **comms
+   boundary** and the pure IAU-1976 `diofinder/precession.py` helper shipped in
+   v0.11.53 (so `:GR/:GD` and the web UI already report JNow, and `:CM#` align
+   converts back) — **the OnStep sync reuses that same helper**; it does not
+   re-implement precession. Mount side is JNow.
 2. **Serial vs TCP as the shipped default.** Serial is topology-independent
    (finder ↔ OnStepX colocated on the OTA, no shared network) — recommended
    primary. TCP is there for WiFi OnStepX but reintroduces the network-topology

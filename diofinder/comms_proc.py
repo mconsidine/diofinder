@@ -39,6 +39,7 @@ from queue import Empty, Full
 
 from diofinder import config as cfg_mod
 from diofinder import bg_modes as bg_modes_mod
+from diofinder import precession as _precession
 from diofinder.align import AlignRequest, AlignResult, CommsAlignState
 from diofinder.imu_math import (quat_delta_rotvec, alpha_beta_step,
                                 rotvec_to_quat, quat_mul, quat_to_radec,
@@ -1062,6 +1063,15 @@ def _do_alignment(align_state, cfg, shared_cfg,
     if req is None:
         return "no align target#"
 
+    # The align target arrives from SkySafari in its reporting epoch (JNow by
+    # default). The solver's boresight math runs in the internal J2000 frame,
+    # so convert the target JNow -> J2000 to keep the align epoch-consistent
+    # with the solved field. report_epoch=j2000 -> passthrough (the boresight
+    # then silently absorbs the epoch offset, as it did pre-v0.11.53).
+    if str(shared_cfg.get("report_epoch", "jnow")).lower() == "jnow":
+        req.target_ra_deg, req.target_dec_deg = _precession.jnow_to_j2000(
+            req.target_ra_deg, req.target_dec_deg)
+
     # Serialize the whole shared-queue exchange: with per-connection LX200
     # threads (v0.11.52), a second align's initial drain could otherwise eat
     # the first's in-flight response off the shared align_response_q.
@@ -1377,6 +1387,27 @@ def _poll_snapshots(shared_cfg, latest_solution):
         return _poll_snap["cfg"], _poll_snap["sol"]
 
 
+def _report_radec(scfg, sol):
+    """(ra_deg, dec_deg) to report to LX200 clients — IMU-predicted between
+    solves when available, else the last solved position — converted from the
+    internal **J2000** frame to the reporting epoch.
+
+    diofinder solves in J2000/ICRS and never precesses internally, but
+    SkySafari's LX200 link uses the equinox of date (JNow), so the default
+    `report_epoch=jnow` precesses J2000 -> JNow at this boundary. Precession
+    mixes RA and Dec, so the full pair is converted together here and :GR/:GD
+    each take their component from the same (TTL-cached) snapshot. Kill switch:
+    `report_epoch=j2000` reports the raw J2000 frame (pre-v0.11.53 behaviour)."""
+    pred = _imu_predict_smoothed(scfg)
+    if pred is not None:
+        ra, dec = float(pred[0]), float(pred[1])
+    else:
+        ra, dec = float(sol.get("ra_deg", 0.0)), float(sol.get("dec_deg", 0.0))
+    if str(scfg.get("report_epoch", "jnow")).lower() == "jnow":
+        ra, dec = _precession.j2000_to_jnow(ra, dec)
+    return ra, dec
+
+
 def _handle_lx200_command(cmd, latest_solution, align_state, time_state,
                           cfg, shared_cfg,
                           align_request_q, align_response_q, ctx=None):
@@ -1385,18 +1416,15 @@ def _handle_lx200_command(cmd, latest_solution, align_state, time_state,
         # TTL-cached snapshots = at most TWO Manager IPC round-trips per
         # 100 ms window shared across :GR and :GD; the prediction path then
         # reads ~14 keys locally. Also makes the multi-key read coherent —
-        # no solve can land between key reads.
+        # no solve can land between key reads. Reported in the epoch the
+        # client expects (JNow by default); see _report_radec.
         scfg, sol = _poll_snapshots(shared_cfg, latest_solution)
-        pred = _imu_predict_smoothed(scfg)
-        if pred is not None:
-            return _format_ra(pred[0] / 15.0).encode("ascii")
-        return _format_ra(sol.get("ra_deg", 0.0) / 15.0).encode("ascii")
+        ra, _dec = _report_radec(scfg, sol)
+        return _format_ra(ra / 15.0).encode("ascii")
     if cmd == ":GD":
         scfg, sol = _poll_snapshots(shared_cfg, latest_solution)
-        pred = _imu_predict_smoothed(scfg)
-        if pred is not None:
-            return _format_dec(pred[1]).encode("ascii")
-        return _format_dec(sol.get("dec_deg", 0.0)).encode("ascii")
+        _ra, dec = _report_radec(scfg, sol)
+        return _format_dec(dec).encode("ascii")
     if cmd == ":GW":
         return b"AT2#"
     if cmd in (":GVN", ":GVP"):
@@ -1560,6 +1588,19 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             # CLOCK_MONOTONIC origin), as the watchdog already relies on.
             _sol_epoch = sol.get("epoch_monotonic")
             _sol_age = (time.monotonic() - _sol_epoch) if _sol_epoch else None
+            # Reporting-epoch position (JNow by default) so the web UI matches
+            # what SkySafari shows. The raw ra_deg/dec_deg in `sol` stay J2000
+            # for any internal consumer; report_* is the converted copy.
+            _rep_epoch = str(scfg.get("report_epoch", "jnow")).lower()
+            sol["report_epoch"] = _rep_epoch
+            if sol.get("solved") and sol.get("ra_deg") is not None:
+                if _rep_epoch == "jnow":
+                    _rra, _rdec = _precession.j2000_to_jnow(
+                        sol["ra_deg"], sol["dec_deg"])
+                else:
+                    _rra, _rdec = sol["ra_deg"], sol["dec_deg"]
+                sol["report_ra_deg"] = _rra
+                sol["report_dec_deg"] = _rdec
             return MaintResponse(ok=True, result={
                 "solution":  sol,
                 "pointing_age_s": (round(_sol_age, 1)
@@ -2001,6 +2042,9 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 "imu_rate_gate_dps": ctx.shared_cfg.get(
                     "imu_rate_gate_dps",
                     getattr(ctx.cfg, "imu_rate_gate_dps", _IMU_RATE_GATE_DPS)),
+                "report_epoch": ctx.shared_cfg.get(
+                    "report_epoch",
+                    str(getattr(ctx.cfg, "report_epoch", "jnow")).lower()),
             })
 
         if cmd == "solver_params_set":
@@ -2195,6 +2239,13 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 # Read live by _imu_predict's motion gate; no solver round-trip.
                 ctx.shared_cfg["imu_rate_gate_dps"] = rg
                 updates["imu_rate_gate_dps"] = rg
+            if "report_epoch" in args:
+                ep = str(args["report_epoch"]).strip().lower()
+                if ep not in ("jnow", "j2000"):
+                    return MaintResponse(
+                        ok=False, error="report_epoch must be 'jnow' or 'j2000'")
+                ctx.shared_cfg["report_epoch"] = ep
+                updates["report_epoch"] = ep
             if persist and updates:
                 cfg_mod.save_keys(updates)
             return MaintResponse(ok=True, result={**updates, "persisted": persist})
@@ -2858,6 +2909,11 @@ def comms_main(latest_solution, shared_cfg,
     # shared_cfg, not cfg). setdefault so a live toggle isn't clobbered.
     shared_cfg.setdefault("imu_exact_predict",
                           bool(getattr(cfg, "imu_exact_predict", True)))
+    # Reporting epoch (jnow default) — precesses J2000 -> JNow at the LX200
+    # boundary. Seeded from the conf so a persisted `report_epoch: j2000`
+    # (the kill switch) is honored from boot.
+    shared_cfg.setdefault("report_epoch",
+                          str(getattr(cfg, "report_epoch", "jnow")).lower())
 
     ctx = _MaintContext(
         cfg=cfg, latest_solution=latest_solution, shared_cfg=shared_cfg,

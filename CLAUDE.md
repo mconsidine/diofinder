@@ -88,6 +88,7 @@ LX200-pointing consumers, and the calibration loop).
 | `auto_exposure_peak_floor` | float | comms (via maint `auto_exposure_set {"peak_floor":...}`) | comms auto-exposure thread |
 | `imu_rate_gate_dps` | float | comms (seed from cfg; live via `solver_params_set` — Camera-page "IMU pointing gate" slider, v0.11.50) | comms LX200 pointing (rate gate in `_imu_predict`; raise to stop a parked scope's SkySafari jitter) |
 | `imu_exact_predict` | bool | comms (seed from cfg; `solver_params_set`) | comms LX200 pointing (kill switch for the exact quaternion path; false → legacy C-matrix) |
+| `report_epoch` | str (`jnow`/`j2000`) | comms (seed from cfg; `solver_params_set`) | comms LX200 boundary — precesses J2000→JNow for `:GR/:GD` + the status `report_*`, JNow→J2000 for the `:CM#` align target (v0.11.53). `j2000` = raw kill switch |
 | `display_wanted_until` | float (monotonic) | comms (via maint `display_start` keepalive) | solver (demand-gates the `diofinder_display` write; no viewer → no copy) |
 | `star_name_brightest` | bool | comms (via maint `solver_params_set`) | solver (centered-star naming) |
 | `imu_available` | bool | imu_thread | comms, webui |
@@ -247,6 +248,16 @@ runs concurrently across connections; the only shared-mutation hazard is the
 the publish is a dict *merge*); the `status` maint result exposes
 `pointing_age_s` + `pointing_stale` (> `_POINTING_STALE_S`=10 s) so the web UI
 can flag a held-but-old crosshair.
+
+**Epoch boundary (v0.11.53).** diofinder solves in **J2000/ICRS** internally
+(the Gaia/Hipparcos catalog frame — no precession anywhere in the pipeline).
+SkySafari's LX200 link and OnStepX use **JNow**, so `diofinder/precession.py`
+(IAU 1976, `math`-only) converts *only at the comms boundary*: outbound
+`:GR/:GD` (and the status `report_ra_deg/dec_deg`) J2000→JNow via
+`_report_radec`; inbound the `:CM#` align target JNow→J2000 in `_do_alignment`.
+Everything internal (solver, `imu_ref`, boresight, calibration) stays J2000.
+Gated by `shared_cfg["report_epoch"]` (`jnow` default; `j2000` = raw kill
+switch). Reused by the planned OnStep sync (`docs/onstep-design.md`).
 
 ---
 

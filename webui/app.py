@@ -271,13 +271,19 @@ def _format_solution(sol):
             "noise":  sol.get("noise", 0.0),
             "status": sol.get("status", 0),
         }
-    ra_h = sol["ra_deg"] / 15.0
+    # Show the REPORTED epoch (JNow by default) so the page matches SkySafari;
+    # the daemon adds report_ra_deg/dec_deg. Fall back to the raw J2000
+    # ra_deg/dec_deg for an older daemon that doesn't send them.
+    _rra = sol.get("report_ra_deg", sol["ra_deg"])
+    _rdec = sol.get("report_dec_deg", sol["dec_deg"])
+    ra_h = _rra / 15.0
     return {
         "solved":    True,
         "ra_str":    _hms(ra_h),
-        "dec_str":   _dms(sol["dec_deg"]),
-        "ra_deg":    sol["ra_deg"],
-        "dec_deg":   sol["dec_deg"],
+        "dec_str":   _dms(_rdec),
+        "ra_deg":    _rra,
+        "dec_deg":   _rdec,
+        "epoch":     sol.get("report_epoch", "j2000"),
         "fov_deg":   sol.get("fov_deg",  0.0),
         "roll_deg":  sol.get("roll_deg", 0.0),
         "stars":     sol["stars"],

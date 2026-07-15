@@ -342,15 +342,19 @@ async function refreshHome(){
     const d = await r.json();
     if (!d.status || !d.status.ok || !d.status.result) return;
     const sol = d.status.result.solution || {};
+    // Prefer the reported epoch (JNow by default) so the page matches SkySafari.
+    const rRa = (sol.report_ra_deg != null) ? sol.report_ra_deg : sol.ra_deg;
+    const rDec = (sol.report_dec_deg != null) ? sol.report_dec_deg : sol.dec_deg;
     if (sol.solved){
-      _set('ra', formatHMS(sol.ra_deg / 15)); _set('dec', formatDMS(sol.dec_deg));
+      _set('ra', formatHMS(rRa / 15)); _set('dec', formatDMS(rDec));
       _set('stars', sol.stars); _set('matches', sol.matches);
       _set('solve_ms', sol.solve_ms != null ? sol.solve_ms.toFixed(0) + ' ms' : '—');
       _set('peak', sol.peak);
       _set('fov', sol.fov_deg != null ? sol.fov_deg.toFixed(3) + '°' : '—');
       _set('roll', (sol.roll_deg || 0).toFixed(1) + '°');
       const se = document.getElementById('status');
-      if (se){ se.textContent = 'solved'; se.style.color = '#44cc44'; }
+      const epLbl = (sol.report_epoch === 'j2000') ? 'J2000' : 'JNow';
+      if (se){ se.textContent = 'solved · ' + epLbl; se.style.color = '#44cc44'; }
       let t = '—';
       if (sol.star_name){
         t = sol.star_name;
@@ -365,8 +369,8 @@ async function refreshHome(){
       // SkySafari), show it dimmed with its age instead of blanking, so the
       // web UI matches the crosshair and says how old it is.
       const age = d.status.result.pointing_age_s;
-      const held = (sol.ra_deg != null && sol.dec_deg != null);
-      if (held){ _set('ra', formatHMS(sol.ra_deg / 15)); _set('dec', formatDMS(sol.dec_deg)); }
+      const held = (rRa != null && rDec != null);
+      if (held){ _set('ra', formatHMS(rRa / 15)); _set('dec', formatDMS(rDec)); }
       else     { _set('ra', '—'); _set('dec', '—'); }
       _set('matches', '—'); _set('solve_ms', '—');
       _set('fov', '—'); _set('roll', '—'); _set('dash-star', '—');

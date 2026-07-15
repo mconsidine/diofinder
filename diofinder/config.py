@@ -27,7 +27,7 @@ DEFAULT_CONFIG_PATH = "/etc/diofinder/diofinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.11.52"
+    version: str = "0.11.53"
 
     # -------- Camera --------
     frame_width: int = 960
@@ -257,6 +257,16 @@ class Config:
     # LX200 crosshair looks wrong during a slew — a field-reversible fallback
     # with no downgrade. Live-mutable via shared_cfg (solver_params_set).
     imu_exact_predict: bool = True
+
+    # Epoch of coordinates reported to LX200 clients (SkySafari) and used for
+    # the align target. diofinder solves in J2000/ICRS internally; SkySafari's
+    # LX200 link and OnStepX use the equinox of date, so the default `jnow`
+    # precesses J2000 -> JNow at the comms boundary (and JNow -> J2000 for the
+    # :CM# align target). Set `j2000` to report the raw solved frame
+    # (pre-v0.11.53 behaviour). Live-mutable via shared_cfg (solver_params_set).
+    # NOTE: switching this shifts reported pointing by the precession amount
+    # (~15-22' in 2026) — re-align once after changing it.
+    report_epoch: str = "jnow"
 
     # -------- CPU affinity --------
     # Pi Zero 2W: 4 cores.
