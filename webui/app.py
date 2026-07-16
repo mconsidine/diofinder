@@ -1636,6 +1636,45 @@ def config_page():
 _bs_cache: dict = {"cx": None, "cy": None, "ts": 0.0}
 _BS_CACHE_TTL = 5.0  # seconds
 
+# Boresight reticle: three rings whose DIAMETERS are 0.5deg / 2deg / 4deg — the
+# classic Telrad pattern. All three are angular (radius_px = half-diameter in
+# arcsec / arcsec_per_pixel), so they read as true on-sky rulers regardless of
+# the calibrated plate scale. The 5px-FWHM focus circle is unrelated (Focus page).
+_RETICLE_RING_DIAMETERS_DEG = (0.5, 2.0, 4.0)
+# Fixed-pixel fallback radii (~0.5/2/4deg diameter at the nominal 50.8"/px), used
+# only if the plate scale is missing/invalid.
+_RETICLE_FALLBACK_RADII_PX = (18, 71, 142)
+
+
+def _draw_boresight_reticle(draw, cx, cy, arcsec_per_pixel, ds=1):
+    """Draw the Telrad-style boresight reticle (three angular rings + a centre
+    crosshair) onto an ImageDraw at (cx, cy). ``ds`` is the image downsample
+    factor so radii scale with a half-res render. Ring radii come from
+    ``_RETICLE_RING_DIAMETERS_DEG`` via ``arcsec_per_pixel``; a fixed-pixel
+    fallback is used if the scale is missing/invalid. Shared by /frame.jpg and
+    the debug-bundle display JPGs so the two never drift."""
+    try:
+        aps = float(arcsec_per_pixel)
+        if aps <= 0:
+            raise ValueError
+        radii = [max(1, int(round(d * 3600.0 / 2.0 / aps)) // ds)
+                 for d in _RETICLE_RING_DIAMETERS_DEG]
+    except Exception:
+        radii = [max(1, r // ds) for r in _RETICLE_FALLBACK_RADII_PX]
+    r_inner = radii[0]
+    # Innermost ring is brighter/thicker — it marks the boresight; the crosshair
+    # ticks flank it so the exact centre is unambiguous at a glance.
+    draw.ellipse([cx - r_inner, cy - r_inner, cx + r_inner, cy + r_inner],
+                 outline=(255, 80, 80), width=2)
+    gap = 6
+    draw.line([cx - r_inner - gap, cy, cx - r_inner - 1, cy], fill=(255, 120, 120), width=1)
+    draw.line([cx + r_inner + 1,   cy, cx + r_inner + gap, cy], fill=(255, 120, 120), width=1)
+    draw.line([cx, cy - r_inner - gap, cx, cy - r_inner - 1], fill=(255, 120, 120), width=1)
+    draw.line([cx, cy + r_inner + 1,   cx, cy + r_inner + gap], fill=(255, 120, 120), width=1)
+    for rr in radii[1:]:
+        draw.ellipse([cx - rr, cy - rr, cx + rr, cy + rr],
+                     outline=(255, 120, 120), width=1)
+
 
 @app.route("/frame.jpg")
 def frame_jpg():
@@ -1694,24 +1733,8 @@ def frame_jpg():
     cy //= ds
     img  = Image.fromarray(stretched, mode="L").convert("RGB")
     draw = ImageDraw.Draw(img)
-    r    = 28 // ds
-    draw.ellipse([cx - r, cy - r, cx + r, cy + r],
-                 outline=(255, 80, 80), width=2)
-    gap = 6
-    draw.line([cx - r - gap, cy, cx - r - 1, cy],   fill=(255, 120, 120), width=1)
-    draw.line([cx + r + 1,   cy, cx + r + gap, cy],  fill=(255, 120, 120), width=1)
-    draw.line([cx, cy - r - gap, cx, cy - r - 1],   fill=(255, 120, 120), width=1)
-    draw.line([cx, cy + r + 1,   cx, cy + r + gap],  fill=(255, 120, 120), width=1)
-
-    try:
-        r_half = round(1800.0 / ecfg.arcsec_per_pixel) // ds
-        r_one  = round(3600.0 / ecfg.arcsec_per_pixel) // ds
-    except Exception:
-        r_half, r_one = 35 // ds, 71 // ds
-    draw.ellipse([cx - r_half, cy - r_half, cx + r_half, cy + r_half],
-                 outline=(255, 120, 120), width=1)
-    draw.ellipse([cx - r_one,  cy - r_one,  cx + r_one,  cy + r_one],
-                 outline=(255, 120, 120), width=1)
+    _draw_boresight_reticle(
+        draw, cx, cy, getattr(ecfg, "arcsec_per_pixel", None), ds=ds)
 
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=70)
@@ -2009,17 +2032,7 @@ def debug_collect():
             disp  = np.clip(xs / scale * 255.0, 0, 255).astype(np.uint8)
             img   = Image.fromarray(disp, mode="L").convert("RGB")
             draw  = ImageDraw.Draw(img)
-            r = 28
-            draw.ellipse([cx-r, cy-r, cx+r, cy+r], outline=(255, 80, 80), width=2)
-            try:
-                r_half = round(1800.0 / arcsec_px)
-                r_one  = round(3600.0 / arcsec_px)
-                draw.ellipse([cx-r_half, cy-r_half, cx+r_half, cy+r_half],
-                             outline=(255, 120, 120), width=1)
-                draw.ellipse([cx-r_one,  cy-r_one,  cx+r_one,  cy+r_one],
-                             outline=(255, 120, 120), width=1)
-            except Exception:
-                pass
+            _draw_boresight_reticle(draw, cx, cy, arcsec_px, ds=1)
             disp_buf = io.BytesIO()
             img.save(disp_buf, format="JPEG", quality=85)
             zf.writestr(f"frame_{idx:02d}_display.jpg", disp_buf.getvalue())
