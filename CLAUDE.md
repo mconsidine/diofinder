@@ -91,6 +91,7 @@ LX200-pointing consumers, and the calibration loop).
 | `report_epoch` | str (`jnow`/`j2000`) | comms (seed from cfg; `solver_params_set`) | comms LX200 boundary — precesses J2000→JNow for `:GR/:GD` + the status `report_*`, JNow→J2000 for the `:CM#` align target (v0.11.53). `j2000` = raw kill switch |
 | `display_wanted_until` | float (monotonic) | comms (via maint `display_start` keepalive) | solver (demand-gates the `diofinder_display` write; no viewer → no copy) |
 | `star_name_brightest` | bool | comms (via maint `solver_params_set`) | solver (centered-star naming) |
+| `star_name_whole_fov` | bool | comms (via maint `solver_params_set`) | solver (centered-star naming — brightest anywhere in the frame vs within `star_name_radius_deg` of boresight; implies brightest mode; an align anchor when boresight is off) |
 | `imu_available` | bool | imu_thread | comms, webui |
 | `imu` | tuple ((w,x,y,z), t) | imu_thread | comms, solver (via `imu_math.get_imu_qt`; ONE atomic write per 20 Hz read since v0.11.24 — the split `imu_q`/`imu_t` keys are legacy-read only) |
 | `imu_ref_q/ra/dec/roll/t` | varies | *(no longer published since v0.11.24 — readers use the `imu_ref` tuple; comms still accepts them from older solvers)* | — |
@@ -1083,7 +1084,7 @@ set in `diofinder.conf`.
 | `/var/lib/diofinder/` | Star databases (`.npz`), debug ZIPs, saved frames |
 | `/var/lib/diofinder/hot_pixel_mask.npz` | Hot-pixel mask (from `dark_capture`) |
 | `/var/lib/diofinder/seeing_overrides.json` | Saved Good/Bad seeing overrides (factory presets stay immutable) |
-| `/var/lib/diofinder/star_names.csv` | Star naming catalog (from astro_databases release); powers the "Centered star" label (default: the BRIGHTEST cataloged star within `star_name_radius_deg` (2°) of the boresight, falling back to nearest; the expert toggle `star_name_brightest=false` reverts to pure nearest). Optional — missing file disables naming. Refreshed by `diofinder-db-update`. |
+| `/var/lib/diofinder/star_names.csv` | Star naming catalog (from astro_databases release); powers the "Centered star" label (default: the BRIGHTEST cataloged star within `star_name_radius_deg` (2°) of the boresight, falling back to nearest; the expert toggle `star_name_brightest=false` reverts to pure nearest; `star_name_whole_fov=true` widens the brightest search to the whole frame — a stable align anchor when boresight is off). Optional — missing file disables naming. Refreshed by `diofinder-db-update`. |
 | `/var/lib/diofinder/captures/` | PNG captures when `save_failed_frames=true` (100 MB cap, oldest evicted) |
 | `/run/diofinder/maint.sock` | Maintenance Unix socket |
 | `/var/lib/diofinder/version` | Running release tag + ISO date. Stamped at image build (`install.sh`, from `DIOFINDER_VERSION`) and rewritten by `diofinder-update`. The `version` maint command resolves it as: this file → `git describe` of `/opt/diofinder` → in-code `cfg.version` (so a fresh burn reports its real tag instead of the stale default). |

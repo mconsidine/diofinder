@@ -266,6 +266,9 @@ star_names_path: /var/lib/diofinder/star_names.csv
 # the boresight (falling back to nearest); false = pure nearest.
 star_name_brightest: true
 star_name_radius_deg: 2.0
+# true = name the brightest star anywhere in the FIELD OF VIEW (not just near
+# the boresight) — a stable anchor to center + align on when boresight is off.
+star_name_whole_fov: false
 
 # ---- IMU pointing prediction ----
 # Rotation-rate gate (deg/s) that distinguishes a real pan from parked gyro

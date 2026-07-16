@@ -1065,6 +1065,9 @@ def solver_params_set():
     if "star_name_brightest" in request.form:
         pargs["star_name_brightest"] = request.form.get(
             "star_name_brightest", "false").strip().lower() in ("true", "1", "on")
+    if "star_name_whole_fov" in request.form:
+        pargs["star_name_whole_fov"] = request.form.get(
+            "star_name_whole_fov", "false").strip().lower() in ("true", "1", "on")
     if request.form.get("min_centroids"):
         try:
             pargs["min_centroids"] = int(request.form["min_centroids"])
