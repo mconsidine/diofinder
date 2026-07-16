@@ -916,6 +916,17 @@ prerequisite the OnStep work needed). Nothing here is a bug or a regression.
   client as the second `MountLink` dialect (Alpaca is HTTP/JSON, mount-agnostic,
   and covers SkyWatcher + most modern WiFi mounts). Build only after the OnStep
   LX200 dialect proves the `MountLink` seam.
+- **Tap-to-align** — full spec in **`docs/tap-align-design.md`**. Let the user
+  **tap a star in the web-UI live view** to set the boresight, instead of the
+  SkySafari `:CM#` round-trip. Key insight: an align only resolves the *boresight
+  pixel*, and the backend for setting it (`boresight_set {y,x}`, persists) already
+  exists — so this is ~80–90% front-end. **Model A** (tap → `boresight_set`, with
+  a screen→frame coordinate mapper and a server-side snap-to-nearest-centroid) is
+  the intended build; **Model A+** overlays named tap-targets ("tap Vega") using
+  the shipped `star_names.csv`. Model B (tap feeds the `:CM#`) is documented and
+  deferred — no accuracy gain over the sub-pixel auto-projection. Semantic caveat:
+  the tap must be the *eyepiece-centered* star (same trust the current align
+  needs).
 - **Field-networking UX** — analysis + deferred items in **`docs/networking.md`**
   (new this session). Today's boot behaviour (AP default, `station.sh` to join a
   network, boot-only `diofinder-ensure-ap` fallback, `diofinder.local` mDNS,
