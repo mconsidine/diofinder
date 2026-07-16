@@ -235,19 +235,42 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.53)
+## 6. Current state (as of v0.11.55)
 
-Released through **v0.11.53** (latest). `olive` carries no unreleased *code* at
-this point; the only post-v0.11.53 additions are **documentation** (design
-specs, no release cut — see below).
+Released through **v0.11.55** (latest).
 
-**Design docs added post-v0.11.53 (doc-only, not yet a feature):**
+**Design docs (doc-only, not yet a feature):**
 `docs/onstep-design.md` (mount-sync output spec — OnStepX/LX200 v1, Alpaca for
 SkyWatcher in §11) and `docs/networking.md` (field-networking topologies +
 deferred AP-fallback/IP-display/hotspot-join UX). Both are indexed as
 forward-looking work in §7 → "Designed but not built". The v0.11.53 epoch
 boundary (`diofinder/precession.py`) was cut partly as the shared prerequisite
 the OnStep sync needs.
+
+Recent-history summary (this session, PRs #141–#147):
+- v0.11.55: **UI/UX simplification** (webui-only). (1) **Telrad boresight
+  reticle** — the three live-view rings are now all angular at **0.5°/2°/4°
+  diameter** (was a fixed 28 px inner marker + 0.5°/1° *radius* rings); one
+  shared `webui/app.py::_draw_boresight_reticle` feeds both `/frame.jpg` and the
+  debug-bundle display JPGs (`tests/test_reticle.py`). The 5 px-FWHM focus
+  circle is separate and unchanged. (2) **Debug-bundle button below the live
+  view** on Home/Focus/Advanced (+ Utilities), via a shared `.js-debug-bundle`
+  handler in `base.html` and a `debug_bundle()` macro (deduped three inline
+  copies). (3) **Dark-frame capture "capturing…" status** (`darkCaptureStart`)
+  on both hot-pixel forms. (4) **Nav declutter** — Polar hidden, Logs moved to
+  the Utilities page; **Background page** A/B card hidden and Notes collapsed
+  into `<details>`. All webui-only → `systemctl restart diofinder-webui`. (PRs
+  #145–#147.)
+- v0.11.54: two solver changes (needs full daemon restart). (1) **`:CM#` align
+  now survives a marginal sky.** The sync was a one-frame gamble — the solver
+  consumed the request on the next frame and failed it on any NoMatch, so a sync
+  during a solve drought (≈50 % NoMatch) died instantly and never moved the
+  boresight (user-reported: Vega centered, aligned, boresight stayed at the
+  (380,480) default). The solver now HOLDS the pending sync across frames
+  (`_align_promote`, pure/tested) until a solve lands the target or a ~13 s
+  window expires (recorded in §4, PR #144). (2) **`star_name_whole_fov`** toggle
+  — centered-star = brightest anywhere in the FOV, a stable align anchor when
+  boresight is off (PR #143).
 
 Recent-history summary (details in each PR, #99–#103):
 - v0.11.53: **report JNow to SkySafari — epoch-consistent boundary.** diofinder
