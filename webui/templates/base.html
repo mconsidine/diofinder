@@ -26,8 +26,11 @@
       <a href="{{ url_for('utilities_page') }}">Utilities</a>
       <a class="expert-only" href="{{ url_for('camera_page') }}">Advanced</a>
       <a class="expert-only" href="{{ url_for('bgtest_page') }}">Background</a>
-      <a class="expert-only" href="{{ url_for('polar_page') }}">Polar</a>
-      <a class="expert-only" href="{{ url_for('logs') }}">Logs</a>
+      {# UI simplification: Polar access hidden from the nav (route/template kept).
+         Re-enable by uncommenting.
+      <a class="expert-only" href="{{ url_for('polar_page') }}">Polar</a> #}
+      {# Logs moved off the top nav to the Utilities page (route/template kept).
+      <a class="expert-only" href="{{ url_for('logs') }}">Logs</a> #}
     </nav>
     <div class="mode-toggle" role="group" aria-label="Interface mode">
       <span class="mode-toggle-label">View</span>
