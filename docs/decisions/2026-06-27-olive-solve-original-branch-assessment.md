@@ -172,3 +172,68 @@ Net: there is **selective, real value** in `original` — chiefly the
 early-rejection pre-pass — but it must be **ported onto `main`**, re-expressed in
 `main`'s f32 + per-worker-scratch parallel structure, and validated for solve
 rate. There is **no value** in adopting the branch as-is.
+
+---
+
+## Revisit 2026-07-15 — the `original` branch grew (9 most-recent commits)
+
+Since the original assessment, `mconsidine/olive-solve` `original` advanced past
+the 3 perf commits. The 9 most-recent commits (HEAD `235a5d9`) are:
+
+| Commit | Theme |
+|--------|-------|
+| `a1a479c` Comprehensive native optimization suite | perf (solver.rs) — assessed above |
+| `d965fd5` Massive perf optimizations | perf (solver.rs) — assessed above |
+| `42145c4` Docs: optimization comments + warnings | perf docs — assessed above |
+| `b182ace` Docs: optimization comments + warnings | **duplicate** of `42145c4` (via the oakamil merge) |
+| `b8ee8ee` Create astronomical IMU implementation | **new `olive-imu` crate** |
+| `ebfb878` IMU improvements | olive-imu |
+| `615c0a4` Merge `oakamil/olive-solve` main | brings oakamil's line in |
+| `d476ea3` Improve IMU hardware sync & timing | olive-imu |
+| `235a5d9` Include olive-imu in README | docs |
+
+The **only new substance** vs. the assessment above is a standalone
+**`olive-imu`** Rust crate (~1,900 LOC, author Omair Kamil/oakamil, absent from
+`main`): I2C drivers for **BMI160 + BNO085**, real-time SVD camera↔IMU frame
+alignment, continuous gyro-bias compensation, I2C timing synchronization, and a
+100 Hz+ async (`tokio`) polling thread. The perf commits (and the duplicate docs
+commit) are unchanged from what's assessed above.
+
+### Verdict on `olive-imu` for diofinder: **skip**
+
+- **Wrong sensor.** olive-imu drives BMI160 (raw 6-axis, no fusion) and BNO085.
+  diofinder is committed to the **BNO055** (`imu_proc.py`), which fuses on-chip
+  and returns a ready quaternion. olive-imu supports neither BNO055 specifically;
+  its **continuous bias compensation** exists precisely because a raw IMU
+  (BMI160) has no onboard fusion — moot when the chip already fuses in hardware.
+- **Redundant with more mature, astronomy-specific equivalents.** olive-imu's
+  "real-time SVD alignment" is the same math as diofinder's **Kabsch fit**
+  (`imu_frame.py`), but diofinder's is quality-gated (≥4 magnitude-consistent
+  pairs, axis diversity ≥0.25, R²≥0.9, refuses unobservable alt-only slews) and
+  feeds a tear-proof `imu_ref` + exact-quaternion LX200 prediction with kill
+  switches. diofinder's is field-hardened; olive-imu's is generic and new.
+- **Wrong architecture/language.** Standalone Rust + `tokio` crate, **not** part
+  of the `tetra3` wheel diofinder consumes, no Python bindings. Adopting it means
+  PyO3 packaging + rewriting the comms-process IMU integration (shared_cfg
+  publishing, calibration loop, LX200 path). High cost, negative net.
+
+### One borrowable idea (low value): IMU timestamp back-dating
+
+olive-imu's headline timing trick is back-dating timestamps to map an
+I2C-jittered read to the true measurement instant. diofinder stamps samples with
+a simple pre-read `time.monotonic()` and no back-dating (`imu_proc.py:185-189`),
+so it has the same imperfection in principle. **But the payoff is small:**
+diofinder polls at **20 Hz (50 ms granularity)**, which dominates the ~1 ms I2C
+jitter, so back-dating buys little without also raising the poll rate (a
+deliberate 20 Hz choice, BNO055 on CPU 0); and the main consumer — the Kabsch
+fit over *inter-solve* intervals (seconds) — is insensitive to a 1 ms stamp
+error. It would only marginally affect fast-slew LX200 prediction. Not worth
+acting on unless the IMU rate is later raised for slew pointing.
+
+### Net (revisit)
+
+Nothing in the 9 commits changes the earlier conclusion. The perf commits remain
+"port the early-rejection pre-pass only, if solver latency becomes a pain." The
+new `olive-imu` crate is a **skip** for diofinder — wrong sensor, redundant with
+a more mature in-house stack, architecturally expensive — with only IMU
+timestamp back-dating as a minor, low-priority idea.
