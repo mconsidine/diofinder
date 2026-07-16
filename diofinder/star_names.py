@@ -90,6 +90,20 @@ class StarNames:
             "sep_deg": round(sep_deg, 2),
         }
 
+    def brightest_in_fov(self, ra_deg: float, dec_deg: float,
+                         fov_deg: float):
+        """Return the BRIGHTEST cataloged star anywhere in the frame, or None.
+
+        Same magnitude-wins selection as ``brightest_within``, but the search
+        radius is the frame half-extent (``fov_deg * _RADIUS_FACTOR``, the same
+        radius ``nearest`` uses) instead of a small circle around the
+        boresight. This names the dominant star in the whole field of view —
+        useful as a stable alignment anchor when the boresight itself is off
+        (a near-blank-center pointing still reports the bright star in a
+        corner, which ``brightest_within(radius=2°)`` would miss).
+        """
+        return self.brightest_within(ra_deg, dec_deg, fov_deg * _RADIUS_FACTOR)
+
     def nearest(self, ra_deg: float, dec_deg: float, fov_deg: float):
         """Return the cataloged star nearest the given pointing, or None.
 

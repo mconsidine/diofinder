@@ -1771,13 +1771,22 @@ def solver_main(slots, latest_solution, shared_cfg,
             # (falling back to plain nearest when none is that close) — the
             # notable star beats a faint catalog entry a hair closer. The
             # expert toggle star_name_brightest=false reverts to pure nearest.
+            # star_name_whole_fov (live) widens the brightest search to the
+            # whole frame — the dominant star in view, a stable align anchor
+            # when the boresight is off. It implies brightest mode.
             star = None
             if star_names is not None:
                 try:
-                    brightest = bool(snap.get(
+                    whole_fov = bool(snap.get(
+                        "star_name_whole_fov",
+                        getattr(cfg, "star_name_whole_fov", False)))
+                    brightest = whole_fov or bool(snap.get(
                         "star_name_brightest",
                         getattr(cfg, "star_name_brightest", True)))
-                    if brightest:
+                    if whole_fov:
+                        star = star_names.brightest_in_fov(
+                            ra_out, dec_out, measured_fov)
+                    elif brightest:
                         star = star_names.brightest_within(
                             ra_out, dec_out,
                             float(getattr(cfg, "star_name_radius_deg", 2.0)))

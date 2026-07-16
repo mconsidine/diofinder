@@ -46,3 +46,19 @@ def test_nearest_is_pure_proximity():
     star = _catalog().nearest(100.0, 20.0, 13.64)
     assert star["name"] == "A"
     assert abs(star["sep_deg"] - 0.5) < 0.05
+
+
+def test_brightest_in_fov_spans_whole_frame():
+    # fov 13.64 -> radius ~8.9 deg admits C (5 deg away, mag 0.0), which
+    # brightest_within(2 deg) would miss -> the whole-FOV mode names the
+    # dominant star in view regardless of its distance from the boresight.
+    star = _catalog().brightest_in_fov(100.0, 20.0, 13.64)
+    assert star["name"] == "C"
+    assert star["mag"] == 0.0
+
+
+def test_brightest_in_fov_wider_than_radius_circle():
+    # The 2-deg circle picks B; the whole FOV picks the brighter, farther C.
+    cat = _catalog()
+    assert cat.brightest_within(100.0, 20.0, 2.0)["name"] == "B"
+    assert cat.brightest_in_fov(100.0, 20.0, 13.64)["name"] == "C"

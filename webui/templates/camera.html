@@ -266,6 +266,18 @@
           <span class="hint">(off: nearest cataloged star, the original behaviour)</span>
         </label>
       </form>
+      <form method="post" action="{{ url_for('solver_params_set') }}"
+            style="margin:0 0 10px;">
+        <input type="hidden" name="next" value="camera_page">
+        <input type="hidden" name="star_name_whole_fov"
+               value="{{ 'false' if solver_params.star_name_whole_fov else 'true' }}">
+        <label class="checkbox">
+          <input type="checkbox" onchange="this.form.submit()"
+                 {{ 'checked' if solver_params.star_name_whole_fov }}>
+          Centered star = brightest in the whole field of view
+          {{ tip("Names the brightest cataloged star anywhere in the frame, not just near the boresight. A stable anchor to center and align on when boresight calibration is off — a near-blank center still reports the bright star in a corner. Implies the brightest-star mode above.") }}
+        </label>
+      </form>
       <form method="post" action="{{ url_for('solver_params_set') }}">
         <label class="expert-only">
           Extractor backend {{ tip("<code>sycamore</code> (matched filter + temporal cache) or <code>tetra3</code> (AstroKeith's <code>get_centroids_from_image</code>). Flips only the extractor, holding the solve params constant — for a clean A/B against the Legacy preset. Applies live; Apply &amp; save persists.") }}

@@ -238,6 +238,11 @@ class Config:
     # via solver_params_set (expert toggle on the Advanced page).
     star_name_brightest: bool = True
     star_name_radius_deg: float = 2.0
+    # When True, the "centered star" names the brightest star anywhere in the
+    # FIELD OF VIEW (search radius = the frame half-extent) rather than within
+    # star_name_radius_deg of the boresight — a stable alignment anchor when
+    # boresight calibration is off. Implies brightest mode. Live-mutable.
+    star_name_whole_fov: bool = False
 
     # -------- Comms --------
     lx200_port: int = 4060
