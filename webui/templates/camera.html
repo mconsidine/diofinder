@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import tip %}
+{% from "_macros.html" import tip, debug_bundle %}
 {% block title %}diofinder Advanced{% endblock %}
 {% block content %}
 
@@ -30,6 +30,9 @@
       <dt>Status</dt>       <dd id="stat-status">—</dd>
     </dl>
     <p class="hint" id="live-ts" style="margin-top:4px;"></p>
+    {# Debug bundle right under the frame so a state can be captured without
+       scrolling away (the Downloads card below keeps the saved burst archives). #}
+    <p style="margin:6px 0 0;">{{ debug_bundle("cam-live-debug") }}</p>
   </div>
 
   <div class="card">
@@ -170,7 +173,7 @@
         {% if hotpix.loaded %}(loaded){% else %}(none){% endif %}</p>
     {% endif %}
     <form method="post" action="{{ url_for('hotpixel_capture') }}"
-          onsubmit="return confirm('Lens capped? This captures dark frames.');">
+          onsubmit="return darkCaptureStart(this, 'Lens capped? This captures dark frames.');">
       <label>Frames
         <input type="number" name="frames" value="16" min="2" max="64" step="1"
                style="width:5em;">
@@ -184,6 +187,7 @@
                style="width:5em;">
       </label>
       <button type="submit" class="btn">Capture dark frame</button>
+      <span class="dark-status" style="margin-left:8px;font-size:0.85rem;color:#c93;"></span>
     </form>
     {% if hotpix and hotpix.count %}
     <form method="post" action="{{ url_for('hotpixel_clear') }}" style="margin-top:6px;">
@@ -439,13 +443,11 @@
     {% endif %}
   </div>
 
-  {# ---- Downloads: debug bundle + saved burst archives. Visible in both
-        novice and expert mode — downloads are read-only page-level actions,
-        like the Config page's factory-reset card. ---- #}
+  {# ---- Saved burst archives. (The debug-bundle button now lives directly
+        below the live view at the top of the page.) Visible in both novice and
+        expert mode — downloads are read-only page-level actions. ---- #}
   <div class="card" id="downloads-card">
-    <h2>Downloads {{ tip("Debug bundle: a <strong>12-frame burst</strong> of raw frames plus the current settings, logs, and solve state in one ZIP (same as the Home page button). Below it, every saved burst archive from the Background A/B page.") }}</h2>
-    <button id="cam-debug-btn" class="btn btn-primary">Download debug bundle</button>
-    <span id="cam-debug-status" style="margin-left:8px;font-size:0.85rem;color:#888;"></span>
+    <h2>Saved burst archives {{ tip("Every saved burst archive from the Background A/B page. The debug bundle (a <strong>12-frame burst</strong> + settings, logs, and solve state) is the button below the live view at the top of this page.") }}</h2>
     {% if bursts %}
     <ul style="margin:10px 0 0; padding-left:1.2em; font-size:0.9rem;">
       {% for b in bursts %}
@@ -1009,45 +1011,7 @@ setInterval(syncCameraState, 3000);
   refresh();
 })();
 
-// --- Downloads: debug bundle (same flow as the Home page button) --------------
-(function () {
-  const btn = document.getElementById('cam-debug-btn');
-  const st  = document.getElementById('cam-debug-status');
-  if (!btn) return;
-  btn.addEventListener('click', async function () {
-    btn.disabled = true;
-    const label = btn.textContent;
-    btn.textContent = 'Collecting… (~15 s)';
-    st.textContent = '';
-    try {
-      const r = await fetch('/debug/collect', {method: 'POST'});
-      if (!r.ok) { st.textContent = 'Error: server returned ' + r.status; }
-      else {
-        const blob = await r.blob();
-        const n = new Date();
-        const ts = n.getFullYear().toString()
-          + String(n.getMonth() + 1).padStart(2, '0')
-          + String(n.getDate()).padStart(2, '0')
-          + String(n.getHours()).padStart(2, '0')
-          + String(n.getMinutes()).padStart(2, '0')
-          + String(n.getSeconds()).padStart(2, '0');
-        const fn = `diofinder_debug_${ts}.zip`;
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = fn;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(a.href);
-        st.textContent = '✓ ' + fn;
-      }
-    } catch (e) {
-      st.textContent = 'Error: ' + e.message;
-    }
-    btn.textContent = label;
-    btn.disabled = false;
-  });
-})();
+// (Debug-bundle button handler is shared in base.html via .js-debug-bundle.)
 </script>
 
 {% endblock %}

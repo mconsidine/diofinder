@@ -94,6 +94,65 @@
         if (e.key === 'Escape' || e.key === 'Esc') closeAll(null);
       });
     })();
+
+    // Debug bundle: ONE handler for every .js-debug-bundle button (macro in
+    // _macros.html), so the "Download debug bundle" button can sit below the
+    // live view on any page without per-page JS. POSTs /debug/collect and
+    // streams the ZIP back as a download; status goes to <btn.id>-status.
+    document.addEventListener('DOMContentLoaded', function () {
+      document.querySelectorAll('.js-debug-bundle').forEach(function (btn) {
+        btn.addEventListener('click', async function () {
+          var st = document.getElementById(btn.id + '-status');
+          btn.disabled = true;
+          var label = btn.textContent;
+          btn.textContent = 'Collecting… (~15 s)';
+          if (st) st.textContent = '';
+          try {
+            var r = await fetch('/debug/collect', {method: 'POST'});
+            if (!r.ok) { if (st) st.textContent = 'Error: server returned ' + r.status; }
+            else {
+              var blob = await r.blob();
+              var n = new Date();
+              var ts = n.getFullYear().toString()
+                + String(n.getMonth() + 1).padStart(2, '0')
+                + String(n.getDate()).padStart(2, '0')
+                + String(n.getHours()).padStart(2, '0')
+                + String(n.getMinutes()).padStart(2, '0')
+                + String(n.getSeconds()).padStart(2, '0');
+              var fn = 'diofinder_debug_' + ts + '.zip';
+              var a = document.createElement('a');
+              a.href = URL.createObjectURL(blob);
+              a.download = fn;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(a.href);
+              if (st) st.textContent = '✓ ' + fn;
+            }
+          } catch (e) {
+            if (st) st.textContent = 'Error: ' + e.message;
+          }
+          btn.textContent = label;
+          btn.disabled = false;
+        });
+      });
+    });
+
+    // Dark-frame / hot-pixel capture is a blocking form POST (~5-15 s). Call
+    // this from the form's onsubmit so the current page shows a "capturing…"
+    // status while the browser waits for the redirect. Returns the confirm
+    // result: false cancels the submit, true lets it proceed with the status
+    // shown. Disabling the submit button after submit has begun is a no-op on
+    // the in-flight POST (it only guards against a double-click).
+    function darkCaptureStart(form, confirmMsg) {
+      if (confirmMsg && !confirm(confirmMsg)) return false;
+      var btn = form.querySelector('button[type="submit"]');
+      if (btn) { btn.disabled = true; btn.textContent = 'Capturing…'; }
+      var st = form.querySelector('.dark-status');
+      if (st) st.textContent =
+        'Capturing dark frame — keep the lens capped… (~15 s, page will refresh)';
+      return true;
+    }
   </script>
 </body>
 </html>
