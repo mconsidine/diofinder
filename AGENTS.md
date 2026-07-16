@@ -173,6 +173,7 @@ a guard in code. If you touch the related code, keep the guard and its test.
 | Frozen-but-live pointing | Camera capture failure republished the stale buffer with fresh seq | publish-only-on-success + backoff (v0.11.20) |
 | Settings saved ≠ settings in force | `%.6f` float persist (1e-7 → 0.0), unlocked cross-process conf RMW, half-applied seeing presets | `%.10g` + flock + atomic replace + DB-switch-first (v0.11.20) |
 | Stale conf across OTA | `/etc` conf persists; old defaults (scientific tuning w/ DPC, old bg mode…) rot silently | one-shot `conf_migrate` + divergence report (v0.11.21) |
+| `:CM#` sync never moves the boresight on a marginal sky | Solver consumed the align request on the *first* frame and replied FAILURE on any NoMatch/TooFew; the 15 s "several attempts" comms window was never used for retries, so a sync landing in a solve drought (≈50 % NoMatch is common) died instantly | Solver **holds** the pending sync across frames (`_align_promote`, pure/tested) until a solve lands the target or the 13 s window expires (v0.11.54) |
 
 Device quirk worth knowing: field units often have **no RTC/NTP** — journal
 timestamps can be weeks off. Correlate by event order, not wall-clock.

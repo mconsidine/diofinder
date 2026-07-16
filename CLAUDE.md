@@ -244,7 +244,14 @@ one-at-a-time — a blocking `:CM#` align or a half-open phone can't starve othe
 clients' `:GR/:GD` polls (the reconnect→broken-pipe storm). `_handle_lx200_command`
 runs concurrently across connections; the only shared-mutation hazard is the
 `:CM#` align exchange on the shared `align_response_q`, serialized by
-`_align_lock`. `:GR/:GD` **hold the last solved RA/Dec** during a solve drought
+`_align_lock`. **Held sync (v0.11.54).** A `:CM#` must survive a marginal sky:
+the solver keeps the pending align request across frames (`_align_promote`) and
+only replies FAILURE when the ~13 s hold window expires — *not* on the first
+frame that fails to solve. Before this, the request was consumed and failed on
+frame one, so a sync issued during a solve drought (≈50 % NoMatch is common)
+died instantly and never moved the boresight; the 15 s comms timeout
+(`CommsAlignState.DEFAULT_TIMEOUT_S`, whose comment always promised "several
+attempts") was never actually used for retries. `:GR/:GD` **hold the last solved RA/Dec** during a solve drought
 (it lingers in `latest_solution` because `_empty_solution` omits `ra_deg` and
 the publish is a dict *merge*); the `status` maint result exposes
 `pointing_age_s` + `pointing_stale` (> `_POINTING_STALE_S`=10 s) so the web UI

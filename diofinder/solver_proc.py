@@ -182,6 +182,15 @@ def _filled_solution(*, ra, dec, roll, fov, stars, matches,
     return sol
 
 
+# A :CM# sync must survive a marginal sky. comms waits CommsAlignState.
+# DEFAULT_TIMEOUT_S (15 s) for a result — the intent (per that constant's
+# comment) is "give the solver several attempts". So the solver HOLDS a pending
+# align request across frames and only replies FAILURE when this window expires,
+# not on the first frame that fails to solve. Kept a hair under the comms
+# timeout so a definitive failure reaches comms before it stops listening.
+_ALIGN_SOLVER_WINDOW_S = 13.0
+
+
 def _drain_align_queue(q, response_q):
     latest = None
     superseded = []
@@ -211,6 +220,32 @@ def _align_reply(response_q, req, success, **kw):
             completed_at=time.monotonic(), **kw))
     except Exception:
         log.warning("align response queue full — result dropped")
+
+
+def _align_promote(pending, deadline, new_req, now, window_s):
+    """Pure per-frame decision for a held :CM# sync (unit-tested).
+
+    A sync must survive a marginal sky: rather than fail on the first frame
+    that doesn't solve, the solver HOLDS the request across frames and retries
+    until a solve lands the target or the window expires. This function owns
+    only the promote/supersede/expire transitions; the caller emits the
+    returned failure replies and, on a later successful solve, clears `pending`.
+
+    Returns ``(pending, deadline, fail_replies)`` where ``fail_replies`` is a
+    list of ``(req, error_message)`` the caller must send via ``_align_reply``.
+    """
+    fail_replies = []
+    if new_req is not None:
+        # A newer sync supersedes one still waiting for a good solve.
+        if pending is not None:
+            fail_replies.append((pending, "superseded by a newer sync request"))
+        pending = new_req
+        deadline = now + window_s
+    if pending is not None and now > deadline:
+        fail_replies.append(
+            (pending, "no successful solve within the align window"))
+        pending = None
+    return pending, deadline, fail_replies
 
 
 def _drain_cmd_queue(q):
@@ -1015,6 +1050,12 @@ def solver_main(slots, latest_solution, shared_cfg,
     last_sky_q       = None   # quaternion (w,x,y,z) from last successful solve
     last_solve_imu_q = None   # IMU quaternion recorded at that same solve
 
+    # Pending :CM# sync, held across frames until a solve lands the target or
+    # the align window expires (a solve drought must not fail the sync on frame
+    # one — see _ALIGN_SOLVER_WINDOW_S). None when no sync is in flight.
+    pending_align          = None
+    pending_align_deadline = 0.0
+
     # ---- Tracking-mode state machine (experimental, opt-in) ---------------
     # Two states: FULL (full-frame detect + blind/IMU-hint solve, the shipped
     # behaviour) and TRACKING (ROI-windowed detect around the previous solved
@@ -1145,7 +1186,21 @@ def solver_main(slots, latest_solution, shared_cfg,
             # :CM# on a dark frame (mid-slew / cloud / exposure step) and
             # silently dropped it — SkySafari then blocked for the full 15 s
             # alignment timeout. Requests now stay queued until a bright frame.
-            align_req  = _drain_align_queue(align_request_q, align_response_q)
+            new_align_req = _drain_align_queue(align_request_q, align_response_q)
+            pending_align, pending_align_deadline, _align_fails = _align_promote(
+                pending_align, pending_align_deadline, new_align_req,
+                time.monotonic(), _ALIGN_SOLVER_WINDOW_S)
+            for _freq, _fmsg in _align_fails:
+                _align_reply(align_response_q, _freq, False, error_message=_fmsg)
+            if new_align_req is not None:
+                log.info("ALIGN pending: (%.4f, %.4f) — holding up to %.0fs "
+                         "for a solve", new_align_req.target_ra_deg,
+                         new_align_req.target_dec_deg, _ALIGN_SOLVER_WINDOW_S)
+            if _align_fails and pending_align is None:
+                log.warning("ALIGN failed: no solve within %.0fs window",
+                            _ALIGN_SOLVER_WINDOW_S)
+            # The solve below projects the target every frame until it lands.
+            align_req = pending_align
 
             # ONE Manager IPC round-trip for all per-frame knob reads: every
             # snap.get() is a pickled unix-socket RPC to the Manager
@@ -1443,9 +1498,8 @@ def solver_main(slots, latest_solution, shared_cfg,
                     log.warning("centroid extraction raised: %s", e)
                 latest_solution.update(_empty_solution(peak=local_peak,
                                                        seq=frame_seq))
-                if align_req is not None:
-                    _align_reply(align_response_q, align_req, False,
-                                 error_message=f"centroid extraction raised: {e}")
+                # Hold any pending :CM# — a bad frame is not an align failure;
+                # it retries next frame until the align window expires.
                 fail_streak += 1
                 # Same failure bookkeeping as a NoMatch: without it an
                 # exception-class failure (e.g. a poisoned cache model) never
@@ -1476,9 +1530,8 @@ def solver_main(slots, latest_solution, shared_cfg,
                 latest_solution.update(_empty_solution(
                     stars=n_stars, peak=local_peak,
                     solve_ms=extract_ms, status=TOO_FEW, seq=frame_seq))
-                if align_req is not None:
-                    _align_reply(align_response_q, align_req, False,
-                                 error_message=f"too few stars ({n_stars}<{min_c})")
+                # Hold any pending :CM# — too-few-stars is a transient bad
+                # frame; the sync retries next frame within its window.
                 fail_streak += 1
                 if served_by_tracking:
                     tracking_solve_fail += 1
@@ -1577,9 +1630,8 @@ def solver_main(slots, latest_solution, shared_cfg,
                 latest_solution.update(_empty_solution(
                     stars=n_stars, peak=local_peak,
                     solve_ms=extract_ms, status=NO_MATCH, seq=frame_seq))
-                if align_req is not None:
-                    _align_reply(align_response_q, align_req, False,
-                                 error_message=f"solver raised: {e}")
+                # Hold any pending :CM# — a raised solve is a transient bad
+                # frame; the sync retries next frame within its window.
                 fail_streak += 1
                 if served_by_tracking:
                     # A tracked verify/solve failure says "the tight attitude
@@ -1680,9 +1732,8 @@ def solver_main(slots, latest_solution, shared_cfg,
                 latest_solution.update(_empty_solution(
                     stars=n_stars, peak=local_peak,
                     solve_ms=elapsed_ms, status=status_int, seq=frame_seq))
-                if align_req is not None:
-                    _align_reply(align_response_q, align_req, False,
-                                 error_message=f"no match (status={status_str})")
+                # Hold any pending :CM# — this frame didn't solve, but the sync
+                # keeps retrying every frame until it does or its window ends.
                 fail_streak += 1
                 if fail_streak == 1 or fail_streak % 20 == 0:
                     log.info(
@@ -1827,6 +1878,9 @@ def solver_main(slots, latest_solution, shared_cfg,
                         _align_reply(align_response_q, align_req, True,
                                      boresight_y=float(y),
                                      boresight_x=float(x))
+                # Resolved on this successful solve (the target either landed or
+                # was genuinely outside the frame) — stop holding it.
+                pending_align = None
 
             if cfg.save_solved_frames and frame_snapshot is not None:
                 _save_frame(frame_snapshot, cfg, "solved")
