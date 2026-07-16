@@ -15,3 +15,15 @@
 {% macro tip(text, label="More info") -%}
 <span class="tip"><button type="button" class="tip-btn" aria-label="{{ label }}" aria-expanded="false">i</button><span class="tip-pop" role="tooltip">{{ text | safe }}</span></span>
 {%- endmacro %}
+
+{#- Debug-bundle button + inline status. Wired by ONE shared handler in
+    base.html (delegated on the .js-debug-bundle class); the status span id is
+    always `<bid>-status`. Drop it anywhere — e.g. just below the live view —
+    with a unique `bid`:
+      {% from "_macros.html" import debug_bundle %}
+      {{ debug_bundle("home-live-debug") }}
+    POSTs /debug/collect and streams the ZIP back as a download (a copy is also
+    saved on the device); nothing on the device changes. -#}
+{% macro debug_bundle(bid, label="Download debug bundle", cls="btn btn-primary") -%}
+<button id="{{ bid }}" type="button" class="{{ cls }} js-debug-bundle">{{ label }}</button><span id="{{ bid }}-status" class="debug-bundle-status" style="margin-left:8px;font-size:0.85rem;color:#888;"></span>
+{%- endmacro %}

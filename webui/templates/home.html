@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import tip %}
+{% from "_macros.html" import tip, debug_bundle %}
 {% block title %}diofinder Home{% endblock %}
 {% block content %}
 
@@ -23,6 +23,9 @@
            style="max-width:100%; height:auto; display:block; background:#111;">
     </div>
     <p class="hint" id="live-ts" style="margin-top:4px;"></p>
+    {# Debug bundle right under the frame so a state can be captured without
+       scrolling away (12-frame burst + settings + logs; nothing changes). #}
+    <p style="margin:6px 0 0;">{{ debug_bundle("home-live-debug") }}</p>
   </div>
 
   <div class="card" id="solution-card">
@@ -275,12 +278,8 @@
     {% endif %}
   </div>
 
-  {# ---- Diagnostics (12-frame debug burst) ---- #}
-  <div class="card expert-only">
-    <h2>Diagnostics {{ tip("Captures a <strong>12-frame burst</strong> of raw frames + the current settings, logs, and solve state into a ZIP to email for support. Nothing on the device is changed.") }}</h2>
-    <button id="home-debug-btn" class="btn btn-primary">Download debug bundle</button>
-    <span id="home-debug-status" style="margin-left:8px;font-size:0.85rem;color:#888;"></span>
-  </div>
+  {# Diagnostics debug-bundle button moved directly below the live view (top of
+     page) so a state can be captured without scrolling. #}
 
 </section>
 
@@ -512,46 +511,7 @@ if (expNum)   expNum.addEventListener('input',   e => expNumChange(e.target.valu
 if (gainNum)  gainNum.addEventListener('input',  e => gainNumChange(e.target.value));
 if (sigmaNum) sigmaNum.addEventListener('input', e => sigmaNumChange(e.target.value));
 
-// Debug bundle: POST /debug/collect builds the 12-frame-burst ZIP and streams
-// it back as a download (a copy is also saved on the device).
-(function () {
-  const btn = document.getElementById('home-debug-btn');
-  const st  = document.getElementById('home-debug-status');
-  if (!btn) return;
-  btn.addEventListener('click', async function () {
-    btn.disabled = true;
-    const label = btn.textContent;
-    btn.textContent = 'Collecting… (~15 s)';
-    st.textContent = '';
-    try {
-      const r = await fetch('/debug/collect', {method: 'POST'});
-      if (!r.ok) { st.textContent = 'Error: server returned ' + r.status; }
-      else {
-        const blob = await r.blob();
-        const n = new Date();
-        const ts = n.getFullYear().toString()
-          + String(n.getMonth() + 1).padStart(2, '0')
-          + String(n.getDate()).padStart(2, '0')
-          + String(n.getHours()).padStart(2, '0')
-          + String(n.getMinutes()).padStart(2, '0')
-          + String(n.getSeconds()).padStart(2, '0');
-        const fn = `diofinder_debug_${ts}.zip`;
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = fn;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(a.href);
-        st.textContent = '✓ ' + fn;
-      }
-    } catch (e) {
-      st.textContent = 'Error: ' + e.message;
-    }
-    btn.textContent = label;
-    btn.disabled = false;
-  });
-})();
+// (Debug-bundle button handler is shared in base.html via .js-debug-bundle.)
 </script>
 
 {% endblock %}
