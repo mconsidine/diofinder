@@ -1055,12 +1055,30 @@ def _watchdog_loop(ctx, interval_s=5.0):
 _align_req_seq = itertools.count(1)
 _align_lock = threading.Lock()
 
+# Shared LX200 align target across ALL connection threads (v0.11.56 fix).
+# SkySafari sends :Sr/:Sd (set target RA/Dec) then :CM# (sync). v0.11.52's
+# threaded server gave each connection its OWN CommsAlignState, so if the client
+# split those commands across connections — or reconnected between them — the
+# :CM# landed on a connection whose target was never set: build_request()
+# returned None, _do_alignment bailed with a silent "no align target#", and the
+# boresight never moved (align appeared to do nothing, no log). One shared
+# instance restores the pre-v0.11.52 behaviour. Aligns are rare and effectively
+# single-client, so the tiny race between two simultaneous aligns is acceptable.
+_lx200_align_state = CommsAlignState()
+
+# LX200 commands we don't handle — logged once each (bounded) at INFO so a
+# client using a *different* sync/align command than :CM# is visible in a
+# bundle instead of hiding at DEBUG.
+_lx200_unhandled_seen: set = set()
+
 
 def _do_alignment(align_state, cfg, shared_cfg,
                   align_request_q, align_response_q):
     """Execute :CM# alignment: send target to solver, wait for result, persist boresight."""
     req = align_state.build_request()
     if req is None:
+        log.warning("LX200 :CM# ignored — no align target set (:Sr/:Sd not "
+                    "received before :CM#). Align makes no change.")
         return "no align target#"
 
     # The align target arrives from SkySafari in its reporting epoch (JNow by
@@ -1433,11 +1451,18 @@ def _handle_lx200_command(cmd, latest_solution, align_state, time_state,
         return f"diofinder {cfg.version}#".encode("ascii")
     if cmd.startswith(":Sr"):
         ok = align_state.set_target_ra(cmd[3:])
+        log.info("LX200 :Sr target RA %s (%r)",
+                 "set" if ok else "REJECTED", cmd[3:].strip())
         return b"1" if ok else b"0"
     if cmd.startswith(":Sd"):
         ok = align_state.set_target_dec(cmd[3:])
+        log.info("LX200 :Sd target Dec %s (%r)",
+                 "set" if ok else "REJECTED", cmd[3:].strip())
         return b"1" if ok else b"0"
     if cmd == ":CM":
+        log.info("LX200 :CM# sync received — target %s",
+                 "on record" if align_state.can_align()
+                 else "MISSING (no :Sr/:Sd before :CM#)")
         reply = _do_alignment(align_state, cfg, shared_cfg,
                               align_request_q, align_response_q)
         return reply.encode("ascii")
@@ -1514,7 +1539,13 @@ def _handle_lx200_command(cmd, latest_solution, align_state, time_state,
         return b"+00#"
     if cmd in (":GA", ":GZ"):
         return b"+00*00#"
-    log.debug("Unhandled LX200 command: %r", cmd)
+    if cmd not in _lx200_unhandled_seen and len(_lx200_unhandled_seen) < 64:
+        _lx200_unhandled_seen.add(cmd)
+        log.info("LX200 unhandled command (first seen): %r — if this is your "
+                 "client's align/sync command, that's why :CM# alignment "
+                 "isn't firing", cmd)
+    else:
+        log.debug("Unhandled LX200 command: %r", cmd)
     return b"#"
 
 
@@ -2822,8 +2853,10 @@ def _serve_lx200_client(client, addr, latest_solution, shared_cfg, cfg,
         except (AttributeError, OSError):
             pass
         client.settimeout(cfg.lx200_client_timeout_s)
-        log.debug("LX200 client from %s", addr)
-        align_state = CommsAlignState()
+        log.info("LX200 client connected from %s", addr)
+        # SHARED align target (v0.11.56): :Sr/:Sd on one connection must be
+        # visible to a :CM# that arrives on another (SkySafari splits/reconnects).
+        align_state = _lx200_align_state
         time_state  = {}
         buf = b""
         while True:
