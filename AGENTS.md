@@ -174,6 +174,7 @@ a guard in code. If you touch the related code, keep the guard and its test.
 | Settings saved ≠ settings in force | `%.6f` float persist (1e-7 → 0.0), unlocked cross-process conf RMW, half-applied seeing presets | `%.10g` + flock + atomic replace + DB-switch-first (v0.11.20) |
 | Stale conf across OTA | `/etc` conf persists; old defaults (scientific tuning w/ DPC, old bg mode…) rot silently | one-shot `conf_migrate` + divergence report (v0.11.21) |
 | `:CM#` sync never moves the boresight on a marginal sky | Solver consumed the align request on the *first* frame and replied FAILURE on any NoMatch/TooFew; the 15 s "several attempts" comms window was never used for retries, so a sync landing in a solve drought (≈50 % NoMatch is common) died instantly | Solver **holds** the pending sync across frames (`_align_promote`, pure/tested) until a solve lands the target or the 13 s window expires (v0.11.54) |
+| `:CM#` sync never moves the boresight — **no align activity logged at all** | v0.11.52's threaded server gave each connection its own `CommsAlignState`; a client that split `:Sr`/`:Sd` (set target) from `:CM#` (sync) across connections — or reconnected between them — hit a sync connection with no target → `build_request()` None → silent "no align target#", boresight untouched, nothing logged. Confirmed from a v0.11.55 bundle: Vega solved 2.4° off, boresight stuck at (380,480), zero `ALIGN`/`:CM` lines | **Shared** module-level `_lx200_align_state` across all LX200 threads (v0.11.56); plus INFO logging of `:Sr`/`:Sd`/`:CM#`, the no-target bail, and first-seen unhandled commands so the sequence is never silent again |
 
 Device quirk worth knowing: field units often have **no RTC/NTP** — journal
 timestamps can be weeks off. Correlate by event order, not wall-clock.
@@ -235,9 +236,25 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.55)
+## 6. Current state (as of v0.11.56)
 
-Released through **v0.11.55** (latest).
+Released through **v0.11.56** (latest).
+
+- v0.11.56: **`:CM#` align finally moves the boresight — shared align target +
+  full align logging.** A v0.11.55 debug bundle (Vega solved 2.4° off, boresight
+  stuck at the (380,480) default, *zero* align lines in the journal) proved the
+  sync was silently dropped: v0.11.52's threaded LX200 server gave each
+  connection its own `CommsAlignState`, so a client that split `:Sr`/`:Sd` from
+  `:CM#` across connections (or reconnected between them) hit a sync connection
+  whose target was never set → `build_request()` None → silent "no align
+  target#". Fix: one **shared** `_lx200_align_state` across all LX200 threads
+  (restores pre-v0.11.52 behaviour; aligns are rare/single-client). Plus INFO
+  logging of every `:Sr`/`:Sd`/`:CM#`, the client connect, the no-target bail,
+  and first-seen unhandled commands — so if a client uses a non-`:CM#` sync
+  command (different scope type) it's visible in a bundle instead of hiding at
+  DEBUG. comms-only; §4 catalog updated. (The v0.11.54 align-hold fix is still
+  needed — it handles the *marginal-sky* failure; this handles the *silent-drop*
+  failure. Both were real.)
 
 **Design docs (doc-only, not yet a feature):**
 `docs/onstep-design.md` (mount-sync output spec — OnStepX/LX200 v1, Alpaca for
