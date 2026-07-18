@@ -236,9 +236,25 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.57)
+## 6. Current state (as of v0.11.58)
 
-Released through **v0.11.57** (latest).
+Released through **v0.11.58** (latest).
+
+- v0.11.58: **LX200 fixed worker pool** — absorb the SkySafari reconnect storm.
+  Field bundles showed SkySafari opening a **new TCP connection per poll**
+  (~4/s at readout rate 4; a client-side behaviour, not configurable away), and
+  v0.11.52's thread-per-connection then spawned/tore down a thread that often on
+  the Zero 2W's shared CPU 0 — behind the transient "camera unavailable" frame
+  misses and crosshair jitter. `_serve_lx200`'s accept loop now only enqueues
+  sockets; a fixed pool of `_LX200_POOL_WORKERS`=8 long-lived workers drains a
+  bounded queue (`_LX200_QUEUE_MAX`=16, overflow sheds). Zero per-connection
+  thread churn, same 8-way concurrency ceiling and shed-on-overload as the old
+  semaphore cap, and the v0.11.52 isolation invariant preserved (a blocking
+  `:CM#`/half-open phone occupies one worker, not the accept loop). Per-connection
+  handling (`_serve_lx200_client`) is byte-identical minus the semaphore. Full
+  rationale + reviewer checklist in `docs/lx200-connection-pool-design.md`.
+  comms-only; the socket/threading path isn't unit-covered (nor was the threaded
+  server) — validated by byte-compile + review + on-device.
 
 - v0.11.57: align-glitch polish after v0.11.56 field-verified the align works
   (bundles: `:Sr`→`:Sd`→`:CM# target on record`→`ALIGN pending`→`ALIGN: ->

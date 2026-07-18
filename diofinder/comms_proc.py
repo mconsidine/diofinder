@@ -35,7 +35,7 @@ import statistics
 import subprocess
 import threading
 import time
-from queue import Empty, Full
+from queue import Empty, Full, Queue
 
 from diofinder import config as cfg_mod
 from diofinder import bg_modes as bg_modes_mod
@@ -2865,17 +2865,30 @@ def _serve_maint_socket(ctx, socket_path=None):
 # spawn threads without bound. SkySafari uses 1-2; 8 is generous. Dead
 # half-open connections are reaped by TCP keepalive (~25 s) and the recv
 # timeout, freeing slots.
-_LX200_MAX_CLIENTS = 8
+# Fixed worker pool (v0.11.58): a SkySafari readout rate of N opens a NEW TCP
+# connection N times/sec (per-poll reconnect — a client-side behaviour, not
+# configurable away). Thread-per-connection (v0.11.52) then spawned/tore down a
+# thread that often on the Zero 2W's shared CPU 0, behind the transient
+# "camera unavailable"/jitter. A fixed pool of long-lived workers draining a
+# bounded queue keeps the v0.11.52 isolation (a blocking :CM# / half-open phone
+# occupies one WORKER, not the accept loop) with zero per-connection thread
+# churn. Pool size = the old concurrency cap; queue absorbs bursts, overflow
+# sheds. See docs/lx200-connection-pool-design.md.
+_LX200_POOL_WORKERS = 8
+_LX200_QUEUE_MAX = 16
+# Retained name for the (unchanged) 8-way concurrency ceiling the pool provides.
+_LX200_MAX_CLIENTS = _LX200_POOL_WORKERS
 
 
 def _serve_lx200_client(client, addr, latest_solution, shared_cfg, cfg,
-                        align_request_q, align_response_q, ctx, sem):
-    """Serve one LX200 connection to completion, in its own thread (v0.11.52).
+                        align_request_q, align_response_q, ctx):
+    """Serve one LX200 connection to completion on a pool worker (v0.11.58).
 
-    One thread per connection means a blocking :CM# align — or a half-open
-    phone the old single-connection server would sit and wait on — can no
-    longer starve other clients' :GR/:GD polls (the poll-timeout ->
-    reconnect -> broken-pipe storm). Releases its client slot on exit."""
+    A blocking :CM# align — or a half-open phone the old single-connection
+    server would sit and wait on — occupies one worker but can no longer starve
+    other clients' :GR/:GD polls (the poll-timeout -> reconnect -> broken-pipe
+    storm). The per-connection handling is unchanged from the v0.11.52 threaded
+    server; only the dispatch (pool + queue) differs."""
     try:
         client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         client.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
@@ -2921,43 +2934,53 @@ def _serve_lx200_client(client, addr, latest_solution, shared_cfg, cfg,
     finally:
         try: client.close()
         except Exception: pass
-        sem.release()
 
 
 def _serve_lx200(latest_solution, shared_cfg, cfg,
                  align_request_q, align_response_q, ctx):
-    """Bind the LX200 TCP socket and serve each connection in its own thread
-    (bounded to _LX200_MAX_CLIENTS)."""
+    """Bind the LX200 TCP socket and serve connections from a FIXED WORKER POOL
+    (v0.11.58): the accept loop only enqueues sockets; _LX200_POOL_WORKERS
+    long-lived workers drain a bounded queue. A per-poll-reconnect client
+    (SkySafari) no longer churns a thread per connection. See
+    docs/lx200-connection-pool-design.md."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(("0.0.0.0", cfg.lx200_port))
-    sock.listen(8)
-    sem = threading.BoundedSemaphore(_LX200_MAX_CLIENTS)
-    log.info("LX200 server listening on :%d (per-connection threads, max %d)",
-             cfg.lx200_port, _LX200_MAX_CLIENTS)
+    sock.listen(16)
+    work_q: Queue = Queue(maxsize=_LX200_QUEUE_MAX)
+
+    def _worker():
+        while True:
+            client, addr = work_q.get()
+            try:
+                _serve_lx200_client(client, addr, latest_solution, shared_cfg,
+                                    cfg, align_request_q, align_response_q, ctx)
+            except Exception as e:
+                log.warning("LX200 worker error serving %s: %s", addr, e)
+                try: client.close()
+                except Exception: pass
+            finally:
+                work_q.task_done()
+
+    for i in range(_LX200_POOL_WORKERS):
+        threading.Thread(target=_worker, name=f"lx200-worker-{i}",
+                         daemon=True).start()
+    log.info("LX200 server listening on :%d (%d-worker pool, queue %d)",
+             cfg.lx200_port, _LX200_POOL_WORKERS, _LX200_QUEUE_MAX)
+
     while True:
         client, addr = sock.accept()
         _lx200_note_connection(addr)
-        if not sem.acquire(blocking=False):
-            # At the client cap — almost always stale half-open connections a
-            # phone left behind, which keepalive/recv-timeout will reap soon.
-            # Drop the newcomer rather than block the accept loop.
-            log.warning("LX200 at client cap (%d); dropping %s",
-                        _LX200_MAX_CLIENTS, addr)
-            try: client.close()
-            except Exception: pass
-            continue
         try:
-            threading.Thread(
-                target=_serve_lx200_client,
-                args=(client, addr, latest_solution, shared_cfg, cfg,
-                      align_request_q, align_response_q, ctx, sem),
-                name="lx200-client", daemon=True).start()
-        except Exception as e:
-            # Thread spawn failed (resource exhaustion): release the slot we
-            # took so it doesn't leak, and drop the client.
-            log.error("LX200 client thread spawn failed: %s", e)
-            sem.release()
+            work_q.put_nowait((client, addr))
+        except Full:
+            # All workers busy AND the backlog is full — almost always stale
+            # half-open connections a phone left behind (reaped by keepalive /
+            # the recv timeout). Shed the newcomer rather than grow unbounded,
+            # exactly as the old semaphore cap did.
+            log.warning("LX200 work queue full (%d busy + %d queued); "
+                        "dropping %s", _LX200_POOL_WORKERS, _LX200_QUEUE_MAX,
+                        addr)
             try: client.close()
             except Exception: pass
 
