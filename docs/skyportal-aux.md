@@ -22,11 +22,13 @@ TCP server, UDP discovery beacon, and pointing callback live in
 
 ## Using it
 
-1. Set `latitude_deg` / `longitude_deg` in the conf (Config page) and make
-   sure the clock is right (NTP, or connect once with SkySafari, whose LX200
-   link syncs the clock). Alt/az is computed from the solved RA/Dec with
-   site + time; the in-app alignment absorbs constant offsets but not a
-   wrong rotation rate from a bad site/clock.
+1. Set your **site** on the web UI Config page → "Observer location" card
+   (paste `lat, lon` from a phone maps app — both Apple and Google Maps copy
+   coordinates in that form). The **clock** syncs itself: every web-UI page
+   load posts the browser's time to the daemon, which steps its own clock if
+   the drift exceeds ~10 s. Alt/az is computed from the solved RA/Dec with
+   site + time; the in-app alignment absorbs a constant offset but not a
+   wrong rate from a bad site/clock, so both should be roughly right.
 2. Put the phone on the same network as the finder (the finder's AP or a
    shared Wi-Fi).
 3. SkyPortal → Settings → Telescope → connect. Auto-detect finds the finder
@@ -38,6 +40,27 @@ TCP server, UDP discovery beacon, and pointing callback live in
 GoTo and manual-slew commands are **acknowledged as no-ops** (slew reports
 "done" immediately) — diofinder cannot move the telescope; the user pushes.
 The app's crosshair always shows where the scope actually points.
+
+### Getting time and location without SkySafari
+
+The AUX protocol has no channel for the app to hand time or location to the
+mount (on the real bus a GPS accessory *serves* those; the Evolution has no
+RTC). So a SkyPortal-only setup gets them from the browser instead:
+
+* **Time** — automatic. `base.html` POSTs `Date.now()` to `/api/time_sync`
+  on every page load; `comms_proc._sync_clock_epoch` steps the system clock
+  past the shared `_CLOCK_DRIFT_MIN_S` (10 s) threshold via the same
+  sudo-whitelisted `diofinder-set-time` helper the SkySafari `:SL/:SG/:SC`
+  path uses. Stepping the clock shifts the reported alt/az, so re-align
+  SkyPortal if it was already connected when a large correction lands.
+* **Location** — the Config "Observer location" card. Browser geolocation
+  (`navigator.geolocation`) is blocked on plain `http://`, so the card takes
+  a pasted `lat, lon` instead (`/location/set` → `location_set` maint
+  command → persists both, routes latitude to the solver like
+  `polar_set_latitude`). One-time; it rarely changes.
+
+A single SkySafari LX200 connection still sets both automatically, and NTP
+covers time whenever the finder has internet in station mode.
 
 ## Config keys
 

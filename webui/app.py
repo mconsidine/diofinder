@@ -429,7 +429,7 @@ def boresight_center():
 
 
 _NEXT_ENDPOINTS = {"dashboard", "camera_page", "home_page", "utilities_page",
-                   "bgtest_page"}
+                   "bgtest_page", "config_page"}
 
 
 def _redirect_next(default):
@@ -500,6 +500,50 @@ def polar_set_latitude():
     _safe_call("polar_set_latitude",
                {"latitude_deg": lat, "persist": True})
     return redirect(url_for("polar_page"))
+
+
+@app.route("/api/time_sync", methods=["POST"])
+def api_time_sync():
+    """Set the Pi's clock from the browser's epoch (posted on every page load).
+
+    SkyPortal has no way to hand the finder time over the Celestron AUX
+    protocol, and the Pi has no RTC, so the browser is the easiest clock
+    source. The daemon steps the clock only past its drift threshold; a
+    sub-threshold call is a cheap no-op. Fire-and-forget from the client."""
+    try:
+        epoch_ms = float((request.get_json(silent=True) or {}).get("epoch_ms"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "epoch_ms must be numeric"}), 400
+    r = _safe_call("time_sync", {"epoch_ms": epoch_ms}, timeout=20.0)
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
+@app.route("/location/set", methods=["POST"])
+def location_set():
+    """Persist observer latitude+longitude from the 'Set location' card.
+
+    Accepts either the two numeric fields or a single 'coords' string of the
+    form 'lat, lon' pasted straight from a phone maps app."""
+    coords = (request.form.get("coords") or "").strip()
+    lat_s = request.form.get("latitude_deg", "")
+    lon_s = request.form.get("longitude_deg", "")
+    if coords:
+        parts = [p.strip() for p in coords.replace(";", ",").split(",")]
+        if len(parts) != 2:
+            return "paste coordinates as 'lat, lon'", 400
+        lat_s, lon_s = parts
+    try:
+        lat = float(lat_s)
+        lon = float(lon_s)
+    except ValueError:
+        return "latitude and longitude must be numeric", 400
+    if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
+        return "coordinates out of range", 400
+    r = _safe_call("location_set",
+                   {"latitude_deg": lat, "longitude_deg": lon})
+    if not r.ok:
+        return (r.error or "location set failed"), 500
+    return _redirect_next("config_page")
 
 
 @app.route("/bgtest")

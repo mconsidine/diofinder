@@ -41,6 +41,30 @@
 </div>
 
 <div class="card" style="margin-bottom:1rem;">
+  <h3 style="margin:0 0 8px 0; font-size:1rem;">Observer location</h3>
+  {{ tip("SkyPortal reports pointing as alt/az, which needs your site + an accurate clock. The clock syncs automatically from this browser on every page load; latitude/longitude are set here (SkySafari's LX200 link also sets them automatically on connect). Paste coordinates straight from a phone maps app &mdash; both Apple and Google Maps copy them as <code>lat, lon</code>.") }}
+  <p style="margin:2px 0 8px 0;">
+    Current:
+    <strong>{{ "%.4f"|format(runtime_lat) if runtime_lat is not none else "0.0" }}</strong>,
+    <strong>{{ "%.4f"|format(runtime_lon) if runtime_lon is not none else "0.0" }}</strong>
+    &deg;
+    {% if (runtime_lat in (none, 0.0)) and (runtime_lon in (none, 0.0)) %}
+      <span class="hint">(not set &mdash; SkyPortal alt/az will be wrong until you set this)</span>
+    {% endif %}
+  </p>
+  <form method="post" action="{{ url_for('location_set') }}">
+    <input type="hidden" name="next" value="config_page">
+    <label style="display:block; margin:6px 0;">
+      Paste <code>lat, lon</code>:
+      <input type="text" name="coords" inputmode="text"
+             placeholder="44.4759, -73.2121" style="width:16em;">
+    </label>
+    <button type="submit" class="btn">Set location</button>
+    <span class="hint">Latitude +N, longitude +E.</span>
+  </form>
+</div>
+
+<div class="card" style="margin-bottom:1rem;">
   <h3 style="margin:0 0 8px 0; font-size:1rem;">Runtime Status</h3>
   {% if daemon_ok %}
   <dl class="stats">

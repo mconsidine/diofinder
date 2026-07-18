@@ -295,6 +295,19 @@ acked as no-ops (`MC_SLEW_DONE`→`0xff` immediately) — correct for a push-to.
 A UDP identity beacon (port 55555, 1 Hz, only while no AUX client is
 connected) serves the app's auto-detect on shared networks.
 
+**Getting time/location without SkySafari.** The AUX protocol has no channel
+for the app to push time or site to the mount (unlike SkySafari's LX200
+`:St/:Sg` + `:SL/:SG/:SC`), and the Pi has no RTC — so a SkyPortal-only setup
+gets them from the browser. **Time**: `base.html` POSTs `Date.now()` to
+`/api/time_sync` on every page load → `time_sync` maint →
+`_sync_clock_epoch`, which steps the clock only past `_CLOCK_DRIFT_MIN_S`
+(10 s, shared with the SkySafari `_sync_clock` path) via the sudo-whitelisted
+`diofinder-set-time`. **Location**: the Config-page "Observer location" card
+posts a pasted `lat, lon` to `/location/set` → `location_set` maint (persists
+both keys, routes latitude to the solver like `polar_set_latitude`); browser
+geolocation is blocked on plain http, hence the paste. Pure clock logic is
+unit-tested in `tests/test_time_sync.py`.
+
 All protocol logic — 0x3b framing/checksum, the streaming `FrameParser`, the
 `AuxDispatcher` command table, 24-bit position encoding, GMST + RA/Dec→alt/az
 — is pure stdlib in `diofinder/celestron_aux.py`, verified byte-for-byte

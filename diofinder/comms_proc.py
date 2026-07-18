@@ -23,7 +23,8 @@ Pinned to its dedicated CPU. Three server endpoints:
 Available maintenance commands:
   set_test_mode {"enabled": true | false}
   status, boresight_show/set/center, calibration_status/reset,
-  polar_start/status/cancel/set_latitude, exposure_get/set, gain_set,
+  polar_start/status/cancel/set_latitude, time_sync, location_set,
+  exposure_get/set, gain_set,
   auto_exposure_set, auto_tune/auto_tune_status/auto_tune_cancel,
   tuning_set, solver_params_get/set, match_params_get/set,
   seeing_get/set, seeing_override_save/clear, solve_centroids,
@@ -1400,31 +1401,94 @@ def _imu_predict_smoothed(shared_cfg):
         return ra, dec
 
 
+# Minimum drift before the system clock is actually stepped — shared by the
+# SkySafari :SL/:SG/:SC path and the web-UI time_sync path. Below this the
+# clock is already fine (and stepping it would pointlessly shift the reported
+# alt/az the Celestron AUX clients see).
+_CLOCK_DRIFT_MIN_S = 10.0
+
+
+def _set_system_clock(utc_dt):
+    """Step the system clock via the sudo-whitelisted diofinder-set-time
+    helper. Returns (ok, detail) where detail is the time string on success
+    or the failure reason."""
+    time_str = utc_dt.strftime("%Y-%m-%d %H:%M:%S")
+    result = subprocess.run(
+        ["sudo", "/usr/local/bin/diofinder-set-time", time_str],
+        capture_output=True, text=True, timeout=15,
+    )
+    if result.returncode == 0:
+        return True, time_str
+    return False, f"rc={result.returncode}: {result.stderr.strip()}"
+
+
 def _sync_clock(sl, sg, sc):
     """Set system clock from SkySafari's :SG/:SL/:SC local-time + UTC-offset sequence."""
     try:
         local_dt = datetime.datetime.strptime(f"{sc} {sl}", "%m/%d/%y %H:%M:%S")
         sg_hours = float(sg)
         utc_dt   = local_dt + datetime.timedelta(hours=sg_hours)
-        time_str = utc_dt.strftime("%Y-%m-%d %H:%M:%S")
         now_utc  = datetime.datetime.utcnow()
         diff_s   = abs((utc_dt - now_utc).total_seconds())
-        if diff_s < 10:
+        if diff_s < _CLOCK_DRIFT_MIN_S:
             log.debug("Clock already accurate (drift %.0fs); skipping", diff_s)
             return
-        log.info("Clock drift %.0fs — syncing from SkySafari: %s UTC",
-                 diff_s, time_str)
-        result = subprocess.run(
-            ["sudo", "/usr/local/bin/diofinder-set-time", time_str],
-            capture_output=True, text=True, timeout=15,
-        )
-        if result.returncode == 0:
-            log.info("Clock synced to %s UTC", time_str)
+        log.info("Clock drift %.0fs — syncing from SkySafari", diff_s)
+        ok, detail = _set_system_clock(utc_dt)
+        if ok:
+            log.info("Clock synced to %s UTC", detail)
         else:
-            log.warning("Clock sync failed (rc=%d): %s",
-                        result.returncode, result.stderr.strip())
+            log.warning("Clock sync failed (%s)", detail)
     except Exception as e:
         log.warning("Clock sync error: %s", e)
+
+
+def _sync_clock_epoch(epoch_ms, now_s=None, set_clock=None):
+    """Set the system clock from a client-supplied Unix epoch (milliseconds).
+
+    Backs the `time_sync` maint command — the web UI POSTs the phone's
+    Date.now() on every page load, because SkyPortal (unlike SkySafari's
+    LX200 link, which sends :SL/:SG/:SC) has no way to provide time over the
+    Celestron AUX protocol, and the Pi has no RTC. Same drift threshold as
+    the SkySafari path; a sub-threshold drift is reported but not stepped.
+
+    Pure on its inputs when now_s/set_clock are injected (unit tests).
+    Returns {"ok", "synced", "drift_s"} (+ "error" on failure).
+    """
+    try:
+        epoch_s = float(epoch_ms) / 1000.0
+    except (TypeError, ValueError):
+        return {"ok": False, "synced": False,
+                "error": "epoch_ms must be a number"}
+    if not 0.0 < epoch_s < 4102444800.0:      # sanity: 1970 < t < 2100
+        return {"ok": False, "synced": False,
+                "error": "epoch_ms out of range"}
+    now = time.time() if now_s is None else now_s
+    drift = epoch_s - now
+    if abs(drift) < _CLOCK_DRIFT_MIN_S:
+        return {"ok": True, "synced": False, "drift_s": drift}
+    utc_dt = datetime.datetime.fromtimestamp(epoch_s,
+                                             tz=datetime.timezone.utc)
+    ok, detail = (set_clock or _set_system_clock)(utc_dt)
+    if not ok:
+        log.warning("Web clock sync failed (%s)", detail)
+        return {"ok": False, "synced": False, "drift_s": drift,
+                "error": detail}
+    # A stepped clock shifts the alt/az reported to Celestron AUX clients:
+    # a connected SkyPortal should re-align (its model absorbed the old
+    # offset). Worth an INFO line, not worth blocking the sync.
+    log.info("Clock drift %.0fs — synced from web client to %s UTC "
+             "(re-align SkyPortal if it was connected)", drift, detail)
+    return {"ok": True, "synced": True, "drift_s": drift}
+
+
+def _time_sync_response(args):
+    """Adapt _sync_clock_epoch's dict to MaintResponse(**...) kwargs."""
+    r = _sync_clock_epoch((args or {}).get("epoch_ms"))
+    if not r.get("ok"):
+        return {"ok": False, "error": r.get("error", "time sync failed")}
+    return {"ok": True, "result": {"synced": r.get("synced", False),
+                                   "drift_s": r.get("drift_s")}}
 
 
 # Snapshot cache for the :GR/:GD poll pair. :GD virtually always follows
@@ -1831,6 +1895,46 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 cfg_mod.save_keys({"latitude_deg": lat})
             return MaintResponse(ok=True, result={**reply.result,
                                                   "persisted": persist})
+
+        if cmd == "time_sync":
+            # Set the system clock from a client-supplied Unix epoch (ms).
+            # The web UI posts the browser's Date.now() on page load so a
+            # SkyPortal-only user (no SkySafari :SL/:SG/:SC) still gets an
+            # accurate clock, which the Celestron AUX alt/az reporting needs.
+            return MaintResponse(**_time_sync_response(args))
+
+        if cmd == "location_set":
+            # Persist observer latitude+longitude from one call (the web-UI
+            # "Set location" card pastes "lat, lon" from a phone maps app).
+            # Latitude also routes to the solver's polar machinery, mirroring
+            # polar_set_latitude; longitude is conf-only (comms alt/az reads
+            # ctx.cfg.longitude_deg).
+            try:
+                lat = float(args["latitude_deg"])
+                lon = float(args["longitude_deg"])
+            except (KeyError, ValueError, TypeError) as e:
+                return MaintResponse(
+                    ok=False,
+                    error=f"requires numeric latitude_deg + longitude_deg: {e}")
+            if not (-90.0 <= lat <= 90.0):
+                return MaintResponse(ok=False,
+                                     error="latitude out of range [-90, 90]")
+            if not (-180.0 <= lon <= 180.0):
+                return MaintResponse(ok=False,
+                                     error="longitude out of range [-180, 180]")
+            _invalidate_solver_cache(SOLVER_OP_POLAR_STATUS)
+            reply = _call_solver(SOLVER_OP_POLAR_SET_LATITUDE,
+                                 {"latitude_deg": lat},
+                                 ctx.solver_cmd_q, ctx.solver_cmd_reply_q)
+            if reply is None:
+                return MaintResponse(ok=False, error="solver did not respond")
+            if not reply.ok:
+                return MaintResponse(ok=False, error=reply.error)
+            ctx.cfg.latitude_deg = lat
+            ctx.cfg.longitude_deg = lon
+            cfg_mod.save_keys({"latitude_deg": lat, "longitude_deg": lon})
+            return MaintResponse(ok=True, result={"latitude_deg": lat,
+                                                  "longitude_deg": lon})
 
         if cmd == "exposure_get":
             reply = _call_camera(CAMERA_OP_GET_EXPOSURE, {},

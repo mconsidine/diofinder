@@ -87,11 +87,14 @@ fov_fallback_fails: 20
 distortion: 0.0
 
 # ---- Observer location ----
-# Latitude/longitude are normally set automatically when SkySafari (or
-# any LX200 client) connects -- it sends :St / :Sg with its GPS-derived
-# location. The values get persisted here so the next session has them
-# even before a client connects. Manual override:
+# Latitude/longitude are set automatically when SkySafari (or any LX200
+# client) connects -- it sends :St / :Sg with its GPS-derived location.
+# SkyPortal (Celestron AUX) cannot send location, so for a SkyPortal-only
+# setup use the web UI Config page "Observer location" card (paste
+# "lat, lon" from a phone maps app), or:
 #   diofinder-ctl polar set-latitude 44.5
+# The values persist here so the next session has them before any client
+# connects. Needed for the alt/az the Celestron AUX server reports.
 latitude_deg: 0.0
 longitude_deg: 0.0
 

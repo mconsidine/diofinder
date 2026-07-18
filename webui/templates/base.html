@@ -100,6 +100,19 @@
     // live view on any page without per-page JS. POSTs /debug/collect and
     // streams the ZIP back as a download; status goes to <btn.id>-status.
     document.addEventListener('DOMContentLoaded', function () {
+      // Clock sync: the Pi has no RTC, and SkyPortal (unlike SkySafari's
+      // LX200 link) cannot hand it the time. So every page load quietly
+      // offers the browser's clock; the daemon steps its own only past a
+      // drift threshold. Fire-and-forget — never blocks the page, and a
+      // failure (daemon down, sudo denied) is silent by design.
+      try {
+        fetch('/api/time_sync', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({epoch_ms: Date.now()})
+        }).catch(function () {});
+      } catch (e) {}
+
       document.querySelectorAll('.js-debug-bundle').forEach(function (btn) {
         btn.addEventListener('click', async function () {
           var st = document.getElementById(btn.id + '-status');
