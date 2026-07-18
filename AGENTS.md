@@ -236,9 +236,25 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.56)
+## 6. Current state (as of v0.11.57)
 
-Released through **v0.11.56** (latest).
+Released through **v0.11.57** (latest).
+
+- v0.11.57: align-glitch polish after v0.11.56 field-verified the align works
+  (bundles: `:Sr`→`:Sd`→`:CM# target on record`→`ALIGN pending`→`ALIGN: ->
+  pixel`→`Alignment complete`, boresight moved off the (380,480) default and
+  persisted). Two fixes from those bundles: (1) **live boresight display** — the
+  Home "Boresight" X/Y numbers were rendered server-side only, so an align moved
+  the reticle but left the numbers frozen until reload; the status poller now
+  updates them from `status.result.boresight`. (2) **connection-log throttle +
+  storm detection** — the bundles revealed SkySafari opening a **new TCP
+  connection ~4×/sec** (per-poll reconnect; 244 in 58 s), and v0.11.56's INFO
+  per-connect log flooded the journal. Dropped it to DEBUG; the accept loop now
+  emits ONE throttled WARNING per storm window (`_lx200_note_connection`). No
+  cap-drops/timeouts occurred (8-client cap absorbs it fine) — the shared align
+  target (v0.11.56) is exactly what lets align work through the per-connection
+  churn. "Command failure" in SkySafari on a star-poor sky is *expected*: the
+  align holds 13 s then fails when no solve lands (v0.11.54) — it needs a solve.
 
 - v0.11.56: **`:CM#` align finally moves the boresight — shared align target +
   full align logging.** A v0.11.55 debug bundle (Vega solved 2.4° off, boresight
