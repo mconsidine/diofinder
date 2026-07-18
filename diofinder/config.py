@@ -27,7 +27,7 @@ DEFAULT_CONFIG_PATH = "/etc/diofinder/diofinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.11.56"
+    version: str = "0.11.57"
 
     # -------- Camera --------
     frame_width: int = 960

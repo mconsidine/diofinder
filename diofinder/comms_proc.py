@@ -1071,6 +1071,39 @@ _lx200_align_state = CommsAlignState()
 # bundle instead of hiding at DEBUG.
 _lx200_unhandled_seen: set = set()
 
+# Rapid-reconnect ("storm") detection. Some SkySafari configs open a NEW TCP
+# connection per poll (~several/sec). We tolerate it (it's why the align target
+# is shared, v0.11.56), but the per-connection log stays at DEBUG so it can't
+# flood the journal — instead the accept loop surfaces the *pattern* with ONE
+# throttled WARNING (evaluated per 5 s window; a persistent connection is
+# lighter on CPU 0). Mutated only by the single-threaded accept loop — no race.
+_LX200_STORM_PER_5S = 10          # >= this many connects in a 5 s window = storm
+_LX200_STORM_WARN_EVERY_S = 120.0
+_lx200_conn_count = 0
+_lx200_conn_window_t = 0.0
+_lx200_storm_warned_t = 0.0
+
+
+def _lx200_note_connection(addr):
+    """Count accepted connections and emit a throttled storm WARNING. Called
+    only from the single-threaded accept loop, so the module counters are safe
+    without a lock."""
+    global _lx200_conn_count, _lx200_conn_window_t, _lx200_storm_warned_t
+    now = time.monotonic()
+    if now - _lx200_conn_window_t > 5.0:
+        prev = _lx200_conn_count
+        _lx200_conn_window_t = now
+        _lx200_conn_count = 0
+        if prev >= _LX200_STORM_PER_5S and \
+                now - _lx200_storm_warned_t > _LX200_STORM_WARN_EVERY_S:
+            _lx200_storm_warned_t = now
+            log.warning(
+                "LX200: %d rapid reconnects in ~5s from %s — some SkySafari "
+                "configs open a new connection per poll. Tolerated (align target "
+                "is shared), but a persistent connection is lighter on CPU 0.",
+                prev, addr)
+    _lx200_conn_count += 1
+
 
 def _do_alignment(align_state, cfg, shared_cfg,
                   align_request_q, align_response_q):
@@ -2853,7 +2886,7 @@ def _serve_lx200_client(client, addr, latest_solution, shared_cfg, cfg,
         except (AttributeError, OSError):
             pass
         client.settimeout(cfg.lx200_client_timeout_s)
-        log.info("LX200 client connected from %s", addr)
+        log.debug("LX200 client connected from %s", addr)
         # SHARED align target (v0.11.56): :Sr/:Sd on one connection must be
         # visible to a :CM# that arrives on another (SkySafari splits/reconnects).
         align_state = _lx200_align_state
@@ -2904,6 +2937,7 @@ def _serve_lx200(latest_solution, shared_cfg, cfg,
              cfg.lx200_port, _LX200_MAX_CLIENTS)
     while True:
         client, addr = sock.accept()
+        _lx200_note_connection(addr)
         if not sem.acquire(blocking=False):
             # At the client cap — almost always stale half-open connections a
             # phone left behind, which keepalive/recv-timeout will reap soon.

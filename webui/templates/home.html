@@ -224,8 +224,8 @@
     <h2>Boresight {{ tip("Use SkySafari &ldquo;Align&rdquo; on a known star for normal alignment.") }}</h2>
     {% if boresight %}
       <dl class="stats">
-        <dt>X (pixels)</dt><dd>{{ "%.1f"|format(boresight.x) }}</dd>
-        <dt>Y (pixels)</dt><dd>{{ "%.1f"|format(boresight.y) }}</dd>
+        <dt>X (pixels)</dt><dd id="bs-x">{{ "%.1f"|format(boresight.x) }}</dd>
+        <dt>Y (pixels)</dt><dd id="bs-y">{{ "%.1f"|format(boresight.y) }}</dd>
       </dl>
     {% endif %}
     <form method="post" action="{{ url_for('boresight_center') }}">
@@ -384,6 +384,13 @@ async function refreshHome(){
         }
         se.style.color = '#ff7700';
       }
+    }
+    // Boresight offsets — update live so a SkySafari align is reflected here,
+    // not frozen at page load (the reticle already moves within a poll).
+    const bs = d.status.result.boresight;
+    if (bs){
+      if (bs.x != null) _set('bs-x', bs.x.toFixed(1));
+      if (bs.y != null) _set('bs-y', bs.y.toFixed(1));
     }
     // IMU (expert card)
     const imu = d.status.result.imu;
