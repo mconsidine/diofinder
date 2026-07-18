@@ -238,13 +238,21 @@ All LX200 handling lives in `diofinder/comms_proc.py::_handle_lx200_command`.
 
 There is no registration table — the function is a plain if/elif chain.
 
-**Threaded server (v0.11.52).** `_serve_lx200` serves each connection in its
-own bounded thread (`_serve_lx200_client`, cap `_LX200_MAX_CLIENTS`=8), not
-one-at-a-time — a blocking `:CM#` align or a half-open phone can't starve other
-clients' `:GR/:GD` polls (the reconnect→broken-pipe storm). `_handle_lx200_command`
-runs concurrently across connections; the only shared-mutation hazard is the
-`:CM#` align exchange on the shared `align_response_q`, serialized by
-`_align_lock`. **Held sync (v0.11.54).** A `:CM#` must survive a marginal sky:
+**Worker-pool server (v0.11.58, was per-connection threads in v0.11.52).**
+`_serve_lx200`'s accept loop only enqueues sockets; a fixed pool of
+`_LX200_POOL_WORKERS`=8 long-lived workers drains a bounded queue
+(`_LX200_QUEUE_MAX`=16, overflow sheds) and each runs `_serve_lx200_client` to
+completion — not one-at-a-time, so a blocking `:CM#` align or a half-open phone
+occupies one worker but can't starve other clients' `:GR/:GD` polls (the
+reconnect→broken-pipe storm). The pool replaced thread-per-connection because
+SkySafari opens a **new TCP connection per poll** (readout-rate reconnect storm,
+~4/s at rate 4) — spawning/tearing down a thread that often loaded the Zero 2W's
+shared CPU 0 (transient "camera unavailable"/jitter); the pool has zero
+per-connection thread churn (`docs/lx200-connection-pool-design.md`). Same 8-way
+concurrency ceiling and shed-on-overload as the old semaphore cap.
+`_handle_lx200_command` runs concurrently across workers; the only
+shared-mutation hazard is the `:CM#` align exchange on the shared
+`align_response_q`, serialized by `_align_lock`. **Held sync (v0.11.54).** A `:CM#` must survive a marginal sky:
 the solver keeps the pending align request across frames (`_align_promote`) and
 only replies FAILURE when the ~13 s hold window expires — *not* on the first
 frame that fails to solve. Before this, the request was consumed and failed on
