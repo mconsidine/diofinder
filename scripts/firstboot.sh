@@ -120,15 +120,28 @@ if ! nmcli -t -f NAME con show | grep -qx "diofinder-ap"; then
     wifi.mode ap \
     wifi.band bg \
     ipv4.method shared \
-    ipv4.addresses 10.42.0.1/24 \
+    ipv4.addresses 1.2.3.4/24 \
     ipv6.method ignore \
     wifi-sec.key-mgmt wpa-psk \
     wifi-sec.psk "$AP_PASS" \
     || WARN "Could not create AP profile"
 
-  LOG "  SSID=$AP_SSID  password=$AP_PASS  IP=10.42.0.1"
+  # 1.2.3.4/24 mirrors the Celestron SkyPortal WiFi module so SkyPortal
+  # "Direct Connect" (hardcoded 1.2.3.4:2000) works when a phone joins this
+  # AP directly. See docs/skyportal-aux.md.
+  LOG "  SSID=$AP_SSID  password=$AP_PASS  IP=1.2.3.4"
 else
-  LOG "AP profile already exists — leaving it unchanged"
+  # Migrate a pre-existing profile off the old 10.42.0.1 subnet, which
+  # SkyPortal Direct Connect cannot reach.
+  CUR_ADDR=$(nmcli -t -f ipv4.addresses con show diofinder-ap 2>/dev/null | cut -d: -f2)
+  if [ "$CUR_ADDR" != "1.2.3.4/24" ]; then
+    LOG "Migrating AP address to 1.2.3.4/24 (was: ${CUR_ADDR:-unset})"
+    nmcli con modify diofinder-ap \
+      ipv4.method shared ipv4.addresses 1.2.3.4/24 \
+      2>/dev/null || WARN "Could not migrate AP address (non-fatal)"
+  else
+    LOG "AP profile already exists — leaving it unchanged"
+  fi
 fi
 
 # Ensure NM will always retry the AP connection. autoconnect-retries=0

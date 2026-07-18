@@ -31,9 +31,15 @@ TCP server, UDP discovery beacon, and pointing callback live in
    wrong rate from a bad site/clock, so both should be roughly right.
 2. Put the phone on the same network as the finder (the finder's AP or a
    shared Wi-Fi).
-3. SkyPortal → Settings → Telescope → connect. Auto-detect finds the finder
-   via the UDP beacon; if it doesn't, disable auto-detect and enter the Pi's
-   IP with port 2000.
+3. SkyPortal → Settings → Telescope → connect. Two paths both work:
+   * **Auto-detect** (phone + finder on a shared network) finds the finder
+     via the UDP beacon; if it doesn't, disable auto-detect and enter the
+     Pi's IP with port 2000.
+   * **Direct Connect** (phone joined straight to the finder's own AP) dials
+     a hardcoded `1.2.3.4:2000` and ignores discovery. The finder's AP is
+     configured as `1.2.3.4/24` precisely so this works — the same address
+     the real Celestron WiFi module uses. (If Direct Connect fails, the AP is
+     on the wrong subnet: `sudo ap.sh` re-addresses it to `1.2.3.4/24`.)
 4. Do the app's star alignment (center a star in the scope, tap Align). The
    crosshair then tracks the plate-solved pointing.
 

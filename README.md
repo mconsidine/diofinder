@@ -72,7 +72,7 @@ SkySafari in real time via the LX200 protocol.
 - **Dark frame fast-path**: frames below 20 ADU peak are detected in ~0.1 ms
   and skipped entirely.
 - **Dual network**: USB Ethernet gadget (`10.55.0.1`) and self-hosted Wi-Fi AP
-  (`10.42.0.1`) simultaneously. Browser-based station-mode switching with
+  (`1.2.3.4`) simultaneously. Browser-based station-mode switching with
   automatic AP fallback.
 
 ---
@@ -127,7 +127,7 @@ boot:
 | Interface | IP address | How to reach it |
 |---|---|---|
 | **USB Ethernet gadget** | `10.55.0.1` | Connect the Pi's middle micro-USB port to your computer. No driver needed on macOS / Linux. |
-| **Wi-Fi access point** | `10.42.0.1` | Join SSID `diofinder-XXXX` (last 4 hex digits of the Wi-Fi MAC). |
+| **Wi-Fi access point** | `1.2.3.4` | Join SSID `diofinder-XXXX` (last 4 hex digits of the Wi-Fi MAC). Same subnet as the Celestron SkyPortal module, so SkyPortal "Direct Connect" works. |
 
 **Default credentials:**
 
@@ -444,7 +444,7 @@ sudo usermod -aG i2c diofinder
 
 ### AP mode (default)
 
-SSID `diofinder-XXXX`, password `12345678`, gateway `10.42.0.1`.
+SSID `diofinder-XXXX`, password `12345678`, gateway `1.2.3.4`.
 
 ### Switching to station mode
 
@@ -751,7 +751,7 @@ work through the stages below.
 ### 1. Connect to the device
 
 ```
-Host:     diofinder.local  (or 10.55.0.1 via USB, or 10.42.0.1 via Wi-Fi AP)
+Host:     diofinder.local  (or 10.55.0.1 via USB, or 1.2.3.4 via Wi-Fi AP)
 Port:     22
 Username: diofinder
 Password: 12345678

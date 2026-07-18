@@ -846,8 +846,9 @@ script prints a reminder if `star_db_deep` is not yet configured.
 
 Switch the diofinder's Wi-Fi interface to access-point mode. Creates or updates
 the `diofinder-ap` NetworkManager profile and activates it. The Pi then
-advertises a WPA2 AP at IP `10.42.0.1`; connect with
-`ssh diofinder@10.42.0.1` or `ssh diofinder@diofinder.local`.
+advertises a WPA2 AP at IP `1.2.3.4` (the Celestron SkyPortal subnet, so
+SkyPortal Direct Connect works); connect with
+`ssh diofinder@1.2.3.4` or `ssh diofinder@diofinder.local`.
 
 ```bash
 sudo ap.sh                       # activate existing diofinder-ap profile

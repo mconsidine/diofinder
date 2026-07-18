@@ -8,7 +8,12 @@
 # Connect from your phone or laptop:
 #   1. Look for the SSID printed below in your Wi-Fi list.
 #   2. Connect with the password printed below.
-#   3. ssh diofinder@10.42.0.1   (or diofinder.local once mDNS resolves)
+#   3. ssh diofinder@1.2.3.4   (or diofinder.local once mDNS resolves)
+#
+# The AP uses the 1.2.3.0/24 subnet with the Pi at 1.2.3.4 — the SAME address
+# Celestron's SkyPortal WiFi module uses — so SkyPortal's "Direct Connect"
+# (which dials a hardcoded 1.2.3.4:2000 and ignores discovery) works when a
+# phone is joined straight to this AP. See docs/skyportal-aux.md.
 #
 # Run via sudo. Reports the active SSID and password before and after
 # so you know exactly what to look for.
@@ -48,7 +53,7 @@ if [ $# -ge 1 ]; then
       wifi.mode ap \
       wifi.band bg \
       ipv4.method shared \
-      ipv4.addresses 10.42.0.1/24 \
+      ipv4.addresses 1.2.3.4/24 \
       ipv6.method ignore \
       wifi-sec.key-mgmt wpa-psk \
       wifi-sec.psk "$NEW_PASS"
@@ -65,6 +70,19 @@ if ! nmcli -t -f NAME con show | grep -qx "$PROFILE"; then
   echo "ERROR: $PROFILE profile not found." >&2
   echo "Run 'sudo ap.sh SSID PASSWORD' to create it." >&2
   exit 1
+fi
+
+# Migrate devices provisioned before the SkyPortal-subnet change: older
+# profiles used 10.42.0.1/24, which SkyPortal "Direct Connect" (hardcoded
+# 1.2.3.4:2000) can't reach. Force the Celestron subnet on every run so an
+# in-place update fixes it without re-creating the profile.
+CUR_ADDR=$(nmcli -t -f ipv4.addresses con show "$PROFILE" 2>/dev/null | cut -d: -f2)
+if [ "$CUR_ADDR" != "1.2.3.4/24" ]; then
+  echo "Setting AP address to 1.2.3.4/24 (was: ${CUR_ADDR:-unset})"
+  nmcli con modify "$PROFILE" \
+    ipv4.method shared \
+    ipv4.addresses 1.2.3.4/24 \
+    2>/dev/null || true
 fi
 
 # Take down any active station connection on wlan0.
@@ -99,9 +117,12 @@ diofinder Wi-Fi is now in ACCESS POINT mode.
   IP:       ${IP:-(none yet)}
 
 Connect a device to that SSID, then:
-  ssh diofinder@10.42.0.1
+  ssh diofinder@1.2.3.4
 or:
   ssh diofinder@diofinder.local   (if mDNS works on your client)
+
+SkyPortal "Direct Connect" works while joined to this AP (the Pi is at
+1.2.3.4, the same address the Celestron WiFi module uses).
 
 To switch to a real Wi-Fi network later:
   sudo /usr/local/bin/station.sh "MyWiFi" "MyPassword"

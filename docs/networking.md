@@ -10,9 +10,13 @@ NetworkManager profiles + one guard service (`scripts/ap.sh`,
 `scripts/station.sh`, `systemd/diofinder-ensure-ap.service`):
 
 - **`diofinder-ap`** — `wifi.mode ap`, `ipv4.method shared` (the Pi runs its own
-  DHCP + NAT), **fixed `10.42.0.1/24`**, autoconnect. The shipped default: the
+  DHCP + NAT), **fixed `1.2.3.4/24`**, autoconnect. The shipped default: the
   finder is its own access point at a known SSID + address. This is how a phone
-  reaches it now.
+  reaches it now. The `1.2.3.4/24` subnet **deliberately mirrors the Celestron
+  SkyPortal WiFi module** (Pi at `1.2.3.4`, DHCP pool in `1.2.3.x`) so
+  SkyPortal's "Direct Connect" — which ignores discovery and dials a hardcoded
+  `1.2.3.4:2000` — works when a phone joins this AP directly. `ap.sh`/`firstboot`
+  migrate the old `10.42.0.1/24` address in place. See `docs/skyportal-aux.md`.
 - **`diofinder-station`** (`station.sh SSID PASS`) — joins a named network as a
   client, gets a **DHCP** address, and **demotes** `diofinder-ap` to
   autoconnect=no (but keeps the profile).
