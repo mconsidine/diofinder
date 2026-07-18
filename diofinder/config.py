@@ -247,6 +247,22 @@ class Config:
     # -------- Comms --------
     lx200_port: int = 4060
     lx200_client_timeout_s: float = 30.0
+    # Celestron AUX server for SkyPortal (and SkySafari's "Celestron WiFi"
+    # scope type), which speaks the Celestron AUX bus protocol over TCP —
+    # not LX200. Runs alongside the LX200 server; either app works, on its
+    # own port. Solved pointing is reported as alt/az "encoder" positions,
+    # so latitude_deg/longitude_deg and an accurate clock matter here (the
+    # in-app star alignment absorbs constant offsets, not a wrong site/time
+    # rate). See docs/skyportal-aux.md.
+    celestron_aux_enabled: bool = True
+    celestron_aux_port: int = 2000       # SkyPortal expects 2000
+    # UDP identity beacon on port 55555 (1 Hz, only while no AUX client is
+    # connected) so the app's auto-detect can find the finder on a shared
+    # network. In AP mode the app connects to the well-known IP directly.
+    celestron_beacon_enabled: bool = True
+    # Mount model reported to the app (MC_GET_MODEL). 0x1687 = NexStar
+    # Evolution, the model the protocol emulation was captured against.
+    celestron_model: int = 0x1687
     # IMU pointing motion gate, in degrees/second of measured rotation RATE.
     # Below this the device is treated as stationary and :GR/:GD report the
     # last solved RA/Dec (no gyro-drift wander on a parked scope); above it the

@@ -1,13 +1,21 @@
 """
 Comms worker process.
 
-Pinned to its dedicated CPU. Two server endpoints:
+Pinned to its dedicated CPU. Three server endpoints:
 
   1. LX200 TCP server on cfg.lx200_port (default 4060) -- talks to
      SkySafari and any other LX200 client. Handles :GR/:GD pointing
      queries and the :Sr/:Sd/:CM# boresight alignment workflow.
 
-  2. Maintenance Unix socket at /run/diofinder/maint.sock -- accepts
+  2. Celestron AUX TCP server on cfg.celestron_aux_port (default 2000,
+     gated by cfg.celestron_aux_enabled) -- talks to SkyPortal (and
+     SkySafari's "Celestron WiFi" scope type), which speaks the Celestron
+     AUX bus protocol, not LX200. Reports the solved pointing as alt/az
+     "encoder" positions; a UDP beacon on port 55555 serves app
+     auto-detect. Protocol logic lives in diofinder/celestron_aux.py;
+     see docs/skyportal-aux.md.
+
+  3. Maintenance Unix socket at /run/diofinder/maint.sock -- accepts
      newline-delimited JSON requests for inspection, calibration,
      boresight management, exposure tuning, and mode switching.
      Used by diofinder-ctl and the web UI.
@@ -39,6 +47,7 @@ from queue import Empty, Full, Queue
 
 from diofinder import config as cfg_mod
 from diofinder import bg_modes as bg_modes_mod
+from diofinder import celestron_aux as _caux
 from diofinder import precession as _precession
 from diofinder.align import AlignRequest, AlignResult, CommsAlignState
 from diofinder.imu_math import (quat_delta_rotvec, alpha_beta_step,
@@ -1449,14 +1458,33 @@ def _report_radec(scfg, sol):
     mixes RA and Dec, so the full pair is converted together here and :GR/:GD
     each take their component from the same (TTL-cached) snapshot. Kill switch:
     `report_epoch=j2000` reports the raw J2000 frame (pre-v0.11.53 behaviour)."""
-    pred = _imu_predict_smoothed(scfg)
-    if pred is not None:
-        ra, dec = float(pred[0]), float(pred[1])
-    else:
-        ra, dec = float(sol.get("ra_deg", 0.0)), float(sol.get("dec_deg", 0.0))
+    ra, dec = _predicted_radec_j2000(scfg, sol)
     if str(scfg.get("report_epoch", "jnow")).lower() == "jnow":
         ra, dec = _precession.j2000_to_jnow(ra, dec)
     return ra, dec
+
+
+def _predicted_radec_j2000(scfg, sol):
+    """Internal-frame (J2000) pointing: IMU-predicted between solves when
+    available, else the last solved position (0,0 before the first solve)."""
+    pred = _imu_predict_smoothed(scfg)
+    if pred is not None:
+        return float(pred[0]), float(pred[1])
+    return float(sol.get("ra_deg", 0.0)), float(sol.get("dec_deg", 0.0))
+
+
+def _report_altaz(scfg, sol, cfg):
+    """(alt_deg, az_deg) reported to Celestron AUX clients (SkyPortal).
+
+    Same pointing source as the LX200 :GR/:GD path (IMU-predicted between
+    solves), converted J2000 -> equinox-of-date -> topocentric alt/az with the
+    conf latitude/longitude and the system clock. Unlike _report_radec this
+    ALWAYS precesses: alt/az is physical geometry, not a client's preferred
+    catalog frame, so the `report_epoch=j2000` kill switch does not apply."""
+    ra, dec = _predicted_radec_j2000(scfg, sol)
+    ra, dec = _precession.j2000_to_jnow(ra, dec)
+    return _caux.radec_to_altaz(ra, dec, cfg.latitude_deg, cfg.longitude_deg,
+                                time.time())
 
 
 def _handle_lx200_command(cmd, latest_solution, align_state, time_state,
@@ -2985,6 +3013,112 @@ def _serve_lx200(latest_solution, shared_cfg, cfg,
             except Exception: pass
 
 
+# ---------------------------------------------------------------------------
+# Celestron AUX server (SkyPortal). Protocol logic: diofinder/celestron_aux.py.
+# SkyPortal holds ONE persistent connection (unlike SkySafari's LX200
+# reconnect-per-poll storm), so plain thread-per-connection with a small cap
+# is the right shape here — no worker pool needed.
+# ---------------------------------------------------------------------------
+_AUX_MAX_CLIENTS = 4
+_aux_client_count = 0
+_aux_client_lock = threading.Lock()
+
+
+def _aux_clients_connected() -> int:
+    with _aux_client_lock:
+        return _aux_client_count
+
+
+def _serve_aux_client(client, addr, latest_solution, shared_cfg, cfg):
+    global _aux_client_count
+    parser = _caux.FrameParser()
+
+    def _get_altaz():
+        scfg, sol = _poll_snapshots(shared_cfg, latest_solution)
+        return _report_altaz(scfg, sol, cfg)
+
+    dispatcher = _caux.AuxDispatcher(_get_altaz,
+                                     model=cfg.celestron_model)
+    try:
+        client.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        client.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        client.settimeout(cfg.lx200_client_timeout_s)
+        log.info("Celestron AUX client connected from %s", addr)
+        while True:
+            chunk = client.recv(512)
+            if not chunk:
+                break
+            for frame in parser.feed(chunk):
+                for reply in dispatcher.handle(frame):
+                    client.sendall(reply)
+    except socket.timeout:
+        log.info("Celestron AUX client %s timed out", addr)
+    except Exception as e:
+        log.warning("Celestron AUX client %s error: %s", addr, e)
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+        with _aux_client_lock:
+            _aux_client_count -= 1
+        log.info("Celestron AUX client %s disconnected (%d frames, %d replies)",
+                 addr, dispatcher.rx_frames, dispatcher.replies)
+
+
+def _serve_celestron_aux(latest_solution, shared_cfg, cfg):
+    global _aux_client_count
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("0.0.0.0", cfg.celestron_aux_port))
+    sock.listen(4)
+    log.info("Celestron AUX (SkyPortal) server listening on :%d",
+             cfg.celestron_aux_port)
+    while True:
+        client, addr = sock.accept()
+        with _aux_client_lock:
+            if _aux_client_count >= _AUX_MAX_CLIENTS:
+                log.warning("Celestron AUX: %d clients already; dropping %s",
+                            _aux_client_count, addr)
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                continue
+            _aux_client_count += 1
+        threading.Thread(
+            target=_serve_aux_client,
+            args=(client, addr, latest_solution, shared_cfg, cfg),
+            name="celestron-aux-client", daemon=True).start()
+
+
+def _celestron_aux_loop(latest_solution, shared_cfg, cfg):
+    while True:
+        try:
+            _serve_celestron_aux(latest_solution, shared_cfg, cfg)
+        except Exception as e:
+            log.error("Celestron AUX server crashed: %s; restarting in 2s", e)
+            time.sleep(2)
+
+
+def _celestron_beacon_loop(cfg, interval_s=1.0):
+    """UDP discovery beacon on port 55555 for SkyPortal/SkySafari auto-detect.
+
+    Broadcast only while no AUX client is connected (matching the homebrew
+    adapters): once the app is talking to us there is nothing to discover,
+    and an idle finder costs one small datagram per second."""
+    payload = _caux.beacon_payload(cfg.version)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    while True:
+        try:
+            if _aux_clients_connected() == 0:
+                sock.sendto(payload, ("255.255.255.255", 55555))
+        except Exception as e:
+            log.debug("Celestron beacon send failed: %s", e)
+        time.sleep(interval_s)
+
+
 def comms_main(latest_solution, shared_cfg,
                align_request_q, align_response_q,
                solver_cmd_q, solver_cmd_reply_q,
@@ -3027,6 +3161,16 @@ def comms_main(latest_solution, shared_cfg,
 
     threading.Thread(target=_watchdog_loop, args=(ctx,),
                      name="diofinder-watchdog", daemon=True).start()
+
+    if getattr(cfg, "celestron_aux_enabled", True):
+        threading.Thread(
+            target=_celestron_aux_loop,
+            args=(latest_solution, shared_cfg, cfg),
+            name="diofinder-celestron-aux", daemon=True).start()
+        if getattr(cfg, "celestron_beacon_enabled", True):
+            threading.Thread(target=_celestron_beacon_loop, args=(cfg,),
+                             name="diofinder-celestron-beacon",
+                             daemon=True).start()
 
     while True:
         try:

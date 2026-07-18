@@ -22,7 +22,7 @@ diofinder_main.py (launcher, CPU 0)
   │
   ├── camera_proc   (CPU 3)          — captures frames → shared memory
   ├── solver_proc   (CPUs 1+2+3)     — extracts stars, plate-solves
-  └── comms_proc    (CPU 0)          — LX200 TCP server + maintenance socket
+  └── comms_proc    (CPU 0)          — LX200 + Celestron AUX TCP servers + maintenance socket
 ```
 
 The IMU thread runs inside the **launcher** process (same CPU 0 as comms,
@@ -274,6 +274,38 @@ SkySafari's LX200 link and OnStepX use **JNow**, so `diofinder/precession.py`
 Everything internal (solver, `imu_ref`, boresight, calibration) stays J2000.
 Gated by `shared_cfg["report_epoch"]` (`jnow` default; `j2000` = raw kill
 switch). Reused by the planned OnStep sync (`docs/onstep-design.md`).
+
+---
+
+## Celestron AUX / SkyPortal server
+
+SkyPortal (and SkySafari's "Celestron WiFi" scope type) speaks the **Celestron
+AUX bus protocol over TCP**, not LX200. `comms_proc` runs a second TCP server
+on `celestron_aux_port` (2000) — alongside LX200 on 4060, so either app works
+interchangeably — that emulates a NexStar Evolution: the app joins the bus as
+device `0x20`, and diofinder answers as the AZM/ALT motor controllers
+(`0x10`/`0x11`) plus the Evolution battery/charger/lights peripherals. The app
+keeps its alignment model in-app and only ever polls raw "encoder" angles, so
+diofinder reports the solved (IMU-smoothed, `_predicted_radec_j2000` — the same
+pointing source as `:GR/:GD`) position converted J2000→JNow→**topocentric
+alt/az** (`_report_altaz`; needs conf `latitude_deg`/`longitude_deg` + a
+correct clock — this path **always** precesses, the `report_epoch` kill switch
+does not apply because alt/az is physical geometry). GoTo/slew commands are
+acked as no-ops (`MC_SLEW_DONE`→`0xff` immediately) — correct for a push-to.
+A UDP identity beacon (port 55555, 1 Hz, only while no AUX client is
+connected) serves the app's auto-detect on shared networks.
+
+All protocol logic — 0x3b framing/checksum, the streaming `FrameParser`, the
+`AuxDispatcher` command table, 24-bit position encoding, GMST + RA/Dec→alt/az
+— is pure stdlib in `diofinder/celestron_aux.py`, verified byte-for-byte
+against a captured SkyPortal↔real-Evolution session (including the mount's
+odd `0x47`→`0xf0` reply, reproduced deliberately) in
+`tests/test_celestron_aux.py`. Unemulated bus devices (GPS `0xb0`) get **no
+reply** — silence is how an absent device behaves; unknown setters get an
+empty-payload echo ack like a real MC. The server is thread-per-connection
+(cap 4) — SkyPortal holds one persistent connection, so the LX200 pool's
+reconnect-storm rationale doesn't apply. Protocol + handshake reference:
+`docs/skyportal-aux.md`.
 
 ---
 
@@ -598,6 +630,10 @@ New keys (this release):
 | `watchdog_enabled` | `true` | Solver-hang watchdog (comms thread). |
 | `watchdog_timeout_s` | `30.0` | Staleness before the solver is declared hung. |
 | `extractor_backend` | `sycamore` | Centroid extractor: `sycamore` (matched filter + bg_cache) or `tetra3` (AstroKeith's olive-solve `get_centroids_from_image`). Live-mutable; set by the Legacy preset. |
+| `celestron_aux_enabled` | `true` | Celestron AUX (SkyPortal) TCP server — see **Celestron AUX / SkyPortal server**. |
+| `celestron_aux_port` | `2000` | SkyPortal expects 2000. |
+| `celestron_beacon_enabled` | `true` | UDP auto-detect beacon on port 55555. |
+| `celestron_model` | `0x1687` | Mount model reported to the app (NexStar Evolution). Dataclass-only. |
 
 ---
 

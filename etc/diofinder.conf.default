@@ -229,6 +229,18 @@ boresight_x: 480.0
 lx200_port: 4060
 lx200_client_timeout_s: 30.0
 
+# ---- Celestron AUX server (SkyPortal) ----
+# SkyPortal (and SkySafari's "Celestron WiFi" scope type) speaks the
+# Celestron AUX bus protocol over TCP, not LX200. This second server runs
+# alongside the LX200 one, so either app works. Pointing is reported as
+# alt/az, computed from the solved RA/Dec with latitude_deg/longitude_deg
+# and the system clock — set your site above and keep the clock synced.
+# The UDP beacon (port 55555, 1/s while no client is connected) lets the
+# app's auto-detect find the finder on a shared Wi-Fi network.
+celestron_aux_enabled: true
+celestron_aux_port: 2000
+celestron_beacon_enabled: true
+
 # ---- CPU affinity (Pi Zero 2W: 4 cores) ----
 # 0=comms+webui+IMU (I/O bound, shares with kernel/IRQs)
 # 1=solver auxiliary   2=solver primary   3=camera + solver secondary
