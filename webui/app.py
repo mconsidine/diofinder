@@ -1535,9 +1535,9 @@ _CONFIG_SECTIONS = [
         ("match_threshold",  "Match threshold",    "Max false-positive probability (1e-5 default)."),
         ("match_radius",     "Match radius",       "Max centroid-catalog distance as fraction of FOV."),
     ]),
-    ("Boresight", [
-        ("boresight_x", "Boresight X (px)", "Telescope axis X in pixels."),
-        ("boresight_y", "Boresight Y (px)", "Telescope axis Y in pixels."),
+    ("Aim point", [
+        ("boresight_x", "Aim point X (px)", "Telescope optical-axis X in pixels."),
+        ("boresight_y", "Aim point Y (px)", "Telescope optical-axis Y in pixels."),
     ]),
     ("Communications (LX200)", [
         ("lx200_port",             "LX200 port",         "TCP port for the LX200 server."),

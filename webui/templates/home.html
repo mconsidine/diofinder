@@ -219,9 +219,9 @@
     {% endif %}
   </div>
 
-  {# ---- Boresight ---- #}
+  {# ---- Aim point (a.k.a. boresight in code) ---- #}
   <div class="card expert-only">
-    <h2>Boresight {{ tip("Use SkySafari &ldquo;Align&rdquo; on a known star for normal alignment.") }}</h2>
+    <h2>Aim point {{ tip("The point in the finder view that matches where your telescope actually points. Use SkySafari &ldquo;Align&rdquo; on a known star to set it.") }}</h2>
     {% if boresight %}
       <dl class="stats">
         <dt>X (pixels)</dt><dd id="bs-x">{{ "%.1f"|format(boresight.x) }}</dd>
