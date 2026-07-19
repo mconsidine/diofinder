@@ -291,6 +291,35 @@ possible paths, in order of attractiveness:
    defeats the "finder pushes directly to the mount on the OTA" simplicity.
    Not recommended.
 
+### SkyWatcher/SynScan "Virtuoso" over GPIO serial — feasible, second dialect
+
+A wired GPIO link (§13) to a SkyWatcher **Virtuoso** (Freedom-Find alt-az) is
+feasible, with two caveats that make it more work than OnStepX:
+
+- **Protocol: SynScan/AUX, not LX200.** The Virtuoso's motor controller speaks
+  the SkyWatcher **AUX/SynScan** command set (the `:`-prefixed motor protocol
+  INDI's `skywatcherAPIMount` uses, and/or the NexStar-derived SynScan HC ASCII
+  set) at **9600 baud TTL**. So it needs the **`SynScanLink` dialect** (path 2
+  above), not the near-free LX200 `sync()`. Its sync is an axis-position/offset
+  set (INDI implements it), so an aim-point correction *is* expressible — but the
+  semantics differ from `:CM#` and need care.
+- **Electrical:** confirm the mount's serial-port level (TTL vs the HC's RS-232)
+  and pinout before wiring — likely TTL → a divider or MAX3232 (see §13).
+- **Great fit for Freedom-Find.** Because the Virtuoso tracks hand-pushes via its
+  encoders, diofinder plate-solving + a serial **sync** gives it an accurate
+  absolute reference: push roughly to target, diofinder solves and corrects the
+  mount's model, and its GoTo/tracking is then dead-on **without a manual star
+  alignment** — arguably the most compelling mount pairing here (auto-align the
+  Virtuoso from the finder).
+- **GTi caveat.** The **Virtuoso GTi** is Wi-Fi-primary (SynScan app → UDP
+  11880). If it exposes a wired serial port, GPIO still works and avoids Wi-Fi
+  contention; if not, you're back to the Wi-Fi/Alpaca path (path 1) with its
+  topology trade-offs. Confirm the exact model's ports.
+
+Net: a Virtuoso over GPIO is **feasible as a second `MountLink` dialect**
+(`SynScanLink`) sharing the GPIO transport — it vindicates the pluggable-dialect
+design. More effort than OnStepX (new command set), identical transport story.
+
 ### General strategy
 
 - Keep `MountLink` **dialect-pluggable**: `sync(ra_deg, dec_deg) -> (ok, detail)`
@@ -315,10 +344,79 @@ possible paths, in order of attractiveness:
    re-implement precession. Mount side is JNow.
 2. **Serial vs TCP as the shipped default.** Serial is topology-independent
    (finder ↔ OnStepX colocated on the OTA, no shared network) — recommended
-   primary. TCP is there for WiFi OnStepX but reintroduces the network-topology
-   dependency discussed for the phone/mount/finder case.
-3. **UART on the Pi Zero 2W** (`/dev/ttyAMA0` is entangled with Bluetooth /
-   console) — likely prefer a **USB-serial** link to OnStepX; document the
-   config step.
+   primary, over the **GPIO UART** (§13). TCP is there for WiFi OnStepX but
+   reintroduces the network-topology dependency discussed for the phone/mount/
+   finder case.
+3. **UART transport — RESOLVED (§13): use the GPIO UART, not USB-serial.** The
+   earlier "prefer USB-serial" guess was wrong for this device: the single OTG
+   port is committed to the USB-gadget PuTTY console, and the login console is
+   on `ttyGS0` (USB), *not* `serial0` — so with `enable_uart=1` (already set)
+   the GPIO UART is free for the mount and the tether is untouched. Bluetooth is
+   rejected (shared 2.4 GHz radio contends with the SkySafari Wi-Fi). See §13.
 4. **Alpaca reach** — confirm whether the SkyWatcher (and other) target mounts
    expose ASCOM Alpaca, which would make §11 path 1 the general answer.
+5. **Push-to-Dob: which feature? (§13)** — "deal with a push-to Dob" is three
+   different things (replace / feed / read encoders); #1 needs no mount serial
+   at all. Resolve before speccing.
+
+---
+
+## 13. Transport on the Pi Zero 2W — use the GPIO UART
+
+Resolves §12's UART question with the device's **actual** serial layout
+(verified in `scripts/install.sh` / `build/build-image.sh`).
+
+**The finding.** diofinder's backup access (PuTTY) is a **USB CDC-ACM gadget**
+on the single OTG port: install.sh sets `console=ttyGS0,115200` +
+`serial-getty@ttyGS0`, and `diofinder-gadget-connect` builds the ACM device via
+configfs on the dwc2 peripheral port. The login console therefore lives on the
+**USB port**. Separately, install.sh already sets **`enable_uart=1`**, and the
+console is *not* on `serial0` — so **GPIO14 (TXD) / GPIO15 (RXD) are free** and a
+mount can own `/dev/serial0` without touching the tether.
+
+**Consequences:**
+
+- **GPIO UART is the recommended mount transport.** A dedicated wired link (zero
+  radio contention) that leaves the USB port for the PuTTY tether. Near
+  drop-in: `enable_uart=1` is already set; just ensure no
+  `serial-getty@serial0`/`@ttyS0` is enabled and the `MountLink` serial
+  transport opens `/dev/serial0`.
+- **USB-serial to the mount is NOT viable** without giving up the tether: the Pi
+  Zero has one OTG data port, committed to the gadget (`dr_mode=peripheral`); a
+  USB-serial *host* link would need that port in host mode → conflict. (Reverses
+  the earlier "prefer USB-serial" note.)
+- **Bluetooth is inferior.** Wi-Fi + BT share the one 2.4 GHz radio on the Zero
+  2W combo chip, so an active BT mount link contends with the SkySafari Wi-Fi
+  stream for airtime — the opposite of what we want after taming the
+  connection storm. Skip unless a wire is truly impossible.
+
+**Electrical.** GPIO is **3.3 V TTL**. Most OnStep boards are 3.3 V TTL → direct
+3-wire hookup (TX↔RX crossed, GND). A 5 V-TTL mount needs a divider on the
+mount-TX→Pi-RX line; true RS-232 (±12 V) needs a **MAX3232**. With Bluetooth left
+on, GPIO14/15 carry the **mini-UART** (`/dev/serial0`; PL011 stays on BT), stable
+at 9600–19200 because `enable_uart=1` pins the core clock. `dtoverlay=disable-bt`
+would move the PL011 there but is unnecessary for a slow mount link.
+
+**Wiring.** 3 wires (TX, RX, GND) from the finder's GPIO header down the OTA to
+the mount — a physical run worth a small connector.
+
+### The push-to-Dob fork (resolve before speccing)
+
+"Deal with a push-to Dob" hides **three different features** — decide which
+before any protocol work, because they need different (or no) serial:
+
+1. **Finder *replaces* the encoders** — diofinder *is* the digital setting
+   circles. **No mount serial at all**: it already reports position to
+   SkySafari/SkyPortal over Wi-Fi. Simplest, and arguably what a plate-solving
+   finder is *for*. (Most likely the real goal for a manual Dob.)
+2. **Finder *feeds* an existing DSC / hand controller** by emulating an encoder
+   protocol (Nexus / "basic encoder" / BBox) *out* the GPIO UART — a different
+   output dialect, same transport. Worth it only to keep an existing DSC display
+   driven by diofinder's (better) position.
+3. **Finder *reads* the Dob's encoders** *in* over the UART — possible, but the
+   plate solve is already more accurate; the only value is dead-reckoning
+   between solves (the IMU already does that) or when it can't solve. Marginal.
+
+Most likely the real pairing is **#1 for a manual Dob** and **the outbound
+`sync()` for a GoTo mount** (OnStepX, or a Virtuoso via `SynScanLink`, §11) —
+both served by the GPIO UART transport + the `MountLink` dialect layer.
