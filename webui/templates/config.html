@@ -71,7 +71,7 @@
       <dt>Live FOV</dt><dd>{{ "%.4f"|format(runtime_fov) }}&deg;</dd>
     {% endif %}
     {% if runtime_boresight %}
-      <dt>Boresight</dt>
+      <dt>Aim point</dt>
       <dd>{{ "%.0f"|format(runtime_boresight.x) }}, {{ "%.0f"|format(runtime_boresight.y) }}&thinsp;px</dd>
     {% endif %}
     {% if runtime_lat is not none %}

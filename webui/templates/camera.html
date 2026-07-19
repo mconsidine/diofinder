@@ -5,7 +5,7 @@
 
 <section class="grid">
   <div class="card card-wide">
-    <h2>Live View {{ tip("Red rings are a Telrad-style finder scale — <strong>0.5&deg;, 2&deg;, and 4&deg; diameter</strong>. The bright inner ring + crosshair marks the boresight; centre the target there, then tap <strong>Align</strong> in SkySafari to sync.") }}</h2>
+    <h2>Live View {{ tip("Red rings are a Telrad-style finder scale — <strong>0.5&deg;, 2&deg;, and 4&deg; diameter</strong>. The bright inner ring + crosshair marks the aim point; centre the target there, then tap <strong>Align</strong> in SkySafari to sync.") }}</h2>
     <p style="margin:4px 0;">
       <label>
         <input type="checkbox" id="sub-toggle">
@@ -266,7 +266,7 @@
         <label class="checkbox">
           <input type="checkbox" onchange="this.form.submit()"
                  {{ 'checked' if solver_params.star_name_brightest }}>
-          Centered star = brightest within 2&deg; of the boresight
+          Centered star = brightest within 2&deg; of the aim point
           <span class="hint">(off: nearest cataloged star, the original behaviour)</span>
         </label>
       </form>
@@ -279,7 +279,7 @@
           <input type="checkbox" onchange="this.form.submit()"
                  {{ 'checked' if solver_params.star_name_whole_fov }}>
           Centered star = brightest in the whole field of view
-          {{ tip("Names the brightest cataloged star anywhere in the frame, not just near the boresight. A stable anchor to center and align on when boresight calibration is off — a near-blank center still reports the bright star in a corner. Implies the brightest-star mode above.") }}
+          {{ tip("Names the brightest cataloged star anywhere in the frame, not just near the aim point. A stable anchor to center and align on when the aim point is off — a near-blank center still reports the bright star in a corner. Implies the brightest-star mode above.") }}
         </label>
       </form>
       <form method="post" action="{{ url_for('solver_params_set') }}">
