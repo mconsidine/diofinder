@@ -1146,8 +1146,18 @@ a live status readout via `/api/mount`). Routes `/mount/{set,test,sync}` +
 (`synscan`), `mount_serial_port` (`/dev/serial0`), `mount_serial_baud` (9600),
 `mount_epoch` (`jnow`), `mount_mode` (`manual`), and the auto gates
 `mount_auto_{max_age_s,min_matches,settle_s,deadband_arcmin,min_interval_s}`.
-The `diofinder` user needs serial access (`dialout` group / `/dev/serial0`
-permission) for the link to open.
+
+**Out-of-the-box readiness** (all handled by `install.sh`): `pyserial` ships in
+`requirements.txt` (lazy-imported, only needed when enabled); the `diofinder`
+user is in `dialout`; `enable_uart=1`; and `/dev/serial0` is freed for the
+mount — the UART kernel console is stripped from `cmdline.txt` and
+`serial-getty@serial0/@ttyAMA0/@ttyS0` are masked (the login console lives on
+the USB gadget `ttyGS0`). So on a fresh image the link works the moment it is
+enabled + wired. **Failure is never silent and never disruptive:** manual mode
+(default) is a no-op until you press Test/Sync, which show the error in the UI;
+auto mode logs one WARNING and backs off `_MOUNT_FAIL_BACKOFF_S` (30 s) — no
+per-cycle spam — with `last_error`/`syncs_fail` always in `mount_status`. The
+finder's solving/LX200 path is unaffected regardless.
 
 ---
 

@@ -7,3 +7,7 @@
 # (maturin build + pip install from the local wheel).
 
 smbus2
+# pyserial: outbound mount link (diofinder/mountlink.py) over the GPIO UART.
+# Imported lazily, so it is only needed when the mount link is enabled, but it
+# ships in the image so enabling it "just works".
+pyserial

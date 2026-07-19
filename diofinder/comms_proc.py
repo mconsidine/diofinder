@@ -477,6 +477,7 @@ def _ae_paused() -> bool:
 # --------------------------------------------------------------------------- #
 
 _MOUNT_MANUAL_MAX_AGE_S = 10.0   # a manual "sync now" tolerates a slightly older fix
+_MOUNT_FAIL_BACKOFF_S = 30.0     # auto-mode: pause after a failed sync (no spam)
 
 
 def _mount_params(cfg, scfg):
@@ -632,6 +633,8 @@ def _mount_loop(ctx, interval_s=2.0):
     """
     cfg = ctx.cfg
     last_sync = None          # {"ra","dec","t"} of the last accepted auto sync
+    fail_until = 0.0          # back off attempts until this monotonic time
+    fail_logged = False       # WARNING logged once per failure streak, not per cycle
     while True:
         time.sleep(interval_s)
         try:
@@ -641,21 +644,35 @@ def _mount_loop(ctx, interval_s=2.0):
             if str(scfg.get("mount_mode",
                             getattr(cfg, "mount_mode", "manual"))).lower() != "auto":
                 continue
+            now = time.monotonic()
+            if now < fail_until:
+                # A recent sync failed (no mount / wrong port / rejected).
+                # Back off so a missing mount doesn't retry — and log — every
+                # cycle; mount_status still shows last_error + syncs_fail.
+                continue
             sol = dict(ctx.latest_solution)
             gates = _mount_gates(cfg, scfg)
-            moving = _imu_is_moving(scfg)
             do, why = _mountlink.should_sync(
-                sol, time.monotonic(), last_sync, gates, moving)
+                sol, now, last_sync, gates, _imu_is_moving(scfg))
             if not do:
                 continue
             ra, dec = float(sol["ra_deg"]), float(sol["dec_deg"])
             ok, rec = _mount_mgr.sync(ra, dec, cfg, scfg)
             if ok:
                 last_sync = {"ra": ra, "dec": dec, "t": rec["t"]}
+                if fail_logged:
+                    log.info("Mount link recovered")
+                    fail_logged = False
                 log.info("Mount auto-sync: RA %.4f Dec %.4f (%s)",
                          ra, dec, rec.get("epoch"))
             else:
-                log.warning("Mount auto-sync failed: %s", rec)
+                fail_until = now + _MOUNT_FAIL_BACKOFF_S
+                if not fail_logged:
+                    log.warning("Mount auto-sync failed (%s); backing off %ds "
+                                "(see mount_status)",
+                                rec.get("error") or rec.get("result"),
+                                int(_MOUNT_FAIL_BACKOFF_S))
+                    fail_logged = True
         except Exception as e:
             log.warning("mount loop step failed: %s", e)
 

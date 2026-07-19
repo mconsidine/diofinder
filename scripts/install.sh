@@ -452,7 +452,23 @@ if [ -f "$CMDLINE_TXT" ]; then
       sed -i '1s|^|console=ttyGS0,115200 |' "$CMDLINE_TXT"
     fi
   fi
+  # Free the GPIO UART (/dev/serial0) for the mount link: the login console is
+  # on the USB gadget (ttyGS0), so drop any kernel serial console on serial0/
+  # ttyAMA0. Without this a stock image keeps a console (and a spawned getty)
+  # on the UART, which would block mountlink's serial open. See
+  # docs/onstep-design.md §13.
+  if grep -qE "console=(serial0|ttyAMA0|ttyS0)," "$CMDLINE_TXT"; then
+    [ -f "$CMDLINE_TXT.diofinder-orig" ] \
+      || cp "$CMDLINE_TXT" "$CMDLINE_TXT.diofinder-orig"
+    sed -i -E 's/console=(serial0|ttyAMA0|ttyS0),[0-9n]+ ?//g' "$CMDLINE_TXT"
+    LOG "Removed UART serial console from $CMDLINE_TXT (freeing /dev/serial0)"
+  fi
 fi
+
+# Mask any serial login getty on the GPIO UART so systemd never grabs
+# /dev/serial0 (the mount link owns it). The USB console (ttyGS0) is separate.
+systemctl mask serial-getty@serial0.service serial-getty@ttyAMA0.service \
+               serial-getty@ttyS0.service 2>/dev/null || true
 
 LOG "Enabling USB serial console (serial-getty@ttyGS0)"
 systemctl enable serial-getty@ttyGS0.service 2>/dev/null || \
