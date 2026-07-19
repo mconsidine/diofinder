@@ -1,0 +1,17 @@
+[Unit]
+Description=diofinder mid-session Wi-Fi AP-fallback watchdog
+# Start after the boot-time fallback (diofinder-ensure-ap) has run, so the
+# watchdog only supervises the steady state, never races the boot connect.
+After=NetworkManager.service diofinder-ensure-ap.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+# Defaults live in the script; override the grace/interval here if needed:
+# Environment=DIOFINDER_APWD_GRACE=45
+ExecStart=/usr/local/bin/ap-watchdog.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

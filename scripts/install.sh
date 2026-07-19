@@ -331,6 +331,7 @@ install -m 644 "$DIOFINDER_DIR/systemd/diofinder-firstboot.service"   /etc/syste
 install -m 644 "$DIOFINDER_DIR/systemd/diofinder-webui.service"       /etc/systemd/system/
 install -m 644 "$DIOFINDER_DIR/systemd/diofinder-usb-gadget.service"  /etc/systemd/system/
 install -m 644 "$DIOFINDER_DIR/systemd/diofinder-ensure-ap.service"   /etc/systemd/system/
+install -m 644 "$DIOFINDER_DIR/systemd/diofinder-ap-watchdog.service" /etc/systemd/system/
 
 install -m 440 "$DIOFINDER_DIR/etc/sudoers.d/diofinder-update" /etc/sudoers.d/diofinder-update
 install -m 440 "$DIOFINDER_DIR/etc/sudoers.d/diofinder-clock"  /etc/sudoers.d/diofinder-clock
@@ -352,6 +353,7 @@ install -m 755 "$DIOFINDER_DIR/scripts/diofinder-bg-setup"        /usr/local/bin
 install -m 755 "$DIOFINDER_DIR/scripts/diofinder-bg-test"         /usr/local/bin/diofinder-bg-test
 install -m 755 "$DIOFINDER_DIR/scripts/ap.sh"                   /usr/local/bin/ap.sh
 install -m 755 "$DIOFINDER_DIR/scripts/station.sh"              /usr/local/bin/station.sh
+install -m 755 "$DIOFINDER_DIR/scripts/ap-watchdog.sh"          /usr/local/bin/ap-watchdog.sh
 install -m 755 "$DIOFINDER_DIR/scripts/diofinder-gadget-connect"  /usr/local/bin/diofinder-gadget-connect
 install -m 755 "$DIOFINDER_DIR/scripts/diofinder-set-time"        /usr/local/bin/diofinder-set-time
 chmod 755 "$DIOFINDER_DIR/scripts/firstboot.sh"
@@ -462,7 +464,8 @@ LOG "Enabling services"
 systemctl daemon-reload
 systemctl enable diofinder.service \
                  diofinder-firstboot.service diofinder-webui.service \
-                 diofinder-usb-gadget.service diofinder-ensure-ap.service
+                 diofinder-usb-gadget.service diofinder-ensure-ap.service \
+                 diofinder-ap-watchdog.service
 
 if [ "$IN_CHROOT" != "1" ]; then
   LOG "Starting services"

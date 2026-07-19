@@ -18,9 +18,17 @@ NetworkManager profiles + one guard service (`scripts/ap.sh`,
   autoconnect=no (but keeps the profile).
 - **`diofinder-ensure-ap.service`** — at boot, polls `wlan0` for 60 s; if NM
   connected to *any* WiFi it exits, otherwise it **forces the AP up**. So the
-  self-AP is the automatic fallback in every condition. **NOTE: boot-only** —
-  it does not re-assert the AP if a station link drops mid-session (see the
-  deferred watchdog below).
+  self-AP is the automatic fallback at boot.
+- **`diofinder-ap-watchdog.service`** (`scripts/ap-watchdog.sh`) — the
+  **mid-session** companion (built; deferred item 2 below). A continuous
+  service (starts after `ensure-ap`, `Restart=always`) that checks `wlan0`
+  every `DIOFINDER_APWD_INTERVAL` s (10) and, if the interface stays idle for
+  `DIOFINDER_APWD_GRACE` s (30) — a station link dropped and did not recover —
+  runs `ap.sh` to bring the self-AP back. A short blip (roaming, DHCP renewal)
+  inside the grace window is ignored; once the AP is up it shows active so the
+  watchdog rests (no flapping). Like the boot fallback it does not surrender the
+  AP on its own — reconnect a station network with `station.sh` when back in
+  range.
 - **`avahi-daemon`** advertises **`diofinder.local`** (mDNS); hostname
   `diofinder`.
 - The **USB link is a CDC-ACM serial console** (`ttyGS0`/`ttyACM0`) for bench
@@ -71,10 +79,12 @@ depends on the mount's WiFi:
   it sidesteps the AP-only-mount problem entirely, and the finder just
   `station.sh`-joins it.
 
-Mid-session caveat sharpens here: if the hub (mount AP or router) drops, after
-60 s the finder falls back to its *own* AP — a *different* network from the
-phone/mount — so a hub hiccup can split the finder off. Argues for the
-mid-session AP-fallback watchdog below.
+Mid-session caveat sharpens here: if the hub (mount AP or router) drops, the
+finder falls back to its *own* AP — a *different* network from the phone/mount —
+so a hub hiccup can split the finder off. This is exactly what the mid-session
+AP-fallback watchdog (`diofinder-ap-watchdog.service`, now built) provides, at
+the cost of that re-split being automatic; reconnect with `station.sh` once the
+hub is back.
 
 For actually *driving* a mount from the finder (plate-solve → sync the mount's
 model), see `docs/onstep-design.md` — that's a separate outbound feature (v1:
@@ -88,9 +98,10 @@ pleasant. All webui/systemd-level, no change to the solve/pointing path:
 1. **Show the current station IP prominently** in the web UI (and any status
    surface), so the SkySafari numeric-IP step is copy-paste, not a hunt — you
    browse `diofinder.local`, read the IP, paste into SkySafari.
-2. **Mid-session AP-fallback watchdog** — bring the self-AP back if the station
-   link drops and doesn't recover within N seconds (closes the boot-only gap in
-   `diofinder-ensure-ap`). **Highest-value field-robustness item.**
+2. **Mid-session AP-fallback watchdog** — **BUILT** (`ap-watchdog.sh` +
+   `diofinder-ap-watchdog.service`, see "What exists today" above). Brings the
+   self-AP back if the station link drops and doesn't recover within the grace
+   window, closing the boot-only gap in `diofinder-ensure-ap`.
 3. **A "join my phone's hotspot" helper** in the WiFi page (enter SSID/password
    once), with the AP-fallback behaviour explained inline so it's obvious the
    self-AP isn't given up.

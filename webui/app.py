@@ -895,6 +895,7 @@ def camera_page():
     solver_params = _safe_call("solver_params_get")
     hotpix        = _safe_call("hot_pixel_status")
     seeing        = _safe_call("seeing_get")
+    mount         = _safe_call("mount_status")
     tuning_profile = _tuning_profile()
     return render_template(
         "camera.html",
@@ -903,6 +904,7 @@ def camera_page():
         tuning_profile=tuning_profile,
         hotpix=(hotpix.result if hotpix.ok else None),
         seeing=(seeing.result if seeing.ok else None),
+        mount=(mount.result if mount.ok else None),
         bursts=_list_bursts(),
         bg_modes=bg_modes_mod.for_ui(),
     )
@@ -916,6 +918,48 @@ def autoexposure_set():
     if not r.ok:
         return r.error, 500
     return _redirect_next("camera_page")
+
+
+@app.route("/mount/set", methods=["POST"])
+def mount_set():
+    """Set live mount-link options (enable / mode / epoch); applies + persists."""
+    args = {}
+    if "enabled" in request.form:
+        args["enabled"] = request.form.get(
+            "enabled", "false").strip().lower() in ("true", "1", "on")
+    mode = (request.form.get("mode") or "").strip().lower()
+    if mode:
+        args["mode"] = mode
+    epoch = (request.form.get("epoch") or "").strip().lower()
+    if epoch:
+        args["epoch"] = epoch
+    if not args:
+        return "nothing to set", 400
+    r = _safe_call("mount_set", args)
+    if not r.ok:
+        return r.error, 500
+    return _redirect_next("camera_page")
+
+
+@app.route("/mount/test", methods=["POST"])
+def mount_test():
+    """Open the mount link and query its version (setup / wiring check)."""
+    r = _safe_call("mount_test")
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
+@app.route("/mount/sync", methods=["POST"])
+def mount_sync():
+    """One-shot manual sync of the current solved position to the mount."""
+    r = _safe_call("mount_sync")
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
+@app.route("/api/mount")
+def api_mount():
+    """JSON mount-link status for the Camera-page poller."""
+    r = _safe_call("mount_status")
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
 
 
 @app.route("/tuning/set", methods=["POST"])
@@ -1550,6 +1594,16 @@ _CONFIG_SECTIONS = [
     ("Communications (LX200)", [
         ("lx200_port",             "LX200 port",         "TCP port for the LX200 server."),
         ("lx200_client_timeout_s", "Client timeout (s)", "Disconnect idle LX200 clients."),
+    ]),
+    ("Mount sync (SynScan)", [
+        ("mount_enabled",       "Mount link",       "Push solved position to a GoTo mount as a sync (never a slew). Default off."),
+        ("mount_protocol",      "Protocol",         "Mount dialect: synscan (SkyWatcher). Restart to change."),
+        ("mount_serial_port",   "Serial port",      "GPIO UART device, e.g. /dev/serial0 (GPIO14/15 -> MAX232 -> RS-232). Restart."),
+        ("mount_serial_baud",   "Serial baud",      "SynScan default 9600. Restart to change."),
+        ("mount_epoch",         "Mount epoch",      "The mount's coordinate epoch (jnow/j2000). Separate from the LX200 report epoch."),
+        ("mount_mode",          "Push mode",        "manual (Sync-now button) or auto (gated sync after each solve)."),
+        ("mount_auto_min_interval_s", "Auto min interval (s)", "Auto mode: minimum seconds between syncs."),
+        ("mount_auto_deadband_arcmin", "Auto deadband (')", "Auto mode: skip a re-sync within this angle of the last."),
     ]),
     ("CPU Affinity", [
         ("cpu_camera", "Camera CPU",  "Core for camera_proc. Also shared with solver rayon threads."),

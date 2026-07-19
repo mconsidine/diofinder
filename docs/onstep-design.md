@@ -1,7 +1,26 @@
 # OnStepX sync output — design spec
 
-Status: **design only, not implemented.** Optional, off-by-default feature to
-turn the finder into a plate-solve alignment source for a GoTo mount.
+Status: **SynScan dialect BUILT (v1); OnStepX/LX200 + Alpaca dialects still
+design-only.** Optional, off-by-default feature to turn the finder into a
+plate-solve alignment source for a GoTo mount.
+
+> **As built — SynScan (SkyWatcher Virtuoso), first dialect.** The pluggable
+> `MountLink` design below is realized in **`diofinder/mountlink.py`** with the
+> **SynScan/NexStar** dialect (`SynScanLink`) + a pyserial `SerialTransport`
+> over the GPIO UART (`/dev/serial0`, GPIO14/15 → **MAX232 → RS-232** to the
+> Virtuoso's wired serial port). It follows this spec's shape:
+> `sync(ra,dec)` (precise NexStar `s` command, sync-only — never slews),
+> `version()`, `get_radec()`, `ping()`; epoch conversion via
+> `diofinder.precession` gated by the mount's own epoch. The comms side adds
+> `_mount_loop` (auto-push daemon, mirrors `_auto_exposure_loop`), the pure
+> `mountlink.should_sync` policy (§3), the `mount_status/sync/test/set` maint
+> commands (§6), a Camera-page "Mount sync" card (§7), and `mount_*` config
+> keys. The generic prefix is **`mount_*`** (not `onstep_*`) since SynScan
+> shipped first and the layer is dialect-agnostic. Unit-tested in
+> `tests/test_mountlink.py` (encoding round-trips, sync sequence/reply against
+> a fake transport, epoch conversion, the auto-push decision matrix). **When
+> the LX200/Alpaca dialects are added, `onstep_*` in the tables below maps to
+> the shipped `mount_*` keys.**
 
 ---
 
