@@ -123,6 +123,27 @@ else
   LOG "No star_names.csv on this release; leaving any existing catalog in place"
 fi
 
+# Refresh the Messier catalog from the same release (optional; powers the
+# "centered object" DSO label). Same non-fatal, manifest-verified contract as
+# the star-names catalog above.
+MESSIER_PATH=/var/lib/diofinder/messier.csv
+if curl -fsSL "$BASE/messier.csv" -o "$TMPDIR/messier.csv" 2>/dev/null; then
+  MWANT=$(python3 -c "
+import json
+m = json.load(open('$TMPDIR/manifest.json'))
+print(m['outputs'].get('messier', {}).get('sha256', ''))
+" 2>/dev/null) || MWANT=""
+  MGOT=$(sha256sum "$TMPDIR/messier.csv" | cut -d' ' -f1)
+  if [ -n "$MWANT" ] && [ "$MWANT" != "$MGOT" ]; then
+    LOG "WARNING: messier.csv SHA-256 mismatch; keeping existing catalog"
+  else
+    install -m 644 -o diofinder -g diofinder "$TMPDIR/messier.csv" "$MESSIER_PATH"
+    LOG "Installed Messier catalog at $MESSIER_PATH"
+  fi
+else
+  LOG "No messier.csv on this release; leaving any existing catalog in place"
+fi
+
 LOG "Restarting diofinder service..."
 systemctl restart diofinder
 LOG "Done. Previous database kept at $DB_PATH.bak"

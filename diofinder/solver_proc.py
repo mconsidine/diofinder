@@ -162,7 +162,8 @@ def _empty_solution(stars=0, peak=0, noise=0.0, solve_ms=0.0, status=0,
 
 
 def _filled_solution(*, ra, dec, roll, fov, stars, matches,
-                     peak, noise, solve_ms, status, star=None, seq=None):
+                     peak, noise, solve_ms, status, star=None, dso=None,
+                     seq=None):
     sol = {
         "ra_deg": float(ra), "dec_deg": float(dec),
         "roll_deg": float(roll), "fov_deg": float(fov),
@@ -179,6 +180,15 @@ def _filled_solution(*, ra, dec, roll, fov, stars, matches,
         sol["star_desig"] = star["desig"]
         sol["star_mag"] = star["mag"]
         sol["star_sep_deg"] = star["sep_deg"]
+    # "Centered object": the Messier DSO the aim point is on. Written to
+    # SEPARATE dso_* fields so the star label never regresses when this is
+    # absent/off. Display only — nothing downstream reads it.
+    if dso:
+        sol["dso_m"] = dso["m"]
+        sol["dso_name"] = dso["name"]
+        sol["dso_mag"] = dso["mag"]
+        sol["dso_type"] = dso["type"]
+        sol["dso_sep_deg"] = dso["sep_deg"]
     return sol
 
 
@@ -931,6 +941,12 @@ def solver_main(slots, latest_solution, shared_cfg,
     # Never fatal: a missing/bad catalog just disables brightest-star naming.
     from diofinder import star_names as _star_names_mod
     star_names = _star_names_mod.try_load(cfg.star_names_path)
+
+    # ---- Load Messier catalog ("centered object" label; optional) ----------
+    # Same contract as star-names: a missing/bad catalog just disables the DSO
+    # label. Display only — it never touches detection, the solve, or the aim.
+    from diofinder import messier as _messier_mod
+    messier = _messier_mod.try_load(cfg.messier_path)
 
     # ---- Load sycamore extractor -------------------------------------------
     try:
@@ -1845,13 +1861,24 @@ def solver_main(slots, latest_solution, shared_cfg,
                         star = star_names.nearest(ra_out, dec_out, measured_fov)
                 except Exception as e:
                     log.debug("Star-name lookup failed: %s", e)
+            # Name the "centered object": the Messier DSO the aim point is on
+            # (display only, separate dso_* fields). Gated by star_name_dso
+            # (live), on by default. Matched against the internal J2000 aim
+            # point — this runs before the JNow report boundary, no precession.
+            dso = None
+            if messier is not None and bool(snap.get(
+                    "star_name_dso", getattr(cfg, "star_name_dso", True))):
+                try:
+                    dso = messier.centered(ra_out, dec_out)
+                except Exception as e:
+                    log.debug("Messier lookup failed: %s", e)
             latest_solution.update(_filled_solution(
                 ra=ra_out, dec=dec_out,
                 roll=soln.get("Roll", 0.0), fov=measured_fov,
                 stars=n_stars, matches=n_matches,
                 peak=local_peak, noise=0.0,
                 solve_ms=elapsed_ms, status=MATCH_FOUND,
-                star=star, seq=frame_seq,
+                star=star, dso=dso, seq=frame_seq,
             ))
             _imu_update_reference(
                 shared_cfg, ra_out, dec_out, soln.get("Roll", 0.0), snap=snap,

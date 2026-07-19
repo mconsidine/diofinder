@@ -2,8 +2,27 @@
 
 Design spec for a **display-only** label that names the bright deep-sky object
 (Messier) the aim point currently sits on, mirroring the existing "Centered
-star" label. **Not built** — backlog. Display overlay only; it never touches the
-solve, the align, or the aim point.
+star" label. **Built** (`diofinder/messier.py`, wired into `solver_proc.py`;
+catalog shipped by `astro_databases` from release `2026.07.01`). Display
+overlay only; it never touches the solve, the align, or the aim point.
+
+## As built
+
+- **Catalog**: `astro_databases/scripts/build_messier.py` → `messier.csv`
+  (110 rows), a release asset fetched by `diofinder-db-update` to
+  `/var/lib/diofinder/messier.csv` (sha-verified against the manifest, exactly
+  like `star_names.csv`; missing file disables the label).
+- **Match engine**: `diofinder/messier.py` `MessierCatalog.load()` +
+  `centered(ra, dec)` — vectorized dot-product over precomputed unit vectors,
+  per-object match radius `max(0.5·size/60 + 0.1°, 0.25°)`, nearest center on
+  overlap, brightness tie-break. Unit-tested in `tests/test_messier.py`.
+- **Solver**: loaded non-fatally at `solver_main` startup; the naming block
+  sets `dso_m / dso_name / dso_mag / dso_type / dso_sep_deg` on
+  `latest_solution` alongside the `star_*` fields, gated by `star_name_dso`.
+- **Config**: `messier_path` (default `/var/lib/diofinder/messier.csv`) and
+  `star_name_dso: bool = True` (live-mutable via `solver_params_set`).
+- **Web UI**: a "Centered object" readout on the Home and Camera pages
+  (poller-updated from `solution.dso_*`) and an expert-mode toggle on Camera.
 
 ## Motivation
 

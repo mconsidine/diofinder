@@ -92,6 +92,7 @@ LX200-pointing consumers, and the calibration loop).
 | `display_wanted_until` | float (monotonic) | comms (via maint `display_start` keepalive) | solver (demand-gates the `diofinder_display` write; no viewer → no copy) |
 | `star_name_brightest` | bool | comms (via maint `solver_params_set`) | solver (centered-star naming) |
 | `star_name_whole_fov` | bool | comms (via maint `solver_params_set`) | solver (centered-star naming — brightest anywhere in the frame vs within `star_name_radius_deg` of boresight; implies brightest mode; an align anchor when boresight is off) |
+| `star_name_dso` | bool | comms (via maint `solver_params_set`) | solver (centered-**object** label — names the Messier DSO the aim point is on, from `messier.csv`; sets separate `dso_*` solution fields; display only) |
 | `imu_available` | bool | imu_thread | comms, webui |
 | `imu` | tuple ((w,x,y,z), t) | imu_thread | comms, solver (via `imu_math.get_imu_qt`; ONE atomic write per 20 Hz read since v0.11.24 — the split `imu_q`/`imu_t` keys are legacy-read only) |
 | `imu_ref_q/ra/dec/roll/t` | varies | *(no longer published since v0.11.24 — readers use the `imu_ref` tuple; comms still accepts them from older solvers)* | — |
@@ -1100,6 +1101,7 @@ set in `diofinder.conf`.
 | `/var/lib/diofinder/hot_pixel_mask.npz` | Hot-pixel mask (from `dark_capture`) |
 | `/var/lib/diofinder/seeing_overrides.json` | Saved Good/Bad seeing overrides (factory presets stay immutable) |
 | `/var/lib/diofinder/star_names.csv` | Star naming catalog (from astro_databases release); powers the "Centered star" label (default: the BRIGHTEST cataloged star within `star_name_radius_deg` (2°) of the boresight, falling back to nearest; the expert toggle `star_name_brightest=false` reverts to pure nearest; `star_name_whole_fov=true` widens the brightest search to the whole frame — a stable align anchor when boresight is off). Optional — missing file disables naming. Refreshed by `diofinder-db-update`. |
+| `/var/lib/diofinder/messier.csv` | Messier catalog (from astro_databases release ≥ `2026.07.01`); powers the "Centered object" DSO label (`messier.py`: the Messier object the aim point is on, matched by each object's own extent). Display only — separate from the star label, never touches the solve/align/aim. Gated by `star_name_dso` (default on). Optional — missing file disables it. Refreshed by `diofinder-db-update`. |
 | `/var/lib/diofinder/captures/` | PNG captures when `save_failed_frames=true` (100 MB cap, oldest evicted) |
 | `/run/diofinder/maint.sock` | Maintenance Unix socket |
 | `/var/lib/diofinder/version` | Running release tag + ISO date. Stamped at image build (`install.sh`, from `DIOFINDER_VERSION`) and rewritten by `diofinder-update`. The `version` maint command resolves it as: this file → `git describe` of `/opt/diofinder` → in-code `cfg.version` (so a fresh burn reports its real tag instead of the stale default). |
