@@ -993,7 +993,18 @@ prerequisite the OnStep work needed). Nothing here is a bug or a regression.
 
 ### Accepted-by-design (do NOT "fix" without a new reason)
 
-- LX200 server handles one client connection at a time.
+- **`:CM#` align uses coordinate projection, NOT centroid identification.** Using
+  the SkySafari target RA/Dec to snap the boresight to a detected centroid (or to
+  reject if none is near) was considered and rejected: it would break aligning on
+  DSOs, planets, the Moon, and faint/undetected targets — a large routine
+  fraction of what users align on. The project-to-pixel behaviour is general by
+  design (aligning is "where does this coordinate land in my frame", not "which
+  detected star is this"); the only right hard-reject is "target outside camera
+  FOV". Full advantages/disadvantages in
+  `docs/decisions/2026-07-19-centroid-align-target-id.md`.
+- LX200 server handles many clients via a fixed worker pool (v0.11.58, was
+  thread-per-connection v0.11.52); a blocking `:CM#`/half-open phone occupies one
+  worker, not the accept loop. (`docs/lx200-connection-pool-design.md`.)
 - Tracking mode (`tracking.py`) is experimental, default-off; its dedupe
   distance not scaling with `bin` is known and harmless at bin=2.
 - `detect_bin` is restart-only (the temporal cache is built at one binning).
