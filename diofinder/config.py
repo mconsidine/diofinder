@@ -281,6 +281,26 @@ class Config:
     # (~15-22' in 2026) — re-align once after changing it.
     report_epoch: str = "jnow"
 
+    # -------- Mount link (outbound sync to a GoTo mount; default OFF) --------
+    # After a confident solve the finder can push its solved position to a mount
+    # as a SYNC (never a slew), correcting the mount's pointing model — turning
+    # the plate solver into an alignment source. v1 speaks the SynScan/NexStar
+    # ASCII protocol over the GPIO UART (GPIO14/15 -> MAX232 -> RS-232 to a
+    # SkyWatcher Virtuoso). See docs/onstep-design.md. Sync-only: nothing here
+    # can move the mount.
+    mount_enabled: bool = False          # master switch (live via shared_cfg)
+    mount_protocol: str = "synscan"      # dialect (future: lx200 / alpaca); restart
+    mount_serial_port: str = "/dev/serial0"   # GPIO UART; restart (opens a device)
+    mount_serial_baud: int = 9600        # SynScan HC default; restart
+    mount_epoch: str = "jnow"            # the MOUNT's epoch (jnow/j2000); live
+    mount_mode: str = "manual"           # manual (button) / auto (gated); live
+    # Auto-mode gates (all live via shared_cfg) — mirror the OnStep design §3.
+    mount_auto_max_age_s: float = 3.0        # never sync a stale/held solution
+    mount_auto_min_matches: int = 8          # don't sync a weak solve
+    mount_auto_settle_s: float = 3.0         # never sync mid-slew (IMU rate gate)
+    mount_auto_deadband_arcmin: float = 1.0  # don't re-sync the same spot
+    mount_auto_min_interval_s: float = 15.0  # a mount needs no sub-second syncs
+
     # -------- CPU affinity --------
     # Pi Zero 2W: 4 cores.
     #   0 = comms_proc + diofinder-webui + IMU thread (I/O bound) + kernel/IRQs

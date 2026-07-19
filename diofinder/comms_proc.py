@@ -40,6 +40,7 @@ from queue import Empty, Full, Queue
 from diofinder import config as cfg_mod
 from diofinder import bg_modes as bg_modes_mod
 from diofinder import precession as _precession
+from diofinder import mountlink as _mountlink
 from diofinder.align import AlignRequest, AlignResult, CommsAlignState
 from diofinder.imu_math import (quat_delta_rotvec, alpha_beta_step,
                                 rotvec_to_quat, quat_mul, quat_to_radec,
@@ -467,6 +468,196 @@ def _ae_resume():
 def _ae_paused() -> bool:
     with _ae_pause_lock:
         return _ae_pause_count > 0
+
+
+# --------------------------------------------------------------------------- #
+# Mount link (outbound SYNC to a GoTo mount; default OFF). Owns one serial
+# connection shared by the auto-push loop and the manual mount_sync/mount_test
+# maint commands, serialized by a lock. Sync-only — it cannot move the mount.
+# --------------------------------------------------------------------------- #
+
+_MOUNT_MANUAL_MAX_AGE_S = 10.0   # a manual "sync now" tolerates a slightly older fix
+
+
+def _mount_params(cfg, scfg):
+    proto = str(scfg.get("mount_protocol",
+                         getattr(cfg, "mount_protocol", "synscan"))).lower()
+    port = str(scfg.get("mount_serial_port",
+                        getattr(cfg, "mount_serial_port", "/dev/serial0")))
+    baud = int(scfg.get("mount_serial_baud",
+                        getattr(cfg, "mount_serial_baud", 9600)))
+    epoch = str(scfg.get("mount_epoch",
+                         getattr(cfg, "mount_epoch", "jnow"))).lower()
+    return proto, port, baud, epoch
+
+
+def _mount_gates(cfg, scfg):
+    def g(key, default):
+        return scfg.get(key, getattr(cfg, key, default))
+    return {
+        "max_age_s": float(g("mount_auto_max_age_s", 3.0)),
+        "min_matches": int(g("mount_auto_min_matches", 8)),
+        "settle_s": float(g("mount_auto_settle_s", 3.0)),
+        "deadband_arcmin": float(g("mount_auto_deadband_arcmin", 1.0)),
+        "min_interval_s": float(g("mount_auto_min_interval_s", 15.0)),
+    }
+
+
+def _solved_j2000(sol, max_age_s):
+    """(ra, dec) J2000 of a fresh solve, else None. Uses the raw solved
+    position (boresight-corrected) — NOT the IMU prediction — since an
+    alignment sync wants the real fix, not a smoothed extrapolation."""
+    if not sol.get("solved"):
+        return None
+    ra = sol.get("ra_deg")
+    dec = sol.get("dec_deg")
+    if ra is None or dec is None:
+        return None
+    if time.monotonic() - sol.get("epoch_monotonic", 0.0) > max_age_s:
+        return None
+    return float(ra), float(dec)
+
+
+class _MountManager:
+    """One serial mount connection, shared by the auto loop and manual commands.
+
+    All serial access goes through ``_lock`` so the push loop and a manual
+    ``mount_sync`` can't interleave on the wire. The link is (re)built when the
+    protocol/port/baud change; the mount epoch updates without a rebuild.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._link = None
+        self._transport = None
+        self._key = None            # (protocol, port, baud) the link was built for
+        self.connected = False
+        self.mount_version = None
+        self.last_sync = None       # {ra, dec, utc, result, t, ...}
+        self.syncs_ok = 0
+        self.syncs_fail = 0
+        self.last_error = None
+
+    def _teardown(self):
+        if self._transport is not None:
+            self._transport.close()
+        self._transport = None
+        self._link = None
+        self._key = None
+        self.connected = False
+
+    def _ensure(self, cfg, scfg):
+        """(Re)build + open the link. Caller holds the lock. Raises MountError."""
+        proto, port, baud, epoch = _mount_params(cfg, scfg)
+        key = (proto, port, baud)
+        if self._link is None or self._key != key:
+            self._teardown()
+            self._transport = _mountlink.SerialTransport(port, baud)
+            self._link = _mountlink.make_link(proto, self._transport, epoch=epoch)
+            self._key = key
+        self._link.epoch = epoch    # live-updatable, no rebuild
+        if not self._transport.is_open:
+            self._transport.open()
+        return self._link
+
+    def test(self, cfg, scfg):
+        with self._lock:
+            try:
+                ver = self._ensure(cfg, scfg).version()
+                self.mount_version = ver
+                self.connected = True
+                self.last_error = None
+                return True, ver
+            except _mountlink.MountError as e:
+                self.last_error = str(e)
+                self._teardown()
+                return False, str(e)
+
+    def sync(self, ra_j2000, dec_j2000, cfg, scfg):
+        with self._lock:
+            try:
+                link = self._ensure(cfg, scfg)
+                ok, detail = link.sync(ra_j2000, dec_j2000)
+                self.connected = True
+                rec = {
+                    "ra": round(ra_j2000, 5), "dec": round(dec_j2000, 5),
+                    "utc": datetime.datetime.now(
+                        datetime.timezone.utc).isoformat(timespec="seconds"),
+                    "t": time.monotonic(),
+                    "result": "ok" if ok else "rejected",
+                    "sent_ra_deg": detail.get("sent_ra_deg"),
+                    "sent_dec_deg": detail.get("sent_dec_deg"),
+                    "epoch": detail.get("epoch"),
+                }
+                self.last_sync = rec
+                if ok:
+                    self.syncs_ok += 1
+                    self.last_error = None
+                else:
+                    self.syncs_fail += 1
+                    self.last_error = f"mount rejected sync (reply {detail.get('reply')!r})"
+                return ok, rec
+            except _mountlink.MountError as e:
+                self.syncs_fail += 1
+                self.last_error = str(e)
+                self._teardown()
+                return False, {"result": "error", "error": str(e)}
+
+    def status(self, cfg, scfg):
+        proto, port, baud, epoch = _mount_params(cfg, scfg)
+        with self._lock:
+            return {
+                "enabled": bool(scfg.get(
+                    "mount_enabled", getattr(cfg, "mount_enabled", False))),
+                "protocol": proto, "port": port, "baud": baud, "epoch": epoch,
+                "mode": str(scfg.get(
+                    "mount_mode", getattr(cfg, "mount_mode", "manual"))).lower(),
+                "connected": self.connected,
+                "mount_version": self.mount_version,
+                "last_sync": self.last_sync,
+                "syncs_ok": self.syncs_ok, "syncs_fail": self.syncs_fail,
+                "last_error": self.last_error,
+            }
+
+
+_mount_mgr = _MountManager()
+
+
+def _mount_loop(ctx, interval_s=2.0):
+    """Auto-push daemon: in 'auto' mode, sync the mount after gated solves.
+
+    Gated by mount_enabled + mount_mode=='auto'. Manual mode idles here (the
+    user drives it via the mount_sync maint command). Never dies; a serial
+    failure is logged, the link torn down, and retried next cycle.
+    """
+    cfg = ctx.cfg
+    last_sync = None          # {"ra","dec","t"} of the last accepted auto sync
+    while True:
+        time.sleep(interval_s)
+        try:
+            scfg = dict(ctx.shared_cfg)
+            if not scfg.get("mount_enabled", getattr(cfg, "mount_enabled", False)):
+                continue
+            if str(scfg.get("mount_mode",
+                            getattr(cfg, "mount_mode", "manual"))).lower() != "auto":
+                continue
+            sol = dict(ctx.latest_solution)
+            gates = _mount_gates(cfg, scfg)
+            moving = _imu_is_moving(scfg)
+            do, why = _mountlink.should_sync(
+                sol, time.monotonic(), last_sync, gates, moving)
+            if not do:
+                continue
+            ra, dec = float(sol["ra_deg"]), float(sol["dec_deg"])
+            ok, rec = _mount_mgr.sync(ra, dec, cfg, scfg)
+            if ok:
+                last_sync = {"ra": ra, "dec": dec, "t": rec["t"]}
+                log.info("Mount auto-sync: RA %.4f Dec %.4f (%s)",
+                         ra, dec, rec.get("epoch"))
+            else:
+                log.warning("Mount auto-sync failed: %s", rec)
+        except Exception as e:
+            log.warning("mount loop step failed: %s", e)
 
 
 def _auto_exposure_loop(ctx, interval_s=5.0):
@@ -1258,6 +1449,28 @@ def _imu_motion_engaged(state, q_now, imu_t, ref_t,
     return bool(state.get("engaged"))
 
 
+_mount_rate_state = {}          # dedicated motion state for the mount push loop
+_mount_rate_lock = threading.Lock()
+
+
+def _imu_is_moving(scfg) -> bool:
+    """Best-effort slew detector for the mount auto-push (its own rate state,
+    so it never perturbs the LX200 pointing path). Returns False when the IMU
+    is unavailable — a missing motion signal must not silently block syncs; the
+    freshness / deadband gates still protect against a mid-slew push."""
+    if not scfg.get("imu_available", False):
+        return False
+    q_now, imu_t = get_imu_qt(scfg)
+    if q_now is None or time.monotonic() - imu_t > 2.0:
+        return False
+    ref = scfg.get("imu_ref")
+    ref_t = ref[4] if ref is not None and len(ref) >= 5 else 0.0
+    rate_gate = float(scfg.get("imu_rate_gate_dps", _IMU_RATE_GATE_DPS))
+    with _mount_rate_lock:
+        return _imu_motion_engaged(_mount_rate_state, q_now, imu_t, ref_t,
+                                   rate_gate_dps=rate_gate)
+
+
 def _imu_predict(shared_cfg):
     """Return (ra_deg, dec_deg) predicted from IMU rotation since last solve, or None if unavailable."""
     if not shared_cfg.get("imu_available", False):
@@ -1852,6 +2065,78 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             log.info("Auto-exposure -> %s (%s)", enabled, updates)
             return MaintResponse(ok=True, result={
                 **updates, "persisted": persist})
+
+        # ---- Mount link (outbound SYNC; sync-only, never slews) ----
+        if cmd == "mount_status":
+            return MaintResponse(
+                ok=True, result=_mount_mgr.status(ctx.cfg, dict(ctx.shared_cfg)))
+
+        if cmd == "mount_test":
+            ok, detail = _mount_mgr.test(ctx.cfg, dict(ctx.shared_cfg))
+            if not ok:
+                return MaintResponse(ok=False, error=detail)
+            return MaintResponse(ok=True, result={"connected": True,
+                                                  "mount_version": detail})
+
+        if cmd == "mount_sync":
+            scfg = dict(ctx.shared_cfg)
+            sol = dict(ctx.latest_solution)
+            fix = _solved_j2000(sol, _MOUNT_MANUAL_MAX_AGE_S)
+            if fix is None:
+                return MaintResponse(ok=False, error="no fresh solution to sync")
+            ok, rec = _mount_mgr.sync(fix[0], fix[1], ctx.cfg, scfg)
+            if not ok:
+                return MaintResponse(
+                    ok=False, error=rec.get("error", "mount rejected sync"))
+            log.info("Mount manual sync: RA %.4f Dec %.4f (%s)",
+                     fix[0], fix[1], rec.get("epoch"))
+            return MaintResponse(ok=True, result=rec)
+
+        if cmd == "mount_set":
+            # Live-tunable mount keys (enabled/mode/epoch + the auto gates).
+            # Transport keys (protocol/port/baud) are restart-level and set in
+            # the conf, so they are NOT accepted here.
+            updates = {}
+            if "enabled" in args:
+                updates["mount_enabled"] = bool(args["enabled"])
+            if args.get("mode") is not None:
+                mode = str(args["mode"]).lower()
+                if mode not in ("manual", "auto"):
+                    return MaintResponse(ok=False, error="mode must be manual/auto")
+                updates["mount_mode"] = mode
+            if args.get("epoch") is not None:
+                epoch = str(args["epoch"]).lower()
+                if epoch not in ("jnow", "j2000"):
+                    return MaintResponse(ok=False, error="epoch must be jnow/j2000")
+                updates["mount_epoch"] = epoch
+            _num_gates = {
+                "mount_auto_max_age_s": (float, 0.5, 60.0),
+                "mount_auto_min_matches": (int, 0, 100),
+                "mount_auto_settle_s": (float, 0.0, 60.0),
+                "mount_auto_deadband_arcmin": (float, 0.0, 120.0),
+                "mount_auto_min_interval_s": (float, 0.0, 3600.0),
+            }
+            for key, (cast, lo, hi) in _num_gates.items():
+                short = key[len("mount_auto_"):]
+                if args.get(short) is None and args.get(key) is None:
+                    continue
+                raw = args.get(short, args.get(key))
+                try:
+                    val = cast(raw)
+                except (ValueError, TypeError):
+                    return MaintResponse(ok=False, error=f"bad {short}")
+                if not lo <= val <= hi:
+                    return MaintResponse(
+                        ok=False, error=f"{short} must be in [{lo}, {hi}]")
+                updates[key] = val
+            if not updates:
+                return MaintResponse(ok=False, error="mount_set: nothing to set")
+            persist = bool(args.get("persist", True))
+            ctx.shared_cfg.update(updates)
+            if persist:
+                cfg_mod.save_keys(updates)
+            log.info("Mount settings -> %s", updates)
+            return MaintResponse(ok=True, result={**updates, "persisted": persist})
 
         if cmd == "auto_tune":
             # Precondition: we must currently see a star field (fresh detection
@@ -3018,6 +3303,14 @@ def comms_main(latest_solution, shared_cfg,
     # (the kill switch) is honored from boot.
     shared_cfg.setdefault("report_epoch",
                           str(getattr(cfg, "report_epoch", "jnow")).lower())
+    # Mount link live-mutable keys, seeded from the conf so a persisted state is
+    # honored from boot (transport keys are read directly from cfg, not seeded).
+    shared_cfg.setdefault("mount_enabled",
+                          bool(getattr(cfg, "mount_enabled", False)))
+    shared_cfg.setdefault("mount_mode",
+                          str(getattr(cfg, "mount_mode", "manual")).lower())
+    shared_cfg.setdefault("mount_epoch",
+                          str(getattr(cfg, "mount_epoch", "jnow")).lower())
 
     ctx = _MaintContext(
         cfg=cfg, latest_solution=latest_solution, shared_cfg=shared_cfg,
@@ -3034,6 +3327,9 @@ def comms_main(latest_solution, shared_cfg,
 
     threading.Thread(target=_watchdog_loop, args=(ctx,),
                      name="diofinder-watchdog", daemon=True).start()
+
+    threading.Thread(target=_mount_loop, args=(ctx,),
+                     name="diofinder-mount", daemon=True).start()
 
     while True:
         try:

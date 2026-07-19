@@ -256,6 +256,45 @@
     </div>
   </div>
 
+  <div class="card expert-only" id="mount-card">
+    <h2>Mount sync (SynScan) {{ tip("Push the finder's solved position to a GoTo mount as a <strong>sync</strong> (never a slew) over the GPIO serial line — turning the plate solver into an alignment source (e.g. a SkyWatcher Virtuoso via GPIO14/15 &rarr; MAX232 &rarr; RS-232). <strong>Manual</strong>: press Sync now. <strong>Auto</strong>: syncs after each confident, settled solve. Sync-only — it cannot move the mount. Transport (port/baud) is set in the config file; restart to change it.") }}</h2>
+    {% if mount %}
+      <form method="post" action="{{ url_for('mount_set') }}" style="margin:0 0 10px;">
+        <input type="hidden" name="next" value="camera_page">
+        <input type="hidden" name="enabled"
+               value="{{ 'false' if mount.enabled else 'true' }}">
+        <label class="checkbox">
+          <input type="checkbox" onchange="this.form.submit()"
+                 {{ 'checked' if mount.enabled }}>
+          Enable mount link
+        </label>
+      </form>
+      <form method="post" action="{{ url_for('mount_set') }}" style="margin:0 0 10px;">
+        <input type="hidden" name="next" value="camera_page">
+        <label>Mode
+          <select name="mode" onchange="this.form.submit()">
+            <option value="manual" {{ 'selected' if mount.mode == 'manual' }}>Manual (button)</option>
+            <option value="auto"   {{ 'selected' if mount.mode == 'auto' }}>Auto (gated)</option>
+          </select>
+        </label>
+        <label style="margin-left:10px;">Mount epoch
+          <select name="epoch" onchange="this.form.submit()">
+            <option value="jnow"  {{ 'selected' if mount.epoch == 'jnow' }}>JNow</option>
+            <option value="j2000" {{ 'selected' if mount.epoch == 'j2000' }}>J2000</option>
+          </select>
+        </label>
+      </form>
+      <div style="margin-top:6px;">
+        <button type="button" class="btn" id="mount-test">Test connection</button>
+        <button type="button" class="btn btn-primary" id="mount-sync">Sync now</button>
+        <span id="mount-action" class="hint" style="margin-left:8px;"></span>
+      </div>
+      <pre id="mount-status" class="hint" style="margin-top:8px;white-space:pre-wrap;"></pre>
+    {% else %}
+      <p class="muted">Daemon not reachable.</p>
+    {% endif %}
+  </div>
+
   <div class="card expert-only">
     <h2>Solver Parameters</h2>
     {% if solver_params %}
@@ -1034,6 +1073,57 @@ setInterval(syncCameraState, 3000);
     } catch (e) { /* leave the previous text */ }
   }
   setInterval(refresh, 3000);
+  refresh();
+})();
+
+// ---- Mount sync card ----
+(function(){
+  const statusEl = document.getElementById('mount-status');
+  if (!statusEl) return;                 // card absent (daemon unreachable)
+  const actionEl = document.getElementById('mount-action');
+  function render(m){
+    if (!m){ statusEl.textContent = 'no status'; return; }
+    const lines = [];
+    lines.push('link:      ' + (m.enabled ? 'ENABLED' : 'off') +
+               ' · ' + m.mode + ' · ' + m.protocol +
+               ' @ ' + m.port + ' ' + m.baud + ' · epoch ' + m.epoch);
+    lines.push('connected: ' + (m.connected ? ('yes' +
+               (m.mount_version ? ' (v' + m.mount_version + ')' : '')) : 'no'));
+    if (m.last_sync){
+      const s = m.last_sync;
+      lines.push('last sync: RA ' + s.ra + ' Dec ' + s.dec +
+                 ' · ' + s.result + ' · ' + (s.utc || ''));
+    }
+    lines.push('syncs:     ' + m.syncs_ok + ' ok / ' + m.syncs_fail + ' failed');
+    if (m.last_error) lines.push('error:     ' + m.last_error);
+    statusEl.textContent = lines.join('\n');
+  }
+  async function refresh(){
+    try {
+      const r = await fetch('/api/mount');
+      const d = await r.json();
+      if (d.ok) render(d.result);
+    } catch (e) { /* leave previous */ }
+  }
+  const testBtn = document.getElementById('mount-test');
+  const syncBtn = document.getElementById('mount-sync');
+  if (testBtn) testBtn.addEventListener('click', async () => {
+    actionEl.textContent = 'testing…';
+    const r = await fetch('/mount/test', {method:'POST'});
+    const d = await r.json();
+    actionEl.textContent = d.ok
+      ? ('connected: v' + ((d.result && d.result.mount_version) || '?'))
+      : ('error: ' + d.error);
+    refresh();
+  });
+  if (syncBtn) syncBtn.addEventListener('click', async () => {
+    actionEl.textContent = 'syncing…';
+    const r = await fetch('/mount/sync', {method:'POST'});
+    const d = await r.json();
+    actionEl.textContent = d.ok ? 'sync sent' : ('error: ' + d.error);
+    refresh();
+  });
+  setInterval(refresh, 4000);
   refresh();
 })();
 

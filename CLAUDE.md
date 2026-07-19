@@ -89,6 +89,7 @@ LX200-pointing consumers, and the calibration loop).
 | `imu_rate_gate_dps` | float | comms (seed from cfg; live via `solver_params_set` — Camera-page "IMU pointing gate" slider, v0.11.50) | comms LX200 pointing (rate gate in `_imu_predict`; raise to stop a parked scope's SkySafari jitter) |
 | `imu_exact_predict` | bool | comms (seed from cfg; `solver_params_set`) | comms LX200 pointing (kill switch for the exact quaternion path; false → legacy C-matrix) |
 | `report_epoch` | str (`jnow`/`j2000`) | comms (seed from cfg; `solver_params_set`) | comms LX200 boundary — precesses J2000→JNow for `:GR/:GD` + the status `report_*`, JNow→J2000 for the `:CM#` align target (v0.11.53). `j2000` = raw kill switch |
+| `mount_enabled`, `mount_mode`, `mount_epoch` | bool / str (`manual`/`auto`) / str (`jnow`/`j2000`) | comms (seed from cfg; `mount_set`) | comms `_mount_loop` + `mount_sync`/`mount_status` — outbound SynScan mount sync (the mount's OWN epoch, distinct from `report_epoch`). `mount_auto_*` gates are read live too. Transport keys (`mount_protocol`/`mount_serial_port`/`mount_serial_baud`) are cfg-only (restart) |
 | `display_wanted_until` | float (monotonic) | comms (via maint `display_start` keepalive) | solver (demand-gates the `diofinder_display` write; no viewer → no copy) |
 | `star_name_brightest` | bool | comms (via maint `solver_params_set`) | solver (centered-star naming) |
 | `star_name_whole_fov` | bool | comms (via maint `solver_params_set`) | solver (centered-star naming — brightest anywhere in the frame vs within `star_name_radius_deg` of boresight; implies brightest mode; an align anchor when boresight is off) |
@@ -1088,6 +1089,65 @@ invisibly forever.
 Pi): point it at a directory of solved-frame PNGs and it runs `tetra3rs`
 `calibrate_camera` to fit SIP distortion and prints the `distortion:` value to
 set in `diofinder.conf`.
+
+---
+
+## Mount link — outbound sync to a GoTo mount (default OFF)
+
+`diofinder/mountlink.py` turns the plate solver into an **alignment source**:
+after a confident solve it pushes the solved position to a mount as a **SYNC
+(never a slew)**, correcting the mount's pointing model. The finder serves
+SkySafari over Wi-Fi and drives the mount over the GPIO serial line at the same
+time. Full design + rationale in `docs/onstep-design.md`.
+
+**v1 dialect: SynScan** (SkyWatcher Virtuoso). The transport is the **GPIO
+UART** `/dev/serial0` (GPIO14/15) through a **MAX232 → true RS-232** to the
+Virtuoso's wired serial port; the tether (USB CDC-ACM console) is untouched.
+`mountlink.py` is **dialect- and transport-pluggable**:
+
+- `SerialTransport` (pyserial, imported lazily — the module and its tests need
+  no hardware). NexStar/SynScan replies are `#`-terminated; `read_reply`
+  returns the bytes before it.
+- `SynScanLink` (NexStar-derived ASCII): `sync(ra, dec)` (precise `s` command),
+  `version()`, `get_radec()`, `ping()`. Pure encode/decode
+  (`deg_to_nexstar_hex` / `nexstar_hex_to_deg`) unit-tested. **Sync-only — there
+  is no slew/GoTo command in the module; nothing here can move the mount.**
+- Epoch: the finder solves in **J2000**; SynScan mounts use **JNow**. The
+  conversion happens in the link via `diofinder.precession`, gated by the
+  **mount's own** epoch (`mount_epoch`, distinct from `report_epoch` — the mount
+  could be J2000 while SkySafari is JNow).
+- `make_link(protocol, transport, epoch)` selects the dialect; future
+  `lx200`/`alpaca` drop in behind the same `sync()` shape.
+
+**Comms integration** (`comms_proc.py`):
+
+- `_mount_loop` — daemon thread (mirrors `_auto_exposure_loop`), gated by
+  `mount_enabled` + `mount_mode=="auto"`. Manual mode idles (the user drives it
+  via `mount_sync`). Never dies; a serial failure tears down the link and
+  retries next cycle.
+- `_MountManager` (module singleton) owns the one serial connection, shared by
+  the loop and the manual commands under a lock so pushes can't interleave.
+- `mountlink.should_sync(solution, now, last_sync, gates, moving)` — the pure
+  auto-push policy (solved & fresh, ≥ `min_matches`, not slewing, outside the
+  arcmin deadband, past the min interval), unit-tested in `tests/test_mountlink.py`.
+- Maint commands: `mount_status`, `mount_sync` (one-shot manual push of the
+  fresh solved position — `no fresh solution` otherwise), `mount_test` (open +
+  query version, for wiring setup), `mount_set` (live keys: enabled/mode/epoch +
+  the auto gates; transport keys are cfg-only/restart).
+- Slew detection uses a **dedicated** IMU rate-state (`_imu_is_moving`) so the
+  mount push never perturbs the LX200 pointing path's motion gate.
+
+**Web UI**: a "Mount sync (SynScan)" card on the Camera/Advanced page (enable
+toggle, mode + mount-epoch selects, **Test connection** / **Sync now** buttons,
+a live status readout via `/api/mount`). Routes `/mount/{set,test,sync}` +
+`/api/mount`.
+
+**Config keys** (`mount_*`): `mount_enabled` (false), `mount_protocol`
+(`synscan`), `mount_serial_port` (`/dev/serial0`), `mount_serial_baud` (9600),
+`mount_epoch` (`jnow`), `mount_mode` (`manual`), and the auto gates
+`mount_auto_{max_age_s,min_matches,settle_s,deadband_arcmin,min_interval_s}`.
+The `diofinder` user needs serial access (`dialout` group / `/dev/serial0`
+permission) for the link to open.
 
 ---
 

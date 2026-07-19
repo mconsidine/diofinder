@@ -289,6 +289,24 @@ imu_rate_gate_dps: 0.1
 # Live-mutable via solver_params_set.
 imu_exact_predict: true
 
+# ---- Mount link (outbound sync to a GoTo mount; default OFF) ----
+# After a confident solve the finder can SYNC its solved position to a mount
+# (never a slew), correcting the mount's pointing model. v1 speaks the
+# SynScan/NexStar protocol over the GPIO UART (GPIO14/15 -> MAX232 -> RS-232,
+# e.g. a SkyWatcher Virtuoso). Sync-only: nothing here can move the mount.
+mount_enabled: false          # master switch (live)
+mount_protocol: synscan       # dialect; restart
+mount_serial_port: /dev/serial0   # GPIO UART; restart
+mount_serial_baud: 9600       # restart
+mount_epoch: jnow             # the MOUNT's epoch (jnow/j2000); live
+mount_mode: manual            # manual (button) / auto (gated); live
+# Auto-mode gates (live):
+mount_auto_max_age_s: 3.0
+mount_auto_min_matches: 8
+mount_auto_settle_s: 3.0
+mount_auto_deadband_arcmin: 1.0
+mount_auto_min_interval_s: 15.0
+
 # ---- Shutdown ----
 shutdown_grace_s: 2.0
 
