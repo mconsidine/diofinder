@@ -220,6 +220,10 @@ class Config:
     # Star-names catalog (star_names.csv from astro_databases) used to label
     # the brightest star in a solved field. Missing file → naming disabled.
     star_names_path: str = "/var/lib/diofinder/star_names.csv"
+    # Messier catalog (messier.csv from astro_databases) used to label the
+    # bright DSO the aim point is on ("centered object"). Missing file →
+    # DSO naming disabled. Same optional/non-fatal contract as star_names.
+    messier_path: str = "/var/lib/diofinder/messier.csv"
     fov_max_error_deg: float = 0.3  # tightened: lens FOV is fixed & known
     min_centroids: int = 8
     max_solve_stars: int = 50
@@ -243,6 +247,10 @@ class Config:
     # star_name_radius_deg of the boresight — a stable alignment anchor when
     # boresight calibration is off. Implies brightest mode. Live-mutable.
     star_name_whole_fov: bool = False
+    # "Centered object" label: True (default) names the Messier DSO the aim
+    # point is on (from messier.csv). Independent of the star label; sets
+    # separate dso_* solution fields. Live-mutable via solver_params_set.
+    star_name_dso: bool = True
 
     # -------- Comms --------
     lx200_port: int = 4060

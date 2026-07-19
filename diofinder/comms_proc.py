@@ -2088,6 +2088,9 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 "star_name_whole_fov":  ctx.shared_cfg.get(
                     "star_name_whole_fov",
                     getattr(ctx.cfg, "star_name_whole_fov", False)),
+                "star_name_dso":        ctx.shared_cfg.get(
+                    "star_name_dso",
+                    getattr(ctx.cfg, "star_name_dso", True)),
                 "min_centroids":       ctx.shared_cfg.get(
                     "min_centroids",       ctx.cfg.min_centroids),
                 "max_solve_stars":     ctx.shared_cfg.get(
@@ -2220,6 +2223,10 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 snwf = bool(args["star_name_whole_fov"])
                 ctx.shared_cfg["star_name_whole_fov"] = snwf
                 updates["star_name_whole_fov"] = snwf
+            if "star_name_dso" in args:
+                snd = bool(args["star_name_dso"])
+                ctx.shared_cfg["star_name_dso"] = snd
+                updates["star_name_dso"] = snd
             if "min_centroids" in args:
                 try:
                     mc = int(args["min_centroids"])

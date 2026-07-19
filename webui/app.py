@@ -295,6 +295,11 @@ def _format_solution(sol):
         "star_desig":   sol.get("star_desig"),
         "star_mag":     sol.get("star_mag"),
         "star_sep_deg": sol.get("star_sep_deg"),
+        "dso_m":        sol.get("dso_m"),
+        "dso_name":     sol.get("dso_name"),
+        "dso_mag":      sol.get("dso_mag"),
+        "dso_type":     sol.get("dso_type"),
+        "dso_sep_deg":  sol.get("dso_sep_deg"),
     }
 
 
@@ -1068,6 +1073,9 @@ def solver_params_set():
     if "star_name_whole_fov" in request.form:
         pargs["star_name_whole_fov"] = request.form.get(
             "star_name_whole_fov", "false").strip().lower() in ("true", "1", "on")
+    if "star_name_dso" in request.form:
+        pargs["star_name_dso"] = request.form.get(
+            "star_name_dso", "false").strip().lower() in ("true", "1", "on")
     if request.form.get("min_centroids"):
         try:
             pargs["min_centroids"] = int(request.form["min_centroids"])

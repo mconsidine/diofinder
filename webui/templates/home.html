@@ -35,6 +35,7 @@
       <div><span class="label">Dec</span> <span id="dec">{{ solution.dec_str if solution and solution.solved else '—' }}</span></div>
     </div>
     <dl class="stats">
+      <dt>Centered object</dt><dd id="dash-dso">{% if solution and solution.solved and solution.dso_m %}{{ solution.dso_m }}{% if solution.dso_name %} ({{ solution.dso_name }}){% endif %}{% else %}—{% endif %}</dd>
       <dt>Centered star</dt><dd id="dash-star">{% if solution and solution.solved and solution.star_name %}{{ solution.star_name }}{% if solution.star_desig %} ({{ solution.star_desig }}){% endif %}{% else %}—{% endif %}</dd>
       <dt>Stars</dt><dd id="stars">{{ solution.stars if solution else 0 }}</dd>
       <dt>Matched</dt><dd id="matches">{{ solution.matches if solution and solution.solved else '—' }}</dd>
@@ -362,6 +363,13 @@ async function refreshHome(){
         if (sol.star_sep_deg != null && sol.star_sep_deg >= 1.0) t += ' · ' + sol.star_sep_deg.toFixed(1) + '° off';
       }
       _set('dash-star', t);
+      let dt = '—';
+      if (sol.dso_m){
+        dt = sol.dso_m;
+        if (sol.dso_name) dt += ' (' + sol.dso_name + ')';
+        if (sol.dso_mag != null) dt += ' · mag ' + sol.dso_mag.toFixed(1);
+      }
+      _set('dash-dso', dt);
     } else {
       // Not solving right now. If a prior solve is still HELD (the last RA/Dec
       // lingers in latest_solution — the same value the LX200 reports to
@@ -373,6 +381,7 @@ async function refreshHome(){
       else     { _set('ra', '—'); _set('dec', '—'); }
       _set('matches', '—'); _set('solve_ms', '—');
       _set('fov', '—'); _set('roll', '—'); _set('dash-star', '—');
+      _set('dash-dso', '—');
       _set('stars', sol.stars || 0); _set('peak', sol.peak || 0);
       const se = document.getElementById('status');
       if (se){

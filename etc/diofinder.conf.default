@@ -270,6 +270,14 @@ star_name_radius_deg: 2.0
 # the boresight) — a stable anchor to center + align on when boresight is off.
 star_name_whole_fov: false
 
+# ---- Centered-object (Messier DSO) label ----
+# messier.csv refreshed by diofinder-db-update; a missing file disables it.
+# Independent of the star label above; sets separate dso_* solution fields.
+messier_path: /var/lib/diofinder/messier.csv
+# true = name the Messier deep-sky object the aim point is on ("M31 —
+# Andromeda Galaxy"); false = disable the centered-object label.
+star_name_dso: true
+
 # ---- IMU pointing prediction ----
 # Rotation-rate gate (deg/s) that distinguishes a real pan from parked gyro
 # drift. Live-mutable via shared_cfg.
