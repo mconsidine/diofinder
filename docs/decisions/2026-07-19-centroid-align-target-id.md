@@ -95,3 +95,41 @@ the pixel and the system knows the RA/Dec; here SkySafari supplies the RA/Dec
 and the system would find the pixel). If tap-to-align is ever built, note that
 its "snap to nearest centroid" step must be **optional** for the same reason
 above — a boresight/align target is not always a detected star.
+
+## Follow-up (same day) — confirmed keep, and why the snap dies
+
+Reaffirmed after a round of discussion: **keep the projection align, drop the
+snap entirely.**
+
+Two things clarified the decision:
+
+1. **Naming ≠ align (the source of the confusion).** The three
+   "which star?" strategies in the code — `nearest`, `brightest_within` (2°),
+   `brightest_in_fov` (`star_names.py`) — are the **"Centered star" display
+   label** only; they pick which *cataloged* star to *print* next to the
+   crosshair. They are **not** align approaches. The align has exactly one
+   mechanism: project the SkySafari target RA/Dec through the WCS to a pixel.
+   It's easy to conflate the two because both are "about the crosshair," but
+   changing the label logic has nothing to do with where the align sets the aim
+   point.
+
+2. **The snap would patch a problem it creates.** The pure-projection align is
+   *already* DSO-safe: align on M45 and it lands on the catalog center, not
+   Alcyone; align on M42 and it lands on the nebula centre you selected; align
+   on a star and it lands within ~1 px (the solve residual). The snap's only
+   gain is that sub-pixel (~50″ on this finder) refinement on *star* aligns —
+   and it's exactly that snap that would grab an embedded/nearby star on a
+   star-rich DSO (Pleiades, Trapezium). Adding a Messier catalog to *recognise*
+   those DSOs and suppress the snap was considered, but that is machinery to
+   protect a sub-pixel nicety from a problem the nicety introduces. Net: **not
+   worth it — keep projection.**
+
+## The Messier catalog was redirected, not adopted
+
+The Messier idea (110 bright, visually-catalogued DSOs — the set a finder is
+actually aligned on) is a good one, but **not for the align**. It was redirected
+to a **display feature**: a "Centered object" label that names the bright DSO the
+aim point sits on, mirroring the existing "Centered star" label. Spec:
+`docs/messier-object-label-design.md` (backlog). It is a *narrow, local
+aim-point label*, deliberately distinct from a full DSO *planning* catalog
+(which stays rejected — SkySafari owns that; see AGENTS.md §7 accepted-by-design).

@@ -976,6 +976,17 @@ prerequisite the OnStep work needed). Nothing here is a bug or a regression.
   deferred — no accuracy gain over the sub-pixel auto-projection. Semantic caveat:
   the tap must be the *eyepiece-centered* star (same trust the current align
   needs).
+- **"Centered object" (Messier) label** — spec in
+  **`docs/messier-object-label-design.md`**. A display-only label naming the
+  bright DSO the aim point is on ("M31 — Andromeda Galaxy"), mirroring the
+  existing "Centered star" label — a near-copy of `star_names.py` fed by a
+  110-row `messier.csv` from `astro_databases`, matched by the object's own
+  extent (not a fixed radius). **Label only** — never touches the solve, align,
+  or aim point; deliberately narrow (not a DSO planning catalog — SkySafari owns
+  that). Came out of the align-snap discussion
+  (`docs/decisions/2026-07-19-centroid-align-target-id.md`): Messier is the right
+  catalog for *labeling*, not for the align (which stays pure projection). Small
+  effort once the `astro_databases` `messier.csv` asset exists.
 - **Field-networking UX** — analysis + deferred items in **`docs/networking.md`**
   (new this session). Today's boot behaviour (AP default, `station.sh` to join a
   network, boot-only `diofinder-ensure-ap` fallback, `diofinder.local` mDNS,
@@ -1025,12 +1036,21 @@ prerequisite the OnStep work needed). Nothing here is a bug or a regression.
   Revisit only if a future measurement shows the bound above no longer holds
   (e.g. the fail-streak threshold changes, or hinted attempts get
   meaningfully more expensive).
-- **Deep-sky-object (Messier/NGC/etc.) catalog.** diofinder is a *pointing*
-  finder, not a planning tool; its actual client (SkySafari, via LX200) already
-  owns the full DSO catalog and displays it once diofinder reports where the
-  scope is pointed. Duplicating that catalog here (beyond the existing
-  brightest-star `star_names.csv` "centered star" label) would be redundant
-  with the client's job for no user-facing gain.
+- **Deep-sky-object (Messier/NGC/etc.) *planning* catalog.** diofinder is a
+  *pointing* finder, not a planning tool; its actual client (SkySafari, via
+  LX200) already owns the full DSO catalog and displays it once diofinder
+  reports where the scope is pointed. Duplicating that catalog here would be
+  redundant with the client's job. **Distinct exception (a designed backlog
+  item, NOT this rejection):** a narrow **110-object Messier "centered object"
+  *label*** — "what bright DSO is my aim point on", the DSO sibling of the
+  `star_names.csv` "centered star" label — is worthwhile *as a local aim-point
+  readout* (`docs/messier-object-label-design.md`, §7 "designed but not built").
+  That is a label, not a planning catalog; it does not overturn this rejection.
+- **Centroid-snapping the `:CM#` align to the target star.** Considered and
+  rejected — the align stays pure coordinate projection (already DSO-safe). Full
+  reasoning: `docs/decisions/2026-07-19-centroid-align-target-id.md`. (Note the
+  align is *separate* from the "centered star" naming strategies in
+  `star_names.py`, which are display-only — a common point of confusion.)
 - **HTTPS/TLS for the webui.** It's a local AP/home-network tool with no
   public exposure; self-signed-cert warnings and the mDNS/cert-hostname
   mismatch aren't worth the complexity here. Revisit only if the device is
