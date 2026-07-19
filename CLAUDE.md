@@ -1172,6 +1172,7 @@ permission) for the link to open.
 | `/usr/local/bin/diofinder-bg-test` | On-device background-mode A/B on saved/live frames; `--solve` adds live-solver match rates |
 | `/usr/local/bin/ap.sh` | Switch wlan0 to access-point mode |
 | `/usr/local/bin/station.sh` | Connect wlan0 to a station network |
+| `/usr/local/bin/ap-watchdog.sh` | Mid-session AP-fallback watchdog (`diofinder-ap-watchdog.service`): if a station link drops and stays idle past the grace window (`DIOFINDER_APWD_GRACE`, 30 s), forces the self-AP back up via `ap.sh`. Closes the boot-only gap in `diofinder-ensure-ap`; see `docs/networking.md`. |
 
 ---
 
