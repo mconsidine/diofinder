@@ -298,28 +298,33 @@
   <div class="card expert-only">
     <h2>Solver Parameters</h2>
     {% if solver_params %}
+      {% set _star_mode = 'whole_fov' if solver_params.star_name_whole_fov
+                          else ('brightest' if solver_params.star_name_brightest
+                          else 'nearest') %}
       <form method="post" action="{{ url_for('solver_params_set') }}"
             style="margin:0 0 10px;">
         <input type="hidden" name="next" value="camera_page">
-        <input type="hidden" name="star_name_brightest"
-               value="{{ 'false' if solver_params.star_name_brightest else 'true' }}">
-        <label class="checkbox">
-          <input type="checkbox" onchange="this.form.submit()"
-                 {{ 'checked' if solver_params.star_name_brightest }}>
-          Centered star = brightest within 2&deg; of the aim point
-          <span class="hint">(off: nearest cataloged star, the original behaviour)</span>
+        <div style="margin-bottom:4px;">
+          Centered star label
+          {{ tip("Which cataloged star names the crosshair. <b>Nearest</b>: the closest star to the aim point (original behaviour). <b>Brightest within 2&deg;</b>: the most notable star near the aim point. <b>Brightest in whole FOV</b>: the dominant star anywhere in the frame — a stable anchor to center and align on when the aim point is off, since a near-blank center still reports the bright star in a corner. These are mutually exclusive.") }}
+        </div>
+        <label class="radio">
+          <input type="radio" name="star_name_mode" value="nearest"
+                 onchange="this.form.submit()"
+                 {{ 'checked' if _star_mode == 'nearest' }}>
+          Nearest cataloged star
         </label>
-      </form>
-      <form method="post" action="{{ url_for('solver_params_set') }}"
-            style="margin:0 0 10px;">
-        <input type="hidden" name="next" value="camera_page">
-        <input type="hidden" name="star_name_whole_fov"
-               value="{{ 'false' if solver_params.star_name_whole_fov else 'true' }}">
-        <label class="checkbox">
-          <input type="checkbox" onchange="this.form.submit()"
-                 {{ 'checked' if solver_params.star_name_whole_fov }}>
-          Centered star = brightest in the whole field of view
-          {{ tip("Names the brightest cataloged star anywhere in the frame, not just near the aim point. A stable anchor to center and align on when the aim point is off — a near-blank center still reports the bright star in a corner. Implies the brightest-star mode above.") }}
+        <label class="radio">
+          <input type="radio" name="star_name_mode" value="brightest"
+                 onchange="this.form.submit()"
+                 {{ 'checked' if _star_mode == 'brightest' }}>
+          Brightest within 2&deg; of the aim point
+        </label>
+        <label class="radio">
+          <input type="radio" name="star_name_mode" value="whole_fov"
+                 onchange="this.form.submit()"
+                 {{ 'checked' if _star_mode == 'whole_fov' }}>
+          Brightest in the whole field of view
         </label>
       </form>
       <form method="post" action="{{ url_for('solver_params_set') }}"

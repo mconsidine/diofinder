@@ -1117,6 +1117,25 @@ def solver_params_set():
     if "star_name_whole_fov" in request.form:
         pargs["star_name_whole_fov"] = request.form.get(
             "star_name_whole_fov", "false").strip().lower() in ("true", "1", "on")
+    # Centered-star mode radio group (Camera page). The solver reads two
+    # booleans that form a precedence chain (whole_fov implies brightest), so
+    # the three mutually-exclusive modes map onto them here rather than being
+    # posted as independent checkboxes. The individual keys above stay for the
+    # diofinder-ctl / maint callers that set them directly.
+    _star_mode = request.form.get("star_name_mode")
+    if _star_mode is not None:
+        _star_mode = _star_mode.strip().lower()
+        if _star_mode == "nearest":
+            pargs["star_name_brightest"] = False
+            pargs["star_name_whole_fov"] = False
+        elif _star_mode == "brightest":
+            pargs["star_name_brightest"] = True
+            pargs["star_name_whole_fov"] = False
+        elif _star_mode == "whole_fov":
+            pargs["star_name_brightest"] = True
+            pargs["star_name_whole_fov"] = True
+        else:
+            return "star_name_mode must be nearest, brightest, or whole_fov", 400
     if "star_name_dso" in request.form:
         pargs["star_name_dso"] = request.form.get(
             "star_name_dso", "false").strip().lower() in ("true", "1", "on")
