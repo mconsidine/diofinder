@@ -138,7 +138,7 @@ label {
   display: block;
   margin: 0.5rem 0;
 }
-label.checkbox {
+label.checkbox, label.radio {
   display: flex;
   align-items: center;
   gap: 0.4rem;

@@ -27,7 +27,7 @@ DEFAULT_CONFIG_PATH = "/etc/diofinder/diofinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.11.59"
+    version: str = "0.11.60"
 
     # -------- Camera --------
     frame_width: int = 960
@@ -270,6 +270,16 @@ class Config:
     # LX200 crosshair looks wrong during a slew — a field-reversible fallback
     # with no downgrade. Live-mutable via shared_cfg (solver_params_set).
     imu_exact_predict: bool = True
+
+    # Unit B (default OFF, pending field validation): persist the BNO055's own
+    # accel/gyro calibration profile across power cycles. The chip has no flash,
+    # so on each boot it re-calibrates from scratch. When enabled, imu_proc
+    # restores a saved profile at init (in CONFIG mode) and saves one back once
+    # the chip reports gyro+accel calibrated, plate solves confirm the IMU is
+    # tracking truth, and the scope is roughly still (so the brief CONFIG
+    # excursion the save needs never lands mid-slew). Off keeps the shipped
+    # behavior byte-for-byte. Seeded into shared_cfg at launch.
+    imu_persist_bno055: bool = False
 
     # Epoch of coordinates reported to LX200 clients (SkySafari) and used for
     # the align target. diofinder solves in J2000/ICRS internally; SkySafari's

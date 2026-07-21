@@ -600,6 +600,7 @@ New keys (this release):
 | `watchdog_enabled` | `true` | Solver-hang watchdog (comms thread). |
 | `watchdog_timeout_s` | `30.0` | Staleness before the solver is declared hung. |
 | `extractor_backend` | `sycamore` | Centroid extractor: `sycamore` (matched filter + bg_cache) or `tetra3` (AstroKeith's olive-solve `get_centroids_from_image`). Live-mutable; set by the Legacy preset. |
+| `imu_persist_bno055` | `false` | **Unit B, default OFF pending field validation.** Persist the BNO055's own accel/gyro calibration profile across power cycles (the chip has no flash). `imu_proc` restores a saved profile at init (CONFIG mode) and saves one once the chip is gyro+accel-calibrated, plate solves confirm the IMU tracks truth, and the scope is still. Off = shipped behavior byte-for-byte. |
 
 ---
 
@@ -1170,6 +1171,8 @@ finder's solving/LX200 path is unaffected regardless.
 | `/var/lib/diofinder/` | Star databases (`.npz`), debug ZIPs, saved frames |
 | `/var/lib/diofinder/hot_pixel_mask.npz` | Hot-pixel mask (from `dark_capture`) |
 | `/var/lib/diofinder/seeing_overrides.json` | Saved Good/Bad seeing overrides (factory presets stay immutable) |
+| `/var/lib/diofinder/imu_extrinsic.json` | Persisted camera↔IMU mounting extrinsic (`imu_frame_R`, Unit A). Written by the solver when the Kabsch fit clears the strict save gate; seeded at boot so the exact LX200 prediction is live from the first solve. A good live fit that diverges (remount) overwrites it — self-healing, like the FOV recommit. Managed by `imu_persist.py`; cleared by factory reset `--clear-imu-calib`. |
+| `/var/lib/diofinder/bno055_calib.json` | Persisted BNO055 accel/gyro calibration profile (22-byte blob, Unit B; gated by `imu_persist_bno055`, default off). Written/restored by `imu_proc.py` via `imu_persist.py`; cleared by factory reset `--clear-imu-calib`. |
 | `/var/lib/diofinder/star_names.csv` | Star naming catalog (from astro_databases release); powers the "Centered star" label (default: the BRIGHTEST cataloged star within `star_name_radius_deg` (2°) of the boresight, falling back to nearest; the expert toggle `star_name_brightest=false` reverts to pure nearest; `star_name_whole_fov=true` widens the brightest search to the whole frame — a stable align anchor when boresight is off). Optional — missing file disables naming. Refreshed by `diofinder-db-update`. |
 | `/var/lib/diofinder/messier.csv` | Messier catalog (from astro_databases release ≥ `2026.07.01`); powers the "Centered object" DSO label (`messier.py`: the Messier object the aim point is on, matched by each object's own extent). Display only — separate from the star label, never touches the solve/align/aim. Gated by `star_name_dso` (default on). Optional — missing file disables it. Refreshed by `diofinder-db-update`. |
 | `/var/lib/diofinder/captures/` | PNG captures when `save_failed_frames=true` (100 MB cap, oldest evicted) |

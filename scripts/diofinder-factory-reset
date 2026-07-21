@@ -7,12 +7,15 @@
 # the running daemon on its old settings until the next reboot.
 #
 # Usage:
-#   sudo /usr/local/bin/diofinder-factory-reset [--clear-overrides] [--clear-hot-pixel-mask]
+#   sudo /usr/local/bin/diofinder-factory-reset [--clear-overrides] [--clear-hot-pixel-mask] [--clear-imu-calib]
 #
 # --clear-overrides       also delete the saved Good/Bad seeing overrides
 #                         (/var/lib/diofinder/seeing_overrides.json)
 # --clear-hot-pixel-mask  also delete the captured hot-pixel mask
 #                         (/var/lib/diofinder/hot_pixel_mask.npz)
+# --clear-imu-calib       also delete the persisted IMU calibration
+#                         (/var/lib/diofinder/imu_extrinsic.json and
+#                         /var/lib/diofinder/bno055_calib.json)
 #
 # Neither the conf reset nor the two --clear-* flags touch the star
 # database, boresight-independent hardware calibration, or anything under
@@ -27,10 +30,12 @@ VENV_PY="$DIOFINDER_DIR/venv/bin/python"
 
 CLEAR_OVERRIDES=0
 CLEAR_HOTPIXEL=0
+CLEAR_IMUCALIB=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --clear-overrides)      CLEAR_OVERRIDES=1; shift ;;
     --clear-hot-pixel-mask) CLEAR_HOTPIXEL=1; shift ;;
+    --clear-imu-calib)      CLEAR_IMUCALIB=1; shift ;;
     *) echo "[factory-reset] ERROR: unknown argument: $1" >&2; exit 1 ;;
   esac
 done
@@ -66,6 +71,11 @@ fi
 if [ "$CLEAR_HOTPIXEL" -eq 1 ]; then
   LOG "Clearing hot-pixel mask"
   rm -f /var/lib/diofinder/hot_pixel_mask.npz
+fi
+
+if [ "$CLEAR_IMUCALIB" -eq 1 ]; then
+  LOG "Clearing persisted IMU calibration (extrinsic + BNO055 profile)"
+  rm -f /var/lib/diofinder/imu_extrinsic.json /var/lib/diofinder/bno055_calib.json
 fi
 
 LOG "Restarting diofinder services"
