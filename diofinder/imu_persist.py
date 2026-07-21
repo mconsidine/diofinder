@@ -221,3 +221,82 @@ def clear_bno055_profile(path: str = BNO055_CALIB_PATH) -> bool:
         return False
     except OSError:
         return False
+
+
+# --- Unit C: plate-solve-derived accel-tilt / gyro-scale calibration ---------
+# The static IMU calibration learned from solve-vs-IMU disagreement
+# (imu_solve_cal). `bias_tilt` is the dimensionless accel tilt vector (b_a/g,
+# radians); `gyro_scale` the rotation-magnitude scale factor. Seeded at boot so
+# the Mode-1 software correction is live immediately; refined online; self-heals
+# on divergence like the extrinsic.
+
+SOLVE_CAL_PATH = "/var/lib/diofinder/imu_solve_cal.json"
+# A new estimate this many radians from the stored one triggers a rewrite /
+# self-heal (~0.29°).
+SOLVE_CAL_UPDATE_TOL_RAD = 0.005
+
+
+def _valid_vec3(v):
+    try:
+        return len(v) == 3 and all(
+            isinstance(x, (int, float)) and math.isfinite(x) for x in v)
+    except TypeError:
+        return False
+
+
+def save_solve_cal(bias_tilt, *, gyro_scale=None, quality=None,
+                   path: str = SOLVE_CAL_PATH, now=None) -> None:
+    """Persist the accel tilt bias (+ optional gyro scale + quality)."""
+    if not _valid_vec3(bias_tilt):
+        raise ValueError("bias_tilt must be 3 finite numbers")
+    _atomic_write_json(path, {
+        "bias_tilt": [float(v) for v in bias_tilt],
+        "gyro_scale": (float(gyro_scale) if gyro_scale is not None else None),
+        "quality": quality if isinstance(quality, dict) else {},
+        "saved_at": float(now if now is not None else time.time()),
+    })
+
+
+def load_solve_cal(path: str = SOLVE_CAL_PATH):
+    """Return ``(bias_tilt, gyro_scale, quality, saved_at)`` or None."""
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    b = data.get("bias_tilt")
+    if not _valid_vec3(b):
+        return None
+    b = [float(v) for v in b]
+    gs = data.get("gyro_scale")
+    try:
+        gs = float(gs) if gs is not None else None
+    except (TypeError, ValueError):
+        gs = None
+    quality = data.get("quality") if isinstance(data.get("quality"), dict) else {}
+    try:
+        saved_at = float(data.get("saved_at", 0.0))
+    except (TypeError, ValueError):
+        saved_at = 0.0
+    return b, gs, quality, saved_at
+
+
+def solve_cal_diverged(b_new, b_old, tol_rad: float = SOLVE_CAL_UPDATE_TOL_RAD) -> bool:
+    """True if two tilt-bias vectors differ by more than ``tol_rad`` (Euclidean),
+    or either is unusable."""
+    if not _valid_vec3(b_new) or not _valid_vec3(b_old):
+        return True
+    return math.sqrt(sum((a - c) ** 2 for a, c in zip(b_new, b_old))) > tol_rad
+
+
+def clear_solve_cal(path: str = SOLVE_CAL_PATH) -> bool:
+    """Delete the persisted solve-cal. True if a file was removed."""
+    try:
+        os.remove(path)
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return False

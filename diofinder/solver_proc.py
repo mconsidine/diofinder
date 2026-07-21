@@ -30,6 +30,8 @@ from diofinder.imu_math import (quat_delta_rotvec, quat_to_rotvec,
                                 rotvec_to_quat, get_imu_qt)
 from diofinder import imu_frame as _imu_frame
 from diofinder import imu_persist as _imu_persist
+from diofinder import imu_solve_cal as _imu_solve_cal
+from diofinder import precession as _precession
 from diofinder import frame_meta as _frame_meta
 from diofinder.polar_run import PolarAligner
 from diofinder import frame_health
@@ -849,6 +851,117 @@ def _persist_extrinsic_if_worthy(R9, quality):
         log.debug("IMU extrinsic persist failed: %s", e)
 
 
+# ---- Unit C: accel-tilt / gyro-scale calibration from solve residuals -------
+# All state is solver-local (single process). The estimator consumes RAW IMU +
+# solve data (never the corrected quaternion) so it stays independent of the
+# Mode-1 correction that comms applies. Gated entirely by imu_solve_cal_enabled;
+# when off, none of this runs and behaviour is byte-for-byte unchanged.
+_solve_cal_est = _imu_solve_cal.AccelTiltEstimator()
+_solve_cal_gyro_pairs = []          # (|imu_delta|, |sky_delta|) rotation angles
+_solve_cal_saved_bias = None        # last tilt bias written to disk
+_solve_cal_solves = 0               # observations since last publish/persist
+_SOLVE_CAL_PUBLISH_EVERY = 10       # solve → estimate cadence
+
+
+def _seed_persisted_solve_cal(shared_cfg):
+    """Publish a persisted Unit C calibration at solver start so the Mode-1
+    correction in comms is live from boot. Seed only; the online estimator
+    overwrites it on divergence."""
+    global _solve_cal_saved_bias
+    loaded = _imu_persist.load_solve_cal()
+    if loaded is None:
+        return
+    bias, gyro_scale, quality, _saved_at = loaded
+    _solve_cal_saved_bias = bias
+    q = dict(quality)
+    q["source"] = "persisted"
+    shared_cfg["imu_solve_cal"] = {
+        "bias_tilt": bias, "gyro_scale": gyro_scale, "quality": q}
+    log.info("Loaded persisted IMU solve-cal (tilt=%s deg, r2=%s)",
+             quality.get("tilt_deg"), quality.get("r2"))
+
+
+def _solve_cal_observe(shared_cfg, cfg, sky_q, prev_sky_q):
+    """One Unit C observation per successful solve. Feeds the accel-tilt
+    estimator (from the plate-solve-derived vs IMU-reported up vectors) and the
+    gyro-scale ratio, then periodically solves, publishes, and persists.
+    Best-effort: any failure is swallowed so the solve loop is never disturbed."""
+    global _solve_cal_solves, _solve_cal_saved_bias
+    try:
+        if sky_q is None:
+            return
+        R9 = shared_cfg.get("imu_frame_R")     # Unit A extrinsic — hard dep
+        if not R9 or len(R9) != 9:
+            return
+        lat = float(getattr(cfg, "latitude_deg", 0.0))
+        lon = float(getattr(cfg, "longitude_deg", 0.0))
+        if abs(lat) < 1e-6 and abs(lon) < 1e-6:
+            return                              # unset site → "truth" invalid
+        q_now, imu_t = get_imu_qt(shared_cfg)
+        if q_now is None or time.monotonic() - imu_t > 2.0:
+            return
+        import datetime as _dt
+        zen = _imu_solve_cal.zenith_unit_j2000(
+            lat, lon, _dt.datetime.now(_dt.timezone.utc),
+            precess=_precession.jnow_to_j2000)
+        u_true = _imu_solve_cal.up_true_body(tuple(sky_q), R9, zen)
+        u_imu = _imu_solve_cal.up_imu_body(tuple(q_now))
+        _solve_cal_est.add(u_true, u_imu)
+        # Gyro scale rides on the same 3-D rotation-vector pairs the extrinsic
+        # fit harvests (magnitude ratio over real slews).
+        if prev_sky_q is not None:
+            r_sky = quat_delta_rotvec(tuple(sky_q), tuple(prev_sky_q))
+            r_imu = _imu_frame_delta_mag(shared_cfg, q_now)
+            if r_imu is not None:
+                sky_mag = math.sqrt(sum(v * v for v in r_sky))
+                _solve_cal_gyro_pairs.append((r_imu, sky_mag))
+                if len(_solve_cal_gyro_pairs) > 40:
+                    del _solve_cal_gyro_pairs[:-40]
+        _solve_cal_solves += 1
+        if _solve_cal_solves < _SOLVE_CAL_PUBLISH_EVERY:
+            return
+        _solve_cal_solves = 0
+        bias, quality = _solve_cal_est.solve()
+        if bias is None:
+            return
+        gscale, _gn = _imu_solve_cal.gyro_scale(_solve_cal_gyro_pairs)
+        shared_cfg["imu_solve_cal"] = {
+            "bias_tilt": bias, "gyro_scale": gscale, "quality": quality}
+        log.info("Unit C solve-cal: tilt=%.2f deg r2=%.3f min_eig=%.2f n=%d "
+                 "gyro_scale=%s", quality.get("tilt_deg", 0.0),
+                 quality.get("r2", 0.0), quality.get("min_eig", 0.0),
+                 quality.get("n", 0),
+                 f"{gscale:.4f}" if gscale is not None else "n/a")
+        # Persist / self-heal: write when nothing stored yet or the estimate has
+        # moved beyond the rewrite tolerance (a remount/temperature shift wins).
+        if (_solve_cal_saved_bias is None
+                or _imu_persist.solve_cal_diverged(bias, _solve_cal_saved_bias)):
+            try:
+                _imu_persist.save_solve_cal(
+                    bias, gyro_scale=gscale, quality=quality)
+                _solve_cal_saved_bias = bias
+            except Exception as e:  # pragma: no cover
+                log.debug("IMU solve-cal persist failed: %s", e)
+    except Exception as e:  # pragma: no cover - never disturb the solve loop
+        log.debug("Unit C observe skipped: %s", e)
+
+
+# Track the raw IMU quaternion at the previous solve so we can measure the
+# IMU-reported rotation magnitude between solves for the gyro-scale ratio.
+_solve_cal_prev_imu_q = None
+
+
+def _imu_frame_delta_mag(shared_cfg, q_now):
+    """|rotation| (rad) the raw IMU reports since the previous solve, or None."""
+    global _solve_cal_prev_imu_q
+    prev = _solve_cal_prev_imu_q
+    _solve_cal_prev_imu_q = tuple(q_now)
+    if prev is None:
+        return None
+    r = quat_delta_rotvec(tuple(q_now), prev)
+    return math.sqrt(sum(v * v for v in r))
+
+
 def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
                           snap=None, sky_q=None, prev_sky_q=None):
     """Record current IMU quaternion alongside the just-solved sky position.
@@ -1001,6 +1114,9 @@ def solver_main(slots, latest_solution, shared_cfg,
     # instead of after the first multi-direction slew re-observes it. The live
     # Kabsch fit still runs and overwrites it on divergence (remount self-heal).
     _seed_persisted_extrinsic(shared_cfg)
+    # Unit C: seed the persisted accel-tilt / gyro-scale calibration so comms'
+    # Mode-1 correction is live from boot (only consumed when the feature is on).
+    _seed_persisted_solve_cal(shared_cfg)
 
     # ---- Load sycamore extractor -------------------------------------------
     try:
@@ -1938,6 +2054,17 @@ def solver_main(slots, latest_solution, shared_cfg,
                 shared_cfg, ra_out, dec_out, soln.get("Roll", 0.0), snap=snap,
                 sky_q=(tuple(q_solved) if q_solved is not None else None),
                 prev_sky_q=prev_sky_q_for_ref)
+            # Unit C (default off): learn the static accel-tilt / gyro-scale
+            # calibration from this solve's IMU-vs-truth disagreement. Runs on
+            # RAW IMU data (independent of the Mode-1 correction) and requires a
+            # Unit A extrinsic + a valid site; it publishes/persists the estimate
+            # that comms optionally applies. Never disturbs the solve path.
+            if snap.get("imu_solve_cal_enabled",
+                        getattr(cfg, "imu_solve_cal_enabled", False)):
+                _solve_cal_observe(
+                    shared_cfg, cfg,
+                    tuple(q_solved) if q_solved is not None else None,
+                    prev_sky_q_for_ref)
 
             if align_req is not None:
                 xt = soln.get("x_target")

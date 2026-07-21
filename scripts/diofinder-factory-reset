@@ -74,8 +74,10 @@ if [ "$CLEAR_HOTPIXEL" -eq 1 ]; then
 fi
 
 if [ "$CLEAR_IMUCALIB" -eq 1 ]; then
-  LOG "Clearing persisted IMU calibration (extrinsic + BNO055 profile)"
-  rm -f /var/lib/diofinder/imu_extrinsic.json /var/lib/diofinder/bno055_calib.json
+  LOG "Clearing persisted IMU calibration (extrinsic + BNO055 profile + solve-cal)"
+  rm -f /var/lib/diofinder/imu_extrinsic.json \
+        /var/lib/diofinder/bno055_calib.json \
+        /var/lib/diofinder/imu_solve_cal.json
 fi
 
 LOG "Restarting diofinder services"
