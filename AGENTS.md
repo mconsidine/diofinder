@@ -236,9 +236,25 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.58)
+## 6. Current state (as of v0.11.60)
 
-Released through **v0.11.58** (latest).
+Released through **v0.11.60** (latest).
+
+- v0.11.60: **IMU calibration persistence + UI/label polish.** (a) *Unit A* —
+  persist the plate-solve-derived camera↔IMU extrinsic (`imu_frame_R`) to
+  `/var/lib/diofinder/imu_extrinsic.json` (`diofinder/imu_persist.py`): the
+  solver seeds it at boot so the exact LX200 prediction is live from the first
+  solve, and overwrites it when a good live Kabsch fit diverges from a stale
+  seed (remount self-heal, like the FOV recommit). (b) *Unit B* (default OFF,
+  `imu_persist_bno055`) — restore/save the BNO055's own accel/gyro calibration
+  blob across power cycles, gated by chip status + plate-solve agreement +
+  stillness so the CONFIG excursion never lands mid-slew. (c) Centered-star
+  label is now a 3-way **radio** (nearest / brightest-2° / brightest-FOV)
+  instead of two checkboxes with hidden precedence. (d) Factory reset gains
+  `--clear-imu-calib`. Design + assessment:
+  `docs/decisions/2026-07-21-imu-calibration-from-plate-solves.md`; extractor /
+  solver-fork assessment: `docs/assessments/2026-07-21-solver-and-extractor-comparison.md`.
+  Pure logic unit-tested in `tests/test_imu_persist.py`.
 
 - v0.11.58: **LX200 fixed worker pool** — absorb the SkySafari reconnect storm.
   Field bundles showed SkySafari opening a **new TCP connection per poll**

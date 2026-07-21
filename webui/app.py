@@ -1502,6 +1502,8 @@ def factory_reset():
         cmd.append("--clear-overrides")
     if request.form.get("clear_hot_pixel_mask"):
         cmd.append("--clear-hot-pixel-mask")
+    if request.form.get("clear_imu_calib"):
+        cmd.append("--clear-imu-calib")
     try:
         logf = open(FACTORY_RESET_LOG, "w")
         logf.write(f"$ {' '.join(cmd)}\n"

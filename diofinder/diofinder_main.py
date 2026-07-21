@@ -157,6 +157,9 @@ def main():
         "boresight_y":   cfg.boresight_y,
         "boresight_x":   cfg.boresight_x,
         "imu_available": False,
+        # Seed the BNO055 calibration-profile persistence flag (Unit B) so the
+        # in-launcher IMU thread can read it without a config round-trip.
+        "imu_persist_bno055": cfg.imu_persist_bno055,
         "test_mode":     default_test_mode,
     })
     align_request_q  = mp.Queue(maxsize=4)

@@ -29,6 +29,7 @@ from diofinder.calibration import FovCalibrator, FallbackGate
 from diofinder.imu_math import (quat_delta_rotvec, quat_to_rotvec,
                                 rotvec_to_quat, get_imu_qt)
 from diofinder import imu_frame as _imu_frame
+from diofinder import imu_persist as _imu_persist
 from diofinder import frame_meta as _frame_meta
 from diofinder.polar_run import PolarAligner
 from diofinder import frame_health
@@ -804,6 +805,48 @@ def _imu_propagate_hint(last_sky_q, last_imu_q, shared_cfg):
 # solver writes and reads them, so publishing the list through shared_cfg
 # just fattened every snapshot RPC in the system (audit 2026-07 P2).
 _imu_calib_pairs = []
+# Last camera<->IMU extrinsic written to disk (imu_persist), tracked so a good
+# live fit only rewrites the file when it moves meaningfully (throttle) or
+# diverges from a stale persisted seed (remount self-heal). Seeded at solver
+# start from the persisted value by _seed_persisted_extrinsic.
+_imu_saved_R9 = None
+
+
+def _seed_persisted_extrinsic(shared_cfg):
+    """Publish the persisted camera<->IMU extrinsic at solver start so the exact
+    LX200 prediction is live from the first solve (before the Kabsch fit
+    re-observes it). The stored value is a SEED — the live fit overwrites it on
+    divergence (see _imu_update_reference)."""
+    global _imu_saved_R9
+    loaded = _imu_persist.load_extrinsic()
+    if loaded is None:
+        return
+    R9, quality, saved_at = loaded
+    _imu_saved_R9 = R9
+    shared_cfg["imu_frame_R"] = R9
+    q = dict(quality)
+    q["source"] = "persisted"
+    shared_cfg["imu_frame_quality"] = q
+    log.info("Loaded persisted IMU extrinsic (r2=%s, n=%s) — exact pointing "
+             "available from first solve", quality.get("r2"), quality.get("n"))
+
+
+def _persist_extrinsic_if_worthy(R9, quality):
+    """Save a fresh good fit to disk when it clears the strict save gate and
+    either nothing is stored yet or it has moved beyond the rewrite/divergence
+    tolerance. Best-effort: a disk error never disturbs the solve loop."""
+    global _imu_saved_R9
+    if R9 is None or not _imu_persist.save_worthy(quality):
+        return
+    if (_imu_saved_R9 is not None
+            and not _imu_persist.extrinsic_diverged(
+                R9, _imu_saved_R9, tol_deg=_imu_persist.SAVE_UPDATE_TOL_DEG)):
+        return  # unchanged within tolerance — don't churn the disk
+    try:
+        _imu_persist.save_extrinsic(R9, quality)
+        _imu_saved_R9 = R9
+    except Exception as e:  # pragma: no cover - disk failure path
+        log.debug("IMU extrinsic persist failed: %s", e)
 
 
 def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
@@ -900,6 +943,10 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
         payload["imu_frame_R"] = R9
         payload["imu_frame_quality"] = (
             quality if R9 is not None else {"rejected": str(quality)})
+        # Persist a well-observed mounting so the next boot has it immediately.
+        # This also self-heals a remount: a good live fit that diverges from a
+        # stale persisted seed overwrites it (extrinsic_diverged in the helper).
+        _persist_extrinsic_if_worthy(R9, quality)
     shared_cfg.update(payload)
 
 
@@ -947,6 +994,13 @@ def solver_main(slots, latest_solution, shared_cfg,
     # label. Display only — it never touches detection, the solve, or the aim.
     from diofinder import messier as _messier_mod
     messier = _messier_mod.try_load(cfg.messier_path)
+
+    # ---- Seed the persisted camera<->IMU extrinsic (optional) --------------
+    # If a prior session learned and saved the IMU->camera mounting, publish it
+    # now so the exact LX200 pointing prediction is live from the first solve
+    # instead of after the first multi-direction slew re-observes it. The live
+    # Kabsch fit still runs and overwrites it on divergence (remount self-heal).
+    _seed_persisted_extrinsic(shared_cfg)
 
     # ---- Load sycamore extractor -------------------------------------------
     try:

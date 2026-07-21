@@ -32,9 +32,13 @@
       <input type="checkbox" name="clear_overrides" value="1" checked>
       Also clear saved Good/Bad seeing overrides
     </label>
-    <label style="display:block; margin:6px 0 12px 0;">
+    <label style="display:block; margin:6px 0;">
       <input type="checkbox" name="clear_hot_pixel_mask" value="1" checked>
       Also clear the captured hot-pixel mask
+    </label>
+    <label style="display:block; margin:6px 0 12px 0;">
+      <input type="checkbox" name="clear_imu_calib" value="1" checked>
+      Also clear the persisted IMU calibration (mounting + BNO055 profile)
     </label>
     <button type="submit" class="btn btn-warning">Factory reset</button>
   </form>
