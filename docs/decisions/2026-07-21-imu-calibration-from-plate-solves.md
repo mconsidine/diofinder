@@ -26,6 +26,18 @@ calibration would have to be saved externally. Investigate and assess.
 
 ---
 
+## Status (updated 2026-07-21)
+
+- **Units A + B are implemented and shipped in v0.11.60** (PR #162): the
+  camera↔IMU extrinsic persists and self-heals, and the BNO055 profile
+  restore/save is available behind `imu_persist_bno055` (default off).
+- **Unit C** (below) is newly specified — the promotion of Opportunity 3 into a
+  full **accel-bias / gyro-scale calibration derived from solve-vs-IMU
+  disagreement**: the calibration the mounted chip cannot otherwise produce.
+  Not yet implemented.
+
+---
+
 ## Current state (as of v0.11.59)
 
 ### 1. The BNO055 runs in IMUPLUS mode — magnetometer disabled
@@ -108,15 +120,16 @@ cleanly *before* the mode switch.
   agreement between IMU deltas and solved deltas is the right signal for "this
   profile is good, save it."
 
-### Opportunity 3 — plate-solve gyro-bias feed-forward. **Optional, defer.**
+### Opportunity 3 — plate-solve gyro-bias feed-forward → **promoted to Unit C.**
 
-Estimate a slowly-varying gyro-bias vector from the IMU-vs-solve delta mismatch
-per inter-solve interval and de-drift the between-solve prediction. Low marginal
-value: re-anchoring resets the reference every solve, so over a ~10 s interval
-even 5°/hr is only a few arcmin; it mainly helps **fast-slew** dead-reckoning
-latency, partly duplicates the chip's own gyro auto-cal, and can only be applied
-in the software layer (the BNO055 emits a fused quaternion, not debiasable raw
-gyro). Revisit only if slew-time pointing becomes a pain.
+The original narrow idea — estimate a slowly-varying gyro-bias vector from the
+IMU-vs-solve delta mismatch and de-drift the between-solve prediction — is low
+value on its own (re-anchoring resets the reference every solve, so over a ~10 s
+interval even 5°/hr is only a few arcmin). But it under-sold the real prize: the
+same solve-vs-IMU disagreement also contains the **static accelerometer tilt
+error**, which *is* a genuine, invertible calibration the mounted chip can't
+produce on its own. That broader idea is specified below as **Unit C**; the
+gyro-bias piece rides along as its dynamic (non-persisted) term.
 
 ### Anti-recommendation — do not re-enable the magnetometer / NDOF.
 
@@ -207,32 +220,192 @@ and never during an align hold. A stale/temperature-drifted profile is still a
 valid *seed*; the chip re-converges, so a bad restore self-corrects. Keep Unit B
 behind a config flag (`imu_persist_bno055`, default off until field-validated).
 
+### Unit C — online accel-bias / gyro-scale calibration from solve-vs-IMU residuals
+
+**Goal.** Derive the *static* IMU calibrations the mounted BNO055 cannot
+self-produce — **accelerometer bias (absolute tilt)** and **gyro scale-factor** —
+from the accumulated disagreement between plate solves and IMU output, and apply
+them so the *standalone* IMU (between solves, mid-slew, and when solving fails)
+is trustworthy. The accel tilt calibration, not the gyro drift, is the prize:
+the chip normally gets it from a 6-orientation tumble that is impossible once the
+sensor is bolted to the scope, and the plate solve **directly observes absolute
+tilt**, so it is the most observable thing in the residual.
+
+**Principle — split the residual into calibratable vs not.** For each solve, form
+the IMU-vs-truth attitude error and split it about the local vertical:
+
+- the **tilt** component (rotation about a horizontal axis) is driven by the
+  *static* accel bias → **calibratable** (a fixed offset/coefficient exists);
+- the **azimuth/yaw** component (about vertical) is the *dynamic* gyro heading
+  drift → **not** a fixed calibration (a random walk); project it out — the live
+  re-anchoring owns it — and never persist it as a coefficient.
+
+A constant accel bias `b_a` tilts the sensed gravity vector, and its
+attitude-error signature varies predictably with the sensor's orientation
+relative to gravity. Many `(orientation, tilt-residual)` pairs across different
+**altitudes** least-squares-solve for `b_a` (3 params; an optional 3×3
+scale/misalignment is a later richer model). The gyro scale-factor is the ratio
+`|IMU rotation delta| / |solve rotation delta|` over slews (reusing the
+magnitude data `imu_frame` already harvests).
+
+**Observation model (forming the residual).**
+
+1. `q_sky` — solved camera attitude (celestial J2000).
+2. Site (`cfg` latitude/longitude) + time (UTC → LST) convert `q_sky` to the
+   **local-gravity** (topocentric alt/az/parallactic) frame → `q_truth_grav`:
+   the camera's true orientation relative to local vertical.
+3. `q_imu` — BNO055 fused body quaternion (already gravity-referenced); apply the
+   **Unit A extrinsic** to map body→camera → `q_imu_grav`.
+4. Residual `r = q_truth_grav ⊖ q_imu_grav`, split into tilt (horizontal-axis)
+   and yaw (vertical-axis) using the local vertical.
+
+**Observability gating (load-bearing; mirrors Unit A's axis-diversity gate).**
+
+- **Tilt diversity:** the gravity direction in the body frame must span a range
+  (solves at different altitudes) or `b_a` is under-observed — second-singular-
+  value threshold, refuse below it and stay at the seed.
+- **Requires Unit A:** a good extrinsic must be present, else the tilt residual
+  is confounded by mounting error. Hard dependency A → C. (A is observed from
+  *relative* slew pairs, C's accel bias from *absolute* tilt residuals — so the
+  two are separable by construction, not circular.)
+- **Requires valid site/time:** refuse if latitude/longitude are `(0, 0)` (the
+  factory-reset default) or the clock is implausible — a wrong site silently
+  biases "truth."
+- **Static/dynamic separation:** the accel fit uses the **tilt-only** residual
+  (insensitive to yaw drift by construction); optionally a small filter carries
+  an accel-bias (static) + gyro-yaw-bias (random-walk) state.
+
+**Where the correction applies — two staged modes.**
+
+- **Mode 1 (default, safe): software post-correction.** Apply the accel-bias
+  tilt correction (and gyro scale) to the IMU quaternion in diofinder's consumers
+  (`_imu_predict` / hint / dead-reckoning). Never touches the chip; fully
+  reversible; no risk to the shipped fusion.
+- **Mode 2 (opt-in, later): write to the chip.** Convert the derived accel offset
+  to the BNO055's raw-LSB offset units and write it via the **Unit B** CONFIG-mode
+  channel, so the chip's own fusion improves — literally feeding the chip the
+  calibration it couldn't tumble for. Higher risk (unit conversion; the chip's
+  auto-cal may nudge it). Behind `imu_solve_cal_write_chip` (default off) and
+  requires `imu_persist_bno055`.
+
+**Persistence + self-heal.** The estimate (accel bias, gyro scale, observability
+/ quality, timestamp) persists via `imu_persist.py` →
+`/var/lib/diofinder/imu_solve_cal.json`; seeded at boot (the Mode-1 correction is
+live immediately), refined online, and self-heals like Unit A (a good new
+estimate that diverges overwrites). Cleared by factory reset `--clear-imu-calib`.
+
+**Where it lives.** Reuse the solver's existing per-solve harvest in
+`_imu_update_reference` (it already holds `q_now`, the solved RA/Dec/roll,
+`imu_ref`, and the extrinsic). Add the celestial→gravity conversion (site+time),
+the residual split, accumulation, and a **throttled** estimator run (every N
+solves); publish `shared_cfg["imu_solve_cal"]` + quality; the comms hint/predict
+path applies the Mode-1 correction. The estimator core (residual split,
+accel-bias least-squares, gyro-scale ratio, diversity gate) is **pure numpy,
+hardware-free** — `tests/test_imu_solve_cal.py`: inject a known accel bias into
+synthetic solves and recover it; verify injected yaw drift does **not** leak into
+the accel estimate; under-diversity is refused; gyro-scale recovered.
+
+**Config keys.**
+
+| Key | Default | Notes |
+|-----|---------|-------|
+| `imu_solve_cal_enabled` | `false` | Master switch — estimation + Mode-1 software correction. |
+| `imu_solve_cal_write_chip` | `false` | Mode-2 chip-offset write (requires `imu_persist_bno055`). |
+| `imu_solve_cal_min_tilt_spread_deg` | (tuned) | Observability gate on altitude spread. |
+
+**Risks / honest caveats.**
+
+- **Value framing:** at a solve the benefit is **zero** (re-anchored to truth).
+  The gain is a better *standalone* IMU — smaller between-solve / mid-slew tilt
+  error and a better fallback when solving fails (cloud, lost-in-space). It is
+  **not** a pointing-accuracy fix at the moment of a solve.
+- **Site/time dependence:** garbage site ⇒ garbage "truth"; the validity gate is
+  mandatory (and factory reset zeros lat/long).
+- **Observability:** needs altitude spread; a near-meridian-only session simply
+  stays at the seed — non-destructive.
+- **Temperature (an advantage):** accel bias drifts with temperature, and the
+  *online* estimator tracks it continuously — better than a one-shot tumble or a
+  stale persisted profile.
+- **Mode-2 chip write stays off** by default; Mode 1 delivers most of the value
+  with none of the raw-unit risk.
+
+**Dependencies:** requires **Unit A** (extrinsic frame); complements **Unit B**
+(Mode 2 writes what B persists); independent of the magnetometer decision.
+
 ### Sequencing / rollout
 
-1. Unit A behind no flag needed (pure software, self-healing) — but land it with
-   the divergence self-heal from day one so a remount can't strand a user on a
-   wrong stored mounting.
-2. Unit B behind `imu_persist_bno055=false` until a couple of nights confirm the
-   CONFIG excursion is non-disruptive and the restore actually shortens warm-up.
-3. Defer Opportunity 3 (gyro-bias feed-forward) entirely.
+1. Unit A — **shipped** (v0.11.60): pure software, self-healing.
+2. Unit B — **shipped** (v0.11.60) behind `imu_persist_bno055=false`, pending a
+   couple of nights confirming the CONFIG excursion is non-disruptive and the
+   restore shortens warm-up.
+3. Unit C — **next**, behind `imu_solve_cal_enabled=false`. Land Mode 1 (software
+   correction) first with the observability + site/time gates; add Mode 2
+   (chip-offset write) only after Mode 1 is field-validated.
 
 ### What this buys
 
 - **Cold start after boot:** exact-quaternion pointing prediction available from
   the first solve (Unit A) instead of after the first multi-direction slew;
   trustworthy dead-reckoning immediately (Unit B) instead of after gyro warm-up.
-- **No new failure mode for the shipped path:** both units are seeds the live
+- **Standalone IMU that keeps improving (Unit C):** the mounted accel converges
+  toward truth from the sky without ever being tumbled, so pointing degrades
+  gracefully between solves and when solving fails.
+- **No new failure mode for the shipped path:** every unit is a seed the live
   machinery already overrides; the live Kabsch fit and re-anchoring remain the
-  source of truth.
+  source of truth, and Unit C's default is a reversible software correction.
+
+---
+
+## What the three units accomplish — separately and jointly
+
+| Unit | Derives / stores | Data owner | Plate solves' role | Default | Depends on |
+|------|------------------|-----------|--------------------|---------|-----------|
+| **A** | camera↔IMU **mounting extrinsic** (`imu_frame_R`) | diofinder (software) | **the source** (Kabsch on slew pairs) | on (self-heal) | — |
+| **B** | BNO055 **accel/gyro offset blob** (22 B) | the chip | **gate / validator** (when to save) | off (`imu_persist_bno055`) | — |
+| **C** | static **accel-bias + gyro-scale** correction | diofinder (Mode 1) / the chip (Mode 2) | **the source** (solve-vs-IMU residual) | off (`imu_solve_cal_enabled`) | A (+ B for Mode 2) |
+
+**Separately:**
+
+- **Unit A — geometry ("where is the IMU aimed relative to the camera").**
+  Persists the fixed mounting so the exact pointing prediction is live from the
+  first solve after boot, and self-heals a remount.
+- **Unit B — memory ("remember the chip's own zeroing").** Lets the BNO055's
+  hard-won accel/gyro calibration survive power cycles despite having no flash —
+  including a deliberate *pre-mount* accel tumble captured once and restored
+  forever.
+- **Unit C — learning ("derive the zeroing the chip couldn't get, from the
+  sky").** Turns the standing disagreement between solves and the IMU into the
+  static accel/gyro calibration the mounted chip cannot self-produce, and
+  corrects the IMU output so it is trustworthy on its own.
+
+**Jointly (the closed loop):**
+
+1. **A provides the frame** that lets C attribute a tilt residual to the *sensor*
+   rather than the *mounting* — without A, C's residual is confounded and
+   meaningless.
+2. **C turns ongoing disagreement into an improving calibration**, and in Mode 2
+   writes that accel offset back into the chip's registers…
+3. **…which B then persists** across power cycles.
+
+Net: a **self-calibrating, self-persisting IMU**. A is the geometry, B is the
+memory, C is the learning. Layer-wise, **A and C are diofinder-side calibrations
+derived from solves (software), B is the chip-side calibration, and C's Mode 2 is
+the bridge software→chip that B then remembers.** Together the mounted BNO055
+converges toward truth without ever being tumbled and keeps what it learns across
+reboots — which matters precisely where the IMU has to carry pointing on its own:
+between solves, mid-slew, and when plate solving is unavailable.
 
 ---
 
 ## Bottom line
 
-The premise is right — plate solves calibrate the IMU, and no on-chip flash
-means saving externally — but the leverage is inverted from the obvious reading.
-The plate-solve→IMU calibration loop already runs live; the missing piece is
-that its most valuable product, the **plate-solve-derived camera↔IMU extrinsic**,
-is thrown away every power cycle. Persisting *that* (with live self-heal) is the
-first move; persisting the BNO055's own accel/gyro offsets is worthwhile polish;
-gyro-bias feed-forward and any magnetometer re-enable are not worth doing.
+The premise is right — plate solves calibrate the IMU, and no on-chip flash means
+saving externally — but the leverage is inverted from the obvious reading. The
+plate-solve→IMU loop already runs live; **Unit A** (shipped) persists its most
+valuable product, the camera↔IMU extrinsic, instead of relearning it every boot;
+**Unit B** (shipped, opt-in) remembers the chip's own accel/gyro zeroing across
+power cycles. The remaining prize is **Unit C**: the accel-tilt (and gyro-scale)
+calibration the mounted chip can't otherwise produce is *derivable* from the
+solve-vs-IMU disagreement — the static part is a real, invertible calibration;
+only the heading drift is not, and that stays a running estimate (or
+re-anchoring). A magnetometer re-enable remains off the table.
