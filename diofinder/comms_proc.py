@@ -46,6 +46,7 @@ from diofinder.imu_math import (quat_delta_rotvec, alpha_beta_step,
                                 rotvec_to_quat, quat_mul, quat_to_radec,
                                 get_imu_qt)
 from diofinder.imu_frame import apply_rotation as _imu_apply_rotation
+from diofinder import imu_solve_cal as _imu_solve_cal
 from diofinder.maint import MaintRequest, MaintResponse, SOCKET_PATH
 from diofinder.worker_cmds import (
     SolverCmd, CameraCmd,
@@ -1513,6 +1514,17 @@ def _imu_predict(shared_cfg):
         sky_q_ref = None
     if q_ref is None or ra_ref is None or time.monotonic() - ref_t > 120.0:
         return None
+    # Unit C Mode-1 (default off): correct the static accel-tilt bias in BOTH
+    # the current and reference IMU quaternions so the delta between them is
+    # measured in the true-gravity frame. Software-only, reversible, and never
+    # touches the chip; a no-op unless imu_solve_cal_enabled with a published
+    # estimate.
+    if shared_cfg.get("imu_solve_cal_enabled", False):
+        _sc = shared_cfg.get("imu_solve_cal")
+        _bias = _sc.get("bias_tilt") if isinstance(_sc, dict) else None
+        if _bias:
+            q_now = _imu_solve_cal.correct_quaternion(q_now, _bias)
+            q_ref = _imu_solve_cal.correct_quaternion(q_ref, _bias)
     # Exact frame-corrected path (v0.11.23): when the solver has published a
     # quality-gated IMU-body -> camera rotation fit AND the reference carries
     # the solved sky quaternion, predict by exact quaternion composition —
@@ -3315,6 +3327,13 @@ def comms_main(latest_solution, shared_cfg,
     # shared_cfg, not cfg). setdefault so a live toggle isn't clobbered.
     shared_cfg.setdefault("imu_exact_predict",
                           bool(getattr(cfg, "imu_exact_predict", True)))
+    # Unit C accel-tilt / gyro-scale calibration + Mode-1 correction (default
+    # off). Seeded from the conf; the solver reads the same key to gate the
+    # estimator, comms to gate the correction.
+    shared_cfg.setdefault("imu_solve_cal_enabled",
+                          bool(getattr(cfg, "imu_solve_cal_enabled", False)))
+    shared_cfg.setdefault("imu_solve_cal_write_chip",
+                          bool(getattr(cfg, "imu_solve_cal_write_chip", False)))
     # Reporting epoch (jnow default) — precesses J2000 -> JNow at the LX200
     # boundary. Seeded from the conf so a persisted `report_epoch: j2000`
     # (the kill switch) is honored from boot.

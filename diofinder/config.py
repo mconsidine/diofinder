@@ -281,6 +281,19 @@ class Config:
     # behavior byte-for-byte. Seeded into shared_cfg at launch.
     imu_persist_bno055: bool = False
 
+    # Unit C (default OFF, pending on-sky validation): derive the static IMU
+    # calibrations the mounted BNO055 can't self-produce — accelerometer tilt
+    # bias and gyro scale-factor — from the disagreement between plate solves
+    # and IMU output (diofinder/imu_solve_cal.py), and correct the IMU so it is
+    # trustworthy standalone (between solves, mid-slew, when solving fails).
+    # Requires a good Unit A extrinsic and a valid site (latitude/longitude).
+    # `enabled` runs the estimator + the Mode-1 SOFTWARE correction (reversible,
+    # never touches the chip). `write_chip` is the Mode-2 opt-in that would push
+    # the derived accel offset into the BNO055 registers via the Unit B channel
+    # (requires imu_persist_bno055); not yet implemented. Seeded into shared_cfg.
+    imu_solve_cal_enabled: bool = False
+    imu_solve_cal_write_chip: bool = False
+
     # Epoch of coordinates reported to LX200 clients (SkySafari) and used for
     # the align target. diofinder solves in J2000/ICRS internally; SkySafari's
     # LX200 link and OnStepX use the equinox of date, so the default `jnow`

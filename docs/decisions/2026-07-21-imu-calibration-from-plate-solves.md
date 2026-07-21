@@ -31,10 +31,15 @@ calibration would have to be saved externally. Investigate and assess.
 - **Units A + B are implemented and shipped in v0.11.60** (PR #162): the
   camera↔IMU extrinsic persists and self-heals, and the BNO055 profile
   restore/save is available behind `imu_persist_bno055` (default off).
-- **Unit C** (below) is newly specified — the promotion of Opportunity 3 into a
-  full **accel-bias / gyro-scale calibration derived from solve-vs-IMU
-  disagreement**: the calibration the mounted chip cannot otherwise produce.
-  Not yet implemented.
+- **Unit C** (below) — the promotion of Opportunity 3 into a full **accel-bias /
+  gyro-scale calibration derived from solve-vs-IMU disagreement**: the
+  calibration the mounted chip cannot otherwise produce. **Mode 1 (software
+  correction) is now implemented** on the working branch behind
+  `imu_solve_cal_enabled` (default off), pending on-sky validation:
+  `diofinder/imu_solve_cal.py` (pure estimator + transforms, unit-tested in
+  `tests/test_imu_solve_cal.py`), solver-side observe/estimate/persist, and the
+  comms `_imu_predict` correction. **Mode 2 (chip-offset write) is not
+  implemented** — the config key `imu_solve_cal_write_chip` is reserved.
 
 ---
 
