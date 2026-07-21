@@ -236,9 +236,26 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.60)
+## 6. Current state (as of v0.11.61)
 
-Released through **v0.11.60** (latest).
+Released through **v0.11.61** (latest).
+
+- v0.11.61: **Unit C — accel-tilt / gyro-scale calibration from plate-solve
+  residuals (Mode 1, default OFF).** Learns the static IMU calibrations the
+  mounted BNO055 can't self-produce — the accelerometer tilt bias and gyro
+  scale-factor — from the disagreement between plate solves and IMU output, and
+  corrects the IMU in software (`diofinder/imu_solve_cal.py`, pure/tested). The
+  tilt residual is built from UP vectors only, so heading/yaw drift can't leak
+  into the accel estimate; an observability (altitude/tilt-diversity) gate and a
+  valid-site/clock gate protect it. Solver estimates on RAW IMU data (needs a
+  Unit A extrinsic), publishes/persists `imu_solve_cal.json` (self-heals on
+  divergence), and comms `_imu_predict` applies the correction. Gated by
+  `imu_solve_cal_enabled`; a `Unit C solve-cal:` INFO line logs each estimate,
+  and `status.imu.solve_cal` (+ `frame_quality`, `calib_status`) rides into
+  debug bundles. **Mode 2 (writing the offset into the BNO055 registers) is
+  NOT in this release** — reserved behind `imu_solve_cal_write_chip`. See the
+  on-sky test guide in
+  `docs/decisions/2026-07-21-imu-calibration-from-plate-solves.md`.
 
 - v0.11.60: **IMU calibration persistence + UI/label polish.** (a) *Unit A* —
   persist the plate-solve-derived camera↔IMU extrinsic (`imu_frame_R`) to

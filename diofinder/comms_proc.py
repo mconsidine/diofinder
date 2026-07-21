@@ -1935,6 +1935,12 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "ref_ra_deg":   ref_ra,
                     "ref_dec_deg":  ref_dec,
                     "ref_roll_deg": ref_roll,
+                    # Calibration state for debug bundles / field validation:
+                    # Unit A extrinsic fit quality, Unit C solve-cal estimate,
+                    # Unit B chip calib status.
+                    "frame_quality": scfg.get("imu_frame_quality"),
+                    "solve_cal":     scfg.get("imu_solve_cal"),
+                    "calib_status":  scfg.get("imu_calib_status"),
                 },
                 "solver_backend": "sycamore",
                 "test_mode":      scfg.get("test_mode", False),

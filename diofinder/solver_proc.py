@@ -927,6 +927,11 @@ def _solve_cal_observe(shared_cfg, cfg, sky_q, prev_sky_q):
         gscale, _gn = _imu_solve_cal.gyro_scale(_solve_cal_gyro_pairs)
         shared_cfg["imu_solve_cal"] = {
             "bias_tilt": bias, "gyro_scale": gscale, "quality": quality}
+        log.info("Unit C solve-cal: tilt=%.2f deg r2=%.3f min_eig=%.2f n=%d "
+                 "gyro_scale=%s", quality.get("tilt_deg", 0.0),
+                 quality.get("r2", 0.0), quality.get("min_eig", 0.0),
+                 quality.get("n", 0),
+                 f"{gscale:.4f}" if gscale is not None else "n/a")
         # Persist / self-heal: write when nothing stored yet or the estimate has
         # moved beyond the rewrite tolerance (a remount/temperature shift wins).
         if (_solve_cal_saved_bias is None

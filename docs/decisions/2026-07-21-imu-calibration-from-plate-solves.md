@@ -402,6 +402,89 @@ between solves, mid-slew, and when plate solving is unavailable.
 
 ---
 
+## Testing Unit C on-sky (Mode 1)
+
+Unit C ships **off**. Validate it over a few clear nights before trusting it.
+
+### Preconditions (all three must hold, or nothing is estimated)
+
+1. **Unit A extrinsic has converged.** Unit C refuses without a good
+   `imu_frame_R`. Confirm via `diofinder-ctl raw '{"cmd":"status"}'` →
+   `imu.frame_quality` shows an `r2` (not a `rejected` reason). If absent, slew
+   the scope through **two non-collinear directions** with a solve at each end
+   first (that is what makes the mounting observable).
+2. **Correct site AND clock.** The zenith comes from latitude/longitude + UTC,
+   so a wrong site or a wrong Pi clock poisons the "truth." Check
+   `grep -E 'latitude|longitude' /etc/diofinder/diofinder.conf` (must **not** be
+   0/0) and `date -u` on the Pi (must be correct — a field unit with no network
+   may have a bad clock; set it before testing).
+3. **IMU present** (`imu.available` true).
+
+### Enable
+
+```bash
+sudo sed -i 's/^imu_solve_cal_enabled:.*/imu_solve_cal_enabled: true/' \
+  /etc/diofinder/diofinder.conf   # add the line if missing
+sudo systemctl restart diofinder
+```
+
+### Procedure (the key is ALTITUDE diversity)
+
+The accel bias is only observable if the gravity direction moves in the sensor
+frame — i.e. you must solve at **a spread of altitudes**, not just near the
+meridian. Over a session:
+
+1. Point low (~20–30° alt), get solves; point mid; point high (near zenith);
+   repeat across a few directions. Aim for ≥ 8–10 solves spanning altitude.
+2. Watch it converge:
+   ```bash
+   journalctl -u diofinder -f | grep -i "Unit C solve-cal"
+   # Unit C solve-cal: tilt=1.83 deg r2=0.985 min_eig=2.10 n=14 gyro_scale=1.002
+   ```
+   or one-shot: `diofinder-ctl raw '{"cmd":"status"}'` → `imu.solve_cal`.
+
+### What "good" looks like
+
+- `min_eig` clears the gate (published at all ⇒ it did) and rises with altitude
+  spread — this is the observability metric.
+- `tilt` is **small and stable** across the session and night-to-night
+  (a plausible accel bias is well under a few degrees). `r2` high (> ~0.9).
+- With the correction on, the SkySafari crosshair between solves / mid-slew is
+  as good or better. **If it looks worse, disable and it reverts** (set
+  `imu_solve_cal_enabled: false`, restart — the correction is software-only).
+
+### Red flags (and what they mean)
+
+| Symptom | Likely cause |
+|---|---|
+| Nothing ever logged / `solve_cal` null | Unit A extrinsic missing, or site is 0/0 |
+| `min_eig` stays low, no publish | not enough altitude spread — point across more sky |
+| `tilt` huge (> ~10°) or unstable session-to-session | wrong clock/site, or a frame-convention mismatch (the part needing field confirmation) |
+| Crosshair worse with it on | disable; capture a bundle (below) |
+
+### Debug bundle to send if you need help
+
+If the estimate looks wrong or the crosshair degrades, capture **while the test
+session is live** (Unit C enabled, having solved across altitudes):
+
+1. **A debug bundle** from the Web UI → *Debug* (or
+   `curl http://diofinder.local/debug/collect?frames=12 -o bundle.zip`). It now
+   carries the Unit A/B/C state in `imu.json` (`frame_quality`, `solve_cal`,
+   `calib_status`) plus the frame burst, `effective_params.json`, and the conf.
+2. **The session journal** covering the run:
+   `journalctl -u diofinder --since "today" > diofinder.log` — the
+   `Unit C solve-cal:` lines show the convergence history.
+3. **The persisted artifacts**: `/var/lib/diofinder/imu_solve_cal.json` and
+   `/var/lib/diofinder/imu_extrinsic.json` (the extrinsic Unit C depends on).
+4. **Confirm site+clock**: paste `date -u` and the `latitude`/`longitude` conf
+   lines — the single most common cause of a wrong estimate.
+
+With those four, the tilt estimate, the extrinsic it was built on, the exact
+frames/attitudes, and the site/time can all be replayed to isolate a
+convention vs. an observability vs. a site/clock problem.
+
+---
+
 ## Bottom line
 
 The premise is right — plate solves calibrate the IMU, and no on-chip flash means
