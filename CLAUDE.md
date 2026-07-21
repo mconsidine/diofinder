@@ -602,7 +602,7 @@ New keys (this release):
 | `extractor_backend` | `sycamore` | Centroid extractor: `sycamore` (matched filter + bg_cache) or `tetra3` (AstroKeith's olive-solve `get_centroids_from_image`). Live-mutable; set by the Legacy preset. |
 | `imu_persist_bno055` | `false` | **Unit B, default OFF pending field validation.** Persist the BNO055's own accel/gyro calibration profile across power cycles (the chip has no flash). `imu_proc` restores a saved profile at init (CONFIG mode) and saves one once the chip is gyro+accel-calibrated, plate solves confirm the IMU tracks truth, and the scope is still. Off = shipped behavior byte-for-byte. |
 | `imu_solve_cal_enabled` | `false` | **Unit C, default OFF pending on-sky validation.** Derive the static accel-tilt bias + gyro scale-factor from solve-vs-IMU disagreement (`imu_solve_cal.py`) and correct the IMU (Mode 1, software-only, reversible). Solver runs the estimator on RAW IMU data (needs a Unit A extrinsic + valid latitude/longitude); comms `_imu_predict` applies the correction. Persists `imu_solve_cal.json`; self-heals on divergence. |
-| `imu_solve_cal_write_chip` | `false` | **Unit C Mode 2 (reserved, not implemented).** Would push the derived accel offset into the BNO055 registers via the Unit B channel. |
+| `imu_solve_cal_write_chip` | `false` | **Unit C Mode 2 (implemented on branch, NOT released — bench-verify first).** Pushes the derived accel offset into the BNO055 registers via the Unit B channel (`imu_proc._apply_mode2_offset`), with a solver-estimator reset handshake so it re-measures the post-write residual. Requires `imu_persist_bno055`. The LSB scale + offset sign in `imu_solve_cal.py` are datasheet assumptions needing on-device confirmation. |
 
 ---
 

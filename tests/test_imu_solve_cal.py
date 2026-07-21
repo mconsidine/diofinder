@@ -190,6 +190,24 @@ class TestTransforms(unittest.TestCase):
             self.assertTrue(0.0 <= lst < 360.0)
 
 
+class TestMode2Conversion(unittest.TestCase):
+    def test_accel_offset_delta_lsb(self):
+        # bias_tilt (rad) -> b_a = bias*g (m/s²) -> * lsb_per_ms2, sign-flipped.
+        d = sc.accel_offset_delta_lsb([0.01, 0.0, -0.02],
+                                      lsb_per_ms2=100.0, g=9.80665, sign=-1)
+        # 0.01 rad * 9.80665 * 100 = 9.80665 -> round 10; sign -1 -> -10
+        self.assertEqual(d, [-10, 0, 20])
+        self.assertTrue(all(isinstance(v, int) for v in d))
+
+    def test_zero_bias_zero_delta(self):
+        self.assertEqual(
+            sc.accel_offset_delta_lsb([0.0, 0.0, 0.0]), [0, 0, 0])
+
+    def test_bad_shape_raises(self):
+        with self.assertRaises(ValueError):
+            sc.accel_offset_delta_lsb([0.0, 1.0])
+
+
 class TestGyroScale(unittest.TestCase):
     def test_scale_recovery(self):
         rng = np.random.default_rng(3)

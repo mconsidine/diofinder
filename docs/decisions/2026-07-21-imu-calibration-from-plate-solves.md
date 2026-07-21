@@ -38,8 +38,17 @@ calibration would have to be saved externally. Investigate and assess.
   `imu_solve_cal_enabled` (default off), pending on-sky validation:
   `diofinder/imu_solve_cal.py` (pure estimator + transforms, unit-tested in
   `tests/test_imu_solve_cal.py`), solver-side observe/estimate/persist, and the
-  comms `_imu_predict` correction. **Mode 2 (chip-offset write) is not
-  implemented** — the config key `imu_solve_cal_write_chip` is reserved.
+  comms `_imu_predict` correction. **Mode 1 shipped in v0.11.61.**
+- **Mode 2 (chip-offset write) is implemented on the working branch but NOT
+  released** (`imu_solve_cal_write_chip`, default off, **requires bench
+  verification**): `imu_proc` converts the estimated tilt bias to BNO055
+  accel-offset LSB (`imu_solve_cal.accel_offset_delta_lsb`) and adds it to the
+  chip's registers in a CONFIG-mode excursion (the Unit B channel), then a
+  handshake resets the solver estimator so it re-measures the post-write
+  residual. **Two datasheet assumptions must be confirmed on a real BNO055
+  before trusting it** — `ACCEL_OFFSET_LSB_PER_MS2` (100 LSB per m/s²) and
+  `ACCEL_OFFSET_SIGN` (whether the chip adds or subtracts the stored offset;
+  flip to +1 if a bench test shows the tilt growing instead of shrinking).
 
 ---
 
@@ -489,6 +498,24 @@ session is live** (Unit C enabled, having solved across altitudes):
 With those four, the tilt estimate, the extrinsic it was built on, the exact
 frames/attitudes, and the site/time can all be replayed to isolate a
 convention vs. an observability vs. a site/clock problem.
+
+### Bench-verifying Mode 2 before ever enabling it
+
+Mode 2 writes to the chip, so validate the two datasheet constants on a bench
+BNO055 **before** `imu_solve_cal_write_chip: true`, and only after Mode 1's tilt
+estimate is trusted:
+
+1. With Mode 1 converged to a stable non-trivial tilt, note it.
+2. Enable Mode 2 for **one** write (watch `journalctl` for
+   `Unit C Mode 2: wrote accel offset delta … LSB`), then let Mode 1 re-measure.
+3. **The residual tilt must SHRINK.** If it grows by roughly the same amount,
+   the offset sign is inverted — flip `imu_solve_cal.ACCEL_OFFSET_SIGN` to `+1`.
+   If it changes by the wrong magnitude, `ACCEL_OFFSET_LSB_PER_MS2` is off.
+4. Confirm the written offsets survive a power cycle (they ride in the Unit B
+   `bno055_calib.json`, so `imu_persist_bno055` must also be on).
+
+Until that bench loop passes, Mode 2 stays off — Mode 1's software correction
+delivers the pointing benefit with none of the chip-write risk.
 
 ---
 

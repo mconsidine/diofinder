@@ -225,6 +225,41 @@ def correct_quaternion(q_imu, bias_tilt):
     )
 
 
+# --- Mode 2: convert the tilt bias to BNO055 accel-offset register units -----
+# The estimator produces `bias_tilt = b_a / g` (radians). Mode 2 pushes the
+# accel offset into the chip's registers (bytes 0-5 of the 22-byte calib blob)
+# via the Unit B channel so the chip's OWN fusion improves — "feeding the chip
+# the calibration it couldn't tumble for."
+#
+# ⚠️ BENCH-VERIFY BEFORE ENABLING. Two device-specific facts set the conversion
+# and are asserted here from the datasheet but MUST be confirmed on a real
+# BNO055 (they are exactly the "raw-unit conversion risk" the design flagged):
+#   * ACCEL_OFFSET_LSB_PER_MS2 — the accel offset register LSB. In the m/s²
+#     output unit the BNO055 accelerometer resolution is 1 LSB = 0.01 m/s²
+#     (100 LSB per m/s²); the offset registers share those units.
+#   * ACCEL_OFFSET_SIGN — whether the chip ADDS or SUBTRACTS the stored offset.
+#     +1 assumes the offset is ADDED to raw, so to cancel a +b_a error we store
+#     -b_a. Flip to -1 if a bench test shows the tilt grows instead of shrinks.
+# The imu_proc writer clamps the resulting register value to int16 and only ever
+# ADDS this delta to the offsets already in the chip.
+G = 9.80665                       # m/s²
+ACCEL_OFFSET_LSB_PER_MS2 = 100.0  # BNO055 m/s² mode — CONFIRM ON DEVICE
+ACCEL_OFFSET_SIGN = -1            # store -b_a to cancel a +b_a bias — CONFIRM
+
+
+def accel_offset_delta_lsb(bias_tilt, *, lsb_per_ms2=ACCEL_OFFSET_LSB_PER_MS2,
+                           g=G, sign=ACCEL_OFFSET_SIGN):
+    """Convert a tilt bias (radians, body frame) into the 3 signed integer
+    accel-offset register deltas (X, Y, Z) to add to the chip's current offsets.
+
+    The BNO055 accel/offset axes are the sensor body axes, which is the frame
+    the estimator works in, so the components map directly (no rotation)."""
+    b = np.asarray(bias_tilt, dtype=float)
+    if b.shape != (3,):
+        raise ValueError("bias_tilt must be a 3-vector")
+    return [int(round(sign * v * g * lsb_per_ms2)) for v in b]
+
+
 def gyro_scale(mag_pairs):
     """Robust gyro scale-factor from (|imu_delta|, |sky_delta|) rotation-angle
     pairs (radians): median of |imu|/|sky| over slews above GYRO_MIN_MAG.

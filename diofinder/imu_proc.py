@@ -66,6 +66,11 @@ _STILL_THRESH_DEG = 0.1       # per-sample rotation below this counts as "still"
 _STILL_FRAMES     = 20        # ~1 s at 20 Hz of stillness before a save
 _STATUS_PUBLISH_INTERVAL = 1.0  # seconds between imu_calib_status publishes
 _REF_FRESH_S      = 30.0      # imu_ref newer than this ⇒ solves are live
+# Unit C Mode 2 (chip-offset write): apply only when the residual tilt exceeds
+# this, and no more often than this interval (the estimator needs time to
+# re-converge on the post-write residual between applies).
+_MODE2_APPLY_RAD       = math.radians(0.5)
+_MODE2_MIN_INTERVAL_S  = 60.0
 
 
 def _quat_angle_deg(q1, q2):
@@ -176,6 +181,37 @@ def _save_bno055_profile(bus, addr, status):
         return False
 
 
+def _apply_mode2_offset(bus, addr, delta):
+    """Unit C Mode 2: ADD signed LSB deltas to the chip's accel-offset registers
+    (0x55..0x5A, bytes 0-5 of the calib blob), so the BNO055's own fusion adopts
+    the plate-solve-derived accel correction. CONFIG-mode excursion (offsets are
+    only writable there); the resulting register value is clamped to int16.
+    Best-effort — never raises. Returns True on success.
+
+    ⚠️ The bias→LSB conversion and offset SIGN (imu_solve_cal) are datasheet
+    assumptions that must be bench-verified before this is trusted."""
+    try:
+        _write(bus, addr, _REG_OPR_MODE, _OPR_CONFIG)
+        time.sleep(0.025)
+        try:
+            raw = bus.read_i2c_block_data(addr, _REG_CALIB_DATA, 6)
+            out = []
+            for i in range(3):
+                cur = raw[2 * i] | (raw[2 * i + 1] << 8)
+                if cur > 32767:
+                    cur -= 65536
+                v = max(-32768, min(32767, cur + int(delta[i])))
+                out += [v & 0xFF, (v >> 8) & 0xFF]
+            bus.write_i2c_block_data(addr, _REG_CALIB_DATA, out)
+        finally:
+            _write(bus, addr, _REG_OPR_MODE, _OPR_IMUPLUS)
+            time.sleep(0.025)
+        return True
+    except Exception as e:
+        log.debug("Mode 2 offset write failed: %s", e)
+        return False
+
+
 def _probe_and_init(smbus2, restore=False):
     """Try both I2C addresses.  Return (bus, addr, restored) on success or
     (None, None, False).  When ``restore`` is set and a saved BNO055 profile
@@ -249,6 +285,7 @@ def imu_thread(shared_cfg, stop_event=None):
     still_count = 0
     last_q = None
     last_status_pub = 0.0
+    mode2_last_t = 0.0          # last Unit C Mode-2 chip write
 
     while stop_event is None or not stop_event.is_set():
         persist = bool(shared_cfg.get("imu_persist_bno055", False))
@@ -294,6 +331,27 @@ def imu_thread(shared_cfg, stop_event=None):
                             and _plate_solves_confirm(shared_cfg)):
                         if _save_bno055_profile(bus, addr, st):
                             profile_saved = True
+                    # ---- Unit C Mode 2: push the derived accel offset into
+                    # the chip (requires Unit B channel + the write_chip flag).
+                    if (bool(shared_cfg.get("imu_solve_cal_write_chip", False))
+                            and st["gyro"] >= 3 and st["accel"] >= 3
+                            and still_count >= _STILL_FRAMES
+                            and (t0 - mode2_last_t) > _MODE2_MIN_INTERVAL_S):
+                        _sc = shared_cfg.get("imu_solve_cal")
+                        _bias = (_sc.get("bias_tilt")
+                                 if isinstance(_sc, dict) else None)
+                        if _bias and math.sqrt(sum(b * b for b in _bias)) \
+                                > _MODE2_APPLY_RAD:
+                            delta = _imu_solve_cal.accel_offset_delta_lsb(_bias)
+                            if any(delta) and _apply_mode2_offset(bus, addr, delta):
+                                mode2_last_t = t0
+                                profile_saved = False   # offsets changed → re-save
+                                # Ask the solver to reset its estimator and clear
+                                # the published bias so we re-measure the NEW
+                                # (post-write) residual before applying again.
+                                shared_cfg["imu_solve_cal_reset"] = t0
+                                log.info("Unit C Mode 2: wrote accel offset "
+                                         "delta %s LSB", delta)
                 except Exception as e:
                     log.debug("BNO055 calib status/save skipped: %s", e)
         except Exception as e:

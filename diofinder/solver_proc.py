@@ -860,6 +860,7 @@ _solve_cal_est = _imu_solve_cal.AccelTiltEstimator()
 _solve_cal_gyro_pairs = []          # (|imu_delta|, |sky_delta|) rotation angles
 _solve_cal_saved_bias = None        # last tilt bias written to disk
 _solve_cal_solves = 0               # observations since last publish/persist
+_solve_cal_reset_seen = None        # last Mode-2 reset token acted on
 _SOLVE_CAL_PUBLISH_EVERY = 10       # solve → estimate cadence
 
 
@@ -886,8 +887,20 @@ def _solve_cal_observe(shared_cfg, cfg, sky_q, prev_sky_q):
     estimator (from the plate-solve-derived vs IMU-reported up vectors) and the
     gyro-scale ratio, then periodically solves, publishes, and persists.
     Best-effort: any failure is swallowed so the solve loop is never disturbed."""
-    global _solve_cal_solves, _solve_cal_saved_bias
+    global _solve_cal_solves, _solve_cal_saved_bias, _solve_cal_reset_seen
     try:
+        # Mode-2 handshake: after imu_proc writes the accel offset into the chip
+        # it bumps imu_solve_cal_reset so we re-measure the NEW (post-write)
+        # residual from scratch — reset the estimator and clear the published
+        # bias so Mode 2 doesn't re-apply the stale (pre-write) estimate.
+        tok = shared_cfg.get("imu_solve_cal_reset")
+        if tok != _solve_cal_reset_seen:
+            _solve_cal_reset_seen = tok
+            _solve_cal_est.reset()
+            _solve_cal_solves = 0
+            del _solve_cal_gyro_pairs[:]
+            shared_cfg["imu_solve_cal"] = None
+            return
         if sky_q is None:
             return
         R9 = shared_cfg.get("imu_frame_R")     # Unit A extrinsic — hard dep
