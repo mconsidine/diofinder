@@ -236,9 +236,17 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.61)
+## 6. Current state (as of v0.11.62)
 
-Released through **v0.11.61** (latest).
+Released through **v0.11.62** (latest).
+
+- v0.11.62: **Unit C testability — live webui toggle + readout.**
+  `imu_solve_cal_enabled` is now a live `solver_params_get`/`set` key (no
+  restart): the Camera page → Experimental A/B card has an "IMU accel
+  calibration (Unit C)" checkbox and a live readout (`tilt · r² · obs ·
+  min_eig · gyro×`) fed by `/api/camera/state`. Turns the on-sky test into
+  tick-the-box + watch-it-converge. (Mode 2 chip-write remains off this
+  release, held on a branch pending bench verification.)
 
 - v0.11.61: **Unit C — accel-tilt / gyro-scale calibration from plate-solve
   residuals (Mode 1, default OFF).** Learns the static IMU calibrations the

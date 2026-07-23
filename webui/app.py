@@ -1139,6 +1139,9 @@ def solver_params_set():
     if "star_name_dso" in request.form:
         pargs["star_name_dso"] = request.form.get(
             "star_name_dso", "false").strip().lower() in ("true", "1", "on")
+    if "imu_solve_cal_enabled" in request.form:
+        pargs["imu_solve_cal_enabled"] = request.form.get(
+            "imu_solve_cal_enabled", "false").strip().lower() in ("true", "1", "on")
     if request.form.get("min_centroids"):
         try:
             pargs["min_centroids"] = int(request.form["min_centroids"])
