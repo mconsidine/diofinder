@@ -236,9 +236,26 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.62)
+## 6. Current state (as of v0.11.63)
 
-Released through **v0.11.62** (latest).
+Released through **v0.11.63** (latest).
+
+- v0.11.63: **SkySafari reticle-oscillation fix — three anti-oscillation
+  layers in the IMU pointing path.** The `:GR/:GD` report flip-flopped between
+  the plate solve and a jittery IMU prediction during motion (root cause: the
+  BNO055 in IMUPLUS "hunts" between two orientations ~0.8° apart while
+  stationary, which the rate gate misread as slewing). **P1** — solve-freshness
+  gate (`imu_predict_hold_solve_s`, default 1.0 s): `_imu_predict` reports a
+  solve fresher than the window instead of extrapolating, so the IMU only fills
+  gaps once solves lapse (0 disables). **P2** — motion-gate hysteresis
+  (`_IMU_GATE_HYST_FRAC` = 0.5): an engaged latch stays alive down to half the
+  engage rate, killing the disengage/re-engage thrash between solves; never
+  re-engages from rest. **P3** — fusion-hunt suppression (`imu_hunt_filter`,
+  default on): `imu_proc._hunt_filter` damps the two-state quaternion hunt at
+  the source (adaptive nlerp), while a change past `_HUNT_SNAP_DEG` (2°) snaps
+  through unfiltered so real slews and the solve-hint Kabsch fit are unbiased.
+  All three unit-tested without hardware (`tests/test_imu_smoothing.py`,
+  `tests/test_imu_hunt_filter.py`).
 
 - v0.11.62: **Unit C testability — live webui toggle + readout.**
   `imu_solve_cal_enabled` is now a live `solver_params_get`/`set` key (no
