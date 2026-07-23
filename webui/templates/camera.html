@@ -254,6 +254,33 @@
       </label>
       <span id="bin-status" class="hint" style="margin-left:10px;"></span>
     </div>
+
+    <div style="margin-top:12px; border-top:1px solid #2d0000; padding-top:10px;">
+      <form method="post" action="{{ url_for('solver_params_set') }}"
+            style="display:inline;">
+        <input type="hidden" name="next" value="camera_page">
+        <input type="hidden" name="imu_solve_cal_enabled"
+               value="{{ 'false' if solver_params and solver_params.imu_solve_cal_enabled else 'true' }}">
+        <label class="checkbox">
+          <input type="checkbox" onchange="this.form.submit()"
+                 {{ 'checked' if solver_params and solver_params.imu_solve_cal_enabled }}>
+          <strong>IMU accel calibration (Unit C)</strong>
+          {{ tip("Learns the IMU accelerometer tilt bias from plate-solve vs IMU disagreement and corrects pointing between solves (software-only, reversible; no restart). Needs the mounting (Unit A) already learned and a correct site + clock. Solve across a spread of <strong>altitudes</strong> to make the bias observable, then watch the readout converge.") }}
+        </label>
+      </form>
+      <div class="hint" id="solvecal-readout" style="margin-top:4px;">
+        {%- set _sc = solver_params.imu_solve_cal if solver_params else None -%}
+        {%- if _sc and _sc.quality -%}
+          tilt {{ "%.2f"|format(_sc.quality.tilt_deg) }}&deg; &middot;
+          r&sup2; {{ "%.3f"|format(_sc.quality.r2) }} &middot;
+          obs {{ _sc.quality.n }} &middot;
+          min_eig {{ "%.2f"|format(_sc.quality.min_eig) }}
+          {%- if _sc.gyro_scale %} &middot; gyro&times;{{ "%.4f"|format(_sc.gyro_scale) }}{% endif -%}
+        {%- else -%}
+          no estimate yet — enable, then solve across a spread of altitudes
+        {%- endif -%}
+      </div>
+    </div>
   </div>
 
   <div class="card expert-only" id="mount-card">
@@ -911,7 +938,22 @@ async function syncCameraState() {
     _syncNum('kernel_num', 'kernel_slider', d.detect_kernel_sigma, v => parseFloat(v).toFixed(1));
     _syncSelect('bg_mode_sel', d.detect_bg_mode);
     _syncSelect('backend_sel', d.extractor_backend);
+    _syncSolveCal(d.imu_solve_cal);
   } catch (e) { /* keep trying */ }
+}
+function _syncSolveCal(sc) {
+  const el = document.getElementById('solvecal-readout');
+  if (!el) return;
+  if (sc && sc.quality) {
+    let t = `tilt ${(+sc.quality.tilt_deg).toFixed(2)}° · ` +
+            `r² ${(+sc.quality.r2).toFixed(3)} · ` +
+            `obs ${sc.quality.n} · ` +
+            `min_eig ${(+sc.quality.min_eig).toFixed(2)}`;
+    if (sc.gyro_scale) t += ` · gyro×${(+sc.gyro_scale).toFixed(4)}`;
+    el.textContent = t;
+  } else {
+    el.textContent = 'no estimate yet — enable, then solve across a spread of altitudes';
+  }
 }
 setInterval(syncCameraState, 3000);
 

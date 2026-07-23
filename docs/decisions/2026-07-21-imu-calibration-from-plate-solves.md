@@ -422,7 +422,13 @@ Unit C ships **off**. Validate it over a few clear nights before trusting it.
 
 ### Enable
 
+Easiest (v0.11.62+): **Camera page → Experimental A/B card → "IMU accel
+calibration (Unit C)"** checkbox — live, no restart, and the readout beside it
+shows the estimate as it converges. Equivalent CLI/conf:
+
 ```bash
+diofinder-ctl raw '{"cmd":"solver_params_set","args":{"imu_solve_cal_enabled":true,"persist":true}}'
+# or, conf + restart:
 sudo sed -i 's/^imu_solve_cal_enabled:.*/imu_solve_cal_enabled: true/' \
   /etc/diofinder/diofinder.conf   # add the line if missing
 sudo systemctl restart diofinder
@@ -436,7 +442,8 @@ meridian. Over a session:
 
 1. Point low (~20–30° alt), get solves; point mid; point high (near zenith);
    repeat across a few directions. Aim for ≥ 8–10 solves spanning altitude.
-2. Watch it converge:
+2. Watch it converge — the **Camera-page readout** (`tilt · r² · obs · min_eig ·
+   gyro×`) updates live every ~3 s. Or from the shell:
    ```bash
    journalctl -u diofinder -f | grep -i "Unit C solve-cal"
    # Unit C solve-cal: tilt=1.83 deg r2=0.985 min_eig=2.10 n=14 gyro_scale=1.002

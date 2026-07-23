@@ -2435,6 +2435,11 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 "report_epoch": ctx.shared_cfg.get(
                     "report_epoch",
                     str(getattr(ctx.cfg, "report_epoch", "jnow")).lower()),
+                "imu_solve_cal_enabled": ctx.shared_cfg.get(
+                    "imu_solve_cal_enabled",
+                    getattr(ctx.cfg, "imu_solve_cal_enabled", False)),
+                # Live estimate (Unit C) for the Camera-page readout, or None.
+                "imu_solve_cal": ctx.shared_cfg.get("imu_solve_cal"),
             })
 
         if cmd == "solver_params_set":
@@ -2625,6 +2630,13 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 ep = bool(args["imu_exact_predict"])
                 ctx.shared_cfg["imu_exact_predict"] = ep
                 updates["imu_exact_predict"] = ep
+            if "imu_solve_cal_enabled" in args:
+                # Unit C master switch — read live by the solver (estimator) and
+                # comms (_imu_predict correction), so this toggles without a
+                # restart. Mode 2 (chip write) stays conf-only, not exposed here.
+                sce = bool(args["imu_solve_cal_enabled"])
+                ctx.shared_cfg["imu_solve_cal_enabled"] = sce
+                updates["imu_solve_cal_enabled"] = sce
             if "imu_rate_gate_dps" in args:
                 try:
                     rg = float(args["imu_rate_gate_dps"])
