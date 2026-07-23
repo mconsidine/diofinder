@@ -263,6 +263,20 @@ class Config:
     # slow manual nudge is >0.1. Once moving, the prediction holds until the
     # next solve re-anchors. Seeded into shared_cfg; live-tunable there.
     imu_rate_gate_dps: float = 0.1
+    # P1 (SkySafari reticle-oscillation fix): prefer a plate solve fresher than
+    # this (seconds) over IMU extrapolation. The between-solve prediction only
+    # fills gaps while solving can't keep up; whenever a confident solve landed
+    # within this window the LX200 report follows the solve, not the jittery
+    # prediction. Only once solves lapse past this does the IMU take over. 0
+    # disables (pure rate-gate behaviour). Seeded into shared_cfg; live-tunable.
+    imu_predict_hold_solve_s: float = 1.0
+    # P3: suppress BNO055 fusion "hunting" (the chip toggling between two
+    # nearby orientations while stationary) in the published quaternion before
+    # it reaches the pointing prediction. Real motion snaps through unfiltered,
+    # so slews and the solve-hint fit are unaffected. Default on; false = raw
+    # passthrough. Seeded into shared_cfg at launch for the in-launcher IMU
+    # thread.
+    imu_hunt_filter: bool = True
     # Kill switch for the v0.11.23 exact quaternion pointing prediction. True
     # (default) uses the frame-corrected exact composition when a quality IMU
     # body->camera fit is available; false forces the legacy C-matrix

@@ -346,6 +346,89 @@ def test_imu_predict_accepts_composite_imu_key():
         100.0 + 0.8 / math.cos(math.radians(20.0)), abs=0.1)
 
 
+# ---- P1: prefer a fresh plate solve over IMU extrapolation ------------------
+
+def test_imu_predict_prefers_fresh_solve_but_predicts_when_hold_disabled():
+    # P1 (SkySafari reticle-oscillation fix): with the motion gate engaged, a
+    # solve fresher than the hold window is reported as-is (predict returns
+    # None -> caller uses the solved fix) instead of the jittery IMU
+    # extrapolation. Disabling the hold (0 s) proves the gate WAS engaged and
+    # only the freshness check flipped the result.
+    t0 = time.monotonic() - 1.6
+    ref_fresh = time.monotonic() - 0.2           # 0.2 s < 1.0 s default hold
+
+    _reset_rate_state()
+    out = "unset"
+    for dt, deg in [(0.0, 0.0), (0.8, 0.4), (1.6, 0.8)]:
+        out = comms_proc._imu_predict(
+            _cfg_rotated(deg, imu_t=t0 + dt, ref_t=ref_fresh))
+    assert out is None                           # fresh solve preferred
+
+    _reset_rate_state()
+    for dt, deg in [(0.0, 0.0), (0.8, 0.4), (1.6, 0.8)]:
+        c = _cfg_rotated(deg, imu_t=t0 + dt, ref_t=ref_fresh)
+        c["imu_predict_hold_solve_s"] = 0.0      # disable P1 -> pure rate gate
+        out = comms_proc._imu_predict(c)
+    assert out is not None                        # same geometry now predicts
+    assert out[0] == pytest.approx(
+        100.0 + 0.8 / math.cos(math.radians(20.0)), abs=0.1)
+
+
+def test_imu_predict_takes_over_when_solve_stale():
+    # P1 complement: once solves lapse past the hold window the IMU prediction
+    # takes over — it still fills the gap during a real solve drought mid-slew.
+    _reset_rate_state()
+    t0 = time.monotonic() - 1.6
+    ref_stale = time.monotonic() - 1.5           # > 1.0 s hold, < 120 s cap
+    out = None
+    for dt, deg in [(0.0, 0.0), (0.8, 0.4), (1.6, 0.8)]:
+        out = comms_proc._imu_predict(
+            _cfg_rotated(deg, imu_t=t0 + dt, ref_t=ref_stale))
+    assert out is not None
+    assert out[0] == pytest.approx(
+        100.0 + 0.8 / math.cos(math.radians(20.0)), abs=0.1)
+    assert out[1] == pytest.approx(20.0, abs=0.05)
+
+
+# ---- P2: motion-gate hysteresis latch ---------------------------------------
+
+def test_motion_gate_hysteresis_holds_low_rate_slew_through_solve():
+    # P2: once engaged, a slew whose measured rate dips into [rate_hold, gate)
+    # keeps the motion latch alive, so a solve landing mid-slew does NOT trip
+    # the disengage branch (which would flip the LX200 report predict->hold).
+    state = {}
+    gate, base = 0.1, 0.8
+    assert comms_proc._imu_motion_engaged(
+        state, _q_rot_x(0.0), 0.0, -1.0,
+        rate_gate_dps=gate, baseline_s=base) is False
+    comms_proc._imu_motion_engaged(
+        state, _q_rot_x(0.4), 0.8, -1.0, rate_gate_dps=gate, baseline_s=base)
+    assert state["engaged"] is True              # engaged at 0.5 deg/s
+    # 0.06 deg over the 0.8 s window = 0.075 deg/s: below the 0.1 gate, above
+    # the 0.05 release threshold. A solve landed (ref_t=1.0 > moving_t=0.8).
+    engaged = comms_proc._imu_motion_engaged(
+        state, _q_rot_x(0.46), 1.6, 1.0, rate_gate_dps=gate, baseline_s=base)
+    assert engaged is True                        # latch held (no thrash)
+    assert state["moving_t"] == 1.6               # refreshed by the low band
+    # Genuinely stopped (rate 0 < release) with a fresh solve -> disengage.
+    engaged = comms_proc._imu_motion_engaged(
+        state, _q_rot_x(0.46), 2.4, 2.0, rate_gate_dps=gate, baseline_s=base)
+    assert engaged is False
+
+
+def test_motion_gate_low_band_does_not_engage_from_rest():
+    # The hysteresis low band only SUSTAINS an engaged latch; a sub-gate rate
+    # from rest must not engage — the stationary-hunt suppression relies on it.
+    state = {}
+    gate, base = 0.1, 0.8
+    comms_proc._imu_motion_engaged(
+        state, _q_rot_x(0.0), 0.0, -1.0, rate_gate_dps=gate, baseline_s=base)
+    out = comms_proc._imu_motion_engaged(     # 0.075 deg/s, but never engaged
+        state, _q_rot_x(0.06), 0.8, -1.0, rate_gate_dps=gate, baseline_s=base)
+    assert out is False
+    assert not state.get("engaged")
+
+
 def test_smoothed_wrapper_resnaps_after_stale_gap(monkeypatch):
     comms_proc._imu_filt_state.clear()
     cfg = {"imu_t": 1.0, "imu_ref_t": 100.0, "_z": (10.0, 5.0)}
