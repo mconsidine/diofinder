@@ -87,6 +87,8 @@ LX200-pointing consumers, and the calibration loop).
 | `auto_exposure_max_gain` | float | comms (via `seeing_set`) | comms auto-exposure thread |
 | `auto_exposure_peak_floor` | float | comms (via maint `auto_exposure_set {"peak_floor":...}`) | comms auto-exposure thread |
 | `imu_rate_gate_dps` | float | comms (seed from cfg; live via `solver_params_set` — Camera-page "IMU pointing gate" slider, v0.11.50) | comms LX200 pointing (rate gate in `_imu_predict`; raise to stop a parked scope's SkySafari jitter) |
+| `imu_predict_hold_solve_s` | float | comms (seed from cfg; `solver_params_set`) | comms LX200 pointing (P1 — `_imu_predict` reports a solve fresher than this instead of IMU extrapolation; the SkySafari reticle-oscillation fix. 0 disables) |
+| `imu_hunt_filter` | bool | main (seed from cfg) | imu_thread (P3 — `_hunt_filter` damps BNO055 fusion hunting in the published quaternion; real motion snaps through. false = raw passthrough) |
 | `imu_exact_predict` | bool | comms (seed from cfg; `solver_params_set`) | comms LX200 pointing (kill switch for the exact quaternion path; false → legacy C-matrix) |
 | `report_epoch` | str (`jnow`/`j2000`) | comms (seed from cfg; `solver_params_set`) | comms LX200 boundary — precesses J2000→JNow for `:GR/:GD` + the status `report_*`, JNow→J2000 for the `:CM#` align target (v0.11.53). `j2000` = raw kill switch |
 | `mount_enabled`, `mount_mode`, `mount_epoch` | bool / str (`manual`/`auto`) / str (`jnow`/`j2000`) | comms (seed from cfg; `mount_set`) | comms `_mount_loop` + `mount_sync`/`mount_status` — outbound SynScan mount sync (the mount's OWN epoch, distinct from `report_epoch`). `mount_auto_*` gates are read live too. Transport keys (`mount_protocol`/`mount_serial_port`/`mount_serial_baud`) are cfg-only (restart) |
@@ -473,6 +475,26 @@ fallback (5-tuple refs / no fit). **Kill switch** (v0.11.28):
 shared_cfg at comms start) forces the C-matrix path even when a fit is
 present — a field-reversible fallback to the pre-v0.11.23 behavior if the
 crosshair looks wrong during a slew.
+
+**Anti-oscillation (SkySafari reticle jump during motion).** Three layers stop
+the `:GR/:GD` report flip-flopping between the plate solve and a jittery IMU
+prediction (root cause: the BNO055 in IMUPLUS "hunts" between two orientations
+~0.8° apart while stationary, which the rate gate misreads as slewing).
+**P1 — solve-freshness gate** (`imu_predict_hold_solve_s`, default 1.0 s): the
+between-solve prediction only fills gaps, so whenever a confident solve landed
+within the window `_imu_predict` returns None and the *solve* is reported, not
+the extrapolation; the IMU takes over only once solves lapse. 0 disables.
+**P2 — motion-gate hysteresis** (`_IMU_GATE_HYST_FRAC` = 0.5): once engaged the
+motion latch stays alive down to half the engage rate, so a slew whose measured
+rate wobbles around the gate between solves doesn't disengage-and-re-engage
+(the frame-to-frame predict↔hold thrash). It only *sustains* an engaged latch —
+it never re-engages from rest, so the stationary-drift gate is unchanged.
+**P3 — fusion-hunt suppression** (`imu_hunt_filter`, default on,
+`imu_proc._hunt_filter`): damps the two-state quaternion hunt at the source
+(adaptive nlerp) *before* it reaches any consumer; a change past `_HUNT_SNAP_DEG`
+(2°) snaps through unfiltered so genuine slews and the solve-hint Kabsch fit are
+unbiased. All three are unit-tested (`tests/test_imu_smoothing.py`,
+`tests/test_imu_hunt_filter.py`) with no hardware.
 
 Detection is routed through `diofinder/bg_cache.py::BackgroundCache`, not by calling
 `detect_stars` directly. This gives three composable background strategies, all

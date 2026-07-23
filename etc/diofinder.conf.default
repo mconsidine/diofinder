@@ -282,6 +282,15 @@ star_name_dso: true
 # Rotation-rate gate (deg/s) that distinguishes a real pan from parked gyro
 # drift. Live-mutable via shared_cfg.
 imu_rate_gate_dps: 0.1
+# Prefer a plate solve fresher than this (seconds) over IMU extrapolation
+# (SkySafari reticle-oscillation fix): the between-solve prediction only fills
+# gaps while solving can't keep up, so a fresh solve is reported as-is instead
+# of a jittery prediction. 0 disables. Live-mutable via solver_params_set.
+imu_predict_hold_solve_s: 1.0
+# Suppress BNO055 fusion "hunting" (toggling between two nearby orientations
+# while stationary) in the published quaternion. Real motion snaps through
+# unfiltered. true = on (recommended); false = raw passthrough. Restart to apply.
+imu_hunt_filter: true
 # Exact quaternion pointing prediction (v0.11.23). true = use the
 # frame-corrected exact composition when a quality IMU body->camera fit is
 # available; false = force the legacy C-matrix small-angle path (pre-v0.11.23

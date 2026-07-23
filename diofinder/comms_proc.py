@@ -1416,7 +1416,20 @@ def _do_alignment(align_state, cfg, shared_cfg,
 # diofinder-ctl), no restart. Raise it if a parked scope still jitters.
 _IMU_RATE_GATE_DPS = 0.1
 _IMU_RATE_BASELINE_S = 0.8
+# Motion-gate hysteresis (P2): once engaged the motion latch stays alive down
+# to this fraction of the engage rate, so a real slew whose measured rate
+# wobbles around the gate between solves does not disengage-and-re-engage — the
+# thrash that flipped the LX200 report predict->hold->predict frame to frame.
+_IMU_GATE_HYST_FRAC = 0.5
 _imu_rate_state = {}     # samples: deque[(imu_t, quat)], engaged, moving_t
+
+# Prefer a plate solve fresher than this over IMU extrapolation (P1): the
+# between-solve prediction exists to fill gaps while solving can't keep up, so
+# whenever a confident solve landed within this window we report the solve
+# itself, not the (jittery) prediction. Only once solves genuinely lapse does
+# the IMU take over. 0 disables (pure rate-gate behaviour). Seeded into
+# shared_cfg from the conf; live-tunable there via solver_params_set.
+_PREDICT_HOLD_SOLVE_S = 1.0
 
 # Pointing is "stale" (surfaced to the web UI, not the LX200 wire) when the
 # last solution is older than this. ~1-2 Hz solving means >10 s = several
@@ -1426,7 +1439,8 @@ _POINTING_STALE_S = 10.0
 
 def _imu_motion_engaged(state, q_now, imu_t, ref_t,
                         rate_gate_dps=_IMU_RATE_GATE_DPS,
-                        baseline_s=_IMU_RATE_BASELINE_S):
+                        baseline_s=_IMU_RATE_BASELINE_S,
+                        hyst_frac=_IMU_GATE_HYST_FRAC):
     """Rate-based stationary detector for the pointing prediction.
 
     Feeds (imu_t, quat) samples into ``state`` and returns True while the
@@ -1452,6 +1466,14 @@ def _imu_motion_engaged(state, q_now, imu_t, ref_t,
             break
     if rate is not None and rate >= rate_gate_dps:
         state["engaged"] = True
+        state["moving_t"] = imu_t
+    elif (rate is not None and state.get("engaged")
+            and rate >= rate_gate_dps * hyst_frac):
+        # Hysteresis (P2): still moving above the lower release threshold. Keep
+        # the motion latch fresh so an intervening solve does not trip the
+        # disengage branch below and flip the report predict->hold. Does NOT
+        # re-engage from rest (guarded by state["engaged"]) — this only sustains
+        # an already-moving latch, so the stationary-drift gate is unaffected.
         state["moving_t"] = imu_t
     elif (state.get("engaged")
             and ref_t and ref_t > state.get("moving_t", 0.0)):
@@ -1555,6 +1577,18 @@ def _imu_predict(shared_cfg):
         if not _imu_motion_engaged(_imu_rate_state, q_now, imu_t, ref_t,
                                    rate_gate_dps=rate_gate):
             return None
+    # Solve-freshness gate (P1): the between-solve prediction is only meant to
+    # fill gaps while solving can't keep up. When a confident solve landed
+    # within _PREDICT_HOLD_SOLVE_S the solved position (returned via the None
+    # fallback) is more trustworthy than extrapolating through a noisy IMU — so
+    # report the solve and let the prediction take over only once solves lapse.
+    # This is what stops SkySafari's reticle oscillating between the solve and a
+    # jittering prediction while solves are landing normally. Placed AFTER the
+    # motion gate so the gate's sample history and disengage logic are unchanged.
+    hold_s = float(shared_cfg.get("imu_predict_hold_solve_s",
+                                  _PREDICT_HOLD_SOLVE_S))
+    if hold_s > 0.0 and (time.monotonic() - ref_t) < hold_s:
+        return None
     r = quat_delta_rotvec(q_now, q_ref)
     if use_frame:
         r_cam = _imu_apply_rotation(R9, r)
@@ -2432,6 +2466,10 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 "imu_rate_gate_dps": ctx.shared_cfg.get(
                     "imu_rate_gate_dps",
                     getattr(ctx.cfg, "imu_rate_gate_dps", _IMU_RATE_GATE_DPS)),
+                "imu_predict_hold_solve_s": ctx.shared_cfg.get(
+                    "imu_predict_hold_solve_s",
+                    getattr(ctx.cfg, "imu_predict_hold_solve_s",
+                            _PREDICT_HOLD_SOLVE_S)),
                 "report_epoch": ctx.shared_cfg.get(
                     "report_epoch",
                     str(getattr(ctx.cfg, "report_epoch", "jnow")).lower()),
@@ -2649,6 +2687,20 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 # Read live by _imu_predict's motion gate; no solver round-trip.
                 ctx.shared_cfg["imu_rate_gate_dps"] = rg
                 updates["imu_rate_gate_dps"] = rg
+            if "imu_predict_hold_solve_s" in args:
+                try:
+                    hs = float(args["imu_predict_hold_solve_s"])
+                except (ValueError, TypeError) as e:
+                    return MaintResponse(
+                        ok=False,
+                        error=f"imu_predict_hold_solve_s must be numeric: {e}")
+                if not (0.0 <= hs <= 30.0):
+                    return MaintResponse(
+                        ok=False,
+                        error="imu_predict_hold_solve_s out of range [0, 30]")
+                # Read live by _imu_predict (P1 solve-freshness gate); 0 disables.
+                ctx.shared_cfg["imu_predict_hold_solve_s"] = hs
+                updates["imu_predict_hold_solve_s"] = hs
             if "report_epoch" in args:
                 ep = str(args["report_epoch"]).strip().lower()
                 if ep not in ("jnow", "j2000"):
@@ -3340,6 +3392,11 @@ def comms_main(latest_solution, shared_cfg,
     shared_cfg.setdefault("imu_rate_gate_dps",
                           float(getattr(cfg, "imu_rate_gate_dps",
                                         _IMU_RATE_GATE_DPS)))
+    # Seed the solve-freshness hold (P1) so a persisted conf value is honored
+    # from boot; read live by _imu_predict. setdefault preserves a live override.
+    shared_cfg.setdefault("imu_predict_hold_solve_s",
+                          float(getattr(cfg, "imu_predict_hold_solve_s",
+                                        _PREDICT_HOLD_SOLVE_S)))
     # Seed the exact-prediction kill switch from the conf so a persisted
     # `imu_exact_predict: false` takes effect from boot (comms reads
     # shared_cfg, not cfg). setdefault so a live toggle isn't clobbered.

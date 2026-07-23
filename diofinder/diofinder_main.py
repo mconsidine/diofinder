@@ -160,6 +160,10 @@ def main():
         # Seed the BNO055 calibration-profile persistence flag (Unit B) so the
         # in-launcher IMU thread can read it without a config round-trip.
         "imu_persist_bno055": cfg.imu_persist_bno055,
+        # Seed the fusion-hunt suppression flag (P3) so the in-launcher IMU
+        # thread honors a persisted `imu_hunt_filter: false` without a config
+        # round-trip. Default on.
+        "imu_hunt_filter": getattr(cfg, "imu_hunt_filter", True),
         "test_mode":     default_test_mode,
     })
     align_request_q  = mp.Queue(maxsize=4)

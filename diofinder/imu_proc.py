@@ -76,6 +76,57 @@ def _quat_angle_deg(q1, q2):
     return math.degrees(2.0 * math.acos(max(-1.0, min(1.0, dot))))
 
 
+# ---- P3: BNO055 fusion-hunt suppression --------------------------------------
+# In IMUPLUS (no magnetometer) the BNO055 can "hunt" between two nearby
+# orientations while the scope is physically stationary — observed live as the
+# quaternion toggling between two fixed 16-bit states ~0.8 deg apart. Published
+# raw, that square wave drives the LX200 pointing prediction and SkySafari's
+# reticle oscillates between two positions. An adaptive filter suppresses it:
+# a reading within _HUNT_SNAP_DEG of the last published orientation is low-pass
+# blended toward (attenuating the hunt), while a larger change SNAPS through
+# unfiltered so a genuine slew is tracked with no added lag and the solve-hint
+# Kabsch fit — which learns from real motion only — stays unbiased. Reversible
+# via imu_hunt_filter (default on); when off the raw quaternion is published
+# byte-for-byte.
+_HUNT_SNAP_DEG = 2.0     # change above this is real motion -> pass through
+_HUNT_ALPHA    = 0.35    # blend factor for sub-snap (hunting) readings
+
+
+def _nlerp(q_from, q_to, alpha):
+    """Normalised linear interpolation from q_from to q_to along the short arc.
+
+    alpha=0 -> q_from, alpha=1 -> q_to. A cheap stand-in for slerp; the inputs
+    here are always < _HUNT_SNAP_DEG apart, so the small-angle error is
+    negligible. Returns a unit (w,x,y,z) tuple.
+    """
+    dot = q_from[0]*q_to[0] + q_from[1]*q_to[1] + q_from[2]*q_to[2] \
+        + q_from[3]*q_to[3]
+    s = -1.0 if dot < 0.0 else 1.0          # take the shorter arc
+    q = [f + alpha * (s*t - f) for f, t in zip(q_from, q_to)]
+    n = math.sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3])
+    if n < 1e-9:
+        return tuple(q_to)
+    return (q[0]/n, q[1]/n, q[2]/n, q[3]/n)
+
+
+def _hunt_filter(state, q, snap_deg=_HUNT_SNAP_DEG, alpha=_HUNT_ALPHA):
+    """Attenuate BNO055 two-state hunting in the published quaternion.
+
+    ``state`` is a mutable dict carrying the last published quaternion under
+    key 'q'. A reading beyond ``snap_deg`` of it is real motion and is passed
+    through unchanged (no lag); a nearer reading is blended toward, damping the
+    stationary two-state oscillation. Pure/deterministic — unit-tested without
+    hardware.
+    """
+    last = state.get("q")
+    if last is None or _quat_angle_deg(q, last) > snap_deg:
+        state["q"] = q          # first sample or real motion — snap through
+        return q
+    q_pub = _nlerp(last, q, alpha)
+    state["q"] = q_pub
+    return q_pub
+
+
 def _plate_solves_confirm(shared_cfg):
     """True when plate solves are live (imu_ref freshly re-anchored) — the
     signal that the IMU is being validated against solved truth this session."""
@@ -249,6 +300,7 @@ def imu_thread(shared_cfg, stop_event=None):
     still_count = 0
     last_q = None
     last_status_pub = 0.0
+    hunt_state = {}             # P3: BNO055 fusion-hunt suppression filter state
 
     while stop_event is None or not stop_event.is_set():
         persist = bool(shared_cfg.get("imu_persist_bno055", False))
@@ -269,12 +321,20 @@ def imu_thread(shared_cfg, stop_event=None):
             profile_saved = (not persist) or restored
             still_count = 0
             last_q = None
+            hunt_state.clear()
 
         # ---- Device present: read at _POLL_HZ ---------------------------------
         t0 = time.monotonic()
         try:
             q = _read_quaternion(bus, addr)
             if q is not None:
+                # P3: suppress fusion hunting before publishing so it never
+                # reaches the LX200 pointing prediction (reversible; off ->
+                # raw passthrough).
+                if shared_cfg.get("imu_hunt_filter", True):
+                    q = _hunt_filter(hunt_state, q)
+                else:
+                    hunt_state.clear()   # re-enable snaps cleanly next time
                 shared_cfg["imu"] = (q, t0)
                 # Stillness tracker (for the Unit B save gate).
                 if _quat_angle_deg(q, last_q) < _STILL_THRESH_DEG:
