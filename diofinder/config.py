@@ -270,6 +270,14 @@ class Config:
     # prediction. Only once solves lapse past this does the IMU take over. 0
     # disables (pure rate-gate behaviour). Seeded into shared_cfg; live-tunable.
     imu_predict_hold_solve_s: float = 1.0
+    # Master switch for IMU extrapolation between solves. True (default) lets
+    # the pointing path predict from the live IMU during a slew / solve drought;
+    # false reports ONLY plate solves (held during a drought) and never touches
+    # the IMU for pointing — the between-solve prediction is fully hidden. On a
+    # box that solves several Hz the IMU adds little (the solve is already fresh)
+    # while injecting its own noise, so this is a clean "solves only" mode.
+    # Seeded into shared_cfg; live-tunable via solver_params_set (Camera page).
+    imu_predict_enabled: bool = True
     # P3: suppress BNO055 fusion "hunting" (the chip toggling between two
     # nearby orientations while stationary) in the published quaternion before
     # it reaches the pointing prediction. Real motion snaps through unfiltered,

@@ -1513,6 +1513,11 @@ def _imu_is_moving(scfg) -> bool:
 
 def _imu_predict(shared_cfg):
     """Return (ra_deg, dec_deg) predicted from IMU rotation since last solve, or None if unavailable."""
+    # Master switch (Camera page "Use IMU between solves"): when off, report
+    # plate solves only — never extrapolate from the IMU. Checked first so a
+    # disabled IMU path costs nothing per poll (no shared_cfg reads, no math).
+    if not shared_cfg.get("imu_predict_enabled", True):
+        return None
     if not shared_cfg.get("imu_available", False):
         return None
     q_now, imu_t = get_imu_qt(shared_cfg)
@@ -2470,6 +2475,9 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "imu_predict_hold_solve_s",
                     getattr(ctx.cfg, "imu_predict_hold_solve_s",
                             _PREDICT_HOLD_SOLVE_S)),
+                "imu_predict_enabled": ctx.shared_cfg.get(
+                    "imu_predict_enabled",
+                    getattr(ctx.cfg, "imu_predict_enabled", True)),
                 "report_epoch": ctx.shared_cfg.get(
                     "report_epoch",
                     str(getattr(ctx.cfg, "report_epoch", "jnow")).lower()),
@@ -2701,6 +2709,11 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 # Read live by _imu_predict (P1 solve-freshness gate); 0 disables.
                 ctx.shared_cfg["imu_predict_hold_solve_s"] = hs
                 updates["imu_predict_hold_solve_s"] = hs
+            if "imu_predict_enabled" in args:
+                # Master switch — read live by _imu_predict; off = solves only.
+                pe = bool(args["imu_predict_enabled"])
+                ctx.shared_cfg["imu_predict_enabled"] = pe
+                updates["imu_predict_enabled"] = pe
             if "report_epoch" in args:
                 ep = str(args["report_epoch"]).strip().lower()
                 if ep not in ("jnow", "j2000"):
@@ -3397,6 +3410,10 @@ def comms_main(latest_solution, shared_cfg,
     shared_cfg.setdefault("imu_predict_hold_solve_s",
                           float(getattr(cfg, "imu_predict_hold_solve_s",
                                         _PREDICT_HOLD_SOLVE_S)))
+    # Seed the IMU-between-solves master switch so a persisted conf value is
+    # honored from boot; read live by _imu_predict.
+    shared_cfg.setdefault("imu_predict_enabled",
+                          bool(getattr(cfg, "imu_predict_enabled", True)))
     # Seed the exact-prediction kill switch from the conf so a persisted
     # `imu_exact_predict: false` takes effect from boot (comms reads
     # shared_cfg, not cfg). setdefault so a live toggle isn't clobbered.
