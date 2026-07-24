@@ -505,6 +505,33 @@
           {{ tip("On: the crosshair is extrapolated from the live IMU during a slew or a gap between solves, then re-anchored on each solve. Off: report the plate <em>solves only</em> (the last solve is held during a drought) and never use the IMU for pointing. When the finder solves several times a second the IMU adds little — the last solve is already fresh — while contributing its own jitter, so turning this off can look as smooth or smoother. Saved immediately; no restart. (The IMU is still used for the solve hint and slew detection.)") }}
         </label>
       </form>
+      <form method="post" action="{{ url_for('solver_params_set') }}"
+            style="margin-top:8px;">
+        <input type="hidden" name="next" value="camera_page">
+        <input type="hidden" name="imu_enabled"
+               value="{{ 'false' if solver_params and solver_params.imu_enabled else 'true' }}">
+        <label class="checkbox">
+          <input type="checkbox" onchange="this.form.submit()"
+                 {{ 'checked' if solver_params and solver_params.imu_enabled }}>
+          <strong>IMU sensor</strong>
+          {{ tip("Master power for the whole IMU reader thread. Off <em>parks</em> it entirely — the same as unplugging the BNO055: no sampling, no CPU cost, and pointing/hint/slew all fall back to plate-solves-only. Turn off if you don't use the IMU at all; leave on to keep the solve hint and slew detection. Saved immediately; no restart. (\"Use IMU between solves\" above is the narrower switch that keeps the sensor running but stops it from steering the crosshair.)") }}
+        </label>
+      </form>
+      {% if solver_params and solver_params.imu_enabled %}
+      <form method="post" action="{{ url_for('solver_params_set') }}"
+            style="margin-top:8px;">
+        <input type="hidden" name="next" value="camera_page">
+        <label>
+          IMU sample rate {{ tip("How often the BNO055 is read and published. The pointing consumers (SkySafari polls ~4/s, solves ~2–3/s) don't need 20 Hz, so 5–10 Hz cuts the per-sample inter-process traffic on the shared CPU 0 with no visible pointing change — only slightly coarser slew detection and a slower-converging mounting fit. 20 Hz is the shipped default.") }}
+          <select name="imu_poll_hz" onchange="this.form.submit()">
+            {% for hz in [5, 10, 20] %}
+            <option value="{{ hz }}"
+              {{ 'selected' if solver_params.imu_poll_hz == hz }}>{{ hz }} Hz</option>
+            {% endfor %}
+          </select>
+        </label>
+      </form>
+      {% endif %}
     {% else %}
       <p class="muted">Daemon not reachable.</p>
     {% endif %}

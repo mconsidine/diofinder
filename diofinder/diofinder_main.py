@@ -164,6 +164,10 @@ def main():
         # thread honors a persisted `imu_hunt_filter: false` without a config
         # round-trip. Default on.
         "imu_hunt_filter": getattr(cfg, "imu_hunt_filter", True),
+        # Seed the IMU park switch + poll rate so the in-launcher IMU thread
+        # honors persisted conf values from boot without a config round-trip.
+        "imu_enabled": getattr(cfg, "imu_enabled", True),
+        "imu_poll_hz": getattr(cfg, "imu_poll_hz", 20),
         "test_mode":     default_test_mode,
     })
     align_request_q  = mp.Queue(maxsize=4)

@@ -2478,6 +2478,10 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 "imu_predict_enabled": ctx.shared_cfg.get(
                     "imu_predict_enabled",
                     getattr(ctx.cfg, "imu_predict_enabled", True)),
+                "imu_enabled": ctx.shared_cfg.get(
+                    "imu_enabled", getattr(ctx.cfg, "imu_enabled", True)),
+                "imu_poll_hz": ctx.shared_cfg.get(
+                    "imu_poll_hz", getattr(ctx.cfg, "imu_poll_hz", 20)),
                 "report_epoch": ctx.shared_cfg.get(
                     "report_epoch",
                     str(getattr(ctx.cfg, "report_epoch", "jnow")).lower()),
@@ -2714,6 +2718,23 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 pe = bool(args["imu_predict_enabled"])
                 ctx.shared_cfg["imu_predict_enabled"] = pe
                 updates["imu_predict_enabled"] = pe
+            if "imu_enabled" in args:
+                # Park switch — read live by the in-launcher IMU thread.
+                ie = bool(args["imu_enabled"])
+                ctx.shared_cfg["imu_enabled"] = ie
+                updates["imu_enabled"] = ie
+            if "imu_poll_hz" in args:
+                try:
+                    ph = int(args["imu_poll_hz"])
+                except (ValueError, TypeError) as e:
+                    return MaintResponse(
+                        ok=False, error=f"imu_poll_hz must be an integer: {e}")
+                if not (1 <= ph <= 50):
+                    return MaintResponse(
+                        ok=False, error="imu_poll_hz out of range [1, 50]")
+                # Read live by the IMU reader loop; no restart.
+                ctx.shared_cfg["imu_poll_hz"] = ph
+                updates["imu_poll_hz"] = ph
             if "report_epoch" in args:
                 ep = str(args["report_epoch"]).strip().lower()
                 if ep not in ("jnow", "j2000"):
