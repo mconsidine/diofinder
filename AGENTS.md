@@ -236,9 +236,25 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.63)
+## 6. Current state (as of v0.11.64)
 
-Released through **v0.11.63** (latest).
+Released through **v0.11.64** (latest).
+
+- v0.11.64: **IMU load controls — between-solves toggle, park switch,
+  configurable poll rate.** Follow-up to v0.11.63 after the on-sky finding that
+  pulling the IMU pins looked as smooth as running with it (at the finder's
+  solve rate the IMU adds noise ≥ the motion it corrects between solves, and its
+  real cost is 20 Hz `Manager`-dict IPC on the shared CPU 0). Three live,
+  persisted Camera-page controls, increasing in bluntness: **`imu_predict_enabled`**
+  (default on) — off reports plate solves only, IMU never steers the crosshair
+  but still feeds the solve hint + slew detection; **`imu_enabled`** (default on)
+  — off *parks the whole reader thread* (no sampling/IPC, `imu_available` drops),
+  the same end state as unplugging the BNO055 but reversible with no reboot;
+  **`imu_poll_hz`** (default 20, clamped 1–50) — read live each loop, 5–10 Hz
+  cuts the per-sample IPC proportionally with no visible pointing change. All
+  seeded into `shared_cfg` and live via `solver_params_set`. Tests:
+  `test_imu_park.py` (faked-bus park/resume) + the master-switch case in
+  `test_imu_smoothing.py`.
 
 - v0.11.63: **SkySafari reticle-oscillation fix — three anti-oscillation
   layers in the IMU pointing path.** The `:GR/:GD` report flip-flopped between
