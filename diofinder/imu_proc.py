@@ -303,6 +303,25 @@ def imu_thread(shared_cfg, stop_event=None):
     hunt_state = {}             # P3: BNO055 fusion-hunt suppression filter state
 
     while stop_event is None or not stop_event.is_set():
+        # ---- Park switch: shed the entire IMU load without unplugging ---------
+        # imu_enabled=False stops sampling/publishing and drops imu_available —
+        # the same end state as pulling the sensor: the pointing path reports
+        # solves only, and the solve hint / slew detection fall back to their
+        # non-IMU behavior. Live-toggled from the Camera page; re-enabling
+        # re-probes (bus set None here forces the probe branch below).
+        if not shared_cfg.get("imu_enabled", True):
+            if bus is not None:
+                try:
+                    bus.close()
+                except Exception:
+                    pass
+                bus = addr = None
+                last_probe = 0.0
+            if shared_cfg.get("imu_available", False):
+                shared_cfg["imu_available"] = False
+            time.sleep(0.3)
+            continue
+
         persist = bool(shared_cfg.get("imu_persist_bno055", False))
         # ---- Device absent: probe periodically --------------------------------
         if bus is None:
@@ -367,8 +386,16 @@ def imu_thread(shared_cfg, stop_event=None):
             last_probe = 0.0    # attempt re-probe immediately next iteration
             continue
 
-        # Sleep for the remainder of the poll interval
-        sleep_t = _POLL_INTERVAL - (time.monotonic() - t0)
+        # Sleep for the remainder of the poll interval. The rate is live-tunable
+        # (imu_poll_hz): the pointing consumers (SkySafari ~4 Hz polls, solves
+        # ~2-3 Hz) don't benefit from 20 Hz oversampling, so a lower rate cuts
+        # the per-sample Manager-dict IPC on the shared CPU 0 proportionally.
+        try:
+            hz = float(shared_cfg.get("imu_poll_hz", _POLL_HZ))
+        except (TypeError, ValueError):
+            hz = _POLL_HZ
+        hz = min(50.0, max(1.0, hz))
+        sleep_t = (1.0 / hz) - (time.monotonic() - t0)
         if sleep_t > 0:
             time.sleep(sleep_t)
 

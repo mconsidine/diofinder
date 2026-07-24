@@ -1142,6 +1142,17 @@ def solver_params_set():
     if "imu_solve_cal_enabled" in request.form:
         pargs["imu_solve_cal_enabled"] = request.form.get(
             "imu_solve_cal_enabled", "false").strip().lower() in ("true", "1", "on")
+    if "imu_predict_enabled" in request.form:
+        pargs["imu_predict_enabled"] = request.form.get(
+            "imu_predict_enabled", "false").strip().lower() in ("true", "1", "on")
+    if "imu_enabled" in request.form:
+        pargs["imu_enabled"] = request.form.get(
+            "imu_enabled", "false").strip().lower() in ("true", "1", "on")
+    if request.form.get("imu_poll_hz"):
+        try:
+            pargs["imu_poll_hz"] = int(request.form["imu_poll_hz"])
+        except ValueError:
+            return "imu_poll_hz must be integer", 400
     if request.form.get("min_centroids"):
         try:
             pargs["min_centroids"] = int(request.form["min_centroids"])

@@ -270,6 +270,28 @@ class Config:
     # prediction. Only once solves lapse past this does the IMU take over. 0
     # disables (pure rate-gate behaviour). Seeded into shared_cfg; live-tunable.
     imu_predict_hold_solve_s: float = 1.0
+    # Master switch for IMU extrapolation between solves. True (default) lets
+    # the pointing path predict from the live IMU during a slew / solve drought;
+    # false reports ONLY plate solves (held during a drought) and never touches
+    # the IMU for pointing — the between-solve prediction is fully hidden. On a
+    # box that solves several Hz the IMU adds little (the solve is already fresh)
+    # while injecting its own noise, so this is a clean "solves only" mode.
+    # Seeded into shared_cfg; live-tunable via solver_params_set (Camera page).
+    imu_predict_enabled: bool = True
+    # Park switch for the whole 20 Hz IMU reader thread. True (default) samples
+    # the BNO055; false stops sampling/publishing and drops imu_available — the
+    # same end state as unplugging the sensor (pointing = solves only, solve
+    # hint + slew detection fall back to non-IMU behavior), but reversible with
+    # no reboot. Seeded into shared_cfg for the in-launcher IMU thread;
+    # live-toggled via solver_params_set (Camera page).
+    imu_enabled: bool = True
+    # IMU reader poll rate (Hz), clamped 1–50. The pointing consumers (SkySafari
+    # polls ~4 Hz, solves ~2–3 Hz) don't benefit from 20 Hz oversampling, so
+    # lowering this to 5–10 cuts the per-sample Manager-dict IPC on the shared
+    # CPU 0 proportionally, at the cost of slightly coarser slew detection and a
+    # slower-converging solve-hint fit. 20 keeps the shipped behavior. Seeded
+    # into shared_cfg; read live by the reader loop (no restart).
+    imu_poll_hz: int = 20
     # P3: suppress BNO055 fusion "hunting" (the chip toggling between two
     # nearby orientations while stationary) in the published quaternion before
     # it reaches the pointing prediction. Real motion snaps through unfiltered,

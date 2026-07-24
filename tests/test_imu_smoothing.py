@@ -390,6 +390,28 @@ def test_imu_predict_takes_over_when_solve_stale():
     assert out[1] == pytest.approx(20.0, abs=0.05)
 
 
+def test_imu_predict_master_switch_reports_solves_only():
+    # "Use IMU between solves" toggle: imu_predict_enabled=False makes
+    # _imu_predict return None even during a real slew with a stale solve, so
+    # the caller reports the solved position and the IMU is never used for
+    # pointing. Enabled (default) with the same geometry predicts.
+    t0 = time.monotonic() - 1.6
+    ref = time.monotonic() - 1.7           # stale so P1 does not mask the switch
+
+    _reset_rate_state()
+    out = "unset"
+    for dt, deg in [(0.0, 0.0), (0.8, 0.4), (1.6, 0.8)]:
+        c = _cfg_rotated(deg, imu_t=t0 + dt, ref_t=ref)
+        c["imu_predict_enabled"] = False
+        out = comms_proc._imu_predict(c)
+    assert out is None
+
+    _reset_rate_state()
+    for dt, deg in [(0.0, 0.0), (0.8, 0.4), (1.6, 0.8)]:
+        out = comms_proc._imu_predict(_cfg_rotated(deg, imu_t=t0 + dt, ref_t=ref))
+    assert out is not None                  # default (enabled) still predicts
+
+
 # ---- P2: motion-gate hysteresis latch ---------------------------------------
 
 def test_motion_gate_hysteresis_holds_low_rate_slew_through_solve():

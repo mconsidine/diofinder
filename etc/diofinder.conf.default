@@ -287,6 +287,19 @@ imu_rate_gate_dps: 0.1
 # gaps while solving can't keep up, so a fresh solve is reported as-is instead
 # of a jittery prediction. 0 disables. Live-mutable via solver_params_set.
 imu_predict_hold_solve_s: 1.0
+# Master switch for IMU extrapolation between solves. true = predict from the
+# live IMU during a slew/solve drought; false = report plate solves ONLY (the
+# IMU is never used for pointing). Live-mutable via solver_params_set / the
+# Camera page "Use IMU between solves" toggle.
+imu_predict_enabled: true
+# Park the whole IMU reader thread. true = sample the BNO055 (default); false =
+# stop sampling entirely (same as unplugging it: pointing reports solves only,
+# hint/slew fall back to non-IMU). Live-toggled via the Camera page.
+imu_enabled: true
+# IMU reader poll rate (Hz, 1–50). 20 = shipped. Lower to 5–10 to cut the
+# per-sample IPC load on CPU 0 — the pointing consumers don't need 20 Hz.
+# Live-mutable via solver_params_set / the Camera page.
+imu_poll_hz: 20
 # Suppress BNO055 fusion "hunting" (toggling between two nearby orientations
 # while stationary) in the published quaternion. Real motion snaps through
 # unfiltered. true = on (recommended); false = raw passthrough. Restart to apply.
