@@ -236,9 +236,26 @@ list didn't have its name yet).
 
 ---
 
-## 6. Current state (as of v0.11.64)
+## 6. Current state (as of v0.11.65)
 
-Released through **v0.11.64** (latest).
+Released through **v0.11.65** (latest).
+
+- v0.11.65: **`tests/pointing_log.py` — measure what SkySafari actually sees.**
+  A read-only field diagnostic for the reticle-jitter experiments. It samples
+  two sources in lockstep: `:GR#`/`:GD#` over the LX200 port (the real reported
+  position, IMU extrapolation included) and the `status` maint command — whose
+  `report_ra_deg`/`report_dec_deg` are computed straight from the plate solve
+  and never go through `_imu_predict`. Their angular difference therefore
+  measures directly how far the IMU steers the crosshair off the last solve.
+  Derived metrics map onto the two failure signatures: **stair-stepping**
+  (`repeat_frac` + step size — the report quantised to the solve cadence) and
+  **oscillation** (`reversals` against the direction of travel on a one-way
+  slew), plus solve dropouts, solution age and star/match counts. Rate is
+  computed over the whole window, not per step (per-step divides a solve
+  interval of motion by a poll gap and over-reads ~1.4×). Writes a CSV;
+  `--analyze` re-reads one offline with no daemon. Pure logic unit-tested in
+  `tests/test_pointing_log.py` (14 tests, synthetic stair-step / smooth /
+  oscillating / dropout streams).
 
 - v0.11.64: **IMU load controls — between-solves toggle, park switch,
   configurable poll rate.** Follow-up to v0.11.63 after the on-sky finding that
