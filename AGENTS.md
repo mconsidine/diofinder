@@ -1039,7 +1039,9 @@ durable record, this list is the index. None ships without an explicit "build
 it" from the user (v0.11.53's epoch boundary already landed the shared
 prerequisite the OnStep work needed). Nothing here is a bug or a regression.
 
-- **OnStep / mount sync output** — full spec in **`docs/onstep-design.md`**.
+- **OnStep / mount sync output** — full spec in **`docs/onstep-design.md`**;
+  topology for OnStepX superseded by **`docs/mount-hub-design.md`** (finder as
+  the sole owner of the mount's command channel + closed-loop GoTo).
   The finder is currently an LX200 *server* only (no outbound `socket.connect`
   anywhere in `diofinder/`); this adds an outbound path that plate-solves →
   syncs a mount's pointing model. Design highlights: a dialect-pluggable

@@ -4,6 +4,18 @@ Status: **SynScan dialect BUILT (v1); OnStepX/LX200 + Alpaca dialects still
 design-only.** Optional, off-by-default feature to turn the finder into a
 plate-solve alignment source for a GoTo mount.
 
+> ⚠️ **Topology superseded — read `mount-hub-design.md` before implementing the
+> OnStepX dialect.** §2 and §11 below assume the finder drives the mount on one
+> path while SkySafari independently connects elsewhere. That is unsafe against
+> an OnStepX mount: `:Sr`/`:Sd` write a **mount-global** target register, so two
+> LX200 clients can interleave a sync with a GoTo and produce an unexpected
+> slew. OnStep's own guidance is to put a hub (POTH) in front of the mount.
+> `mount-hub-design.md` specs the finder *as* that hub. Everything else in this
+> document — the `MountLink` abstraction, push policy, epoch handling, config
+> keys, maint commands — stands and is reused there. In the meantime, **do not
+> expose `mount_mode: auto` for OnStepX**; manual-only sync is human-serialized
+> and safe, auto is not.
+
 > **As built — SynScan (SkyWatcher Virtuoso), first dialect.** The pluggable
 > `MountLink` design below is realized in **`diofinder/mountlink.py`** with the
 > **SynScan/NexStar** dialect (`SynScanLink`) + a pyserial `SerialTransport`

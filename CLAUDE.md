@@ -1126,7 +1126,12 @@ set in `diofinder.conf`.
 after a confident solve it pushes the solved position to a mount as a **SYNC
 (never a slew)**, correcting the mount's pointing model. The finder serves
 SkySafari over Wi-Fi and drives the mount over the GPIO serial line at the same
-time. Full design + rationale in `docs/onstep-design.md`.
+time. Full design + rationale in `docs/onstep-design.md` — but for **OnStepX**
+see `docs/mount-hub-design.md` first: `:Sr`/`:Sd` write a mount-global target
+register, so a second LX200 client (SkySafari straight to the mount) can
+interleave a sync with a GoTo and cause an unexpected slew. That spec routes
+SkySafari *through* the finder (one owner of the mount channel) and unlocks
+closed-loop GoTo. Until it ships, keep `mount_mode: auto` off for OnStepX.
 
 **v1 dialect: SynScan** (SkyWatcher Virtuoso). The transport is the **GPIO
 UART** `/dev/serial0` (GPIO14/15) through a **MAX232 → true RS-232** to the
