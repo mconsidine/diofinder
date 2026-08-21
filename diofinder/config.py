@@ -93,6 +93,13 @@ class Config:
     latitude_deg: float = 0.0
     longitude_deg: float = 0.0
 
+    # Opt-in horizon-based solve rejection (olive-solve per-star prune). Default
+    # OFF: only helps the blind/lost-in-space path, and needs a CORRECT clock
+    # (the Pi has no RTC) plus a set site — a wrong UTC rotates the horizon and
+    # would reject valid solves. When true it still self-gates on the site being
+    # set (not 0,0) and the clock being plausible; see diofinder/horizon.py.
+    horizon_reject_enabled: bool = False
+
     fov_calibrated: bool = False
     fov_calibrated_stddev: float = 0.05
     fov_calibrated_max_error_deg: float = 0.1
