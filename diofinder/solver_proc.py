@@ -33,6 +33,7 @@ from diofinder import imu_persist as _imu_persist
 from diofinder import imu_solve_cal as _imu_solve_cal
 from diofinder import precession as _precession
 from diofinder import frame_meta as _frame_meta
+from diofinder import horizon as _horizon
 from diofinder.polar_run import PolarAligner
 from diofinder import frame_health
 from multiprocessing import shared_memory
@@ -1277,6 +1278,16 @@ def solver_main(slots, latest_solution, shared_cfg,
     EXTRACT_HAS_ROI = bool(getattr(_star_detect, "HAS_ROI", False))
     log.info("tracking fast paths: verify_attitude=%s detect_stars_roi=%s",
              SOLVER_HAS_VERIFY, EXTRACT_HAS_ROI)
+    if cfg.horizon_reject_enabled:
+        _hz_active = bool(
+            _horizon.observer_solve_kwargs(
+                True, cfg.latitude_deg, cfg.longitude_deg))
+        if _hz_active:
+            log.info("horizon reject: ENABLED (site set, clock ok)")
+        else:
+            log.warning(
+                "horizon reject: enabled in config but INACTIVE "
+                "(site 0,0 or clock not set) -- solving normally")
 
     fail_streak = 0
     dark_streak = 0
@@ -1787,6 +1798,18 @@ def solver_main(slots, latest_solution, shared_cfg,
             )
             if SOLVER_HAS_STRICT_HINT:
                 _solve_kw["strict_hint"] = solve_strict
+            # Opt-in horizon prune (olive-solve): drop below-horizon candidate
+            # patterns on the blind/hinted search. No-op ({}) unless enabled AND
+            # site+clock are sane; harmless on wheels that predate the feature
+            # (unknown kwargs are ignored). The loose-window retry inherits it
+            # via dict(_solve_kw). verify_attitude is left out on purpose — the
+            # attitude is already known there.
+            if snap.get("horizon_reject_enabled", cfg.horizon_reject_enabled):
+                _solve_kw.update(
+                    _horizon.observer_solve_kwargs(
+                        True, cfg.latitude_deg, cfg.longitude_deg
+                    )
+                )
             try:
                 if use_verify:
                     # Verify-only fast path: no pattern search. The hint/

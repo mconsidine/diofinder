@@ -95,6 +95,15 @@ distortion: 0.0
 latitude_deg: 0.0
 longitude_deg: 0.0
 
+# Horizon-based solve rejection (opt-in, olive-solve per-star prune). Default
+# OFF. When true, candidate star patterns below the observer's horizon are
+# dropped before verification -- helps the blind/lost-in-space path and rejects
+# sub-horizon false positives. REQUIRES a correct system clock (the Pi has no
+# RTC; a wrong UTC rotates the horizon and would reject valid solves) and a set
+# site above -- it self-disables until latitude/longitude are non-zero and the
+# clock year is >= 2025. Leave off unless your time source is reliable.
+horizon_reject_enabled: false
+
 # ---- Star detection (sycamore star_detect extractor) ----
 detect_sigma: 5.0
 
