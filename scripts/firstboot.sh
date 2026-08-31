@@ -124,12 +124,30 @@ if ! nmcli -t -f NAME con show | grep -qx "diofinder-ap"; then
     ipv6.method ignore \
     wifi-sec.key-mgmt wpa-psk \
     wifi-sec.psk "$AP_PASS" \
+    wifi-sec.proto rsn \
+    wifi-sec.pairwise ccmp \
+    wifi-sec.group ccmp \
+    wifi-sec.pmf 1 \
     || WARN "Could not create AP profile"
 
   LOG "  SSID=$AP_SSID  password=$AP_PASS  IP=10.42.0.1"
 else
-  LOG "AP profile already exists — leaving it unchanged"
+  LOG "AP profile already exists — hardening its security (idempotent)"
 fi
+
+# Force WPA2-AES (RSN/CCMP) only, no WPA1/TKIP, PMF disabled. NetworkManager's
+# default for an unspecified wpa-psk AP is mixed WPA/WPA2 with a TKIP group
+# cipher, which modern Windows (11 / recent 10) deprecates and refuses — so the
+# AP "works on Android/iPhone but not a Windows laptop". Applied on every boot
+# setup so existing profiles are migrated too; pmf 1 = disable (some Windows
+# drivers dislike 802.11w on a personal AP). Idempotent.
+nmcli con modify diofinder-ap \
+  wifi-sec.key-mgmt wpa-psk \
+  wifi-sec.proto rsn \
+  wifi-sec.pairwise ccmp \
+  wifi-sec.group ccmp \
+  wifi-sec.pmf 1 \
+  2>/dev/null || WARN "Could not harden AP security (non-fatal)"
 
 # Ensure NM will always retry the AP connection. autoconnect-retries=0
 # means retry indefinitely; without this NM stops trying after a few

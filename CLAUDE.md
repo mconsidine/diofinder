@@ -696,7 +696,14 @@ from. `debug_collect` uses both to write **`frames.json`** into the bundle:
 filename → {seq, `exposure_start_utc`, `readout_start_utc`, actual
 `exposure_s`/`gain`, the frame's **own** solve result (matched by seq — not
 the previous frame's, which is what the older `ref_*` fields in `imu.json`
-record), and the IMU snapshot}. **`tests/bundle_solve.py BUNDLE.zip [--out
+record), and the IMU snapshot}. The solve result carries both the **aim-point**
+`ra_deg`/`dec_deg` (the boresight-pixel pointing that `:GR/:GD` report) **and**
+the **image-center** `center_ra_deg`/`center_dec_deg` (the raw plate-solve
+pointing at the geometric frame center — equal to the aim point only until a
+`:CM#` align offsets the boresight); both J2000/ICRS, plus `roll_deg` and
+`is_mirrored` — enough to reproject a saved frame onto a J2000 sky chart
+(`roll_deg` is north's angle CCW from image "up"/y=0; when `is_mirrored` is
+true the frame must be flipped before the roll rotation applies). **`tests/bundle_solve.py BUNDLE.zip [--out
 FILE.json] [--db PATH]`** re-solves every bundled frame offline (same
 effective-params hydration as `diag_solve.py --bundle`, plus the loose-window
 retry) and emits a single JSON packet mapping each `frame_XX_raw.png` to

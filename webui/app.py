@@ -2208,7 +2208,9 @@ def debug_collect():
                             entry["solution"] = {
                                 k: sol.get(k) for k in (
                                     "solved", "status", "ra_deg", "dec_deg",
-                                    "roll_deg", "fov_deg", "stars", "matches",
+                                    "center_ra_deg", "center_dec_deg",
+                                    "roll_deg", "is_mirrored",
+                                    "fov_deg", "stars", "matches",
                                     "peak", "solve_ms", "seq")
                                 if k in sol}
                         else:

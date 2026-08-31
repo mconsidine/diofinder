@@ -167,7 +167,8 @@ def _empty_solution(stars=0, peak=0, noise=0.0, solve_ms=0.0, status=0,
 
 def _filled_solution(*, ra, dec, roll, fov, stars, matches,
                      peak, noise, solve_ms, status, star=None, dso=None,
-                     seq=None):
+                     seq=None, center_ra=None, center_dec=None,
+                     mirrored=None):
     sol = {
         "ra_deg": float(ra), "dec_deg": float(dec),
         "roll_deg": float(roll), "fov_deg": float(fov),
@@ -179,6 +180,20 @@ def _filled_solution(*, ra, dec, roll, fov, stars, matches,
     }
     if seq is not None:
         sol["seq"] = int(seq)
+    # Image-CENTER RA/Dec: the raw plate-solve pointing at the geometric frame
+    # center, distinct from ra_deg/dec_deg which report the AIM POINT (the
+    # boresight pixel, which the center only equals until a :CM# align offsets
+    # it). Both are J2000/ICRS here (before the comms JNow boundary). Recorded
+    # so the debug bundle's frames.json carries the true center for offline
+    # sky-chart alignment.
+    if center_ra is not None and center_dec is not None:
+        sol["center_ra_deg"] = float(center_ra)
+        sol["center_dec_deg"] = float(center_dec)
+    # Parity: True when the solved field is mirrored (flipped handedness) vs the
+    # sky. Roll alone can't orient a saved frame to a chart without it — a
+    # mirrored frame needs a flip before the roll rotation applies.
+    if mirrored is not None:
+        sol["is_mirrored"] = bool(mirrored)
     if star:
         sol["star_name"] = star["name"]
         sol["star_desig"] = star["desig"]
@@ -2067,6 +2082,8 @@ def solver_main(slots, latest_solution, shared_cfg,
                     log.debug("Messier lookup failed: %s", e)
             latest_solution.update(_filled_solution(
                 ra=ra_out, dec=dec_out,
+                center_ra=soln.get("RA"), center_dec=soln.get("Dec"),
+                mirrored=soln.get("is_mirrored"),
                 roll=soln.get("Roll", 0.0), fov=measured_fov,
                 stars=n_stars, matches=n_matches,
                 peak=local_peak, noise=0.0,

@@ -12,7 +12,21 @@ NetworkManager profiles + one guard service (`scripts/ap.sh`,
 - **`diofinder-ap`** — `wifi.mode ap`, `ipv4.method shared` (the Pi runs its own
   DHCP + NAT), **fixed `10.42.0.1/24`**, autoconnect. The shipped default: the
   finder is its own access point at a known SSID + address. This is how a phone
-  reaches it now.
+  reaches it now. Security is pinned to **WPA2-AES only** —
+  `wifi-sec.proto rsn`, `wifi-sec.pairwise/group ccmp`, `wifi-sec.pmf 1`
+  (802.11w disabled). This matters: NetworkManager's default for a bare
+  `wpa-psk` AP is *mixed WPA/WPA2 with a TKIP group cipher*, which modern
+  **Windows** (11 / recent 10) deprecates and refuses — the AP joins fine on
+  Android/iPhone but a Windows laptop can't connect (it falls into a
+  WPS/"check the router" prompt; note `1234` can never be the key — WPA2
+  passphrases are ≥ 8 chars, so the real key `12345678` is the shortest legal
+  one). The pinning is applied at creation (`firstboot.sh`, `ap.sh`) and
+  migrated onto existing profiles by `firstboot.sh`, every `ap.sh` run, and
+  `diofinder-update` (the OTA migration is non-disruptive — it modifies the
+  profile but does not reactivate it mid-update, so it takes effect on the next
+  AP activation/reboot). On a device that predates this, `sudo ap.sh` or a
+  reboot after `diofinder-update` applies it; then **Forget** the network on
+  Windows and reconnect with `12345678`.
 - **`diofinder-station`** (`station.sh SSID PASS`) — joins a named network as a
   client, gets a **DHCP** address, and **demotes** `diofinder-ap` to
   autoconnect=no (but keeps the profile).

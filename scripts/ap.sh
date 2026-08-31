@@ -51,7 +51,11 @@ if [ $# -ge 1 ]; then
       ipv4.addresses 10.42.0.1/24 \
       ipv6.method ignore \
       wifi-sec.key-mgmt wpa-psk \
-      wifi-sec.psk "$NEW_PASS"
+      wifi-sec.psk "$NEW_PASS" \
+      wifi-sec.proto rsn \
+      wifi-sec.pairwise ccmp \
+      wifi-sec.group ccmp \
+      wifi-sec.pmf 1
   else
     echo "Updating AP profile $PROFILE: SSID=$NEW_SSID"
     nmcli con modify "$PROFILE" \
@@ -79,6 +83,17 @@ fi
 nmcli con modify "$PROFILE" \
   connection.autoconnect yes \
   connection.autoconnect-retries 0 \
+  2>/dev/null || true
+
+# Force WPA2-AES (RSN/CCMP) only — no WPA1/TKIP, PMF disabled. NM's default for
+# an unspecified wpa-psk AP is mixed WPA/WPA2 with a TKIP group cipher, which
+# modern Windows deprecates and refuses (the AP joins on Android/iPhone but not
+# a Windows laptop). Idempotent; the con up below reactivates with these.
+nmcli con modify "$PROFILE" \
+  wifi-sec.proto rsn \
+  wifi-sec.pairwise ccmp \
+  wifi-sec.group ccmp \
+  wifi-sec.pmf 1 \
   2>/dev/null || true
 
 # Bring up the AP.

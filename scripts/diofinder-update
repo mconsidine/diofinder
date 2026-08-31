@@ -298,6 +298,28 @@ for s in "$DIOFINDER_DIR"/etc/sudoers.d/*; do
   fi
 done
 
+# --- Migrate Wi-Fi AP security to WPA2-AES (Windows compatibility) -------------
+# Older profiles were created as bare wpa-psk, which NetworkManager advertises
+# as mixed WPA/WPA2 with a TKIP group cipher — modern Windows deprecates and
+# refuses it (joins on Android/iPhone, fails on a Windows laptop). Pin RSN/CCMP
+# only. NON-disruptive: modify the profile but do NOT reactivate it here (the
+# operator is likely connected THROUGH this AP to run the update — a live
+# down/up would cut them off mid-update). Takes effect on the next AP
+# activation / reboot. Idempotent; skipped if the profile is absent.
+if command -v nmcli >/dev/null 2>&1 && \
+   nmcli -t -f NAME con show 2>/dev/null | grep -qx "diofinder-ap"; then
+  if nmcli con modify diofinder-ap \
+       wifi-sec.key-mgmt wpa-psk \
+       wifi-sec.proto rsn \
+       wifi-sec.pairwise ccmp \
+       wifi-sec.group ccmp \
+       wifi-sec.pmf 1 2>/dev/null; then
+    LOG "AP security pinned to WPA2-AES (effective on next AP activation/reboot)"
+  else
+    LOG "WARN: could not migrate AP security (non-fatal)"
+  fi
+fi
+
 # --- Record version & restart -------------------------------------------------
 
 echo "$TAG $(date -u +%Y-%m-%dT%H:%M:%SZ)" > /var/lib/diofinder/version
