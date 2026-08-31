@@ -29,6 +29,7 @@ No external daemon, gRPC, or server is involved.
 | `pointing_log.py` | **On-device, while slewing**: logs what SkySafari actually sees. Samples `:GR#`/`:GD#` over the LX200 port (the real reported position, IMU extrapolation included) *and* the `status` maint command (whose `report_*` is solve-only), so their difference measures how far the IMU steers the crosshair off the last solve. Reports **stair-stepping** (`repeat_frac` + step size), **oscillation** (`reversals` against the direction of travel), solve dropouts and solution age. Writes a CSV; `--analyze FILE.csv` re-reads one offline. Read-only — changes no daemon state. |
 | `test_seeing_hotpixel.py` | **Pure-logic unit tests** (no hardware, no sycamore): seeing preset application/drift + hot-pixel neighbor-median repair. Run with `python3 -m unittest tests.test_seeing_hotpixel` |
 | `replay_corpus.py` | **Off-device** regression-corpus replay: run detect+solve over a labeled PNG corpus, sweep seeing presets (and optionally bg_modes), report solve rate / star count / timing. See `tests/corpus/README.md` for corpus layout. |
+| `reproject_frame.py` | **Off-device** (stdlib + numpy + Pillow, no solver): turn a debug-bundle frame into a **North-up, East-left** PNG to lay next to a star chart. Reads `frames.json` for the frame's `roll_deg` / `is_mirrored` (flip-if-mirrored, then rotate `-roll`) and stamps the image-center RA/Dec + a compass/crosshair. `--list` shows frames; `--invert` flips the rotation sign for the one-time sign check; `--raw` skips the arcsinh stretch. |
 
 ---
 

@@ -703,7 +703,10 @@ pointing at the geometric frame center — equal to the aim point only until a
 `:CM#` align offsets the boresight); both J2000/ICRS, plus `roll_deg` and
 `is_mirrored` — enough to reproject a saved frame onto a J2000 sky chart
 (`roll_deg` is north's angle CCW from image "up"/y=0; when `is_mirrored` is
-true the frame must be flipped before the roll rotation applies). **`tests/bundle_solve.py BUNDLE.zip [--out
+true the frame must be flipped before the roll rotation applies).
+**`tests/reproject_frame.py BUNDLE.zip [frame]`** does this turnkey off-device
+(flip-if-mirrored, then rotate `-roll`), writing a North-up/East-left PNG with
+the image-center RA/Dec + a compass overlay for chart comparison. **`tests/bundle_solve.py BUNDLE.zip [--out
 FILE.json] [--db PATH]`** re-solves every bundled frame offline (same
 effective-params hydration as `diag_solve.py --bundle`, plus the loose-window
 retry) and emits a single JSON packet mapping each `frame_XX_raw.png` to
