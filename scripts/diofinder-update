@@ -1,15 +1,31 @@
 #!/bin/bash
 # diofinder in-place updater (olive branch).
 # Pulls latest application code, refreshes the olive-solve and optional
-# sycamore-extract wheels from their repos' GitHub releases (a wheel
-# placed in vendor/wheels/ overrides the download — local testing path),
-# and restarts the service.
-# No cedar-detect binary or gRPC stubs are involved.
+# sycamore-extract wheels from their repos' GitHub releases, and restarts the
+# service. No cedar-detect binary or gRPC stubs are involved.
+#
+# Wheel precedence (shadowing-bug fix): the NEWER of {the wheel baked into
+# vendor/wheels/ at image-build time, the latest GitHub release wheel} wins,
+# compared by version. Previously any wheel present in vendor/wheels/ took
+# absolute precedence and skipped the release download — and because the
+# baked vendor/wheels/ is never cleaned after install, a burned image's
+# wheel permanently masked every newer release wheel, so OTA "update to
+# latest" could never move olive-solve/sycamore forward (the reported bug).
+# Escape hatches: DIOFINDER_WHEELS_LOCAL=1 forces the vendored wheel
+# regardless (offline / hand-placed test wheel); OLIVE_SOLVE_TAG /
+# SYCAMORE_TAG pin an exact release (authoritative — may downgrade).
+#
+# The star database is NOT auto-downloaded here (it is large, version-coupled,
+# and changing it alters FOV calibration). This script reports whether the
+# installed DB matches the latest astro_databases release; pass --with-db to
+# also run diofinder-db-update and refresh the DB (and the star-name / Messier
+# catalogs) in the same run.
 #
 # Usage:
 #   sudo /usr/local/bin/diofinder-update                 # latest release tag
 #   sudo /usr/local/bin/diofinder-update v0.8.1          # specific tag
 #   sudo /usr/local/bin/diofinder-update --ref BRANCH    # track a branch (testing)
+#   sudo /usr/local/bin/diofinder-update --with-db       # also refresh the star DB
 #
 # Refuses to update if the working tree has local modifications.
 
@@ -24,11 +40,13 @@ ORIG_ARGS=("$@")
 
 TARGET_VERSION="latest"
 REF=""
+WITH_DB=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --ref)   REF="${2:-}"; shift 2 || { echo "--ref needs an argument" >&2; exit 1; } ;;
-    --ref=*) REF="${1#*=}"; shift ;;
-    *)       TARGET_VERSION="$1"; shift ;;
+    --ref)     REF="${2:-}"; shift 2 || { echo "--ref needs an argument" >&2; exit 1; } ;;
+    --ref=*)   REF="${1#*=}"; shift ;;
+    --with-db) WITH_DB=1; shift ;;
+    *)         TARGET_VERSION="$1"; shift ;;
   esac
 done
 
@@ -158,40 +176,113 @@ installed_wheel_version() { # dist
     | awk '/^Version:/{print $2}'
 }
 
+# Extract the version from a wheel filename or URL. PEP 427 names are
+# {distribution}-{version}-{pytag}-{abi}-{plat}.whl; the distribution part is
+# already normalized (no '-'), so the version is the 2nd hyphen field.
+wheel_version() { # wheel-path-or-url -> version (or empty)
+  basename "$1" | sed -nE 's/^[^-]+-([^-]+)-.*\.whl$/\1/p'
+}
+
+# 0 (true) iff version $1 >= version $2, by `sort -V`. Empty $2 is treated as
+# "-infinity" so a real version always wins over "no vendored wheel".
+ver_ge() { # a b
+  [ -z "$2" ] && return 0
+  [ -z "$1" ] && return 1
+  [ "$1" = "$2" ] && return 0
+  [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" = "$1" ]
+}
+
 install_wheel() { # label dist repo pattern [pattern...]
-  local label=$1 dist=$2 repo=$3 whl url pat before after
+  local label=$1 dist=$2 repo=$3
   shift 3
+  local before after pat vwhl vver url uver whl chosen chosen_ver pin
   before=$(installed_wheel_version "$dist")
+
+  # Best (highest-version) wheel currently sitting in vendor/wheels/.
+  vwhl=""; vver=""
   for pat in "$@"; do
-    whl=$(ls "$VENDOR_WHEELS"/$pat 2>/dev/null | sort -V | tail -n1 || true)
-    [ -n "$whl" ] && break
+    local cand
+    cand=$(ls "$VENDOR_WHEELS"/$pat 2>/dev/null | sort -V | tail -n1 || true)
+    if [ -n "$cand" ] && ver_ge "$(wheel_version "$cand")" "$vver"; then
+      vwhl="$cand"; vver=$(wheel_version "$cand")
+    fi
   done
-  if [ -z "$whl" ]; then
-    local pin=""
+
+  # Forced-local escape hatch: use the vendored wheel as-is, ignore releases.
+  if [ "${DIOFINDER_WHEELS_LOCAL:-0}" = "1" ]; then
+    if [ -z "$vwhl" ]; then
+      LOG "WARN: DIOFINDER_WHEELS_LOCAL=1 but no $label wheel in vendor/wheels/ (keeping installed)"
+      wheel_note "$label" "NOT refreshed (forced-local, none vendored) — still ${before:-not installed}"
+      return 0
+    fi
+    LOG "$label: DIOFINDER_WHEELS_LOCAL=1 — using vendored $(basename "$vwhl")"
+    chosen="$vwhl"
+  else
+    pin=""
     case "$repo" in
       *olive-solve*)      pin="${OLIVE_SOLVE_TAG:-}" ;;
       *sycamore-extract*) pin="${SYCAMORE_TAG:-}" ;;
     esac
     [ -n "$pin" ] && LOG "$label wheel pinned to $pin (env)"
+
+    # Candidate release wheel URL + its version.
+    url=""; uver=""
     for pat in "$@"; do
       url=$(release_wheel_url "$repo" "$pat" "$pin" || true)
       [ -n "$url" ] && break
     done
-    if [ -z "$url" ]; then
+    [ -n "$url" ] && uver=$(wheel_version "$url")
+
+    # Selection: a pin is authoritative (download the pinned release, even a
+    # downgrade). Otherwise take the release wheel when it is strictly newer
+    # than the vendored one (or nothing is vendored); else keep vendored.
+    if [ -n "$url" ] && { [ -n "$pin" ] || ! ver_ge "$vver" "$uver"; }; then
+      # Short-circuit the download when the release wheel is already installed
+      # and nothing vendored beats it (the common "already current" path).
+      if [ -n "$before" ] && [ "$uver" = "$before" ] && ver_ge "$before" "$vver"; then
+        wheel_note "$label" "OK — $before (already current, latest release)"
+        return 0
+      fi
+      whl="$WHEEL_TMP/$(basename "$url")"
+      if curl -fsSL "$url" -o "$whl"; then
+        chosen="$whl"
+      elif [ -n "$vwhl" ]; then
+        LOG "WARN: $label release download failed; falling back to vendored $(basename "$vwhl")"
+        chosen="$vwhl"
+      else
+        LOG "WARN: $label wheel download failed (keeping installed version)"
+        wheel_note "$label" "NOT refreshed (download failed) — still ${before:-not installed}"
+        return 0
+      fi
+    elif [ -n "$vwhl" ]; then
+      chosen="$vwhl"
+    elif [ -n "$url" ]; then
+      # No vendored wheel and the release isn't newer than "nothing" — download.
+      whl="$WHEEL_TMP/$(basename "$url")"
+      if curl -fsSL "$url" -o "$whl"; then
+        chosen="$whl"
+      else
+        LOG "WARN: $label wheel download failed (keeping installed version)"
+        wheel_note "$label" "NOT refreshed (download failed) — still ${before:-not installed}"
+        return 0
+      fi
+    else
       LOG "WARN: no $label wheel in vendor/wheels/ or $repo releases (keeping installed version)"
       wheel_note "$label" "NOT refreshed (no wheel found / no network) — still ${before:-not installed}"
       return 0
     fi
-    whl="$WHEEL_TMP/$(basename "$url")"
-    if ! curl -fsSL "$url" -o "$whl"; then
-      LOG "WARN: $label wheel download failed (keeping installed version)"
-      wheel_note "$label" "NOT refreshed (download failed) — still ${before:-not installed}"
-      return 0
-    fi
   fi
-  LOG "Installing $label: $(basename "$whl")"
+
+  # Skip the reinstall when the chosen wheel already matches what's installed.
+  chosen_ver=$(wheel_version "$chosen")
+  if [ -n "$before" ] && [ -n "$chosen_ver" ] && [ "$chosen_ver" = "$before" ]; then
+    wheel_note "$label" "OK — $before (already current)"
+    return 0
+  fi
+
+  LOG "Installing $label: $(basename "$chosen")"
   if sudo -u diofinder "$DIOFINDER_DIR/venv/bin/pip" install --quiet \
-      --force-reinstall --no-deps "$whl"; then
+      --force-reinstall --no-deps "$chosen"; then
     after=$(installed_wheel_version "$dist")
     if [ -n "$before" ] && [ "$after" = "$before" ]; then
       wheel_note "$label" "OK — $after (already current)"
@@ -319,6 +410,58 @@ if command -v nmcli >/dev/null 2>&1 && \
     LOG "WARN: could not migrate AP security (non-fatal)"
   fi
 fi
+
+# --- Star database: currency report (and optional --with-db refresh) ----------
+# The DB is baked into the image at build time from the latest astro_databases
+# release and refreshed on-device by the dedicated diofinder-db-update tool. It
+# is intentionally NOT auto-downloaded on every OTA (large, version-coupled, and
+# it changes FOV calibration). Here we cheaply report whether the installed DB
+# matches the latest release manifest; --with-db actually refreshes it. All
+# non-fatal — the DB is orthogonal to the code/wheel update above.
+db_report_and_maybe_refresh() {
+  local conf=/etc/diofinder/diofinder.conf stem path
+  stem=$(awk -F': *' '$1=="star_db_standard"{v=$2} END{print v}' "$conf" 2>/dev/null || true)
+  [ -n "$stem" ] || stem=$(awk -F': *' '$1=="solver_db"{v=$2} END{print v}' "$conf" 2>/dev/null || true)
+  stem="${stem:-default_database}"
+  case "$stem" in
+    /*) path="$stem" ;;
+    *)  path="/var/lib/diofinder/${stem}.npz" ;;
+  esac
+
+  if [ "$WITH_DB" = 1 ]; then
+    LOG "Refreshing star database (--with-db)"
+    if [ -x /usr/local/bin/diofinder-db-update ]; then
+      # diofinder-db-update restarts diofinder itself; the final restart below
+      # is idempotent, so a double restart is harmless.
+      /usr/local/bin/diofinder-db-update \
+        || LOG "WARN: diofinder-db-update failed (keeping installed DB)"
+    else
+      LOG "WARN: diofinder-db-update not installed; cannot refresh DB"
+    fi
+    return 0
+  fi
+
+  # Cheap currency check: hash the installed DB against the latest manifest.
+  local base="https://github.com/mconsidine/astro_databases/releases/latest/download"
+  local tmpm want got
+  tmpm=$(mktemp) || return 0
+  if curl -fsSL "$base/manifest.json" -o "$tmpm" 2>/dev/null; then
+    want=$(python3 -c "import json,sys;print(json.load(open('$tmpm'))['outputs']['diofinder']['sha256'])" 2>/dev/null || true)
+  fi
+  rm -f "$tmpm"
+  if [ -n "${want:-}" ] && [ -f "$path" ]; then
+    got=$(sha256sum "$path" | cut -d' ' -f1)
+    if [ "$got" = "$want" ]; then
+      LOG "Star database current (matches latest astro_databases release)"
+    else
+      LOG "Star database differs from the latest astro_databases release."
+      LOG "  Run 'sudo diofinder-db-update' (or re-run with --with-db) to refresh it."
+    fi
+  else
+    LOG "Star database: currency check skipped (offline, no manifest, or DB not found)."
+  fi
+}
+db_report_and_maybe_refresh
 
 # --- Record version & restart -------------------------------------------------
 
