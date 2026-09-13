@@ -127,3 +127,53 @@ standalone **driver bring-up spike** as the GO/NO-GO gate before any other work.
 - Radxa Zero 3W: RK3566, MIPI CSI, 40-pin GPIO; official Debian 12 Bookworm /
   kernel 6.1 images; OV9281 not in stock OS (Radxa forum "Support for OV9281");
   `veyeimaging/rk35xx_radxa` driver repo; device-tree-overlay wiki.
+
+## Addendum (2026-09-13) — corrected USB front-runner: mono AR0144, gated on RAW
+
+The original survey anchored on the OV9281 as "the" 1 MP global-shutter mono
+option and never enumerated the **onsemi AR0144 / AR0234 GS family**, which is a
+**better imaging sensor** (higher QE, lower noise, true low-light GS; the OV9281
+is NIR-niche). That was a gap. Correction on record:
+
+**If the USB route is ever forced, the front-runner is a MONO AR0144 (or the
+2.3 MP AR0234 sibling) — NOT the color+ISP SKU** evaluated in the main note.
+
+**The decisive gate is RAW output availability (≥10-bit mono: `Y10`/`Y12`/`Y16`).**
+Raw preserves the faint-star companding lever (capture 10/12-bit linear, apply
+the asinh LUT to u8 on the CPU — sub-ms, the ISP-gamma replacement). An 8-bit or
+MJPG path fails the gate with no cheap recovery. The gate maps to camera class:
+
+- **UVC module that exposes `Y16`/`Y10` (raw mono over plain V4L2, no SDK) — the
+  ideal quadrant.** e-con Systems See3CAM mono GS cameras output `Y8`+`Y16` over
+  UVC (Linux/ARM supported); some Arducam mono UVC webcams can emit raw. Lowest
+  integration cost — drops onto the existing `camera_proc` grayscale path.
+- **GenICam machine-vision USB3 (raw is native; needs a vendor SDK).** The
+  Imaging Source AR0144 mono (open-source `tiscamera`, GStreamer, bridges to
+  V4L2 — best Linux story; raw 10/12 bpp via yavta), Basler dart (pylon,
+  Mono8/10/12), FLIR/Allied Vision (Spinnaker/Vimba, Mono8/16). Raw guaranteed;
+  cost is the SDK.
+- **Arducam USB Camera Shield (UC-391/UC-425):** raw 8/10/12-bit via the
+  **Arducam SDK** (`.cfg` register configs), **not** UVC.
+- **Onboard-ISP boards (TechNexion UVCS/VCS-AR0144, color webcams): NO raw —
+  gate fails.** (TechNexion's raw AR0144 is the `TEVS-AR0144` **MIPI** part, i.e.
+  the CSI path, not USB.)
+
+**One-command gate check on real hardware:** `v4l2-ctl -d /dev/videoN
+--list-formats-ext` — a `Y16`/`Y10` entry means raw is available; only
+`YUYV`/`GREY`/`MJPG` means it isn't.
+
+This does **not** change the decision (stay on Pi). It records the corrected
+ranking so the AR0144/onsemi-GS family and the RAW gate are on file:
+**mono AR0144/AR0234 with a raw (`Y16`) UVC format ≳ mono AR0144 via a
+V4L2-bridging SDK (tiscamera) > OV9281 mono (8-bit over USB) > anything
+color / ISP-cooked / MJPG / 8 MP.**
+
+### Addendum sources (retrieved 2026-09-13)
+- onsemi AR0144 mono/color, 1/4" 1MP GS 12-bit, companding (onsemi datasheet;
+  LWN AR0144 driver-with-companding series).
+- The Imaging Source `tiscamera` (GStreamer/V4L2; v4l2src 8bpp, yavta 10/12bpp).
+- e-con See3CAM_10CUG mono GS USB; e-con mono cameras stream `Y8`/`Y16` over UVC;
+  See3CAM on ARM/USB3.
+- Arducam USB Camera Shield `.cfg` RAW modes (e.g. `AR0134_RAW_12b_1280x964`);
+  raw via Arducam SDK, not UVC.
+- TechNexion UVCS/VCS-AR0144 (onboard ISP) vs `TEVS-AR0144` (raw MIPI).
