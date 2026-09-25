@@ -156,12 +156,17 @@ succeeds. Any one of these works — try them in order:
    single-FAT32 partition table. Then re-run Imager with **Use custom image** to
    write the diofinder `.img.xz`.
 
-2. **SD Card Formatter** (free, from the SD Association). Select the card, choose
-   **Overwrite format** (*not* Quick format), format. This clears the whole card,
-   not just the one partition Windows can see.
+2. **SD Card Formatter** — a **free download** from the SD Association
+   (`sdcard.org`); it is **not** a built-in Windows tool (its full name is "SD
+   Memory Card Formatter"). Install it, select the card, choose **Overwrite
+   format** (*not* Quick format), and format. This clears the whole card, not
+   just the one partition Windows can see.
 
-3. **`diskpart clean` (the definitive reset).** Removes *all* partitions and
-   signatures — use this if 1–2 still error, or the card shows a stale/tiny size.
+3. **`diskpart clean` — the definitive reset, and built into Windows (nothing to
+   install).** Removes *all* partitions and signatures — use this if 1–2 still
+   error, or the card shows a stale/tiny size. (Windows' own Disk Management and
+   the File-Explorer *Format* command only touch one visible partition, so they
+   do **not** fully reset a multi-partition card — use `diskpart clean` instead.)
    Open an **Administrator** Command Prompt:
    ```
    diskpart
