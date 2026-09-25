@@ -16,6 +16,7 @@ boresight registration and a built-in three-point polar alignment assistant.
 1. [What it does](#what-it-does)
 2. [Hardware requirements](#hardware-requirements)
 3. [Quick start — flashing the image](#quick-start--flashing-the-image)
+    - [Flashing & first-boot troubleshooting](#flashing--first-boot-troubleshooting)
 4. [First boot and network access](#first-boot-and-network-access)
 5. [Connecting from SkySafari](#connecting-from-skysafari)
 6. [LX200 command reference](#lx200-command-reference)
@@ -116,6 +117,90 @@ sudo bash scripts/install.sh
 `install.sh` is idempotent — safe to re-run after updates. It installs system
 packages, Python dependencies, the olive-solve tetra3-py wheel, and all
 systemd unit files. Reboot after the first run.
+
+---
+
+## Flashing & first-boot troubleshooting
+
+Symptoms this section covers: a freshly burned card that won't boot, the Wi-Fi
+AP (`diofinder-XXXX`) never appearing, or Raspberry Pi Imager / balenaEtcher
+throwing an error while writing.
+
+**The release is a full disk image — write it to the whole card, don't copy
+it.** `diofinder-…-vX.Y.Z.img.xz` must be written to the *raw* SD card with an
+imager (Raspberry Pi Imager, balenaEtcher, or `dd`). Copying the `.img`/`.img.xz`
+**file** onto a FAT32-formatted card does **not** make a bootable card — the Pi
+never boots, so there is no AP and no `diofinder.local`.
+
+**When Windows says *"You need to format the disk in drive X: before you can use
+it"* — click Cancel.** Windows can read only the small FAT boot partition, not
+the Linux (ext4) root partition, so it offers to "format" the card. That popup is
+expected on any correctly imaged card. **Do not format** — it corrupts the image.
+
+**Recommended write path (Windows):** Raspberry Pi Imager → **Choose OS → Use
+custom image** → select the `.img.xz` (Imager decompresses it for you) → **Choose
+Storage** → the SD card → **Next/Write**, leaving verification on. **Safely
+eject** before pulling the card — Windows caches writes.
+
+### Wiping / resetting a card so Raspberry Pi Imager won't error
+
+A card that previously held a Linux/Pi image has **multiple partitions** (a FAT
+boot partition + an ext4 root partition, sometimes more). Raspberry Pi Imager and
+balenaEtcher can choke on that leftover layout — you'll see *"Failed to write"*,
+*"…is not accessible"*, a **verify mismatch**, or the card reporting the wrong
+(tiny) size. Reset the card to a **single clean partition** first and the write
+succeeds. Any one of these works — try them in order:
+
+1. **Imager's own erase (easiest).** In Raspberry Pi Imager: **Choose OS → Erase
+   (Format card as FAT32)**, pick the card, write. That rewrites a clean
+   single-FAT32 partition table. Then re-run Imager with **Use custom image** to
+   write the diofinder `.img.xz`.
+
+2. **SD Card Formatter** (free, from the SD Association). Select the card, choose
+   **Overwrite format** (*not* Quick format), format. This clears the whole card,
+   not just the one partition Windows can see.
+
+3. **`diskpart clean` (the definitive reset).** Removes *all* partitions and
+   signatures — use this if 1–2 still error, or the card shows a stale/tiny size.
+   Open an **Administrator** Command Prompt:
+   ```
+   diskpart
+   list disk            ← identify the SD card BY SIZE (e.g. 29 GB, 59 GB)
+   select disk N        ← ⚠ N is the SD card, NOT your C:/system disk
+   clean                ← wipes the partition table (a few seconds)
+   exit
+   ```
+   You do **not** need to create or format a partition afterward — Raspberry Pi
+   Imager repartitions the card when it writes the image. `clean` destroys
+   whatever disk you select, so **double-check the disk number against the card's
+   size** before running it.
+
+After any of these, write the diofinder `.img.xz` with **Use custom image**.
+
+### The card is written but the AP still doesn't appear
+
+Once the card is correctly imaged, work down this list:
+
+- **Watch the green ACT LED.** Occasional flicker settling toward steady = it is
+  booting. No activity, or continuous uniform blinking = it did **not** boot →
+  re-image (above), try a **different / known-good card** (Class 10 / A1), and use
+  a solid **5 V / 2 A** supply on a short cable. A brownout also stops the Wi-Fi
+  radio from initialising.
+- **Give first boot 2–3 minutes, then power-cycle once.** First boot waits for
+  NetworkManager and brings up the Wi-Fi chip, which is slow on the very first
+  boot — the AP can appear only after a reboot. Wait, pull power, reapply, wait
+  again.
+- **Scan for `diofinder-XXXX` on 2.4 GHz.** The SSID ends in the last four hex
+  digits of the Wi-Fi MAC (not just `diofinder`), and the AP is **2.4 GHz only**.
+- **Use the USB-Ethernet fallback to triage.** Connect the Pi's data micro-USB
+  port to a computer and browse **http://10.55.0.1** — this gadget interface
+  comes up independently of Wi-Fi. If it works but there's no AP, the card is fine
+  and the issue is Wi-Fi/first-boot (power-cycle, supply). If even `10.55.0.1` is
+  dead, the card did not boot → re-image.
+- **SSID is visible but Windows won't join?** Different issue (Wi-Fi security, not
+  flashing): a current image uses WPA2-AES; on Windows, **Forget** the network and
+  rejoin with the password **`12345678`** (the shortest legal WPA2 key — `1234` is
+  too short to be valid).
 
 ---
 
