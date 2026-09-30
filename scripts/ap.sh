@@ -47,6 +47,7 @@ if [ $# -ge 1 ]; then
       ssid "$NEW_SSID" \
       wifi.mode ap \
       wifi.band bg \
+      wifi.channel 6 \
       ipv4.method shared \
       ipv4.addresses 10.42.0.1/24 \
       ipv6.method ignore \
@@ -94,6 +95,15 @@ nmcli con modify "$PROFILE" \
   wifi-sec.pairwise ccmp \
   wifi-sec.group ccmp \
   wifi-sec.pmf 1 \
+  2>/dev/null || true
+
+# Pin band + channel. Without an explicit channel, NM's AP mode may auto-select
+# channel 12/13 — illegal in the US/CA regulatory domain and rejected by many
+# Windows/US clients, so the AP appears not to come up. Channel 6 (or 1 / 11) is
+# a safe default. Idempotent; migrates existing profiles on the next ap.sh run.
+nmcli con modify "$PROFILE" \
+  wifi.band bg \
+  wifi.channel 6 \
   2>/dev/null || true
 
 # Bring up the AP.

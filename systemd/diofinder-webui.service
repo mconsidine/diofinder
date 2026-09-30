@@ -35,7 +35,10 @@ RestartSec=5
 # the diofinder user blanket sudo; instead a sudoers drop-in scoped to
 # just /usr/local/bin/diofinder-update is installed by install.sh.
 
-NoNewPrivileges=false   # need sudo to work (drops to it via sudoers rule)
+# NoNewPrivileges must stay false so sudo works (the web UI drops to root via the
+# scoped sudoers rule). systemd has no inline comments — a trailing "# ..." here
+# would be parsed as part of the value and break the directive, so keep it alone.
+NoNewPrivileges=false
 ProtectSystem=full
 ProtectHome=true
 
