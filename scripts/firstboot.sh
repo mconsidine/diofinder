@@ -119,6 +119,7 @@ if ! nmcli -t -f NAME con show | grep -qx "diofinder-ap"; then
     ssid "$AP_SSID" \
     wifi.mode ap \
     wifi.band bg \
+    wifi.channel 6 \
     ipv4.method shared \
     ipv4.addresses 10.42.0.1/24 \
     ipv6.method ignore \
@@ -148,6 +149,16 @@ nmcli con modify diofinder-ap \
   wifi-sec.group ccmp \
   wifi-sec.pmf 1 \
   2>/dev/null || WARN "Could not harden AP security (non-fatal)"
+
+# Pin the AP to the 2.4 GHz band and a fixed channel. Without an explicit
+# channel, NetworkManager's AP mode can auto-select channel 12/13 — disallowed
+# in the US/CA regulatory domain and rejected by many Windows/US clients, so the
+# AP appears not to come up at all. Channel 6 is a safe default (1 or 11 also
+# work). Applied every boot so existing profiles are migrated too; idempotent.
+nmcli con modify diofinder-ap \
+  wifi.band bg \
+  wifi.channel 6 \
+  2>/dev/null || WARN "Could not pin AP band/channel (non-fatal)"
 
 # Ensure NM will always retry the AP connection. autoconnect-retries=0
 # means retry indefinitely; without this NM stops trying after a few

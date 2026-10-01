@@ -73,7 +73,19 @@ else
 fi
 
 # --- WiFi regulatory domain --------------------------------------------------
+# Set the country to US as the baked-in default, via two mechanisms for
+# robustness across kernel versions:
+#   * Kernel module parameter (modern, authoritative): applied the moment
+#     cfg80211 loads — before NetworkManager and firstboot.sh — so the regdomain
+#     is US from the first instant the radio exists. This removes the brief
+#     world-domain ("00") window at boot during which an AP could otherwise come
+#     up on a disallowed channel (12/13) or stay soft-blocked/low-power.
+#   * /etc/default/crda (legacy CRDA path): a no-op on current kernels that use
+#     the in-kernel regulatory.db, kept for older bases.
+# firstboot.sh additionally runs `iw reg set US` every boot as a runtime backup.
 LOG "Setting WiFi regulatory domain to US"
+mkdir -p /etc/modprobe.d
+echo "options cfg80211 ieee80211_regdom=US" > /etc/modprobe.d/cfg80211.conf
 mkdir -p /etc/default
 echo "REGDOMAIN=US" > /etc/default/crda
 
