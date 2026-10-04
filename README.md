@@ -539,10 +539,20 @@ Either IMU works, selected by `imu_sensor` in `diofinder.conf`:
 
 The **BNO085** (CEVA SH-2) uses the same 4-wire I²C hookup as the BNO055 (3.3 V,
 GND, SDA, SCL; ensure the breakout is strapped for I²C mode — the default on
-Adafruit/SparkFun boards). Its SH-2 firmware streams a Rotation Vector
-quaternion directly, so nothing downstream changes — the solve-hint, LX200
-prediction, and SkySafari smoothing are identical. Config-only (restart to
-apply — you can't hot-swap the chip). When you change chips, let the camera↔IMU
+Adafruit/SparkFun boards). Its SH-2 firmware streams a quaternion directly, so
+nothing downstream changes — the solve-hint, LX200 prediction, and SkySafari
+smoothing are identical. By default it uses the **Game Rotation Vector**
+(accel+gyro, **no magnetometer** — the IMUPLUS equivalent), set by
+`imu_bno085_report`:
+
+- **`game`** (default) — magnetometer-free; the right choice near the scope's
+  metal and motors.
+- **`stabilized_game`** — same, but fusion corrections are smoothed (jump-free;
+  may make the hunt filter unnecessary) — worth A/B-ing.
+- **`rotation`** — 9-axis, magnetometer-referenced absolute heading; only
+  meaningful away from magnetic interference, so not recommended on a scope.
+
+Config-only (restart to apply — you can't hot-swap the chip). When you change chips, let the camera↔IMU
 extrinsic re-learn (it self-heals on divergence, or clear it with a factory
 reset `--clear-imu-calib`). Validate a newly-wired BNO085 on-device with:
 

@@ -27,7 +27,7 @@ DEFAULT_CONFIG_PATH = "/etc/diofinder/diofinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.11.69"
+    version: str = "0.11.70"
 
     # -------- Camera --------
     frame_width: int = 960
@@ -307,6 +307,14 @@ class Config:
     # (restart — you can't hot-swap silicon); seeded into shared_cfg for the
     # in-launcher IMU thread.
     imu_sensor: str = "auto"
+    # BNO085 rotation-vector flavour (ignored for the BNO055). "game" (default)
+    # is the 6-axis Game Rotation Vector — accel+gyro, NO magnetometer, the
+    # BNO055 IMUPLUS equivalent: the mag is unreliable near the scope and a
+    # mag-referenced yaw would inject jumps into the relative deltas we use.
+    # "stabilized_game" is the same with fusion corrections smoothed (jump-free;
+    # may let the P3 hunt filter retire). "rotation" is the 9-axis mag-absolute
+    # report (off-scope use only). Config-only (restart); seeded into shared_cfg.
+    imu_bno085_report: str = "game"
     # P3: suppress BNO055 fusion "hunting" (the chip toggling between two
     # nearby orientations while stationary) in the published quaternion before
     # it reaches the pointing prediction. Real motion snaps through unfiltered,

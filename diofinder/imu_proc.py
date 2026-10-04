@@ -8,11 +8,13 @@ Kabsch camera↔IMU fit, SkySafari smoothing) is sensor-agnostic.
   IMUPLUS mode (accel + gyro, magnetometer disabled). The quaternion registers
   give (w,x,y,z) directly, Q14.
 * BNO085 (CEVA/Hillcrest SH-2) — I2C 0x4A/0x4B, driven over the SHTP/SH-2
-  protocol: enable the Rotation Vector report (0x05) at the poll rate, then
-  parse its (i,j,k,real) Q14 components → (w,x,y,z). Lean implementation over
-  smbus2 (i2c_msg/i2c_rdwr, since SHTP packets can exceed the 32-byte SMBus
-  block limit); no Blinka. NOTE: the SH-2 path has no hardware in CI — validate
-  on-device with tests/diag_imu.py before field use.
+  protocol: enable a rotation-vector report at the poll rate, then parse its
+  (i,j,k,real) Q14 components → (w,x,y,z). Default is the Game Rotation Vector
+  (0x08: accel+gyro, NO magnetometer — the BNO055 IMUPLUS equivalent),
+  selectable via imu_bno085_report (game / stabilized_game / rotation). Lean
+  implementation over smbus2 (i2c_msg/i2c_rdwr, since SHTP packets can exceed
+  the 32-byte SMBus block limit); no Blinka. NOTE: the SH-2 path has no
+  hardware in CI — validate on-device with tests/diag_imu.py before field use.
 
 The reader probes on I2C bus 1 (GPIO 2/3, the Pi's primary I2C). "auto" tries
 the BNO085 SH-2 addresses first, then the BNO055 register addresses — they are
@@ -72,11 +74,30 @@ _PROBE_INTERVAL = 3.0   # seconds between probe attempts when device absent
 _BNO085_ADDR_LOW    = 0x4A   # DI/ADR pin low (default)
 _BNO085_ADDR_HIGH   = 0x4B   # DI/ADR pin high
 _SH2_CH_CONTROL     = 2      # SHTP channel: SH-2 control (Set Feature, etc.)
-_SH2_RV_REPORT_ID   = 0x05   # Rotation Vector input report
 _SH2_SET_FEATURE    = 0xFD   # Set Feature Command report id
 _SH2_BASE_TIMESTAMP = 0xFB   # input-report timebase-reference prefix
 _SH2_Q14_SCALE      = 1.0 / 16384.0   # Q14 fixed-point (same scale as BNO055)
 _SH2_READ_BUF       = 64     # one-shot SHTP read size (RV packet ≈ 23 B)
+
+# Rotation-vector report IDs. All share the same (i,j,k,real) Q14 quaternion
+# layout, so one parser handles any of them. Default is GAME (6-axis:
+# accel+gyro, NO magnetometer) — the BNO085 equivalent of the BNO055's IMUPLUS.
+# The magnetometer is unreliable near the scope's metal/motors, and in a
+# mag-referenced report the fusion periodically applies yaw corrections that, in
+# that environment, are wrong and show up in the relative deltas diofinder uses
+# as spurious motion. "stabilized_game" (0x29) is the same 6-axis fix with
+# fusion corrections smoothed (jump-free; can retire the P3 hunt filter).
+# "rotation" (0x05) is the 9-axis mag-absolute report (off-scope use only).
+_SH2_GAME_RV_REPORT_ID      = 0x08
+_SH2_ARVR_GAME_RV_REPORT_ID = 0x29
+_SH2_ROTATION_RV_REPORT_ID  = 0x05
+_BNO085_REPORT_IDS = {
+    "game":            _SH2_GAME_RV_REPORT_ID,
+    "stabilized_game": _SH2_ARVR_GAME_RV_REPORT_ID,
+    "rotation":        _SH2_ROTATION_RV_REPORT_ID,
+}
+# Report IDs we parse as a quaternion (same layout); superset of what we enable.
+_SH2_RV_LIKE = {0x05, 0x08, 0x28, 0x29}
 
 # --- Unit B: BNO055 calibration-profile persistence (default off) -----------
 # The chip has no flash, so its gyro/accel calibration is lost on power-down.
@@ -330,8 +351,10 @@ def _parse_rv(payload):
     component order is (i,j,k,real) → our (w,x,y,z) = (real,i,j,k)."""
     p = payload
     i = 5 if (len(p) >= 5 and p[0] == _SH2_BASE_TIMESTAMP) else 0
-    while i + 14 <= len(p):
-        if p[i] == _SH2_RV_REPORT_ID:
+    # Game RV (0x08) is 12 bytes vs Rotation RV's 14 (no accuracy field); we
+    # only need bytes 4..11 (the quaternion), so guard on 12.
+    while i + 12 <= len(p):
+        if p[i] in _SH2_RV_LIKE:
             def s16(o):
                 v = (p[i + o + 1] << 8) | p[i + o]
                 return v - 65536 if v > 32767 else v
@@ -361,12 +384,14 @@ def _bno085_read_quaternion(smbus2, bus, addr):
     return result
 
 
-def _bno085_enable_rv(smbus2, bus, addr, interval_us):
-    """Send a Set Feature Command enabling the Rotation Vector at interval_us."""
+def _bno085_enable_rv(smbus2, bus, addr, interval_us,
+                      report_id=_SH2_GAME_RV_REPORT_ID):
+    """Send a Set Feature Command enabling a rotation-vector report (Game by
+    default) at interval_us."""
     iv = int(interval_us)
     payload = bytes([
         _SH2_SET_FEATURE,            # 0xFD Set Feature Command
-        _SH2_RV_REPORT_ID,           # 0x05 Rotation Vector
+        report_id & 0xFF,            # rotation-vector report id to enable
         0x00,                        # feature flags
         0x00, 0x00,                  # change sensitivity
         iv & 0xFF, (iv >> 8) & 0xFF, (iv >> 16) & 0xFF, (iv >> 24) & 0xFF,  # interval us LE
@@ -376,15 +401,18 @@ def _bno085_enable_rv(smbus2, bus, addr, interval_us):
     _sh2_write(smbus2, bus, addr, _SH2_CH_CONTROL, 0, payload)
 
 
-def _probe_and_init_bno085(smbus2, poll_hz):
-    """Probe the BNO085 at its SH-2 addresses and enable the Rotation Vector at
-    poll_hz. Returns (bus, addr) or (None, None). Presence is a successful I2C
-    transaction at 0x4A/0x4B (the SH-2 part; the BNO055 lives at 0x28/0x29)."""
+def _probe_and_init_bno085(smbus2, poll_hz, report="game"):
+    """Probe the BNO085 at its SH-2 addresses and enable the configured
+    rotation-vector report (default Game — no magnetometer) at poll_hz. Returns
+    (bus, addr) or (None, None). Presence is a successful I2C transaction at
+    0x4A/0x4B (the SH-2 part; the BNO055 lives at 0x28/0x29)."""
     try:
         hz = min(50.0, max(1.0, float(poll_hz)))
     except (TypeError, ValueError):
         hz = _POLL_HZ
     interval_us = int(1_000_000 / hz)
+    rid = _BNO085_REPORT_IDS.get((report or "game").lower(),
+                                 _SH2_GAME_RV_REPORT_ID)
     for addr in (_BNO085_ADDR_LOW, _BNO085_ADDR_HIGH):
         bus = None
         try:
@@ -394,10 +422,10 @@ def _probe_and_init_bno085(smbus2, poll_hz):
             time.sleep(0.05)
             for _ in range(4):          # drain the power-up advertisement
                 _sh2_read(smbus2, bus, addr)
-            _bno085_enable_rv(smbus2, bus, addr, interval_us)
+            _bno085_enable_rv(smbus2, bus, addr, interval_us, rid)
             time.sleep(0.05)
-            log.info("BNO085 detected at I2C 0x%02x — Rotation Vector @ %.0f Hz",
-                     addr, hz)
+            log.info("BNO085 at I2C 0x%02x — %s rotation vector (0x%02x) @ %.0f Hz",
+                     addr, (report or "game"), rid, hz)
             return bus, addr
         except Exception as e:
             log.debug("BNO085 probe 0x%02x: %s", addr, e)
@@ -411,14 +439,15 @@ def _probe_and_init_bno085(smbus2, poll_hz):
 
 # ---- Sensor selector ----------------------------------------------------------
 
-def _probe_sensor(smbus2, pref, restore, poll_hz):
+def _probe_sensor(smbus2, pref, restore, poll_hz, report="game"):
     """Probe for the configured IMU and initialise it. Returns
     (kind, bus, addr, restored): kind is "bno055" | "bno085" | None; restored is
     BNO055-only (calibration-profile restore), always False for the BNO085.
-    pref: "auto" (BNO085 then BNO055), "bno055", or "bno085"."""
+    pref: "auto" (BNO085 then BNO055), "bno055", or "bno085". report selects the
+    BNO085 rotation-vector flavour (game / stabilized_game / rotation)."""
     pref = (pref or "auto").lower()
     if pref in ("auto", "bno085"):
-        bus, addr = _probe_and_init_bno085(smbus2, poll_hz)
+        bus, addr = _probe_and_init_bno085(smbus2, poll_hz, report)
         if bus is not None:
             return "bno085", bus, addr, False
         if pref == "bno085":
@@ -485,6 +514,7 @@ def imu_thread(shared_cfg, stop_event=None):
 
         persist = bool(shared_cfg.get("imu_persist_bno055", False))
         sensor_pref = shared_cfg.get("imu_sensor", "auto")
+        report_pref = shared_cfg.get("imu_bno085_report", "game")
         try:
             poll_hz_pref = float(shared_cfg.get("imu_poll_hz", _POLL_HZ))
         except (TypeError, ValueError):
@@ -497,7 +527,7 @@ def imu_thread(shared_cfg, stop_event=None):
                 continue
             last_probe = now
             kind, bus, addr, restored = _probe_sensor(
-                smbus2, sensor_pref, persist, poll_hz_pref)
+                smbus2, sensor_pref, persist, poll_hz_pref, report_pref)
             if bus is None:
                 shared_cfg["imu_available"] = False
                 continue

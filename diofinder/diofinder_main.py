@@ -171,6 +171,8 @@ def main():
         # Seed the IMU chip selector (auto/bno055/bno085) so the in-launcher
         # thread picks the right driver from boot without a config round-trip.
         "imu_sensor": getattr(cfg, "imu_sensor", "auto"),
+        # Seed the BNO085 rotation-vector flavour (game/stabilized_game/rotation).
+        "imu_bno085_report": getattr(cfg, "imu_bno085_report", "game"),
         "test_mode":     default_test_mode,
     })
     align_request_q  = mp.Queue(maxsize=4)
