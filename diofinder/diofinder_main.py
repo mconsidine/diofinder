@@ -168,6 +168,9 @@ def main():
         # honors persisted conf values from boot without a config round-trip.
         "imu_enabled": getattr(cfg, "imu_enabled", True),
         "imu_poll_hz": getattr(cfg, "imu_poll_hz", 20),
+        # Seed the IMU chip selector (auto/bno055/bno085) so the in-launcher
+        # thread picks the right driver from boot without a config round-trip.
+        "imu_sensor": getattr(cfg, "imu_sensor", "auto"),
         "test_mode":     default_test_mode,
     })
     align_request_q  = mp.Queue(maxsize=4)

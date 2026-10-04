@@ -528,6 +528,28 @@ Add the `diofinder` user to the `i2c` group if not already done:
 sudo usermod -aG i2c diofinder
 ```
 
+### Sensor selection (BNO055 / BNO085)
+
+Either IMU works, selected by `imu_sensor` in `diofinder.conf`:
+
+- **`auto`** (default) — probe both and use whichever is present. The chips sit
+  at disjoint I²C addresses (BNO055 `0x28`/`0x29`, BNO085 `0x4A`/`0x4B`), so
+  detection is unambiguous and no conf edit is needed when you swap chips.
+- **`bno055`** / **`bno085`** — force one.
+
+The **BNO085** (CEVA SH-2) uses the same 4-wire I²C hookup as the BNO055 (3.3 V,
+GND, SDA, SCL; ensure the breakout is strapped for I²C mode — the default on
+Adafruit/SparkFun boards). Its SH-2 firmware streams a Rotation Vector
+quaternion directly, so nothing downstream changes — the solve-hint, LX200
+prediction, and SkySafari smoothing are identical. Config-only (restart to
+apply — you can't hot-swap the chip). When you change chips, let the camera↔IMU
+extrinsic re-learn (it self-heals on divergence, or clear it with a factory
+reset `--clear-imu-calib`). Validate a newly-wired BNO085 on-device with:
+
+```bash
+sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_imu.py
+```
+
 ---
 
 ## Wi-Fi modes

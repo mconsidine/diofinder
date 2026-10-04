@@ -27,7 +27,7 @@ DEFAULT_CONFIG_PATH = "/etc/diofinder/diofinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.11.68"
+    version: str = "0.11.69"
 
     # -------- Camera --------
     frame_width: int = 960
@@ -299,6 +299,14 @@ class Config:
     # slower-converging solve-hint fit. 20 keeps the shipped behavior. Seeded
     # into shared_cfg; read live by the reader loop (no restart).
     imu_poll_hz: int = 20
+    # Which IMU chip to drive. "auto" probes both and uses whichever answers —
+    # BNO085 over SH-2 at I2C 0x4A/0x4B, BNO055 over register reads at 0x28/0x29;
+    # the addresses are disjoint so detection is unambiguous. "bno055"/"bno085"
+    # force one. Both publish the SAME (w,x,y,z) quaternion to shared_cfg, so the
+    # hint/predict/solve path is identical regardless of chip. Config-only
+    # (restart — you can't hot-swap silicon); seeded into shared_cfg for the
+    # in-launcher IMU thread.
+    imu_sensor: str = "auto"
     # P3: suppress BNO055 fusion "hunting" (the chip toggling between two
     # nearby orientations while stationary) in the published quaternion before
     # it reaches the pointing prediction. Real motion snaps through unfiltered,

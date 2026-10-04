@@ -1,10 +1,22 @@
 """
-BNO055 absolute orientation IMU — background daemon thread.
+Orientation IMU — background daemon thread. Supports two chips, selected by
+``imu_sensor`` (auto / bno055 / bno085); both publish the SAME (w,x,y,z)
+quaternion so everything downstream (hint propagation, LX200 prediction, the
+Kabsch camera↔IMU fit, SkySafari smoothing) is sensor-agnostic.
 
-Probes for the sensor on I2C bus 1 (GPIO 2/3, the Pi's primary I2C)
-at the standard BNO055 addresses (0x28 with ADDR low, 0x29 with ADDR
-high).  When found, initialises the chip in IMUPLUS mode (accelerometer +
-gyroscope, magnetometer disabled) and publishes quaternion updates to
+* BNO055 (Bosch) — I2C 0x28/0x29, read by raw register access; initialised in
+  IMUPLUS mode (accel + gyro, magnetometer disabled). The quaternion registers
+  give (w,x,y,z) directly, Q14.
+* BNO085 (CEVA/Hillcrest SH-2) — I2C 0x4A/0x4B, driven over the SHTP/SH-2
+  protocol: enable the Rotation Vector report (0x05) at the poll rate, then
+  parse its (i,j,k,real) Q14 components → (w,x,y,z). Lean implementation over
+  smbus2 (i2c_msg/i2c_rdwr, since SHTP packets can exceed the 32-byte SMBus
+  block limit); no Blinka. NOTE: the SH-2 path has no hardware in CI — validate
+  on-device with tests/diag_imu.py before field use.
+
+The reader probes on I2C bus 1 (GPIO 2/3, the Pi's primary I2C). "auto" tries
+the BNO085 SH-2 addresses first, then the BNO055 register addresses — they are
+disjoint, so detection is unambiguous. Publishes quaternion updates to
 shared_cfg at ~20 Hz.
 
 IMUPLUS mode is intentional: the magnetometer is unreliable near the
@@ -55,6 +67,16 @@ _PWR_NORMAL   = 0x00
 _POLL_HZ      = 20
 _POLL_INTERVAL = 1.0 / _POLL_HZ
 _PROBE_INTERVAL = 3.0   # seconds between probe attempts when device absent
+
+# ---- BNO085 (CEVA SH-2) constants --------------------------------------------
+_BNO085_ADDR_LOW    = 0x4A   # DI/ADR pin low (default)
+_BNO085_ADDR_HIGH   = 0x4B   # DI/ADR pin high
+_SH2_CH_CONTROL     = 2      # SHTP channel: SH-2 control (Set Feature, etc.)
+_SH2_RV_REPORT_ID   = 0x05   # Rotation Vector input report
+_SH2_SET_FEATURE    = 0xFD   # Set Feature Command report id
+_SH2_BASE_TIMESTAMP = 0xFB   # input-report timebase-reference prefix
+_SH2_Q14_SCALE      = 1.0 / 16384.0   # Q14 fixed-point (same scale as BNO055)
+_SH2_READ_BUF       = 64     # one-shot SHTP read size (RV packet ≈ 23 B)
 
 # --- Unit B: BNO055 calibration-profile persistence (default off) -----------
 # The chip has no flash, so its gyro/accel calibration is lost on power-down.
@@ -269,6 +291,144 @@ def _probe_and_init(smbus2, restore=False):
     return None, None, False
 
 
+# ---- BNO085 SH-2 driver (lean smbus2 SHTP; no Blinka) ------------------------
+
+def _sh2_write(smbus2, bus, addr, channel, seq, payload):
+    """Write one SHTP packet: 4-byte header (length LE, channel, seq) + payload."""
+    length = len(payload) + 4
+    hdr = bytes([length & 0xFF, (length >> 8) & 0xFF, channel & 0xFF, seq & 0xFF])
+    msg = smbus2.i2c_msg.write(addr, hdr + bytes(payload))
+    bus.i2c_rdwr(msg)
+
+
+def _sh2_read(smbus2, bus, addr, bufsize=_SH2_READ_BUF):
+    """Read one SHTP packet in a single I2C transaction. Returns
+    (channel, payload_bytes) or (None, None) when nothing is pending.
+
+    A fixed-size read (not a peek-then-read) sidesteps the BNO08x's per-
+    transaction packet framing: the first 4 bytes are the SHTP header, whose
+    length field says how many of the buffer's bytes are valid. i2c_msg is used
+    (not read_i2c_block_data) because SHTP packets can exceed the 32-byte SMBus
+    block cap; RV packets are ~23 B so one 64-B read covers them.
+    """
+    r = smbus2.i2c_msg.read(addr, bufsize)
+    bus.i2c_rdwr(r)
+    pkt = bytes(r)
+    if len(pkt) < 5:
+        return None, None
+    length = ((pkt[1] << 8) | pkt[0]) & 0x7FFF   # mask the continuation bit
+    if length == 0 or length == 0x7FFF or length < 5:
+        return None, None                         # nothing available / garbage
+    channel = pkt[2]
+    return channel, pkt[4:min(length, bufsize)]
+
+
+def _parse_rv(payload):
+    """Extract a Rotation Vector (0x05) report from an input-sensor payload and
+    return a normalised (w,x,y,z), or None. The payload is prefixed by a 5-byte
+    base-timestamp report (0xFB + int32); the sensor report(s) follow. SH-2
+    component order is (i,j,k,real) → our (w,x,y,z) = (real,i,j,k)."""
+    p = payload
+    i = 5 if (len(p) >= 5 and p[0] == _SH2_BASE_TIMESTAMP) else 0
+    while i + 14 <= len(p):
+        if p[i] == _SH2_RV_REPORT_ID:
+            def s16(o):
+                v = (p[i + o + 1] << 8) | p[i + o]
+                return v - 65536 if v > 32767 else v
+            qi = s16(4) * _SH2_Q14_SCALE
+            qj = s16(6) * _SH2_Q14_SCALE
+            qk = s16(8) * _SH2_Q14_SCALE
+            qr = s16(10) * _SH2_Q14_SCALE
+            n = math.sqrt(qr * qr + qi * qi + qj * qj + qk * qk)
+            if n < 0.5:
+                return None
+            return (qr / n, qi / n, qj / n, qk / n)
+        i += 1
+    return None
+
+
+def _bno085_read_quaternion(smbus2, bus, addr):
+    """Drain pending SHTP packets and return the newest Rotation Vector
+    quaternion (w,x,y,z), or None if no RV report was available this cycle."""
+    result = None
+    for _ in range(8):
+        channel, payload = _sh2_read(smbus2, bus, addr)
+        if payload is None:
+            break
+        q = _parse_rv(payload)
+        if q is not None:
+            result = q      # keep the most recent in this drain
+    return result
+
+
+def _bno085_enable_rv(smbus2, bus, addr, interval_us):
+    """Send a Set Feature Command enabling the Rotation Vector at interval_us."""
+    iv = int(interval_us)
+    payload = bytes([
+        _SH2_SET_FEATURE,            # 0xFD Set Feature Command
+        _SH2_RV_REPORT_ID,           # 0x05 Rotation Vector
+        0x00,                        # feature flags
+        0x00, 0x00,                  # change sensitivity
+        iv & 0xFF, (iv >> 8) & 0xFF, (iv >> 16) & 0xFF, (iv >> 24) & 0xFF,  # interval us LE
+        0x00, 0x00, 0x00, 0x00,      # batch interval
+        0x00, 0x00, 0x00, 0x00,      # sensor-specific config
+    ])
+    _sh2_write(smbus2, bus, addr, _SH2_CH_CONTROL, 0, payload)
+
+
+def _probe_and_init_bno085(smbus2, poll_hz):
+    """Probe the BNO085 at its SH-2 addresses and enable the Rotation Vector at
+    poll_hz. Returns (bus, addr) or (None, None). Presence is a successful I2C
+    transaction at 0x4A/0x4B (the SH-2 part; the BNO055 lives at 0x28/0x29)."""
+    try:
+        hz = min(50.0, max(1.0, float(poll_hz)))
+    except (TypeError, ValueError):
+        hz = _POLL_HZ
+    interval_us = int(1_000_000 / hz)
+    for addr in (_BNO085_ADDR_LOW, _BNO085_ADDR_HIGH):
+        bus = None
+        try:
+            bus = smbus2.SMBus(_I2C_BUS)
+            # Presence: a 4-byte SHTP header read must ACK at this address.
+            bus.i2c_rdwr(smbus2.i2c_msg.read(addr, 4))
+            time.sleep(0.05)
+            for _ in range(4):          # drain the power-up advertisement
+                _sh2_read(smbus2, bus, addr)
+            _bno085_enable_rv(smbus2, bus, addr, interval_us)
+            time.sleep(0.05)
+            log.info("BNO085 detected at I2C 0x%02x — Rotation Vector @ %.0f Hz",
+                     addr, hz)
+            return bus, addr
+        except Exception as e:
+            log.debug("BNO085 probe 0x%02x: %s", addr, e)
+            try:
+                if bus:
+                    bus.close()
+            except Exception:
+                pass
+    return None, None
+
+
+# ---- Sensor selector ----------------------------------------------------------
+
+def _probe_sensor(smbus2, pref, restore, poll_hz):
+    """Probe for the configured IMU and initialise it. Returns
+    (kind, bus, addr, restored): kind is "bno055" | "bno085" | None; restored is
+    BNO055-only (calibration-profile restore), always False for the BNO085.
+    pref: "auto" (BNO085 then BNO055), "bno055", or "bno085"."""
+    pref = (pref or "auto").lower()
+    if pref in ("auto", "bno085"):
+        bus, addr = _probe_and_init_bno085(smbus2, poll_hz)
+        if bus is not None:
+            return "bno085", bus, addr, False
+        if pref == "bno085":
+            return None, None, None, False
+    bus, addr, restored = _probe_and_init(smbus2, restore=restore)
+    if bus is not None:
+        return "bno055", bus, addr, restored
+    return None, None, None, False
+
+
 # ---- Daemon thread ------------------------------------------------------------
 
 def imu_thread(shared_cfg, stop_event=None):
@@ -294,6 +454,7 @@ def imu_thread(shared_cfg, stop_event=None):
 
     shared_cfg["imu_available"] = False
     bus = addr = None
+    kind = None                 # "bno055" | "bno085" once attached
     last_probe = 0.0
     # Unit B calibration-profile state (per successful attach).
     profile_saved = True        # set False on attach when persistence is on
@@ -315,7 +476,7 @@ def imu_thread(shared_cfg, stop_event=None):
                     bus.close()
                 except Exception:
                     pass
-                bus = addr = None
+                bus = addr = kind = None
                 last_probe = 0.0
             if shared_cfg.get("imu_available", False):
                 shared_cfg["imu_available"] = False
@@ -323,6 +484,11 @@ def imu_thread(shared_cfg, stop_event=None):
             continue
 
         persist = bool(shared_cfg.get("imu_persist_bno055", False))
+        sensor_pref = shared_cfg.get("imu_sensor", "auto")
+        try:
+            poll_hz_pref = float(shared_cfg.get("imu_poll_hz", _POLL_HZ))
+        except (TypeError, ValueError):
+            poll_hz_pref = _POLL_HZ
         # ---- Device absent: probe periodically --------------------------------
         if bus is None:
             now = time.monotonic()
@@ -330,14 +496,16 @@ def imu_thread(shared_cfg, stop_event=None):
                 time.sleep(0.1)
                 continue
             last_probe = now
-            bus, addr, restored = _probe_and_init(smbus2, restore=persist)
+            kind, bus, addr, restored = _probe_sensor(
+                smbus2, sensor_pref, persist, poll_hz_pref)
             if bus is None:
                 shared_cfg["imu_available"] = False
                 continue
             shared_cfg["imu_available"] = True
-            # A saved profile already exists (restored) → nothing to re-save.
-            # Only a device with no usable profile saves one once it calibrates.
-            profile_saved = (not persist) or restored
+            # Calibration-profile persistence is BNO055-only (the BNO085
+            # self-calibrates and persists via the SH-2 "save DCD" command). A
+            # saved profile already present (restored) → nothing to re-save.
+            profile_saved = (not persist) or (kind != "bno055") or restored
             still_count = 0
             last_q = None
             hunt_state.clear()
@@ -345,7 +513,10 @@ def imu_thread(shared_cfg, stop_event=None):
         # ---- Device present: read at _POLL_HZ ---------------------------------
         t0 = time.monotonic()
         try:
-            q = _read_quaternion(bus, addr)
+            if kind == "bno085":
+                q = _bno085_read_quaternion(smbus2, bus, addr)
+            else:
+                q = _read_quaternion(bus, addr)
             if q is not None:
                 # P3: suppress fusion hunting before publishing so it never
                 # reaches the LX200 pointing prediction (reversible; off ->
@@ -362,7 +533,8 @@ def imu_thread(shared_cfg, stop_event=None):
                     still_count = 0
                 last_q = q
             # ---- Unit B: publish calib status + save profile once good -------
-            if persist and (t0 - last_status_pub) >= _STATUS_PUBLISH_INTERVAL:
+            if persist and kind == "bno055" and \
+                    (t0 - last_status_pub) >= _STATUS_PUBLISH_INTERVAL:
                 last_status_pub = t0
                 try:
                     st = _imu_persist.decode_calib_status(
@@ -376,12 +548,12 @@ def imu_thread(shared_cfg, stop_event=None):
                 except Exception as e:
                     log.debug("BNO055 calib status/save skipped: %s", e)
         except Exception as e:
-            log.warning("BNO055 read error (%s) — will re-probe", e)
+            log.warning("IMU read error (%s: %s) — will re-probe", kind or "imu", e)
             try:
                 bus.close()
             except Exception:
                 pass
-            bus = addr = None
+            bus = addr = kind = None
             shared_cfg["imu_available"] = False
             last_probe = 0.0    # attempt re-probe immediately next iteration
             continue
@@ -409,5 +581,5 @@ def start_imu_thread(shared_cfg):
         daemon=True,
     )
     t.start()
-    log.info("IMU thread started (will activate when BNO055 is detected)")
+    log.info("IMU thread started (activates when a BNO055/BNO085 is detected)")
     return t
