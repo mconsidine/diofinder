@@ -560,6 +560,23 @@ reset `--clear-imu-calib`). Validate a newly-wired BNO085 on-device with:
 sudo /opt/diofinder/venv/bin/python3 /opt/diofinder/tests/diag_imu.py
 ```
 
+### Reducing readout jumpiness (experimental, v0.11.71)
+
+If the SkySafari readout looks "jumpy" during movement, it is usually the
+report snapping to every new plate solve — motion-blurred frames solve a touch
+differently each frame, and (in a solve drought) the IMU prediction snaps on
+each returning solve. **`imu_report_deadband_deg`** adds a position hysteresis
+to the reported RA/Dec: the readout holds steady until the fresh position moves
+more than the deadband, then advances. Default **0.25°** on this build; it
+trades deadband-sized steps during a genuine slew for a steady readout.
+
+Live A/B (no restart) to find your preference, or `0` to disable:
+
+```bash
+diofinder-ctl raw '{"cmd":"solver_params_set","args":{"imu_report_deadband_deg":0.0}}'   # off (prior behaviour)
+diofinder-ctl raw '{"cmd":"solver_params_set","args":{"imu_report_deadband_deg":0.25}}'  # default
+```
+
 ---
 
 ## Wi-Fi modes

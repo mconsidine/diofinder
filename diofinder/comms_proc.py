@@ -1719,6 +1719,47 @@ def _poll_snapshots(shared_cfg, latest_solution):
         return _poll_snap["cfg"], _poll_snap["sol"]
 
 
+# --- Report deadband (experimental, v0.11.71) --------------------------------
+# Position hysteresis on the FINAL reported pointing: hold the last reported
+# RA/Dec steady until the fresh candidate (IMU-predicted, or the raw solve when
+# the IMU path is idle) moves more than imu_report_deadband_deg away. This
+# targets the "jumpy during movement" readout: in normal fast solving the
+# solve-freshness gate (P1) keeps the readout on the raw latest solve, so
+# motion-blurred frames that solve a touch differently each frame hop the
+# crosshair; and in a solve drought the IMU prediction snaps on every returning
+# solve. A position deadband suppresses both sub-deadband jumps, at the cost of
+# advancing the readout in deadband-sized steps during a genuine slew
+# (acceptable on a ~13.5 deg finder). Applied in the internal J2000 frame,
+# BEFORE the JNow precession boundary, so the held state is epoch-consistent.
+# Default 0.25 deg on this experimental branch; 0 restores the exact prior
+# behaviour. Live-tunable via solver_params_set for A/B (set 0 to compare).
+_report_db_lock = threading.Lock()
+_report_db_state = {}            # {"ra": deg, "dec": deg}
+
+
+def _radec_sep_deg(ra1, dec1, ra2, dec2):
+    """Great-circle angular separation (degrees) between two RA/Dec points."""
+    r1, d1, r2, d2 = (math.radians(ra1), math.radians(dec1),
+                      math.radians(ra2), math.radians(dec2))
+    cosang = (math.sin(d1) * math.sin(d2)
+              + math.cos(d1) * math.cos(d2) * math.cos(r1 - r2))
+    return math.degrees(math.acos(max(-1.0, min(1.0, cosang))))
+
+
+def _apply_report_deadband(ra, dec, deadband_deg):
+    """Hold the last reported (ra,dec) until the candidate moves > deadband.
+    Pure hysteresis on the reported value; deadband_deg <= 0 is a no-op."""
+    if deadband_deg <= 0.0:
+        return ra, dec
+    with _report_db_lock:
+        st = _report_db_state
+        if not st:
+            st["ra"], st["dec"] = ra, dec
+        elif _radec_sep_deg(st["ra"], st["dec"], ra, dec) > deadband_deg:
+            st["ra"], st["dec"] = ra, dec
+        return st["ra"], st["dec"]
+
+
 def _report_radec(scfg, sol):
     """(ra_deg, dec_deg) to report to LX200 clients — IMU-predicted between
     solves when available, else the last solved position — converted from the
@@ -1735,6 +1776,14 @@ def _report_radec(scfg, sol):
         ra, dec = float(pred[0]), float(pred[1])
     else:
         ra, dec = float(sol.get("ra_deg", 0.0)), float(sol.get("dec_deg", 0.0))
+    # Experimental report deadband (v0.11.71) — see the block above. Applied in
+    # J2000, before precession.
+    try:
+        db = float(scfg.get("imu_report_deadband_deg", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        db = 0.0
+    if db > 0.0:
+        ra, dec = _apply_report_deadband(ra, dec, db)
     if str(scfg.get("report_epoch", "jnow")).lower() == "jnow":
         ra, dec = _precession.j2000_to_jnow(ra, dec)
     return ra, dec
@@ -2475,6 +2524,9 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "imu_predict_hold_solve_s",
                     getattr(ctx.cfg, "imu_predict_hold_solve_s",
                             _PREDICT_HOLD_SOLVE_S)),
+                "imu_report_deadband_deg": ctx.shared_cfg.get(
+                    "imu_report_deadband_deg",
+                    getattr(ctx.cfg, "imu_report_deadband_deg", 0.0)),
                 "imu_predict_enabled": ctx.shared_cfg.get(
                     "imu_predict_enabled",
                     getattr(ctx.cfg, "imu_predict_enabled", True)),
@@ -2699,6 +2751,20 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 # Read live by _imu_predict's motion gate; no solver round-trip.
                 ctx.shared_cfg["imu_rate_gate_dps"] = rg
                 updates["imu_rate_gate_dps"] = rg
+            if "imu_report_deadband_deg" in args:
+                try:
+                    rd = float(args["imu_report_deadband_deg"])
+                except (ValueError, TypeError) as e:
+                    return MaintResponse(
+                        ok=False,
+                        error=f"imu_report_deadband_deg must be numeric: {e}")
+                if not (0.0 <= rd <= 5.0):
+                    return MaintResponse(
+                        ok=False,
+                        error="imu_report_deadband_deg out of range [0, 5]")
+                # Read live by _report_radec via the poll snapshot; no restart.
+                ctx.shared_cfg["imu_report_deadband_deg"] = rd
+                updates["imu_report_deadband_deg"] = rd
             if "imu_predict_hold_solve_s" in args:
                 try:
                     hs = float(args["imu_predict_hold_solve_s"])

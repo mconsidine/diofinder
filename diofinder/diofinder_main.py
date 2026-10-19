@@ -173,6 +173,9 @@ def main():
         "imu_sensor": getattr(cfg, "imu_sensor", "auto"),
         # Seed the BNO085 rotation-vector flavour (game/stabilized_game/rotation).
         "imu_bno085_report": getattr(cfg, "imu_bno085_report", "game"),
+        # Seed the experimental report deadband (v0.11.71) — read live by comms
+        # _report_radec via the poll snapshot.
+        "imu_report_deadband_deg": getattr(cfg, "imu_report_deadband_deg", 0.0),
         "test_mode":     default_test_mode,
     })
     align_request_q  = mp.Queue(maxsize=4)

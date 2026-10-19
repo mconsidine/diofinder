@@ -27,7 +27,7 @@ DEFAULT_CONFIG_PATH = "/etc/diofinder/diofinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.11.70"
+    version: str = "0.11.71"
 
     # -------- Camera --------
     frame_width: int = 960
@@ -277,6 +277,15 @@ class Config:
     # prediction. Only once solves lapse past this does the IMU take over. 0
     # disables (pure rate-gate behaviour). Seeded into shared_cfg; live-tunable.
     imu_predict_hold_solve_s: float = 1.0
+    # Experimental (v0.11.71): position hysteresis on the FINAL reported RA/Dec.
+    # Hold the readout steady until the fresh candidate (IMU-predicted, or the
+    # raw solve when the IMU path is idle) moves more than this many degrees —
+    # suppresses the "jumpy during movement" hop where the readout snaps to every
+    # motion-blurred, slightly-different plate solve. Advances in deadband-sized
+    # steps during a genuine slew (fine on a ~13.5 deg finder). 0.25 on this
+    # branch; 0 = off (exact prior behaviour). Live-tunable via solver_params_set
+    # for A/B; read by comms _report_radec.
+    imu_report_deadband_deg: float = 0.25
     # Master switch for IMU extrapolation between solves. True (default) lets
     # the pointing path predict from the live IMU during a slew / solve drought;
     # false reports ONLY plate solves (held during a drought) and never touches
