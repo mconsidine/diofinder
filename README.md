@@ -279,12 +279,22 @@ The diofinder records the pixel offset and writes it to config. Survives restart
 | `:Sg ddd*mm#` | Set observer longitude | `1` |
 | `:Gt#` | Get latitude | `sDD*MM#` |
 | `:Gg#` | Get longitude | `sDDD*MM#` |
+| `:GA#` | Get altitude (of current pointing) | `sDD*MM#` |
+| `:GZ#` | Get azimuth (compass: 0=N, 90=E) | `DDD*MM#` |
 | `:SL HH:MM:SS#` | Set local time | `1` |
 | `:SC MM/DD/YY#` | Set date (syncs system clock) | `1Updating Planetary Data#` |
 | `:MS#` | Move to target (ignored) | `0` |
 | `:Q#` | Stop (ignored) | _(empty)_ |
 | `:GVP#` | Product name | `diofinder <version>#` |
 | `:GVN#` | Firmware version | `diofinder <version>#` |
+
+> **`:GA`/`:GZ` (altitude/azimuth) need a set site and clock.** They are derived
+> from the current pointing plus observer latitude/longitude (from SkySafari's
+> `:St`/`:Sg`, or `diofinder.conf`) and the system time (azimuth depends on local
+> sidereal time; the Pi has no RTC). Until both are set they return a neutral
+> `+00*00#` / `000*00#` stub. The same values are available off the LX200 wire on
+> the maintenance socket — `diofinder-ctl raw '{"cmd":"altaz"}'` →
+> `{alt_deg, az_deg}` — for the web UI or a local reader.
 
 ---
 

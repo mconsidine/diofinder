@@ -19,6 +19,7 @@ Pure functions, unit-tested in `tests/test_horizon.py` with no hardware.
 from __future__ import annotations
 
 import datetime
+import math
 
 # A UTC year below this means the system clock was never set (Pi has no RTC).
 # With no trusted time the horizon would be rotated arbitrarily, so we refuse
@@ -61,6 +62,33 @@ def local_sidereal_time_deg(dt_utc: datetime.datetime, longitude_deg: float) -> 
     d = _julian_date(dt_utc) - 2451545.0
     gmst = (280.46061837 + 360.98564736629 * d) % 360.0
     return (gmst + longitude_deg) % 360.0
+
+
+def radec_to_altaz(ra_deg: float, dec_deg: float,
+                   latitude_deg: float, lst_deg: float):
+    """Equatorial (RA/Dec, of date) -> horizontal (altitude, azimuth) for an
+    observer at ``latitude_deg`` whose local sidereal time is ``lst_deg`` (all
+    degrees). Azimuth uses the compass convention: measured from North and
+    increasing toward East (0=N, 90=E, 180=S, 270=W). Returns
+    ``(altitude_deg, azimuth_deg)`` with azimuth in [0, 360).
+
+    Pure trig, no numpy. Precision tracks local_sidereal_time_deg (mean equinox
+    of date, well under a degree) — ample for a finder readout. The caller is
+    responsible for passing RA/Dec of date (JNow) and a valid site + clock.
+    """
+    H = math.radians(lst_deg - ra_deg)              # local hour angle
+    phi = math.radians(latitude_deg)
+    dec = math.radians(dec_deg)
+    sin_alt = (math.sin(phi) * math.sin(dec)
+               + math.cos(phi) * math.cos(dec) * math.cos(H))
+    sin_alt = max(-1.0, min(1.0, sin_alt))
+    alt = math.asin(sin_alt)
+    az = math.atan2(
+        -math.cos(dec) * math.sin(H),
+        math.sin(dec) * math.cos(phi)
+        - math.cos(dec) * math.sin(phi) * math.cos(H),
+    )
+    return math.degrees(alt), math.degrees(az) % 360.0
 
 
 def site_is_set(latitude_deg: float, longitude_deg: float) -> bool:

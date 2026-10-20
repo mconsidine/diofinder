@@ -40,6 +40,7 @@ from queue import Empty, Full, Queue
 from diofinder import config as cfg_mod
 from diofinder import bg_modes as bg_modes_mod
 from diofinder import precession as _precession
+from diofinder import horizon as _horizon
 from diofinder import mountlink as _mountlink
 from diofinder.align import AlignRequest, AlignResult, CommsAlignState
 from diofinder.imu_math import (quat_delta_rotvec, alpha_beta_step,
@@ -1740,6 +1741,48 @@ def _report_radec(scfg, sol):
     return ra, dec
 
 
+def _report_altaz(scfg, sol, cfg):
+    """(altitude_deg, azimuth_deg) of the current reported pointing, or None
+    when the horizontal frame is undefined because the observing site (lat/lon)
+    or the clock is not set — azimuth depends on BOTH position AND time (via
+    local sidereal time), and the Pi has no RTC. Uses the same JNow RA/Dec that
+    :GR/:GD report, so the Alt/Az tracks the crosshair. Azimuth is compass
+    convention: 0=N, 90=E, 180=S, 270=W."""
+    try:
+        lat = float(getattr(cfg, "latitude_deg", 0.0) or 0.0)
+        lon = float(getattr(cfg, "longitude_deg", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if not _horizon.site_is_set(lat, lon) or not _horizon.clock_is_plausible():
+        return None
+    ra, dec = _report_radec(scfg, sol)          # JNow, as :GR/:GD
+    lst = _horizon.local_sidereal_time_deg(datetime.datetime.utcnow(), lon)
+    return _horizon.radec_to_altaz(ra, dec, lat, lst)
+
+
+def _format_altitude(alt_deg):
+    """LX200 :GA reply, signed 'sDD*MM#'."""
+    sign = "+" if alt_deg >= 0 else "-"
+    a = abs(alt_deg)
+    d = int(a)
+    m = int(round((a - d) * 60.0))
+    if m >= 60:
+        d += 1
+        m = 0
+    return f"{sign}{d:02d}*{m:02d}#"
+
+
+def _format_azimuth(az_deg):
+    """LX200 :GZ reply, unsigned 'DDD*MM#' in [000,359]."""
+    a = az_deg % 360.0
+    d = int(a)
+    m = int(round((a - d) * 60.0))
+    if m >= 60:
+        d = (d + 1) % 360
+        m = 0
+    return f"{d:03d}*{m:02d}#"
+
+
 def _handle_lx200_command(cmd, latest_solution, align_state, time_state,
                           cfg, shared_cfg,
                           align_request_q, align_response_q, ctx=None):
@@ -1852,7 +1895,17 @@ def _handle_lx200_command(cmd, latest_solution, align_state, time_state,
     if cmd == ":GG":
         return b"+00#"
     if cmd in (":GA", ":GZ"):
-        return b"+00*00#"
+        # Real altitude (:GA) / azimuth (:GZ) of the current pointing, computed
+        # from the reported RA/Dec + observer site + local sidereal time. Falls
+        # back to the neutral stub (legacy behaviour) when the site/clock aren't
+        # set, so a client never stalls waiting on these.
+        scfg, sol = _poll_snapshots(shared_cfg, latest_solution)
+        altaz = _report_altaz(scfg, sol, cfg)
+        if altaz is None:
+            return b"+00*00#" if cmd == ":GA" else b"000*00#"
+        alt, az = altaz
+        reply = _format_altitude(alt) if cmd == ":GA" else _format_azimuth(az)
+        return reply.encode("ascii")
     if cmd not in _lx200_unhandled_seen and len(_lx200_unhandled_seen) < 64:
         _lx200_unhandled_seen.add(cmd)
         log.info("LX200 unhandled command (first seen): %r — if this is your "
@@ -1872,6 +1925,22 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
     try:
         if cmd == "ping":
             return MaintResponse(ok=True, result={"pong": True})
+
+        if cmd == "altaz":
+            # Horizontal coords of the current pointing (compass azimuth: 0=N,
+            # 90=E). available=False when the site (lat/lon) or clock isn't set,
+            # since azimuth is undefined without both.
+            scfg = dict(ctx.shared_cfg)
+            sol = dict(ctx.latest_solution)
+            altaz = _report_altaz(scfg, sol, ctx.cfg)
+            if altaz is None:
+                return MaintResponse(ok=True, result={
+                    "available": False,
+                    "reason": "observing site (lat/lon) or clock not set"})
+            return MaintResponse(ok=True, result={
+                "available": True,
+                "alt_deg": round(altaz[0], 4),
+                "az_deg": round(altaz[1], 4)})
 
         if cmd == "version":
             # Resolution order: OTA-written release file -> git describe of the
