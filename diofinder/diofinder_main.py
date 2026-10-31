@@ -208,6 +208,18 @@ def main():
         p.start()
         log.info("Started %s pid=%d", p.name, p.pid)
 
+    # Publish worker PIDs so the resource monitor (sysmon) can attribute RSS/CPU
+    # and affinity per process. Purely informational; no behaviour change. The
+    # launcher process also hosts the IMU thread; the web UI is a separate
+    # service and is discovered by sysmon on its own.
+    try:
+        shared_cfg["proc_pids"] = {
+            "launcher": os.getpid(),
+            **{p.name.replace("diofinder-", ""): p.pid for p in procs},
+        }
+    except Exception as e:
+        log.warning("Could not publish proc_pids for sysmon: %s", e)
+
     def _shutdown(signum, _frame):
         log.info("Received signal %d; shutting down children", signum)
         for p in procs:

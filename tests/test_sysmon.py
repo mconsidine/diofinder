@@ -47,6 +47,23 @@ def test_cpu_pct_from_deltas():
     assert pct2["cpu0"] == 50.0
 
 
+def test_parse_proc_statm():
+    # fields: size resident shared text lib data dt  (resident = field 2)
+    assert sysmon.parse_proc_statm("50000 12000 3000 10 0 8000 0") == round(12000 * sysmon._PAGE_KB, 1)
+    assert sysmon.parse_proc_statm("garbage") is None
+
+
+def test_parse_proc_stat_times():
+    # comm with spaces + parens must not break field parsing.
+    # Build: pid (comm) state ... utime(f14) stime(f15) ... processor(f39)
+    fields3plus = ["R"] + [str(i) for i in range(1, 50)]  # state then f4..f52
+    # after[11] = f14 = value "11"; after[12] = f15 = "12"; after[36] = f39 = "36"
+    line = "123 (py thread (x)) " + " ".join(fields3plus)
+    ticks, last_cpu = sysmon.parse_proc_stat_times(line)
+    assert ticks == 11 + 12
+    assert last_cpu == 36
+
+
 def test_parse_temp_and_loadavg():
     assert sysmon.parse_temp_c("48312\n") == 48.3
     assert sysmon.parse_temp_c("garbage") is None

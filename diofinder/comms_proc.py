@@ -1207,10 +1207,18 @@ def _sysmon_loop(ctx, interval_s=5.0):
         log.warning("sysmon init failed: %s", e)
         return
     log.info("Resource monitor (sysmon) started (interval=%.0fs)", interval_s)
+    webui_pid = None
     while True:
         time.sleep(interval_s)
         try:
-            _SYSMON.sample()
+            # Worker PIDs come from the launcher (shared_cfg); the web UI is a
+            # separate service, discovered + cached (re-found if it restarts).
+            pids = dict(ctx.shared_cfg.get("proc_pids", {}) or {})
+            if webui_pid is None or not os.path.exists("/proc/%d" % webui_pid):
+                webui_pid = _sysmon.discover_pid_by_cmdline("webui.app")
+            if webui_pid:
+                pids["webui"] = webui_pid
+            _SYSMON.sample(pids)
         except Exception as e:
             log.debug("sysmon sample failed: %s", e)
 

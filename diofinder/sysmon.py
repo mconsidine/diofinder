@@ -25,7 +25,17 @@ Design notes:
 
 from __future__ import annotations
 
+import os
 import time
+
+try:
+    _CLK_TCK = os.sysconf("SC_CLK_TCK") or 100
+except (ValueError, OSError):
+    _CLK_TCK = 100
+try:
+    _PAGE_KB = (os.sysconf("SC_PAGE_SIZE") or 4096) / 1024.0
+except (ValueError, OSError):
+    _PAGE_KB = 4.0
 
 _PROC_MEMINFO = "/proc/meminfo"
 _PROC_STAT = "/proc/stat"
@@ -145,6 +155,48 @@ def parse_temp_c(text: str):
         return None
 
 
+def parse_proc_statm(text: str) -> float | None:
+    """/proc/<pid>/statm -> resident set size in KB (field 2 = resident pages)."""
+    try:
+        return round(int(text.split()[1]) * _PAGE_KB, 1)
+    except (ValueError, IndexError, AttributeError):
+        return None
+
+
+def parse_proc_stat_times(text: str):
+    """/proc/<pid>/stat -> (utime+stime jiffies, last_cpu) or (None, None).
+
+    The comm field (2) may contain spaces/parens, so split after the final ')'
+    — everything after is whitespace-delimited starting at field 3 (state)."""
+    try:
+        after = text[text.rindex(")") + 1:].split()
+        # after[0]=state(f3); utime=f14 -> after[11]; stime=f15 -> after[12];
+        # processor=f39 -> after[36].
+        ticks = int(after[11]) + int(after[12])
+        last_cpu = int(after[36]) if len(after) > 36 else None
+        return ticks, last_cpu
+    except (ValueError, IndexError):
+        return None, None
+
+
+def discover_pid_by_cmdline(marker: str) -> int | None:
+    """First PID whose /proc/<pid>/cmdline contains `marker` (NUL-joined args
+    rendered with spaces). Used to find the separate web UI service."""
+    try:
+        pids = [int(d) for d in os.listdir("/proc") if d.isdigit()]
+    except OSError:
+        return None
+    for pid in pids:
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as f:
+                cmd = f.read().replace(b"\0", b" ").decode("utf-8", "ignore")
+        except OSError:
+            continue
+        if marker in cmd:
+            return pid
+    return None
+
+
 def classify(snapshot: dict, thresholds: dict | None = None) -> dict:
     """Pure verdict from a snapshot's high-water values (post-warm-up).
 
@@ -223,6 +275,7 @@ class SysMon:
         self.warmup_s = float(warmup_s)
         self._prev_cpu = None
         self._prev_swap_mb = None
+        self._prev_proc = {}          # pid -> (ticks, monotonic) for CPU% deltas
         self._last = {}
         self.started_mono = time.monotonic()
         self.started_wall = time.time()
@@ -263,15 +316,53 @@ class SysMon:
         if tc is not None:
             hw["max_temp_c"] = tc if hw["max_temp_c"] is None else max(hw["max_temp_c"], tc)
 
-    def sample(self) -> dict:
+    def _sample_processes(self, pids: dict, now_mono: float) -> list:
+        """Per-process RSS / CPU% / core affinity for {label: pid}. Read-only."""
+        out = []
+        seen = set()
+        for label, pid in pids.items():
+            try:
+                pid = int(pid)
+            except (TypeError, ValueError):
+                continue
+            rss_kb = parse_proc_statm(_read(f"/proc/{pid}/statm") or "")
+            rss = round(rss_kb / 1024.0, 1) if rss_kb is not None else None
+            ticks, last_cpu = parse_proc_stat_times(_read(f"/proc/{pid}/stat") or "")
+            cpu_pct = None
+            if ticks is not None:
+                prev = self._prev_proc.get(pid)
+                if prev is not None:
+                    prev_ticks, prev_mono = prev
+                    elapsed = now_mono - prev_mono
+                    dticks = ticks - prev_ticks
+                    if elapsed > 0 and dticks >= 0:
+                        cpu_pct = round(100.0 * dticks / _CLK_TCK / elapsed, 1)
+                self._prev_proc[pid] = (ticks, now_mono)
+                seen.add(pid)
+            try:
+                aff = sorted(os.sched_getaffinity(pid))
+            except OSError:
+                aff = None
+            out.append({"label": label, "pid": pid, "rss_mb": rss,
+                        "cpu_pct": cpu_pct, "affinity": aff, "last_cpu": last_cpu})
+        # Forget vanished PIDs so a restarted process doesn't carry stale ticks.
+        for dead in [p for p in self._prev_proc if p not in seen]:
+            self._prev_proc.pop(dead, None)
+        return out
+
+    def sample(self, pids: dict | None = None) -> dict:
         """Read /proc + /sys, update CPU deltas and high-water-marks, and
-        return the current snapshot (also cached for snapshot())."""
-        uptime = round(time.monotonic() - self.started_mono, 1)
+        return the current snapshot (also cached for snapshot()). When `pids`
+        ({label: pid}) is given, also attach per-process RSS/CPU/affinity."""
+        now_mono = time.monotonic()
+        uptime = round(now_mono - self.started_mono, 1)
         snap = {
             "uptime_s": uptime,
             "warmup_s": self.warmup_s,
             "in_warmup": uptime < self.warmup_s,
         }
+        if pids:
+            snap["processes"] = self._sample_processes(pids, now_mono)
 
         mem = _read(_PROC_MEMINFO)
         if mem:

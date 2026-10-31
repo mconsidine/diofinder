@@ -29,6 +29,15 @@
       <dt>Temperature</dt><dd id="sm-temp">&mdash;</dd>
       <dt>Worst since start</dt><dd id="sm-hw">&mdash;</dd>
     </dl>
+    <table class="preset-table" id="sysmon-procs" style="margin-top:10px;display:none;">
+      <thead><tr><th>process</th><th>RAM</th><th>CPU</th><th>cores (allowed · on)</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <p class="hint" id="sysmon-procs-note" style="margin:6px 0 0 0;display:none;">
+      Per-process resident RAM, CPU (solver can exceed 100% &mdash; it runs on 3
+      cores), and core pinning. CPU&nbsp;0 is shared by launcher/IMU, comms, and
+      the web&nbsp;UI.
+    </p>
   </div>
 
   {# ---- Hot-pixel / dark frame ---- #}
@@ -167,6 +176,18 @@
           ", swap " + (hw.max_swap_used_mb != null ? hw.max_swap_used_mb + " MB" : "—") +
           ", CPU0 " + pctStr(hw.max_cpu0_pct) +
           (hw.max_temp_c != null ? ", " + hw.max_temp_c + " °C" : ""));
+      var procs = res.processes || [], tbl = document.getElementById("sysmon-procs");
+      if (procs.length && tbl) {
+        tbl.querySelector("tbody").innerHTML = procs.map(function (p) {
+          var cores = (p.affinity ? p.affinity.join(",") : "—") +
+                      (p.last_cpu != null ? " · " + p.last_cpu : "");
+          return "<tr><td>" + p.label + "</td><td>" +
+            (p.rss_mb != null ? p.rss_mb + " MB" : "—") + "</td><td>" +
+            (p.cpu_pct != null ? p.cpu_pct + "%" : "—") + "</td><td>" + cores + "</td></tr>";
+        }).join("");
+        tbl.style.display = "";
+        document.getElementById("sysmon-procs-note").style.display = "";
+      }
     }).catch(function () { /* keep last values on a transient error */ });
   }
   poll();
