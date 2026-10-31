@@ -294,6 +294,22 @@ f32 + per-worker-rayon structure, validated on the bundle corpus
 solve_ms AND resident RSS**. Grab (3) and (4) as cheap riders. This is the
 "upstream changes are now useful" answer — and the numbers are real this time.
 
+**Caveat (operator note, 2026-10-31) — parked, not pursued.** The +16 %
+kiddo-6 *latency* win is Amdahl-dominated and effectively invisible in
+diofinder's operating regime: detect+solve is ~20–30 ms while the exposure that
+gates frame cadence is an order of magnitude larger (~200 ms–1 s+), so ~5 ms
+saved is ~2 % of the cycle, and frame rate is exposure-bound regardless of
+solve time. So the **speed** case is weak — it would only matter if very short
+exposures on bright fields ever became an operating mode. The multi-precision
+catalog is a **memory** win (~18 MB resident freed), on a different axis
+entirely: its value is RAM headroom on the 512 MB box, not cycle time, so the
+exposure-dominance argument does not apply to it — but it is worth the
+complexity **only if RSS is a measured constraint** (swap thrash / OOM pressure
+/ load-induced "camera unavailable"). On a device that runs comfortably it is
+also skippable. **Decision: both parked.** Revisit the memory port only if
+resident RAM becomes a real constraint; do not re-propose the latency port on
+cycle-time grounds.
+
 ### The fused-solver / `olive-imu` stack — still SKIP as a whole, softened sensor objection
 
 `original`/`v2` are now a coherent parallel system: a `FusedSolver` /
