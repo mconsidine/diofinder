@@ -15,7 +15,7 @@ import subprocess
 import sys
 import threading
 import zipfile
-from datetime import datetime
+from datetime import datetime, timezone
 
 from flask import (
     Flask, render_template, redirect, url_for, request, jsonify, abort,
@@ -2188,7 +2188,12 @@ def debug_collect():
                         si = _safe_call("status")
                         rec = {
                             "frame": f"frame_{idx:02d}",
-                            "wall_time": datetime.now().isoformat(timespec="milliseconds"),
+                            # UTC (tz-aware) so saved_at carries +00:00 and the
+                            # whole frames.json is uniformly UTC — matches the
+                            # SensorTimestamp-derived exposure_start_utc /
+                            # readout_start_utc (naive datetime.now() was local
+                            # time, an hour off on a UTC+1 device).
+                            "wall_time": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
                             "seq": f_seq,
                             "imu": (si.result.get("imu")
                                     if si.ok and si.result else None),
