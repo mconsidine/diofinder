@@ -1867,7 +1867,6 @@ def _read_focus_data():
     """Read one frame and compute a Laplacian-variance focus score around the brightest star."""
     import numpy as np
     from multiprocessing import shared_memory, resource_tracker as _rt
-    from scipy.ndimage import laplace as nd_laplace
     from PIL import Image
 
     try:
@@ -1887,7 +1886,18 @@ def _read_focus_data():
     cy     = int(idx[0]) + HALF
     cx     = int(idx[1]) + HALF
     patch  = frame[cy - HALF:cy + HALF, cx - HALF:cx + HALF].astype(np.float32)
-    score  = float(nd_laplace(patch).var())
+    # Laplacian-variance focus score, pure numpy. Importing scipy into the web
+    # UI process (CPU 0, shared with comms + IMU) just for this cost ~30-50 MB
+    # RSS and forced the box into zram when the Focus page was opened. This is
+    # the identical 5-point Laplacian stencil ([[0,1,0],[1,-4,1],[0,1,0]] ==
+    # scipy.ndimage.laplace); the interior is used (1-px border trimmed) to
+    # avoid boundary artifacts. The score is relative (session-max normalised),
+    # so this is behaviourally equivalent to the scipy version.
+    lap = (-4.0 * patch
+           + np.roll(patch, 1, 0) + np.roll(patch, -1, 0)
+           + np.roll(patch, 1, 1) + np.roll(patch, -1, 1))
+    core = lap[1:-1, 1:-1] if (lap.shape[0] > 2 and lap.shape[1] > 2) else lap
+    score = float(core.var())
 
     patch_img = Image.fromarray(
         patch.clip(0, 255).astype(np.uint8), mode="L")
