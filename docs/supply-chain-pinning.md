@@ -137,3 +137,110 @@ Leave all repo variables unset and build this branch — the pinned defaults are
 the v0.11.70 values. (apt and pip versions may still differ if the Debian/PyPI
 repos have moved; compare the resulting `build-manifest.json` against a
 v0.11.70 device to confirm.)
+
+---
+
+# How to intentionally move a pin
+
+Every pin is a **default in code** plus an **override** (a `workflow_dispatch`
+input, a repo variable, or an env var for local builds). You almost never edit
+code to move a pin for a one-off build — set the override. Edit the code
+default only when you want the new value to become the permanent baseline, then
+cut a new diofinder release so the default is recorded in git.
+
+**Golden rule:** change one pin, build, flash, and verify on-device *before*
+changing the next. The whole point of this machinery is that a regression has
+exactly one suspect. Each recipe below ends with the one check that proves it.
+
+### Update the Pi OS base image
+
+The base image and the Debian snapshot should move **together** (same date) so
+the OS and its package set stay consistent.
+
+1. Find the new dated snapshot at
+   `https://downloads.raspberrypi.com/raspios_lite_arm64/images/` and its
+   `…img.xz.sha256`.
+2. One-off build: set repo vars `BASE_IMAGE_URL` (full `.img.xz` URL) and
+   `BASE_IMAGE_SHA256` (the hash). Permanent: edit `_DEFAULT_BASE_IMAGE_URL` and
+   `_DEFAULT_BASE_IMAGE_SHA256` in `build/build-image.sh`.
+3. Also move the Debian snapshot (next section) to the same date.
+4. Build. The build **hard-fails at download** if the hash doesn't match — that
+   is the integrity check working, not a bug.
+5. Verify: solve on-sky, and diff the new device's
+   `/var/lib/diofinder/build-manifest.json` against the old one — expect numpy,
+   libcamera, picamera2 to be the only intended movers.
+
+### Update the Debian snapshot (and with it, numpy/scipy/pillow/flask)
+
+1. Pick a timestamp `YYYYMMDDTHHMMSSZ` (midnight of the base-image date is fine;
+   snapshot.debian.org resolves to the nearest run at or before it).
+2. One-off: repo var `DEBIAN_SNAPSHOT`. Permanent: edit the `_DEB_SNAPSHOT`
+   default in `scripts/install.sh`.
+3. **Check the numpy it pins before building** — this is the ABI the fork
+   wheels must tolerate:
+   ```
+   curl -fsSL "https://snapshot.debian.org/archive/debian/<TS>/dists/trixie/main/binary-arm64/Packages.xz" \
+     | xz -d | grep -A1 '^Package: python3-numpy'
+   ```
+   If the **major** version changes (e.g. 2.x → 3.x), you MUST rebuild the fork
+   wheels against it first (see "Update numpy across an ABI boundary").
+4. Build, flash. Backstop: the chroot `import star_detect` / `import tetra3`
+   check fails the build on a gross ABI mismatch.
+5. Verify: `venv/bin/python -c "import numpy; print(numpy.__version__)"` on-device
+   matches the snapshot, and the solver runs.
+6. Escape hatch: `DEBIAN_SNAPSHOT=off` reverts to live apt if the snapshot host
+   is unreachable.
+
+### Update numpy across an ABI boundary (the coupled case — Tier 3)
+
+Only needed when the numpy **major** changes. Within a major (2.4 → 2.7) the ABI
+is stable and you can just move the Debian snapshot.
+
+1. Rebuild the fork wheels against the new numpy major: in **sycamore-extract**
+   and **olive-solve** CI, pin the build-time numpy (`numpy==<major>.*` /
+   `oldest-supported-numpy`), rebuild, and publish new release tags.
+2. Move the Debian snapshot to a date carrying that numpy major (above).
+3. Bump `SYCAMORE_TAG` / `OLIVE_SOLVE_TAG` to the rebuilt wheels (next section).
+4. Build all three changes in ONE image and verify the import check passes and
+   it solves. (This is the one case where several pins must move together.)
+
+### Update sycamore-extract or olive-solve (the fork wheels)
+
+1. Confirm the new release has an `aarch64` wheel asset
+   (`star_detect-*aarch64*.whl` / `tetra3-*aarch64*.whl`).
+2. One-off: `workflow_dispatch` input `sycamore_tag` / `olive_solve_tag`, or repo
+   var `SYCAMORE_TAG` / `OLIVE_SOLVE_TAG`. Permanent: edit the `|| 'vX.Y.Z'`
+   default in `.github/workflows/release.yml`.
+3. Build. Backstop: the chroot import check fails the build if the new wheel is
+   numpy-ABI-incompatible with the pinned snapshot.
+4. Verify: `diofinder-ctl version` shows the new wheel versions (also in the
+   startup log, Home/Update pages, and every debug bundle's
+   `effective_params.json`), and it solves on-sky.
+
+### Update the star database
+
+1. New `astro_databases` release with `diofinder_13deg.npz` (+ optional
+   `_mag85`, `star_names.csv`, `messier.csv`) and a `manifest.json` carrying
+   their SHA-256.
+2. One-off: input `db_tag` or repo var `DB_TAG`. Permanent: edit the
+   `|| '2026.07.01'` default in `release.yml`.
+3. Build — the workflow SHA-256-verifies the DB against the release manifest.
+4. **Reset FOV calibration after flashing** (a new DB can shift the FOV band):
+   Config page → Reset, or set `fov_calibrated: false` and restart. Verify it
+   re-converges and solves.
+
+### Update smbus2 / pyserial
+
+Edit the pins in `requirements.txt`, then confirm on a device:
+`venv/bin/python -c "import smbus2, serial; print(smbus2.__version__, serial.VERSION)"`.
+
+### Update esa/tetra3 (custom-FOV DB generation only)
+
+Only matters if you regenerate a DB at a non-default FOV. Set repo var
+`TETRA3_REF` (or env `DIOFINDER_TETRA3_REF`) to a commit/tag; empty = HEAD.
+
+### After any permanent default change
+
+Bump `diofinder/config.py` `version`, update this file's tables, commit, and cut
+a new diofinder release so the new baseline is what a fresh `workflow_dispatch`
+(with no overrides) reproduces.
