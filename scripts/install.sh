@@ -343,6 +343,16 @@ print('sycamore star_detect OK')
 mkdir -p /var/lib/diofinder
 chown "${DIOFINDER_USER}:${DIOFINDER_USER}" /var/lib/diofinder 2>/dev/null || true
 
+# Belt-and-suspenders test frame: if the checkout carries a root test.png, drop
+# a copy at /var/lib/diofinder/test.png too. The daemon already finds
+# /opt/diofinder/test.png (the checkout is a search path), but staging it here
+# as well means the web UI Test/Live toggle works even if the checkout moves.
+if [ -f "$DIOFINDER_DIR/test.png" ] && [ ! -f /var/lib/diofinder/test.png ]; then
+  cp "$DIOFINDER_DIR/test.png" /var/lib/diofinder/test.png
+  chown "${DIOFINDER_USER}:${DIOFINDER_USER}" /var/lib/diofinder/test.png 2>/dev/null || true
+  LOG "Installed test frame at /var/lib/diofinder/test.png"
+fi
+
 # Stamp the build version so a freshly burned (never-OTA'd) image reports its
 # real tag via `diofinder-ctl version` / the web UI, in the same format
 # diofinder-update writes. Prefer the explicit build tag (DIOFINDER_VERSION); fall

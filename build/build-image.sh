@@ -325,8 +325,10 @@ else
   WARN "vendor/ not found; install.sh will fail (populate vendor/wheels/ from the source repos' releases first)"
 fi
 
-# Optional documentation
-for f in README.md TODO.md; do
+# Optional documentation + the bench test frame (test.png). Staging test.png
+# makes the selective cp -r put it in /opt/diofinder, and install.sh then also
+# mirrors it to /var/lib/diofinder/test.png (belt-and-suspenders).
+for f in README.md TODO.md test.png; do
   [ -f "$SRC_DIR/$f" ] && cp "$SRC_DIR/$f" "$ROOT/tmp/diofinder-src/" || true
 done
 
