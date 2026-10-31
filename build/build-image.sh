@@ -44,9 +44,22 @@ DRY_RUN="${DIOFINDER_BUILD_DRY_RUN:-0}"
 DIOFINDER_REPO_URL="${DIOFINDER_REPO_URL:-https://github.com/${REPO}.git}"
 DIOFINDER_GIT_REF="${DIOFINDER_GIT_REF:-}"
 
-# Pin to "_latest" -- the user has accepted this trade-off (image
-# always uses the most recent published Trixie Lite at build time).
-BASE_IMAGE_URL="https://downloads.raspberrypi.com/raspios_lite_arm64_latest"
+# Pinned base image (v0.11.73 supply-chain freeze). v0.11.70 built on
+# 2026-10-04 against the then-current "_latest", which resolved to the
+# 2026-09-15 Trixie Lite arm64 snapshot (the 2026-10-06 refresh landed two
+# days later). Pinning to the dated snapshot makes rebuilds reproducible
+# instead of silently tracking whatever Pi OS is newest at build time.
+#
+#   * Override the URL with DIOFINDER_BASE_IMAGE_URL to move the pin
+#     deliberately (e.g. a later snapshot you have tested).
+#   * Set DIOFINDER_BASE_IMAGE_SHA256 to ENFORCE integrity (hard-fail on
+#     mismatch). Leave it empty and the build still prints the measured
+#     hash so you can capture and pin it ("record-then-enforce"): the
+#     downloads server publishes no stable hash we can bake in here, so the
+#     first pinned build is where you lock it.
+_DEFAULT_BASE_IMAGE_URL="https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-09-15/2026-09-15-raspios-trixie-arm64-lite.img.xz"
+BASE_IMAGE_URL="${DIOFINDER_BASE_IMAGE_URL:-$_DEFAULT_BASE_IMAGE_URL}"
+BASE_IMAGE_SHA256="${DIOFINDER_BASE_IMAGE_SHA256:-}"
 
 LOG()  { echo "==> $*"; }
 WARN() { echo "WARNING: $*" >&2; }
@@ -87,7 +100,15 @@ else
   LOG "Generating tetra3 star database on host (takes ~20-40 min)..."
   command -v python3 >/dev/null 2>&1 \
     || FAIL "python3 required for database generation (apt install python3)"
-  python3 -m pip install --quiet "git+https://github.com/esa/tetra3.git" \
+  # esa/tetra3 is only used on the custom-FOV database-generation path (the
+  # default build uses the prebuilt astro_databases .npz and never imports it).
+  # It is the one upstream we cannot pin to a published release (esa/tetra3
+  # tags sparsely); DIOFINDER_TETRA3_REF lets you pin a commit/tag when you
+  # DO regenerate a DB, so a custom-FOV rebuild is reproducible. Empty = HEAD.
+  _T3_REF="${DIOFINDER_TETRA3_REF:-}"
+  _T3_SPEC="git+https://github.com/esa/tetra3.git${_T3_REF:+@${_T3_REF}}"
+  LOG "Installing esa/tetra3 ($_T3_SPEC)"
+  python3 -m pip install --quiet "$_T3_SPEC" \
     || FAIL "esa/tetra3 install failed"
   TETRA3_DIR=$(python3 -c \
     'import pathlib, tetra3; print(pathlib.Path(tetra3.__file__).parent)')
@@ -115,6 +136,26 @@ if [ ! -f base.img.xz ]; then
   curl -fsSL --retry 3 -o base.img.xz "$BASE_IMAGE_URL" \
     || FAIL "Failed to download base image"
 fi
+
+# Integrity: record-then-enforce. With DIOFINDER_BASE_IMAGE_SHA256 set we
+# hard-fail on mismatch; without it we print the measured hash loudly so the
+# operator can capture and pin it. Either way the effective URL + measured
+# hash are exported into the chroot so install.sh records them in the build
+# manifest.
+_BASE_SHA_MEASURED=$(sha256sum base.img.xz | cut -d' ' -f1)
+LOG "Base image SHA-256: $_BASE_SHA_MEASURED"
+if [ -n "$BASE_IMAGE_SHA256" ]; then
+  if [ "$_BASE_SHA_MEASURED" = "$BASE_IMAGE_SHA256" ]; then
+    LOG "Base image SHA-256 verified against pin"
+  else
+    FAIL "Base image SHA-256 mismatch: got $_BASE_SHA_MEASURED, expected $BASE_IMAGE_SHA256"
+  fi
+else
+  WARN "DIOFINDER_BASE_IMAGE_SHA256 not set — base image NOT integrity-checked" \
+       "(measured $_BASE_SHA_MEASURED; set the var to enforce it)"
+fi
+export DIOFINDER_BASE_IMAGE_URL_EFF="$BASE_IMAGE_URL"
+export DIOFINDER_BASE_IMAGE_SHA256_EFF="$_BASE_SHA_MEASURED"
 
 if [ ! -f base.img ]; then
   LOG "Decompressing base image"
@@ -328,6 +369,8 @@ export DIOFINDER_CHROOT=1
 export DIOFINDER_VERSION="${DIOFINDER_VERSION}"
 export DIOFINDER_REPO_URL="${DIOFINDER_REPO_URL}"
 export DIOFINDER_GIT_REF="${DIOFINDER_GIT_REF}"
+export DIOFINDER_BASE_IMAGE_URL_EFF="${DIOFINDER_BASE_IMAGE_URL_EFF:-}"
+export DIOFINDER_BASE_IMAGE_SHA256_EFF="${DIOFINDER_BASE_IMAGE_SHA256_EFF:-}"
 ${CHROOT_DB_PATH:+export DIOFINDER_SOLVER_DB="${CHROOT_DB_PATH}"}
 ${CHROOT_DEEP_DB_PATH:+export DIOFINDER_SOLVER_DB_DEEP="${CHROOT_DEEP_DB_PATH}"}
 ${CHROOT_NAMES_PATH:+export DIOFINDER_STAR_NAMES="${CHROOT_NAMES_PATH}"}

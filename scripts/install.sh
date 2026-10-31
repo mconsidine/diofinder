@@ -211,6 +211,19 @@ sudo -u "$DIOFINDER_USER" "$DIOFINDER_DIR/venv/bin/pip" install --upgrade \
   setuptools wheel \
   || FAIL "pip install setuptools wheel failed"
 
+# Install the pinned runtime deps (smbus2 for the IMU, pyserial for the mount
+# link). Before v0.11.73 this ran only on the OTA update path, so a freshly
+# BURNED image could boot without smbus2 and the IMU thread would fail to
+# probe — installing it here closes that fresh-image gap.
+if [ -f "$DIOFINDER_DIR/requirements.txt" ]; then
+  LOG "Installing pinned runtime deps (requirements.txt)"
+  sudo -u "$DIOFINDER_USER" "$DIOFINDER_DIR/venv/bin/pip" install \
+    -r "$DIOFINDER_DIR/requirements.txt" \
+    || FAIL "requirements.txt install failed"
+else
+  WARN "requirements.txt not found in $DIOFINDER_DIR — smbus2/pyserial not installed"
+fi
+
 # --- Install olive-solve tetra3-py -------------------------------------------
 # Only aarch64 wheels are accepted (armv6l wheels will NOT work on the
 # Pi Zero 2W). vendor/wheels/ is populated at image-build time by
@@ -485,6 +498,82 @@ systemctl mask serial-getty@serial0.service serial-getty@ttyAMA0.service \
 LOG "Enabling USB serial console (serial-getty@ttyGS0)"
 systemctl enable serial-getty@ttyGS0.service 2>/dev/null || \
   WARN "Could not enable serial-getty@ttyGS0"
+
+# --- Build manifest ----------------------------------------------------------
+# Record exactly what went into this image: the pinned fork wheels (+ their
+# SHA-256), the star DB, the base-image URL/hash, and the versions of the
+# ABI-critical apt packages that are NOT pinned (numpy/picamera2/libcamera/…).
+# Even where a layer is not hard-pinned, this makes drift VISIBLE: diff two
+# images' manifests and a regression's cause is usually right there. Served by
+# the `version` maint command's consumers and readable at
+# /var/lib/diofinder/build-manifest.json. Non-fatal (diagnostic only).
+
+LOG "Writing build manifest"
+if python3 - \
+    "$DIOFINDER_DIR" "${OLIVE_WHL:-}" "${SYCAMORE_WHL:-}" "${SOLVER_DB:-}" \
+    > /var/lib/diofinder/build-manifest.json <<'PYEOF'
+import datetime, hashlib, json, os, subprocess, sys
+
+diofinder_dir, olive_whl, syc_whl, solver_db = (sys.argv[1:5] + ["", "", "", ""])[:4]
+
+def sha256(path):
+    if not path or not os.path.isfile(path):
+        return None
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+def dpkg_ver(pkg):
+    try:
+        return subprocess.check_output(
+            ["dpkg-query", "-W", "-f=${Version}", pkg],
+            stderr=subprocess.DEVNULL).decode().strip() or None
+    except Exception:
+        return None
+
+def git_ref():
+    try:
+        return subprocess.check_output(
+            ["git", "-C", diofinder_dir, "describe", "--tags", "--always"],
+            stderr=subprocess.DEVNULL).decode().strip() or None
+    except Exception:
+        return None
+
+manifest = {
+    "generated_utc": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "diofinder_version": os.environ.get("DIOFINDER_VERSION") or None,
+    "git_ref": git_ref(),
+    "python": "%d.%d.%d" % sys.version_info[:3],
+    "base_image": {
+        "url": os.environ.get("DIOFINDER_BASE_IMAGE_URL_EFF") or None,
+        "sha256": os.environ.get("DIOFINDER_BASE_IMAGE_SHA256_EFF") or None,
+    },
+    "wheels": {
+        "olive_solve": {"file": os.path.basename(olive_whl) or None,
+                        "sha256": sha256(olive_whl)},
+        "sycamore":    {"file": os.path.basename(syc_whl) or None,
+                        "sha256": sha256(syc_whl)},
+    },
+    "star_db": {"file": os.path.basename(solver_db) or None,
+                "sha256": sha256(solver_db)},
+    # Unpinned apt packages whose drift is most likely to break the image
+    # (numpy ABI vs the wheels, libcamera/picamera2 API vs camera_proc).
+    "apt": {p: dpkg_ver(p) for p in (
+        "python3-numpy", "python3-scipy", "python3-pil",
+        "python3-picamera2", "python3-libcamera", "rpicam-apps",
+        "python3-flask", "network-manager")},
+}
+json.dump(manifest, sys.stdout, indent=2, sort_keys=True)
+sys.stdout.write("\n")
+PYEOF
+then
+  chown "${DIOFINDER_USER}:${DIOFINDER_USER}" /var/lib/diofinder/build-manifest.json 2>/dev/null || true
+  LOG "Build manifest written to /var/lib/diofinder/build-manifest.json"
+else
+  WARN "Build manifest generation failed (non-fatal)"
+fi
 
 # --- Enable services ---------------------------------------------------------
 
