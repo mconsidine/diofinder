@@ -1,8 +1,24 @@
-# Supply-chain pinning (v0.11.73)
+# Supply-chain pinning (v0.11.73 / v0.11.74)
 
-This release freezes the diofinder image build to the exact upstream versions
-that shipped in the known-good **v0.11.70** image, so a rebuild is reproducible
-and nothing advances unless a pin is changed on purpose.
+This freezes the diofinder image build to exact upstream versions, so a rebuild
+is reproducible and nothing advances unless a pin is changed on purpose.
+
+**v0.11.74 (experimental) extends v0.11.73** by closing the remaining gaps —
+it is the first build where every tier is pinned:
+
+* **Fork wheels are now reproducible AND integrity-checked.** sycamore-extract
+  and olive-solve build with a committed `Cargo.lock` + `--locked` (frozen
+  numpy/pyo3/transitive crate versions) and publish a `<wheel>.whl.sha256`;
+  `release.yml` **hard-verifies** each downloaded wheel against it. Pins advance
+  to the hardened releases: **olive-solve v0.1.11**, **sycamore-extract v0.14.2**
+  (each release's tag now equals its wheel version).
+* **Base image is self-hosted.** The default URL points at our own mirror of
+  the 2026-09-15 snapshot in `astro_databases` (release `base-image-2026-09-15`,
+  same SHA-256), so rebuilds survive Raspberry Pi pruning the upstream snapshot.
+
+The sections below describe the v0.11.73 foundation (base-image + Debian
+snapshot + apt holds); the deltas above are the v0.11.74 additions. The v0.11.70
+values in the first table are the historical baseline, not the current pins.
 
 ## What v0.11.70 was built from
 
@@ -83,14 +99,15 @@ diffing two images' manifests makes any drift *visible* even where it isn't
 These are deliberately left for a later pass; the manifest records them so a
 regression traced to one is obvious:
 
-1. **Fork-wheel build-time numpy (Tier 3).** The Debian snapshot now freezes the
-   *image's* numpy, but a wheel only imports cleanly if it was **built against
-   an ABI-compatible numpy** in its own repo's CI (sycamore-extract,
-   olive-solve). Pinning one side without the other is the remaining ABI
-   exposure. Backstop: `install.sh` runs `import star_detect` / `import tetra3`
-   in the chroot after installing the wheels, so a gross ABI mismatch **fails
-   the build** rather than restart-looping in the field. See the Tier 3 update
-   plan below.
+1. **Fork-wheel build-time numpy (Tier 3) — DONE in v0.11.74.** Both forks now
+   commit `Cargo.lock` and build `--locked`, freezing the `numpy`/`pyo3`/
+   transitive crate versions the wheel links against (the Rust `numpy` crate is
+   the ABI boundary for a maturin wheel — there is no Python build-time numpy to
+   pin). Combined with the image's snapshot-pinned Python numpy, numpy is pinned
+   on both sides. Backstop still in place: `install.sh` runs `import star_detect`
+   / `import tetra3` in the chroot, so a gross ABI mismatch fails the build.
+   *(The "Tier 3 update plan" section below is retained as the procedure for the
+   next numpy-major move.)*
 2. **Raspberry Pi archive has no snapshot.** picamera2/libcamera/rpicam-apps are
    frozen only by the pinned base image + `apt-mark hold` — robust against
    on-device upgrades, but a *rebuild* still pulls them from the live RPi

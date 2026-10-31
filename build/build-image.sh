@@ -57,7 +57,12 @@ DIOFINDER_GIT_REF="${DIOFINDER_GIT_REF:-}"
 #     If you move BASE_IMAGE_URL, set DIOFINDER_BASE_IMAGE_SHA256 to the new
 #     image's hash too (they are checked together); set it to "skip" to only
 #     record-and-warn instead of enforcing.
-_DEFAULT_BASE_IMAGE_URL="https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-09-15/2026-09-15-raspios-trixie-arm64-lite.img.xz"
+# Default points at our OWN mirror of the 2026-09-15 snapshot in
+# astro_databases (v0.11.74): Raspberry Pi prunes old /images/ snapshots, which
+# would 404 the upstream URL and break reproducible rebuilds. Same bytes, same
+# SHA-256. Upstream original (kept for reference / re-mirroring):
+#   https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-09-15/2026-09-15-raspios-trixie-arm64-lite.img.xz
+_DEFAULT_BASE_IMAGE_URL="https://github.com/mconsidine/astro_databases/releases/download/base-image-2026-09-15/2026-09-15-raspios-trixie-arm64-lite.img.xz"
 _DEFAULT_BASE_IMAGE_SHA256="cdf4f3bfac35ae947b46e4e767f935453810549779ac3290e05a6754aee627e5"
 BASE_IMAGE_URL="${DIOFINDER_BASE_IMAGE_URL:-$_DEFAULT_BASE_IMAGE_URL}"
 BASE_IMAGE_SHA256="${DIOFINDER_BASE_IMAGE_SHA256:-$_DEFAULT_BASE_IMAGE_SHA256}"

@@ -79,11 +79,11 @@ jobs:
           # v0.11.70 pin, not "latest". Override precedence is unchanged
           # (dispatch input > repo var > pinned default), so bumping a fork
           # stays a deliberate one-line act instead of silent drift.
-          OLIVE_TAG: ${{ inputs.olive_solve_tag || vars.OLIVE_SOLVE_TAG || 'v0.1.9' }}
-          SYCAMORE_TAG: ${{ inputs.sycamore_tag || vars.SYCAMORE_TAG || 'v0.14.1' }}
+          OLIVE_TAG: ${{ inputs.olive_solve_tag || vars.OLIVE_SOLVE_TAG || 'v0.1.11' }}
+          SYCAMORE_TAG: ${{ inputs.sycamore_tag || vars.SYCAMORE_TAG || 'v0.14.2' }}
         run: |
           mkdir -p vendor/wheels
-          rm -f vendor/wheels/*.whl
+          rm -f vendor/wheels/*.whl vendor/wheels/*.whl.sha256
           fetch() { # repo tag pattern
             if [ -n "$2" ]; then
               gh release download "$2" --repo "$1" --pattern "$3" --dir vendor/wheels
@@ -92,6 +92,11 @@ jobs:
             fi
           }
           fetch mconsidine/olive-solve      "$OLIVE_TAG"    "tetra3-*aarch64*.whl"
+          # Companion SHA-256 (sycamore >= 0.14.2 / olive-solve >= 0.1.10
+          # publish it). Non-fatal to fetch so an override to an older tag
+          # without the asset still builds; verification below is strict when
+          # the asset IS present.
+          fetch mconsidine/olive-solve      "$OLIVE_TAG"    "tetra3-*aarch64*.whl.sha256" || true
           # Matches both abi3 wheels (sycamore >= 0.11.2) and per-Python
           # cp31x wheels from older releases
           # NOT optional: the solver hard-requires star_detect at runtime
@@ -99,10 +104,16 @@ jobs:
           # it). A missing/renamed asset must fail the build, not ship an
           # image that restart-loops and never solves.
           fetch mconsidine/sycamore-extract "$SYCAMORE_TAG" "star_detect-*aarch64*.whl"
+          fetch mconsidine/sycamore-extract "$SYCAMORE_TAG" "star_detect-*aarch64*.whl.sha256" || true
           # If a release carried several per-Python wheels, keep only the
-          # newest-sorted one so install.sh picks a single wheel
+          # newest-sorted one so install.sh picks a single wheel (drop its
+          # orphaned .sha256 too).
           EXTRA=$(ls vendor/wheels/star_detect-*aarch64*.whl 2>/dev/null | sort -V | head -n -1 || true)
           [ -n "$EXTRA" ] && rm -f $EXTRA
+          for s in vendor/wheels/*.whl.sha256; do
+            [ -f "$s" ] || continue
+            [ -f "${s%.sha256}" ] || rm -f "$s"
+          done
           ls -lh vendor/wheels/
           WHL=$(ls vendor/wheels/tetra3-*aarch64*.whl 2>/dev/null | head -1 || true)
           if [ -z "$WHL" ]; then
@@ -114,6 +125,26 @@ jobs:
             echo "::error::No aarch64 star_detect wheel could be downloaded from sycamore-extract releases (hard runtime requirement)."
             exit 1
           fi
+          # Hard-verify wheel integrity against the fork-published SHA-256.
+          # The .sha256 records the bare basename, so `sha256sum -c` matches the
+          # wheel sitting beside it. Fail the build on a mismatch; warn only if
+          # no checksum was published (older override tag).
+          (
+            cd vendor/wheels
+            shopt -s nullglob
+            n=0
+            for s in *.whl.sha256; do
+              [ -f "${s%.sha256}" ] || continue
+              echo "Verifying ${s%.sha256}"
+              sha256sum -c "$s" || { echo "::error::wheel SHA-256 mismatch: $s"; exit 1; }
+              n=$((n+1))
+            done
+            if [ "$n" -eq 0 ]; then
+              echo "::warning::No .whl.sha256 published for the pinned wheels — integrity NOT verified (older fork release?)."
+            else
+              echo "Verified $n wheel checksum(s)."
+            fi
+          )
 
       - name: Determine version tag
         id: ver
