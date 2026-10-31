@@ -15,7 +15,7 @@ those values were whatever happened to be current that day:
 | olive-solve (`tetra3` wheel) | **v0.1.9** | `release.yml` default (was `latest`) |
 | sycamore-extract (`star_detect` wheel) | **v0.14.1** | `release.yml` default (was `latest`) |
 | astro_databases (DB, names, Messier) | **2026.07.01** | `release.yml` default (was `latest`) |
-| Base OS image | **raspios_lite_arm64 2026-09-15** (Trixie) | `build-image.sh` dated URL (was `_latest`) |
+| Base OS image | **raspios_lite_arm64 2026-09-15** (Trixie), SHA-256 enforced | `build-image.sh` dated URL (was `_latest`) |
 
 The 2026-09-15 snapshot is the one `_latest` resolved to on the build date; the
 next Pi OS refresh (2026-10-06, Debian 13 + Linux 6.18 update) landed two days
@@ -38,11 +38,13 @@ instead of silently taking latest.
   the dispatch inputs). Unset → the v0.11.70 pins above.
 * **Base image** — `BASE_IMAGE_URL` repo var → `DIOFINDER_BASE_IMAGE_URL` in the
   build. Unset → the pinned 2026-09-15 URL in `build-image.sh`.
-* **Base-image integrity** — `BASE_IMAGE_SHA256` repo var →
-  `DIOFINDER_BASE_IMAGE_SHA256`. **Record-then-enforce**: the downloads server
-  publishes no stable hash to bake in, so leave it empty for the first build —
-  the log and the build manifest print the measured SHA-256. Capture that value,
-  set the repo var, and every later build hard-fails on a mismatch.
+* **Base-image integrity** — the SHA-256
+  `cdf4f3bfac35ae947b46e4e767f935453810549779ac3290e05a6754aee627e5` (confirmed
+  against the downloads server for the 2026-09-15 image) is baked in and
+  **enforced by default**: the build hard-fails if the downloaded image doesn't
+  match. If you move `BASE_IMAGE_URL`, also set `BASE_IMAGE_SHA256` to the new
+  image's hash (they are checked together). Set `BASE_IMAGE_SHA256=skip` to
+  downgrade to record-and-warn.
 * **esa/tetra3** (custom-FOV DB generation only; the default build never imports
   it) — `TETRA3_REF` repo var / `DIOFINDER_TETRA3_REF` env. Empty → HEAD. This
   is the one upstream with no published release to pin to; set a commit/tag only

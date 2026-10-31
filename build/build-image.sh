@@ -52,14 +52,15 @@ DIOFINDER_GIT_REF="${DIOFINDER_GIT_REF:-}"
 #
 #   * Override the URL with DIOFINDER_BASE_IMAGE_URL to move the pin
 #     deliberately (e.g. a later snapshot you have tested).
-#   * Set DIOFINDER_BASE_IMAGE_SHA256 to ENFORCE integrity (hard-fail on
-#     mismatch). Leave it empty and the build still prints the measured
-#     hash so you can capture and pin it ("record-then-enforce"): the
-#     downloads server publishes no stable hash we can bake in here, so the
-#     first pinned build is where you lock it.
+#   * The SHA-256 is pinned and ENFORCED by default (hard-fail on mismatch);
+#     it was confirmed against the downloads server for the 2026-09-15 image.
+#     If you move BASE_IMAGE_URL, set DIOFINDER_BASE_IMAGE_SHA256 to the new
+#     image's hash too (they are checked together); set it to "skip" to only
+#     record-and-warn instead of enforcing.
 _DEFAULT_BASE_IMAGE_URL="https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2026-09-15/2026-09-15-raspios-trixie-arm64-lite.img.xz"
+_DEFAULT_BASE_IMAGE_SHA256="cdf4f3bfac35ae947b46e4e767f935453810549779ac3290e05a6754aee627e5"
 BASE_IMAGE_URL="${DIOFINDER_BASE_IMAGE_URL:-$_DEFAULT_BASE_IMAGE_URL}"
-BASE_IMAGE_SHA256="${DIOFINDER_BASE_IMAGE_SHA256:-}"
+BASE_IMAGE_SHA256="${DIOFINDER_BASE_IMAGE_SHA256:-$_DEFAULT_BASE_IMAGE_SHA256}"
 
 LOG()  { echo "==> $*"; }
 WARN() { echo "WARNING: $*" >&2; }
@@ -144,15 +145,15 @@ fi
 # manifest.
 _BASE_SHA_MEASURED=$(sha256sum base.img.xz | cut -d' ' -f1)
 LOG "Base image SHA-256: $_BASE_SHA_MEASURED"
-if [ -n "$BASE_IMAGE_SHA256" ]; then
+if [ -n "$BASE_IMAGE_SHA256" ] && [ "$BASE_IMAGE_SHA256" != "skip" ]; then
   if [ "$_BASE_SHA_MEASURED" = "$BASE_IMAGE_SHA256" ]; then
     LOG "Base image SHA-256 verified against pin"
   else
     FAIL "Base image SHA-256 mismatch: got $_BASE_SHA_MEASURED, expected $BASE_IMAGE_SHA256"
   fi
 else
-  WARN "DIOFINDER_BASE_IMAGE_SHA256 not set — base image NOT integrity-checked" \
-       "(measured $_BASE_SHA_MEASURED; set the var to enforce it)"
+  WARN "Base image SHA-256 enforcement disabled (BASE_IMAGE_SHA256=skip/empty)" \
+       "— measured $_BASE_SHA_MEASURED, NOT verified"
 fi
 export DIOFINDER_BASE_IMAGE_URL_EFF="$BASE_IMAGE_URL"
 export DIOFINDER_BASE_IMAGE_SHA256_EFF="$_BASE_SHA_MEASURED"
