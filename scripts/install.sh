@@ -98,6 +98,48 @@ touch /etc/cloud/cloud-init.disabled
 
 LOG "Updating apt and installing system packages"
 export DEBIAN_FRONTEND=noninteractive
+
+# --- Debian snapshot pin (v0.11.73, BUILD-ONLY) ------------------------------
+# Freeze the Debian-archive package versions (numpy/scipy/pillow/flask/
+# build-essential + their deps) to a snapshot.debian.org timestamp so rebuilds
+# are reproducible — the numpy ABI the fork wheels link against is the item
+# that matters most here. The Raspberry Pi archive (picamera2/libcamera/
+# rpicam-apps) has NO snapshot service, so those are frozen by the pinned base
+# image + `apt-mark hold` further down instead.
+#
+# The repoint is undone after the installs below so the SHIPPED image updates
+# normally on-device; only the build-time version selection is pinned.
+#
+#   DEBIAN_SNAPSHOT  snapshot timestamp (YYYYMMDDTHHMMSSZ). Unset/empty -> the
+#                    v0.11.70-era default below. Set to "off" to disable the
+#                    pin (live apt) — the escape hatch if snapshot.debian.org
+#                    is ever unreachable from the builder.
+_DEB_SNAPSHOT="${DEBIAN_SNAPSHOT:-20260915T000000Z}"
+_APT_RESTORE_LIST=""
+if [ "$_DEB_SNAPSHOT" != "off" ]; then
+  LOG "Pinning Debian apt archive to snapshot $_DEB_SNAPSHOT (build-only)"
+  for f in /etc/apt/sources.list \
+           /etc/apt/sources.list.d/*.list \
+           /etc/apt/sources.list.d/*.sources; do
+    [ -f "$f" ] || continue
+    # Only rewrite files that reference the Debian archive; the Raspberry Pi
+    # archive (archive.raspberrypi.com) is a different host and is left alone.
+    grep -qE 'https?://[a-z0-9.-]*\.debian\.org/' "$f" || continue
+    cp -a "$f" "$f.diofinder-orig"
+    _APT_RESTORE_LIST="$_APT_RESTORE_LIST $f"
+    # Rewrite debian-security FIRST so the plain /debian rule can't clobber it.
+    sed -i -E \
+      -e 's@https?://[a-z0-9.-]*\.debian\.org/debian-security/?@https://snapshot.debian.org/archive/debian-security/'"$_DEB_SNAPSHOT"'/@g' \
+      -e 's@https?://[a-z0-9.-]*\.debian\.org/debian/?@https://snapshot.debian.org/archive/debian/'"$_DEB_SNAPSHOT"'/@g' \
+      "$f"
+  done
+  # Snapshot metadata is intentionally old; accept it and retry transient 5xx.
+  cat > /etc/apt/apt.conf.d/10diofinder-snapshot <<'EOF'
+Acquire::Check-Valid-Until "false";
+Acquire::Retries "5";
+EOF
+fi
+
 apt-get update
 apt-get install -y --no-install-recommends \
   python3 python3-venv python3-pip python3-dev \
@@ -126,6 +168,34 @@ EOF
 else
   WARN "zram-tools not available (non-fatal)"
 fi
+
+# --- End of the Debian snapshot window ---------------------------------------
+# Restore the live apt sources so the shipped image updates normally on-device
+# (the snapshot pin was only to make BUILD-time versions reproducible), and
+# drop the snapshot-era package lists so the first on-device `apt update`
+# fetches fresh metadata.
+if [ -n "${_APT_RESTORE_LIST:-}" ]; then
+  for f in $_APT_RESTORE_LIST; do
+    [ -f "$f.diofinder-orig" ] && mv "$f.diofinder-orig" "$f"
+  done
+  rm -f /etc/apt/apt.conf.d/10diofinder-snapshot
+  rm -rf /var/lib/apt/lists/*
+  LOG "Restored live Debian apt sources (snapshot pin was build-only)"
+fi
+
+# --- Hold the ABI-critical packages (v0.11.73) -------------------------------
+# Defense-in-depth: prevent an on-device `apt upgrade` from bumping numpy (the
+# ABI the fork wheels link against) or the Raspberry Pi camera stack (API that
+# camera_proc tracks) out from under the application. The RPi archive has no
+# snapshot, so holding is the only on-device guard for it. Reversible with
+# `sudo apt-mark unhold <pkg>`.
+for pkg in python3-numpy python3-picamera2 python3-libcamera rpicam-apps; do
+  apt-mark hold "$pkg" 2>/dev/null || true
+done
+# Also hold any versioned libcamera runtime lib actually installed.
+{ dpkg-query -W -f='${binary:Package}\n' 'libcamera*' 2>/dev/null || true; } \
+  | while read -r _p; do [ -n "$_p" ] && apt-mark hold "$_p" 2>/dev/null || true; done
+LOG "Held ABI-critical packages (numpy + camera stack) against on-device upgrades"
 
 systemctl enable ssh.service 2>/dev/null || systemctl enable ssh.socket || true
 
@@ -509,6 +579,7 @@ systemctl enable serial-getty@ttyGS0.service 2>/dev/null || \
 # /var/lib/diofinder/build-manifest.json. Non-fatal (diagnostic only).
 
 LOG "Writing build manifest"
+export DIOFINDER_DEBIAN_SNAPSHOT_EFF="${_DEB_SNAPSHOT:-}"
 if python3 - \
     "$DIOFINDER_DIR" "${OLIVE_WHL:-}" "${SYCAMORE_WHL:-}" "${SOLVER_DB:-}" \
     > /var/lib/diofinder/build-manifest.json <<'PYEOF'
@@ -550,6 +621,7 @@ manifest = {
         "url": os.environ.get("DIOFINDER_BASE_IMAGE_URL_EFF") or None,
         "sha256": os.environ.get("DIOFINDER_BASE_IMAGE_SHA256_EFF") or None,
     },
+    "debian_snapshot": os.environ.get("DIOFINDER_DEBIAN_SNAPSHOT_EFF") or None,
     "wheels": {
         "olive_solve": {"file": os.path.basename(olive_whl) or None,
                         "sha256": sha256(olive_whl)},

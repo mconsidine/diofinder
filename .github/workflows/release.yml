@@ -247,6 +247,10 @@ jobs:
           # repo vars to move the pin or to hard-enforce the hash.
           DIOFINDER_BASE_IMAGE_URL: ${{ vars.BASE_IMAGE_URL || '' }}
           DIOFINDER_BASE_IMAGE_SHA256: ${{ vars.BASE_IMAGE_SHA256 || '' }}
+          # Debian-archive snapshot pin (Tier 1). Blank -> install.sh's pinned
+          # 20260915 default; set DEBIAN_SNAPSHOT repo var to move it, or "off"
+          # to fall back to live apt if the snapshot host is unreachable.
+          DEBIAN_SNAPSHOT: ${{ vars.DEBIAN_SNAPSHOT || '' }}
         run: |
           sudo -E bash build/build-image.sh
 

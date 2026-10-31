@@ -50,6 +50,20 @@ instead of silently taking latest.
 * **smbus2 / pyserial** — pinned in `requirements.txt` (`smbus2~=0.4.3`,
   `pyserial==3.5`) and now installed at **image build** too, not only on OTA
   (closes a fresh-image gap where the IMU's `smbus2` could be missing).
+* **apt packages (Tier 1 + Tier 2)** — split by archive:
+  * **Debian archive** (numpy, scipy, pillow, flask, build-essential, deps):
+    `install.sh` repoints the Debian deb822/list sources at
+    `snapshot.debian.org` for the duration of the build, pinned to
+    `DEBIAN_SNAPSHOT` (default `20260915T000000Z`, matching the base image),
+    then **restores the live sources** so the shipped device still updates
+    normally. This freezes the **numpy ABI** the fork wheels link against —
+    the highest-value apt pin. Set the `DEBIAN_SNAPSHOT` repo var to move it,
+    or `off` to fall back to live apt if the snapshot host is unreachable.
+  * **Raspberry Pi archive** (picamera2, libcamera, rpicam-apps): has **no
+    public snapshot service**, so these are frozen by the pinned base image and
+    `apt-mark hold` — the build holds numpy + the camera stack so an on-device
+    `apt upgrade` can't bump them out from under the code. Reversible with
+    `sudo apt-mark unhold <pkg>`.
 
 ## Build manifest
 
@@ -67,15 +81,53 @@ diffing two images' manifests makes any drift *visible* even where it isn't
 These are deliberately left for a later pass; the manifest records them so a
 regression traced to one is obvious:
 
-1. **apt package versions.** `apt-get update && install` on a rolling distro
-   serves whatever Debian/RPi publish at build time, even on a pinned base
-   image. The sharp edge is **numpy ABI vs the fork wheels** — if Pi OS advances
-   numpy across an ABI boundary, a wheel built against the old ABI fails to
-   import and the solver restart-loops. Hard pinning needs `apt-mark hold` /
-   snapshot.debian.org and matching the wheels' build-time numpy.
-2. **`pip install --upgrade pip setuptools wheel`.** Latest build backend each
+1. **Fork-wheel build-time numpy (Tier 3).** The Debian snapshot now freezes the
+   *image's* numpy, but a wheel only imports cleanly if it was **built against
+   an ABI-compatible numpy** in its own repo's CI (sycamore-extract,
+   olive-solve). Pinning one side without the other is the remaining ABI
+   exposure. Backstop: `install.sh` runs `import star_detect` / `import tetra3`
+   in the chroot after installing the wheels, so a gross ABI mismatch **fails
+   the build** rather than restart-looping in the field. See the Tier 3 update
+   plan below.
+2. **Raspberry Pi archive has no snapshot.** picamera2/libcamera/rpicam-apps are
+   frozen only by the pinned base image + `apt-mark hold` — robust against
+   on-device upgrades, but a *rebuild* still pulls them from the live RPi
+   archive. Full reproducibility there needs vendored `.deb`s (download the
+   known-good versions the manifest records, install from a local cache) — a
+   later escalation, only if camera-API drift actually appears.
+3. **`pip install --upgrade pip setuptools wheel`.** Latest build backend each
    run. Low risk, recorded as the Python version in the manifest.
-3. **esa/tetra3 HEAD** on the custom-FOV path (see `TETRA3_REF` above).
+4. **esa/tetra3 HEAD** on the custom-FOV path (see `TETRA3_REF` above).
+
+## Tier 3 update plan — fork-wheel numpy (do AFTER 0.11.73)
+
+Order: **0.11.73 first, Tier 3 after.** 0.11.73 pins to the *existing*
+v0.1.9 / v0.14.1 wheels, which already shipped in the known-good v0.11.70 image
+and are therefore already ABI-compatible with the ~2026-09-15 Trixie numpy the
+snapshot now pins. So 0.11.73 is internally consistent and safe to build now;
+Tier 3 only affects the **next** wheel you build. Doing it first would mean
+cutting new wheels and re-pinning 0.11.73 to them — more churn, no safety gain.
+
+Steps, in the fork repos (not diofinder):
+
+1. **Record the baseline.** From a v0.11.70/0.11.73 device, read
+   `/var/lib/diofinder/build-manifest.json` → `apt.python3-numpy` (the numpy
+   major the working wheels tolerate). Confirm it's numpy 2.x (Trixie) so the
+   target is unambiguous.
+2. **Pin build-time numpy in sycamore-extract CI.** In its wheel-build job, add
+   `oldest-supported-numpy` or an explicit `numpy==<major>.*` build requirement
+   so the PyO3/`numpy`-crate ABI targets that major. Rebuild and bump its tag.
+3. **Pin build-time numpy in olive-solve CI** the same way; bump its tag.
+4. **Adopt the new wheels deliberately** in diofinder by bumping
+   `OLIVE_SOLVE_TAG` / `SYCAMORE_TAG` (the pinned defaults in `release.yml`) to
+   the rebuilt tags — a normal, reviewed pin move, in its own diofinder release.
+5. **Keep the build-time import check** as the permanent backstop; optionally
+   add an explicit `numpy.__version__` assertion to the manifest-time check so a
+   major mismatch is named loudly.
+
+Net: numpy is then pinned on *both* sides (image via snapshot, wheels via their
+CI), which closes the ABI loop. Until then, the import-check backstop + the
+`apt-mark hold` on numpy are what keep the shipped image safe.
 
 ## To reproduce the v0.11.70 image exactly
 
