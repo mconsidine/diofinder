@@ -54,31 +54,61 @@ def test_parse_temp_and_loadavg():
     assert sysmon.parse_loadavg("") is None
 
 
+def _hw(**kw):
+    base = {"min_mem_available_pct": None, "max_swap_used_mb": 0.0,
+            "max_swap_growth_mb": 0.0, "max_cpu_pct": 0.0, "max_cpu0_pct": 0.0,
+            "max_temp_c": None}
+    base.update(kw)
+    return base
+
+
+def test_classify_warming_up():
+    v = sysmon.classify({"in_warmup": True, "high_water": _hw(max_cpu0_pct=100.0)})
+    assert v["level"] == "warming_up"
+    assert v["reasons"] == []
+
+
 def test_classify_comfortable():
-    snap = {"mem_available_pct": 23.6, "swap_used_mb": 0.0,
-            "cpu_pct": {"cpu": 30.0, "cpu0": 40.0}, "temp_c": 55.0,
-            "high_water": {"min_mem_available_pct": 23.6, "max_swap_used_mb": 0.0,
-                           "max_cpu0_pct": 40.0, "max_temp_c": 55.0}}
+    snap = {"in_warmup": False, "mem_total_kb": 508000,
+            "high_water": _hw(min_mem_available_pct=35.0, max_cpu0_pct=40.0,
+                              max_temp_c=55.0)}
     v = sysmon.classify(snap)
     assert v["level"] == "comfortable"
     assert v["reasons"] == []
 
 
-def test_classify_tight_on_swap_highwater():
-    # instantaneous swap is 0 now, but it peaked -> high-water drives the verdict
-    snap = {"mem_available_pct": 25.0, "swap_used_mb": 0.0,
-            "cpu_pct": {"cpu0": 50.0}, "temp_c": 50.0,
-            "high_water": {"min_mem_available_pct": 25.0, "max_swap_used_mb": 20.0,
-                           "max_cpu0_pct": 50.0, "max_temp_c": 50.0}}
+def test_classify_static_swap_occupancy_is_benign():
+    # 26 MB sitting in zram from boot, not growing, well under the backstop ->
+    # must NOT flag (the real-world false alarm this fix addresses).
+    snap = {"in_warmup": False, "mem_total_kb": 508000,
+            "high_water": _hw(min_mem_available_pct=30.0, max_swap_used_mb=26.0,
+                              max_swap_growth_mb=0.0, max_cpu0_pct=50.0)}
+    assert sysmon.classify(snap)["level"] == "comfortable"
+
+
+def test_classify_tight_on_swap_growth():
+    snap = {"in_warmup": False, "mem_total_kb": 508000,
+            "high_water": _hw(min_mem_available_pct=25.0, max_swap_growth_mb=6.0,
+                              max_cpu0_pct=50.0)}
     v = sysmon.classify(snap)
     assert v["level"] == "tight"
-    assert any("swap" in r for r in v["reasons"])
+    assert any("swapping" in r for r in v["reasons"])
+
+
+def test_classify_swap_backstop():
+    # huge occupancy (>30% of RAM) flags even without growth
+    snap = {"in_warmup": False, "mem_total_kb": 508000,
+            "high_water": _hw(max_swap_used_mb=200.0)}
+    v = sysmon.classify(snap)
+    assert v["level"] == "tight"
+    assert any("swapped out" in r for r in v["reasons"])
 
 
 def test_classify_constrained_escalates_to_worst():
-    snap = {"high_water": {"min_mem_available_pct": 25.0, "max_swap_used_mb": 20.0,
-                           "max_cpu0_pct": 97.0, "max_temp_c": 50.0}}
+    snap = {"in_warmup": False, "mem_total_kb": 508000,
+            "high_water": _hw(min_mem_available_pct=25.0, max_swap_growth_mb=6.0,
+                              max_cpu0_pct=99.0, max_temp_c=50.0)}
     v = sysmon.classify(snap)
-    assert v["level"] == "constrained"          # CPU0 97% -> constrained, worst wins
+    assert v["level"] == "constrained"          # CPU0 99% -> constrained, worst wins
     assert any("CPU 0" in r for r in v["reasons"])
-    assert any("swap" in r for r in v["reasons"])  # tight reason still listed
+    assert any("swapping" in r for r in v["reasons"])  # tight reason still listed

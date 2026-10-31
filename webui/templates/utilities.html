@@ -16,8 +16,10 @@
     <h2>System headroom</h2>
     <p class="hint" style="margin:0 0 8px 0;">
       How much memory, CPU, and thermal margin the finder has. The verdict uses
-      the <strong>worst reading since the service started</strong>, so a brief
-      squeeze during a solve or slew still shows up here.
+      the <strong>worst reading since start-up settles</strong> (the first ~90&nbsp;s
+      of boot are excluded), so a squeeze during a solve or slew shows up but the
+      normal boot spike doesn't. Swap is judged on <em>growth</em>, not leftover
+      occupancy.
     </p>
     <p id="sysmon-verdict" style="margin:0 0 8px 0;font-weight:bold;">&hellip;</p>
     <dl class="stats">
@@ -137,8 +139,9 @@
 
 <script>
 (function () {
-  var LABEL = {comfortable: "Comfortable", tight: "Tight", constrained: "Constrained"};
-  var COLOR = {comfortable: "#4c9", tight: "#c93", constrained: "#d55"};
+  var LABEL = {warming_up: "Warming up…", comfortable: "Comfortable",
+               tight: "Tight", constrained: "Constrained"};
+  var COLOR = {warming_up: "#999", comfortable: "#4c9", tight: "#c93", constrained: "#d55"};
   function pctStr(v) { return (v === null || v === undefined) ? "—" : v + "%"; }
   function set(id, txt) { var e = document.getElementById(id); if (e) e.textContent = txt; }
   function poll() {

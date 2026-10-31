@@ -32,17 +32,28 @@ _PROC_STAT = "/proc/stat"
 _PROC_LOADAVG = "/proc/loadavg"
 _SYS_THERMAL = "/sys/class/thermal/thermal_zone0/temp"
 
+# How long after start to ignore for the verdict/high-water-marks. The star-DB
+# load + process spawn + first solve all land in the first few seconds and peg
+# CPU0 / squeeze RAM — a benign boot transient, not sustained pressure.
+DEFAULT_WARMUP_S = 90.0
+
 # Verdict thresholds. Deliberately conservative for a 512 MB board; a finder
 # that is comfortable should sit solidly green. Tunable later via config if a
 # device's "normal" differs.
+#
+# NOTE on swap: we flag on *activity* (zram GROWING between samples), not on
+# occupancy. Pages offloaded once during boot and never reclaimed sit in zram
+# indefinitely with no cost — that is not pressure. A large absolute occupancy
+# is kept only as a backstop (a big fraction of RAM swapped out IS a concern).
 DEFAULT_THRESHOLDS = {
-    "mem_avail_warn_pct": 20.0,   # < this fraction of RAM available -> tight
-    "mem_avail_crit_pct": 10.0,
-    "swap_used_warn_mb": 8.0,     # any sustained zram swap is a yellow flag
-    "swap_used_crit_mb": 64.0,
-    "cpu0_warn_pct": 85.0,        # CPU 0 is the shared/limiting core
-    "cpu0_crit_pct": 95.0,
-    "temp_warn_c": 70.0,          # Pi Zero 2W soft-throttles ~80-85 C
+    "mem_avail_warn_pct": 15.0,      # < this fraction of RAM available -> tight
+    "mem_avail_crit_pct": 8.0,
+    "swap_growth_warn_mb": 4.0,      # zram grew this much in one sample -> swapping
+    "swap_growth_crit_mb": 16.0,
+    "swap_used_backstop_pct": 30.0,  # this fraction of RAM swapped out -> tight
+    "cpu0_warn_pct": 90.0,           # CPU 0 is the shared/limiting core
+    "cpu0_crit_pct": 98.0,
+    "temp_warn_c": 70.0,             # Pi Zero 2W soft-throttles ~80-85 C
     "temp_crit_c": 80.0,
 }
 
@@ -135,13 +146,16 @@ def parse_temp_c(text: str):
 
 
 def classify(snapshot: dict, thresholds: dict | None = None) -> dict:
-    """Pure verdict from a snapshot's instantaneous + high-water values.
+    """Pure verdict from a snapshot's high-water values (post-warm-up).
 
-    Returns {"level": "comfortable"|"tight"|"constrained", "reasons": [...]}.
-    Uses the WORST of instantaneous and high-water-mark per axis, so a verdict
-    reflects whether the device has *ever* been squeezed since monitoring
-    started, not just this instant."""
+    Returns {"level": "warming_up"|"comfortable"|"tight"|"constrained",
+    "reasons": [...]}. The high-water-marks exclude the startup window (so a
+    boot spike doesn't drive the verdict), and swap is judged on *growth*
+    (actively swapping), not static occupancy (benign zram left over from boot).
+    While still warming up, returns "warming_up" with no reasons."""
     t = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
+    if snapshot.get("in_warmup"):
+        return {"level": "warming_up", "reasons": []}
     reasons = []
     level = "comfortable"
 
@@ -152,29 +166,34 @@ def classify(snapshot: dict, thresholds: dict | None = None) -> dict:
             level = new
 
     hw = snapshot.get("high_water", {})
-    # Memory available (lower is worse): use the min seen.
-    mem_lo = hw.get("min_mem_available_pct", snapshot.get("mem_available_pct"))
+    # Memory available (lower is worse): min seen post-warm-up.
+    mem_lo = hw.get("min_mem_available_pct")
     if mem_lo is not None:
         if mem_lo < t["mem_avail_crit_pct"]:
             bump("constrained"); reasons.append(f"available RAM fell to {mem_lo:.0f}%")
         elif mem_lo < t["mem_avail_warn_pct"]:
             bump("tight"); reasons.append(f"available RAM fell to {mem_lo:.0f}%")
-    # Swap used (higher is worse): use the max seen.
-    sw_hi = hw.get("max_swap_used_mb", snapshot.get("swap_used_mb", 0.0))
-    if sw_hi is not None:
-        if sw_hi >= t["swap_used_crit_mb"]:
-            bump("constrained"); reasons.append(f"swap reached {sw_hi:.0f} MB")
-        elif sw_hi >= t["swap_used_warn_mb"]:
-            bump("tight"); reasons.append(f"swap reached {sw_hi:.0f} MB")
-    # CPU 0 (the shared/limiting core): use the max seen.
-    c0_hi = hw.get("max_cpu0_pct", (snapshot.get("cpu_pct") or {}).get("cpu0"))
+    # Swap ACTIVITY (growth per sample), not occupancy — the real pressure sign.
+    sw_grow = hw.get("max_swap_growth_mb", 0.0)
+    if sw_grow is not None:
+        if sw_grow >= t["swap_growth_crit_mb"]:
+            bump("constrained"); reasons.append(f"actively swapping (+{sw_grow:.0f} MB/sample)")
+        elif sw_grow >= t["swap_growth_warn_mb"]:
+            bump("tight"); reasons.append(f"swapping (+{sw_grow:.0f} MB/sample)")
+    # Backstop: a large fraction of RAM swapped out is a concern even if idle.
+    mem_total_mb = (snapshot.get("mem_total_kb") or 0) / 1024.0
+    sw_hi = hw.get("max_swap_used_mb", 0.0)
+    if mem_total_mb and sw_hi >= mem_total_mb * t["swap_used_backstop_pct"] / 100.0:
+        bump("tight"); reasons.append(f"{sw_hi:.0f} MB swapped out")
+    # CPU 0 (the shared/limiting core): max seen post-warm-up.
+    c0_hi = hw.get("max_cpu0_pct")
     if c0_hi is not None:
         if c0_hi >= t["cpu0_crit_pct"]:
             bump("constrained"); reasons.append(f"CPU 0 peaked at {c0_hi:.0f}%")
         elif c0_hi >= t["cpu0_warn_pct"]:
             bump("tight"); reasons.append(f"CPU 0 peaked at {c0_hi:.0f}%")
-    # Temperature: use the max seen.
-    tmp_hi = hw.get("max_temp_c", snapshot.get("temp_c"))
+    # Temperature: max seen post-warm-up.
+    tmp_hi = hw.get("max_temp_c")
     if tmp_hi is not None:
         if tmp_hi >= t["temp_crit_c"]:
             bump("constrained"); reasons.append(f"temperature reached {tmp_hi:.0f} C")
@@ -199,15 +218,18 @@ def _read(path: str):
 class SysMon:
     """Periodically-sampled resource monitor with high-water-marks."""
 
-    def __init__(self, thresholds: dict | None = None):
+    def __init__(self, thresholds: dict | None = None, warmup_s: float = DEFAULT_WARMUP_S):
         self.thresholds = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
+        self.warmup_s = float(warmup_s)
         self._prev_cpu = None
+        self._prev_swap_mb = None
         self._last = {}
         self.started_mono = time.monotonic()
         self.started_wall = time.time()
         self.high_water = {
             "min_mem_available_pct": None,
-            "max_swap_used_mb": 0.0,
+            "max_swap_used_mb": 0.0,     # occupancy (info + backstop)
+            "max_swap_growth_mb": 0.0,   # growth per sample (the pressure signal)
             "max_cpu_pct": 0.0,
             "max_cpu0_pct": 0.0,
             "max_temp_c": None,
@@ -219,12 +241,19 @@ class SysMon:
             self._prev_cpu = parse_stat_cpu(stat)
 
     def _bump_marks(self, snap: dict):
+        # Ignore the startup window: the DB load + process spawn + first solve
+        # spike CPU0 / RAM at boot and must not drive the verdict.
+        if snap.get("in_warmup"):
+            return
         hw = self.high_water
         mp = snap.get("mem_available_pct")
         if mp is not None:
             hw["min_mem_available_pct"] = (mp if hw["min_mem_available_pct"] is None
                                            else min(hw["min_mem_available_pct"], mp))
         hw["max_swap_used_mb"] = max(hw["max_swap_used_mb"], snap.get("swap_used_mb", 0.0))
+        g = snap.get("swap_growth_mb")
+        if g is not None:
+            hw["max_swap_growth_mb"] = max(hw["max_swap_growth_mb"], g)
         cpu = snap.get("cpu_pct") or {}
         if "cpu" in cpu:
             hw["max_cpu_pct"] = max(hw["max_cpu_pct"], cpu["cpu"])
@@ -237,11 +266,23 @@ class SysMon:
     def sample(self) -> dict:
         """Read /proc + /sys, update CPU deltas and high-water-marks, and
         return the current snapshot (also cached for snapshot())."""
-        snap = {"uptime_s": round(time.monotonic() - self.started_mono, 1)}
+        uptime = round(time.monotonic() - self.started_mono, 1)
+        snap = {
+            "uptime_s": uptime,
+            "warmup_s": self.warmup_s,
+            "in_warmup": uptime < self.warmup_s,
+        }
 
         mem = _read(_PROC_MEMINFO)
         if mem:
             snap.update(parse_meminfo(mem))
+            # Swap GROWTH since the previous sample — the real pressure signal
+            # (static zram occupancy left over from boot is not).
+            cur_swap = snap.get("swap_used_mb")
+            if cur_swap is not None:
+                if self._prev_swap_mb is not None:
+                    snap["swap_growth_mb"] = round(max(0.0, cur_swap - self._prev_swap_mb), 1)
+                self._prev_swap_mb = cur_swap
 
         stat = _read(_PROC_STAT)
         if stat:
