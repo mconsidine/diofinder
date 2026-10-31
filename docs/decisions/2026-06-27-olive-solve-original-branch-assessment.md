@@ -237,3 +237,108 @@ Nothing in the 9 commits changes the earlier conclusion. The perf commits remain
 new `olive-imu` crate is a **skip** for diofinder — wrong sensor, redundant with
 a more mature in-house stack, architecturally expensive — with only IMU
 timestamp back-dating as a minor, low-priority idea.
+
+---
+
+## Revisit 2026-10-31 — recommendations executed; new benchmarked perf + a mature fused stack
+
+Two things moved since the July revisit: **diofinder (via olive-solve `main`)
+adopted the recommended ports**, and oakamil's line (`original` + a new `v2`
+branch) advanced a lot — now with **real Pi Zero 2W benchmarks**, not the earlier
+unbenchmarked "massive suite" commits.
+
+### What already landed in `main` (the wheel diofinder ships)
+
+The 2026-06/07 assessment's recommendations were acted on and are **in the
+current v0.1.11 wheel**:
+
+| `main` commit | Shipped | Ported from the assessment |
+|---|---|---|
+| `e0d5326` | v0.1.7 | #1 early-rejection SVD pre-pass, #2 streaming/lazy verify early-break, #4 Cramer's 2×2 refine, reciprocal-multiply, **ImmutableKdTree** (f32) |
+| `9971469` | v0.1.8 | horizon-based early rejection (idea from oakamil's `v2`) — now diofinder's `horizon_reject_enabled` |
+| `246b412` | v0.1.6 | `verify_attitude` verify-only fast path (diofinder tracking) |
+
+So the "port the pre-pass etc." backlog is **closed**. The branches have also
+**diverged further**: `original`/`v2` are now oakamil's full *fused-solver*
+product line, well past a clean cherry-pick of the whole branch.
+
+### New, un-ported, and now BENCHMARKED — worth porting to `main`
+
+These are in `original`/`v2` (HEAD `8fedddc`, 2026-10-28), author oakamil, **not**
+in `main`, and carry measured Z2W numbers — a real upgrade over the earlier
+"unsubstantiated < 0.30 ms" commits:
+
+1. **kiddo 4 → 6.3 allocation-free verify (`419eca6`) — highest-value speed
+   port.** New Builder API; KD-tree query results piped straight into the
+   pre-allocated `scratch.sp_kept` pool, eliminating *all* hidden heap
+   allocations in the verification loop. **~16 % faster on the Z2W test set.**
+   `main` is still on kiddo 4.x `ImmutableKdTree`. Relatively isolated (dep bump
+   + API migration + scratch wiring); the strongest latency port available now.
+2. **Multi-precision pattern catalog (`f016ebe`) — highest-value MEMORY port.**
+   `PatternCatalog` (u8/u16/u32) + `PatternEdge` (f16/f32) load native bitsizes
+   from the `.npy`, branchless `to_bits()` FOV filter, fixed-size 4-elem subslice
+   casts → one SIMD load per candidate. **Solver heap 64 MB → 46 MB (~41 %)** —
+   directly attacks the 512 MB / bandwidth-bound A53 constraint, and supersedes
+   the old #6 "usize→u32" with a bigger, measured win. More involved (catalog
+   type refactor), but the payoff on this device is large.
+3. **Exact-pole bounds clamp + parity plumbing (`a198f11`)** — a solver
+   correctness fix (declination projection clamp at the pole) worth grabbing
+   regardless of perf.
+4. **Faster database load (`0925faf`)** — trims the solver's resident-DB load
+   window (diofinder's `solver_busy_t` / boot time).
+
+**Recommendation:** open a focused olive-solve PR onto `main` porting **(1) kiddo-6
+allocation-free** and **(2) the multi-precision catalog**, re-expressed in `main`'s
+f32 + per-worker-rayon structure, validated on the bundle corpus
+(`diag_solve.py --bundle`, `replay_corpus.py`) for **solve rate AND median
+solve_ms AND resident RSS**. Grab (3) and (4) as cheap riders. This is the
+"upstream changes are now useful" answer — and the numbers are real this time.
+
+### The fused-solver / `olive-imu` stack — still SKIP as a whole, softened sensor objection
+
+`original`/`v2` are now a coherent parallel system: a `FusedSolver` /
+`fused_lx200_server.py`, **virtual crops** (digital zoom) + multi-pass
+`extract_variants`, **IMU verification of plate solves** (reject anomalous
+`MatchFound` at 5° stationary / 20° slewing — `c50446f`),
+`return_best_failed_match` → `LowConfidenceMatch` graded results (`5cca6c5`),
+disk-persisted IMU↔camera SVD calibration with lock-at-maturity + remount sanity
+checks, GIL release during solve/extract/IMU, and external plate-solution
+injection for camera-less testing.
+
+Verdict is **still skip the stack**, because diofinder already has a hardened,
+tailored equivalent for essentially all of it (the CPU-pinned comms LX200 worker
+pool, `imu_proc` BNO055 **+ now BNO085/GRV**, the quality-gated `imu_frame`
+Kabsch fit, `imu_solve_cal`, `tracking.py`, horizon, the exact-quaternion LX200
+prediction with kill switches, and our own test mode + `test.png`). Adopting
+oakamil's would mean *replacing* that in-house stack with a standalone
+Rust + `tokio` crate outside the `tetra3` wheel.
+
+**But one July objection has weakened:** diofinder now supports **BNO085** (this
+release line), which `olive-imu` drives — so "wrong sensor" is no longer blanket
+true. The deeper mismatch remains (olive-imu is a *raw-IMU + continuous-SVD*
+philosophy; diofinder leans on on-chip/low-noise fusion + Kabsch), so this
+changes the framing, not the verdict.
+
+**Borrowable *ideas* (concepts, not code)** from the fused line, if ever wanted:
+
+- **IMU-gated false-solve rejection** (`c50446f`): reject a `MatchFound` whose
+  RA/Dec disagrees with the IMU-propagated attitude beyond a motion-scaled
+  tolerance. diofinder's hint path constrains tracking but does not *reject* a
+  confident solve on IMU disagreement — a cheap robustness layer against
+  false positives on the blind path.
+- **Graded `LowConfidenceMatch`** instead of binary solved/not — could feed a
+  "held but uncertain" crosshair state (diofinder already surfaces
+  `pointing_stale`; a confidence tier is adjacent).
+- **Virtual crops / digital zoom** — only if a zoomed-finder feature is ever on
+  the roadmap; not a current need.
+
+### Net (2026-10-31)
+
+The earlier "port the micro-opts" advice is **done and shipped** (v0.1.7/v0.1.8,
+in the live v0.1.11 wheel). The *new* useful upstream work is **two benchmarked
+solver wins** — kiddo-6 allocation-free (+16 %) and the multi-precision catalog
+(−41 % heap) — which are worth porting onto `main` now, memory especially given
+the 512 MB Pi. The fused-solver/`olive-imu` stack stays a **skip** (diofinder's
+in-house equivalent is more tailored and field-hardened), though diofinder's new
+BNO085 support removes the "wrong sensor" objection and makes IMU-gated
+false-solve rejection the one idea worth considering later.
