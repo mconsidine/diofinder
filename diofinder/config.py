@@ -27,7 +27,7 @@ DEFAULT_CONFIG_PATH = "/etc/diofinder/diofinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.11.74"
+    version: str = "0.11.74-aztest"
 
     # -------- Camera --------
     frame_width: int = 960
@@ -92,6 +92,20 @@ class Config:
 
     latitude_deg: float = 0.0
     longitude_deg: float = 0.0
+
+    # Test-mode Alt/Az (bench exercise of the :GA/:GZ path on a static frame).
+    # These have NO effect in live mode. In test mode, _report_altaz:
+    #   (a) falls back to test_latitude_deg/test_longitude_deg when the real
+    #       site above is unset (0,0), so Alt/Az computes out of the box; and
+    #   (b) computes local sidereal time against the FIXED test_epoch_utc when
+    #       it is set, so the reading is deterministic/repeatable for a given
+    #       test frame (and needs no NTP). Set test_epoch_utc to "" to use the
+    #       wall clock instead (reading then drifts with sidereal time).
+    # Defaults are a deliberately-round placeholder site (40 N, 75 W) — change
+    # them to your bench location (or just set latitude_deg/longitude_deg).
+    test_latitude_deg: float = 40.0
+    test_longitude_deg: float = -75.0
+    test_epoch_utc: str = "2026-01-01T00:00:00Z"
 
     # Opt-in horizon-based solve rejection (olive-solve per-star prune). Default
     # OFF: only helps the blind/lost-in-space path, and needs a CORRECT clock

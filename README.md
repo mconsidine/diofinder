@@ -279,12 +279,22 @@ The diofinder records the pixel offset and writes it to config. Survives restart
 | `:Sg ddd*mm#` | Set observer longitude | `1` |
 | `:Gt#` | Get latitude | `sDD*MM#` |
 | `:Gg#` | Get longitude | `sDDD*MM#` |
+| `:GA#` | Get altitude (of current pointing) | `sDD*MM#` |
+| `:GZ#` | Get azimuth (compass: 0=N, 90=E) | `DDD*MM#` |
 | `:SL HH:MM:SS#` | Set local time | `1` |
 | `:SC MM/DD/YY#` | Set date (syncs system clock) | `1Updating Planetary Data#` |
 | `:MS#` | Move to target (ignored) | `0` |
 | `:Q#` | Stop (ignored) | _(empty)_ |
 | `:GVP#` | Product name | `diofinder <version>#` |
 | `:GVN#` | Firmware version | `diofinder <version>#` |
+
+> **`:GA`/`:GZ` (altitude/azimuth) need a set site and clock.** They are derived
+> from the current pointing plus observer latitude/longitude (from SkySafari's
+> `:St`/`:Sg`, or `diofinder.conf`) and the system time (azimuth depends on local
+> sidereal time; the Pi has no RTC). Until both are set they return a neutral
+> `+00*00#` / `000*00#` stub. The same values are available off the LX200 wire on
+> the maintenance socket — `diofinder-ctl raw '{"cmd":"altaz"}'` →
+> `{alt_deg, az_deg}` — for the web UI or a local reader.
 
 ---
 
@@ -1003,6 +1013,31 @@ s.sendall(b'{\"cmd\":\"set_test_mode\",\"args\":{\"enabled\":false}}\n')
 ```
 
 Or use the web UI dashboard toggle.
+
+### 7a. Test-mode Alt/Az (bench-testing `:GA`/`:GZ`)
+
+To exercise the altitude/azimuth output without a real sky or mount:
+
+1. **Supply a real frame** as the test image. It must be a raw 8-bit grayscale
+   frame at the detection resolution (e.g. 960×760) captured by *this* device
+   (so the FOV/plate scale match the calibration) — the simplest sources are a
+   `frame_XX_raw.png` from a debug bundle this unit produced, or a PNG saved
+   from `/var/lib/diofinder/captures/`. Place it at
+   `/var/lib/diofinder/test.png` (`chown diofinder:diofinder`).
+2. **Enter test mode** via the dashboard Test/Live toggle (or the
+   `set_test_mode {"enabled":true}` maint command). The solver now solves that
+   static frame to a fixed RA/Dec.
+3. **Read it**: `:GZ#`/`:GA#` over port 4060 (or the `altaz` maint command).
+
+In test mode the site/clock gate is relaxed (`diofinder/config.py`
+`test_latitude_deg`/`test_longitude_deg`/`test_epoch_utc`): if the real
+`latitude_deg`/`longitude_deg` are unset it falls back to the test site, and a
+non-empty `test_epoch_utc` makes the reading **deterministic** (computed against
+that fixed instant, so it holds still and needs no NTP). The value reflects the
+test frame's sky coordinates at the configured site/time, **not** the device's
+physical orientation. Set `test_epoch_utc:` empty to use the wall clock instead
+(the reading then drifts with sidereal time). These keys have **no effect in
+live mode** — real Alt/Az still requires a real site + clock.
 
 ### 8. Check shared memory buffers
 

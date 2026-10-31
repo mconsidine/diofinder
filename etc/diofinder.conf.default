@@ -95,6 +95,16 @@ distortion: 0.0
 latitude_deg: 0.0
 longitude_deg: 0.0
 
+# Test-mode Alt/Az (bench exercise of :GA/:GZ on a static frame). No effect in
+# live mode. In test mode, _report_altaz falls back to these when the real site
+# above is 0,0, and computes sidereal time against the fixed test_epoch_utc so
+# the reading is deterministic (and needs no NTP). Set test_epoch_utc to an
+# empty value to use the wall clock instead. Defaults are a round placeholder
+# site -- change to your bench location, or just set latitude_deg/longitude_deg.
+test_latitude_deg: 40.0
+test_longitude_deg: -75.0
+test_epoch_utc: 2026-01-01T00:00:00Z
+
 # Horizon-based solve rejection (opt-in, olive-solve per-star prune). Default
 # OFF. When true, candidate star patterns below the observer's horizon are
 # dropped before verification -- helps the blind/lost-in-space path and rejects
