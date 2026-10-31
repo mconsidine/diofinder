@@ -253,6 +253,12 @@ cpu_comms: 0
 watchdog_enabled: true
 watchdog_timeout_s: 30.0
 
+# Resource-headroom monitor: samples mem/swap, per-core CPU, and SoC
+# temperature every few seconds; shown on the Utilities page (with high-water
+# marks + a comfortable/tight/constrained verdict) and via the `sysmon` maint
+# command. Cheap /proc + /sys reads. Set false to disable the sampler thread.
+sysmon_enabled: true
+
 # ---- Diagnostics ----
 # Set save_solved_frames or save_failed_frames to true to write PNG captures
 # to failed_frames_dir. Files are named <YYYYMMDDTHHMMSS_mmm>_<label>.png

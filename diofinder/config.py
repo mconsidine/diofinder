@@ -27,7 +27,7 @@ DEFAULT_CONFIG_PATH = "/etc/diofinder/diofinder.conf"
 @dataclasses.dataclass
 class Config:
     # -------- Identity --------
-    version: str = "0.11.70"
+    version: str = "0.11.70-sysmon"
 
     # -------- Camera --------
     frame_width: int = 960
@@ -406,6 +406,12 @@ class Config:
     # process is hung; comms logs CRITICAL and exits so systemd restarts it.
     watchdog_enabled: bool = True
     watchdog_timeout_s: float = 30.0
+
+    # Resource-headroom monitor (sysmon): samples mem/swap, per-core CPU, and
+    # SoC temperature every few seconds and surfaces them (+ high-water-marks
+    # and a comfortable/tight/constrained verdict) on the Utilities page and the
+    # `sysmon` maint command. Cheap /proc + /sys reads; off disables the thread.
+    sysmon_enabled: bool = True
 
     # -------- Diagnostics --------
     save_failed_frames: bool = False

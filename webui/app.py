@@ -378,6 +378,15 @@ def api_status():
     })
 
 
+@app.route("/api/sysmon")
+def api_sysmon():
+    """System resource headroom (mem/swap, per-core CPU, SoC temperature, plus
+    high-water-marks and a comfortable/tight/constrained verdict) for the
+    Utilities-page poller."""
+    r = _safe_call("sysmon")
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
 @app.route("/api/liveview_health")
 def api_liveview_health():
     """Explain why the live view couldn't fetch a frame, instead of the browser

@@ -62,6 +62,7 @@ from diofinder.worker_cmds import (
     CAMERA_OP_GET_EXPOSURE, CAMERA_OP_SET_EXPOSURE, CAMERA_OP_SET_GAIN,
 )
 from diofinder import seeing as seeing_mod
+from diofinder import sysmon as _sysmon
 
 log = logging.getLogger("diofinder.comms")
 
@@ -1184,6 +1185,36 @@ def _auto_tune_run(ctx, params):
         _at_set(running=False)
 
 
+# Resource-headroom monitor (sysmon). A single SysMon instance owned by the
+# comms process; the sampler loop keeps it fresh (so high-water-marks capture a
+# squeeze even when no page is open) and the `sysmon` maint command reads it.
+_SYSMON = None
+
+
+def _sysmon_loop(ctx, interval_s=5.0):
+    """Sample system resource headroom (mem/swap, per-core CPU, temp) on a
+    timer so the high-water-marks stay current regardless of page views. Cheap
+    /proc + /sys reads; gated by cfg.sysmon_enabled (default on)."""
+    global _SYSMON
+    cfg = ctx.cfg
+    if not getattr(cfg, "sysmon_enabled", True):
+        log.info("Resource monitor (sysmon) disabled by config")
+        return
+    try:
+        _SYSMON = _sysmon.SysMon()
+        _SYSMON.sample()  # seed the CPU baseline + first snapshot
+    except Exception as e:
+        log.warning("sysmon init failed: %s", e)
+        return
+    log.info("Resource monitor (sysmon) started (interval=%.0fs)", interval_s)
+    while True:
+        time.sleep(interval_s)
+        try:
+            _SYSMON.sample()
+        except Exception as e:
+            log.debug("sysmon sample failed: %s", e)
+
+
 def _watchdog_loop(ctx, interval_s=5.0):
     """Solver-hang watchdog.
 
@@ -1872,6 +1903,13 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
     try:
         if cmd == "ping":
             return MaintResponse(ok=True, result={"pong": True})
+
+        if cmd == "sysmon":
+            sm = _SYSMON
+            if sm is None:
+                return MaintResponse(ok=True, result={
+                    "available": False, "reason": "resource monitor not started"})
+            return MaintResponse(ok=True, result={"available": True, **sm.snapshot()})
 
         if cmd == "version":
             # Resolution order: OTA-written release file -> git describe of the
@@ -3479,6 +3517,9 @@ def comms_main(latest_solution, shared_cfg,
 
     threading.Thread(target=_mount_loop, args=(ctx,),
                      name="diofinder-mount", daemon=True).start()
+
+    threading.Thread(target=_sysmon_loop, args=(ctx,),
+                     name="diofinder-sysmon", daemon=True).start()
 
     while True:
         try:

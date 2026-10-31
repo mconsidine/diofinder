@@ -11,6 +11,24 @@
 
 <section class="grid">
 
+  {# ---- System headroom ---- #}
+  <div class="card" id="sysmon-card">
+    <h2>System headroom</h2>
+    <p class="hint" style="margin:0 0 8px 0;">
+      How much memory, CPU, and thermal margin the finder has. The verdict uses
+      the <strong>worst reading since the service started</strong>, so a brief
+      squeeze during a solve or slew still shows up here.
+    </p>
+    <p id="sysmon-verdict" style="margin:0 0 8px 0;font-weight:bold;">&hellip;</p>
+    <dl class="stats">
+      <dt>Memory free</dt><dd id="sm-mem">&mdash;</dd>
+      <dt>Swap used</dt><dd id="sm-swap">&mdash;</dd>
+      <dt>CPU (overall / core&nbsp;0)</dt><dd id="sm-cpu">&mdash;</dd>
+      <dt>Temperature</dt><dd id="sm-temp">&mdash;</dd>
+      <dt>Worst since start</dt><dd id="sm-hw">&mdash;</dd>
+    </dl>
+  </div>
+
   {# ---- Hot-pixel / dark frame ---- #}
   <div class="card">
     <h2>Dark frame (hot-pixel mask)</h2>
@@ -116,5 +134,41 @@
 </section>
 
 {# Debug-bundle button handler is shared in base.html via .js-debug-bundle. #}
+
+<script>
+(function () {
+  var LABEL = {comfortable: "Comfortable", tight: "Tight", constrained: "Constrained"};
+  var COLOR = {comfortable: "#4c9", tight: "#c93", constrained: "#d55"};
+  function pctStr(v) { return (v === null || v === undefined) ? "—" : v + "%"; }
+  function set(id, txt) { var e = document.getElementById(id); if (e) e.textContent = txt; }
+  function poll() {
+    fetch("/api/sysmon").then(function (r) { return r.json(); }).then(function (j) {
+      var res = (j && j.result) || {};
+      var vEl = document.getElementById("sysmon-verdict");
+      if (!j.ok || !res.available) {
+        if (vEl) { vEl.textContent = "Resource monitor unavailable"; vEl.style.color = "#999"; }
+        return;
+      }
+      var v = res.verdict || {}, cpu = res.cpu_pct || {}, hw = res.high_water || {};
+      if (vEl) {
+        vEl.textContent = (LABEL[v.level] || v.level || "—") +
+          (v.reasons && v.reasons.length ? " — " + v.reasons.join("; ") : "");
+        vEl.style.color = COLOR[v.level] || "#999";
+      }
+      set("sm-mem", (res.mem_available_pct != null ? res.mem_available_pct + "% free" : "—") +
+          (res.mem_total_kb ? " of " + Math.round(res.mem_total_kb / 1024) + " MB" : ""));
+      set("sm-swap", res.swap_used_mb != null ? res.swap_used_mb + " MB" : "—");
+      set("sm-cpu", pctStr(cpu.cpu) + " / " + pctStr(cpu.cpu0));
+      set("sm-temp", res.temp_c != null ? res.temp_c + " °C" : "n/a");
+      set("sm-hw", "min free " + pctStr(hw.min_mem_available_pct) +
+          ", swap " + (hw.max_swap_used_mb != null ? hw.max_swap_used_mb + " MB" : "—") +
+          ", CPU0 " + pctStr(hw.max_cpu0_pct) +
+          (hw.max_temp_c != null ? ", " + hw.max_temp_c + " °C" : ""));
+    }).catch(function () { /* keep last values on a transient error */ });
+  }
+  poll();
+  setInterval(poll, 3000);
+})();
+</script>
 
 {% endblock %}
