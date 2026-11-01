@@ -185,7 +185,7 @@ async function refreshFocus() {
   } catch(e) { /* ignore */ }
 }
 
-setInterval(refreshFocus, 500);
+setInterval(refreshFocus, 750);  // 500 -> 750 ms: ~1/3 less focus-metric work on CPU 0 (shared core); imperceptible for manual focusing
 refreshFocus();
 
 // --- Exposure controls -------------------------------------------------------
