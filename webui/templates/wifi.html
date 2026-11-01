@@ -63,27 +63,30 @@
       </div>
     </form>
 
-    {% if networks %}
-      <details style="margin-top:0.75rem;">
-        <summary class="hint" style="cursor:pointer;">
-          {{ networks|length }} network{{ 's' if networks|length != 1 }} visible
-        </summary>
-        <ul id="network-list-display" style="margin:0.5rem 0; padding-left:1.2rem; font-size:0.9rem;">
-          {% for n in networks %}
-            <li style="cursor:pointer;" onclick="pickNetwork('{{ n.ssid | e }}')">
-              {{ n.ssid }} <span class="muted">({{ n.signal }}%)</span>
-            </li>
-          {% endfor %}
-        </ul>
-      </details>
-    {% else %}
-      <p class="hint" id="no-networks">
-        No networks visible — try Rescan, or enter the SSID manually.
-        {% if status.mode == "ap" %}
-          (Scanning is limited in AP mode.)
-        {% endif %}
-      </p>
-    {% endif %}
+    {# The list container is ALWAYS rendered (hidden when empty) so a Rescan
+       from an initially-empty page has somewhere to put its results. SSIDs
+       travel in data-ssid attributes (HTML-escaped by Jinja), never inside a
+       JS string, so a crafted network name can't inject script. #}
+    <details id="network-details" style="margin-top:0.75rem;"
+             {% if not networks %}hidden{% endif %} {% if networks %}open{% endif %}>
+      <summary class="hint" style="cursor:pointer;" id="network-count">
+        {{ networks|length }} network{{ 's' if networks|length != 1 }} visible
+      </summary>
+      <ul id="network-list-display" style="margin:0.5rem 0; padding-left:1.2rem; font-size:0.9rem;">
+        {% for n in networks %}
+          <li style="cursor:pointer;" data-ssid="{{ n.ssid }}"
+              onclick="pickNetwork(this.dataset.ssid)">
+            {{ n.ssid }} <span class="muted">({{ n.signal }}%)</span>
+          </li>
+        {% endfor %}
+      </ul>
+    </details>
+    <p class="hint" id="no-networks" {% if networks %}hidden{% endif %}>
+      No networks visible — try Rescan, or enter the SSID manually.
+      {% if status.mode == "ap" %}
+        (Scanning is limited in AP mode.)
+      {% endif %}
+    </p>
   </div>
 
 </section>
@@ -94,29 +97,47 @@ function pickNetwork(ssid) {
   document.querySelector('input[name="password"]').focus();
 }
 
+// Render a network list. Builds DOM nodes with textContent (never innerHTML)
+// so SSIDs, which anyone nearby can choose, are always treated as text.
+function showNetworks(networks) {
+  const dl = document.getElementById('network-list');
+  const ul = document.getElementById('network-list-display');
+  const details = document.getElementById('network-details');
+  const count = document.getElementById('network-count');
+  const none = document.getElementById('no-networks');
+  dl.replaceChildren(...networks.map(n => {
+    const o = document.createElement('option');
+    o.value = n.ssid;
+    o.textContent = n.ssid + ' — ' + n.signal + '%';
+    return o;
+  }));
+  ul.replaceChildren(...networks.map(n => {
+    const li = document.createElement('li');
+    li.style.cursor = 'pointer';
+    li.append(n.ssid + ' ');
+    const sig = document.createElement('span');
+    sig.className = 'muted';
+    sig.textContent = '(' + n.signal + '%)';
+    li.append(sig);
+    li.addEventListener('click', () => pickNetwork(n.ssid));
+    return li;
+  }));
+  count.textContent = networks.length + ' network' + (networks.length !== 1 ? 's' : '') + ' visible';
+  details.hidden = networks.length === 0;
+  if (networks.length) details.open = true;
+  none.hidden = networks.length !== 0;
+}
+
 async function rescan() {
   const btn = document.getElementById('rescan-btn');
+  if (btn.disabled) return;
   btn.textContent = 'Scanning…';
   btn.disabled = true;
   try {
+    // The server waits for the radio scan to finish (a few seconds).
     const r = await fetch('/api/wifi/scan');
     const data = await r.json();
-    const dl = document.getElementById('network-list');
-    const ul = document.getElementById('network-list-display');
-    if (dl) {
-      dl.innerHTML = data.networks.map(
-        n => `<option value="${n.ssid}">${n.ssid} — ${n.signal}%</option>`
-      ).join('');
-    }
-    if (ul) {
-      ul.innerHTML = data.networks.length
-        ? data.networks.map(
-            n => `<li style="cursor:pointer;" onclick="pickNetwork('${n.ssid.replace(/'/g,"\\'")}')">
-                    ${n.ssid} <span class="muted">(${n.signal}%)</span>
-                  </li>`
-          ).join('')
-        : '<li class="muted">No networks found.</li>';
-    }
+    showNetworks(data.networks || []);
   } catch(e) {
     console.error('Rescan failed:', e);
   } finally {
@@ -124,6 +145,13 @@ async function rescan() {
     btn.disabled = false;
   }
 }
+
+// The cached list is often empty right after boot in AP mode (NetworkManager
+// may never have scanned). Start a scan automatically so the first visit
+// shows networks without needing a Rescan press.
+{% if not networks %}
+document.addEventListener('DOMContentLoaded', rescan);
+{% endif %}
 </script>
 
 {% endblock %}

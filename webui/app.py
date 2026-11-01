@@ -1252,28 +1252,50 @@ def _get_wifi_status():
     return result
 
 
-def _scan_networks():
-    """Return visible Wi-Fi networks as [{ssid, signal}] sorted by signal, excluding our own AP."""
+def _parse_networks(out):
+    """nmcli -t SSID,SIGNAL output -> [{ssid, signal}], deduped, strongest
+    first, excluding our own AP."""
+    seen     = set()
+    networks = []
+    for line in out.splitlines():
+        parts  = line.split(":")
+        ssid   = parts[0].strip() if parts else ""
+        try:
+            signal = int(parts[1].strip()) if len(parts) > 1 else 0
+        except ValueError:
+            signal = 0
+        if ssid and ssid not in seen and not ssid.startswith("diofinder-"):
+            seen.add(ssid)
+            networks.append({"ssid": ssid, "signal": signal})
+    networks.sort(key=lambda n: n["signal"], reverse=True)
+    return networks
+
+
+def _scan_networks(rescan=False):
+    """Return visible Wi-Fi networks as [{ssid, signal}].
+
+    rescan=False reads NetworkManager's cached list instantly (page load).
+    rescan=True runs a fresh scan and WAITS for it: `nmcli dev wifi list
+    --rescan yes` blocks until the scan completes (a few seconds). The old
+    code fired `nmcli dev wifi rescan`, which only *requests* a scan and
+    returns at once, then read the cache immediately, so the first Rescan
+    came back empty and each press showed the previous press's results.
+    If NetworkManager refuses the scan (e.g. one just ran), fall back to
+    the cached list, which is then fresh anyway."""
+    base = ["nmcli", "-t", "-f", "SSID,SIGNAL", "dev", "wifi", "list", "--rescan"]
+    if rescan:
+        try:
+            out = subprocess.check_output(
+                base + ["yes"], text=True, errors="replace", timeout=20,
+                stderr=subprocess.DEVNULL)
+            return _parse_networks(out)
+        except Exception:
+            pass
     try:
         out = subprocess.check_output(
-            ["nmcli", "-t", "-f", "SSID,SIGNAL",
-             "dev", "wifi", "list", "--rescan", "no"],
-            text=True, errors="replace", timeout=5,
-        )
-        seen     = set()
-        networks = []
-        for line in out.splitlines():
-            parts  = line.split(":")
-            ssid   = parts[0].strip() if parts else ""
-            try:
-                signal = int(parts[1].strip()) if len(parts) > 1 else 0
-            except ValueError:
-                signal = 0
-            if ssid and ssid not in seen and not ssid.startswith("diofinder-"):
-                seen.add(ssid)
-                networks.append({"ssid": ssid, "signal": signal})
-        networks.sort(key=lambda n: n["signal"], reverse=True)
-        return networks
+            base + ["no"], text=True, errors="replace", timeout=5,
+            stderr=subprocess.DEVNULL)
+        return _parse_networks(out)
     except Exception:
         return []
 
@@ -1359,13 +1381,10 @@ def api_wifi_status():
 
 @app.route("/api/wifi/scan")
 def api_wifi_scan():
-    """Trigger an nmcli rescan and return the updated network list as JSON."""
-    try:
-        subprocess.run(["nmcli", "dev", "wifi", "rescan"],
-                       timeout=10, capture_output=True)
-    except Exception:
-        pass
-    return jsonify({"networks": _scan_networks()})
+    """Run a fresh Wi-Fi scan, wait for it to finish, and return the list as
+    JSON. Blocks this request thread for the scan (the server is threaded,
+    so other pages and the live view are unaffected)."""
+    return jsonify({"networks": _scan_networks(rescan=True)})
 
 
 # ---- Logs -------------------------------------------------------------------
