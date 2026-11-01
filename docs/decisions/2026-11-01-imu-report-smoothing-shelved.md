@@ -30,8 +30,11 @@ offset by roughly slew rate × gap.
 
 ## The rejected quick fix (v0.11.71)
 
-Branch `claude/imu-report-deadband-0.11.71`, commit `3ff2df5`, preserved by the
-tag **`archive/imu-report-deadband-0.11.71`** so the branch can be deleted.
+Branch `claude/imu-report-deadband-0.11.71`, commit `3ff2df5` (based on
+v0.11.70). The full commit is preserved in-repo as
+**`docs/decisions/2026-11-01-imu-report-deadband-0.11.71.patch`**
+(`git format-patch` output; reapply with `git am`), so the branch can be
+deleted without losing it.
 
 It added `imu_report_deadband_deg` (default 0.25°): position hysteresis on the
 final reported RA/Dec in `_report_radec`. The readout holds until the candidate
