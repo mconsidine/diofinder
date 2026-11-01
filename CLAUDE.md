@@ -507,6 +507,13 @@ it never re-engages from rest, so the stationary-drift gate is unchanged.
 (2°) snaps through unfiltered so genuine slews and the solve-hint Kabsch fit are
 unbiased. All three are unit-tested (`tests/test_imu_smoothing.py`,
 `tests/test_imu_hunt_filter.py`) with no hardware.
+**Still open (shelved 2026-11-01):** jumpiness *during movement* remains — a new
+solve hard-replaces the reported position (P1 reports the raw solve; the
+alpha-beta filter resets on each `ref_t`). The v0.11.71 position-deadband patch
+was rejected (stuck offset at rest, stepped slews); the planned fix is a
+continuously IMU-propagated, solve-corrected reported attitude plus
+mid-exposure IMU timing — see
+`docs/decisions/2026-11-01-imu-report-smoothing-shelved.md`.
 
 Detection is routed through `diofinder/bg_cache.py::BackgroundCache`, not by calling
 `detect_stars` directly. This gives three composable background strategies, all

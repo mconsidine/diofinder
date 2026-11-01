@@ -2005,8 +2005,8 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             # Horizontal coords of the current pointing (compass azimuth: 0=N,
             # 90=E). available=False when the site (lat/lon) or clock isn't set,
             # since azimuth is undefined without both.
-            scfg = dict(ctx.shared_cfg)
-            sol = dict(ctx.latest_solution)
+            scfg = _mp_snapshot(ctx.shared_cfg)
+            sol = _mp_snapshot(ctx.latest_solution)
             altaz = _report_altaz(scfg, sol, ctx.cfg)
             if altaz is None:
                 return MaintResponse(ok=True, result={
