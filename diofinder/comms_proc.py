@@ -175,6 +175,15 @@ def _format_dec(dec_deg: float) -> str:
     return f"{sign}{d:02d}*{m:02d}:{s:02d}#"
 
 
+def _format_site_dm(value_deg: float, deg_width: int) -> str:
+    """LX200 site coordinate sDD*MM# (latitude, width 2) or sDDD*MM#
+    (longitude, width 3). Rounds to whole arcminutes on the total, so
+    43.9999 gives +44*00, never +43*60."""
+    sign = "+" if value_deg >= 0 else "-"
+    d, m = divmod(int(round(abs(value_deg) * 60.0)), 60)
+    return f"{sign}{d:0{deg_width}d}*{m:02d}#"
+
+
 def _wait_for_reply(reply_q, request_id, timeout_s=5.0):
     """Block up to timeout_s for the reply matching request_id; returns None on timeout."""
     deadline = time.monotonic() + timeout_s
@@ -1821,12 +1830,13 @@ def _report_altaz(scfg, sol, cfg):
                 return None  # test site also unset — nothing sensible to report
         # (b) use a fixed reference epoch when set, so a static frame yields a
         # deterministic reading without depending on the (RTC-less) wall clock.
+        # Any ISO-8601 form is accepted, including frames.json's own
+        # exposure_start_utc ("2026-07-23T01:24:00.798+00:00"); the old strict
+        # parser rejected those and silently fell back to the wall clock.
         epoch = (getattr(cfg, "test_epoch_utc", "") or "").strip()
         if epoch:
-            try:
-                now_utc = datetime.datetime.strptime(
-                    epoch.replace("Z", "").strip(), "%Y-%m-%dT%H:%M:%S")
-            except ValueError:
+            now_utc = _horizon.parse_utc_timestamp(epoch)
+            if now_utc is None:
                 log.warning("Bad test_epoch_utc %r; falling back to wall clock", epoch)
 
     if now_utc is None:
@@ -1922,26 +1932,26 @@ def _handle_lx200_command(cmd, latest_solution, align_state, time_state,
             log.warning("Could not parse :St latitude %r: %s", cmd[3:], e)
             return b"0"
     if cmd.startswith(":Sg"):
+        # LX200 longitude is WEST-positive; diofinder stores East-positive
+        # (conf, Config page "+E", sidereal time). Convert at this boundary.
+        # Before this, a US site from SkySafari was stored ~145 deg of
+        # sidereal time off, so live Alt/Az and horizon-reject were wrong.
         try:
             from diofinder.align import _parse_dec_dms
-            lon = _parse_dec_dms(cmd[3:])
+            lon = _horizon.lx200_longitude_to_east(_parse_dec_dms(cmd[3:]))
             cfg.longitude_deg = lon
             cfg_mod.save_keys({"longitude_deg": lon})
-            log.info("Longitude from :Sg -> %.4f", lon)
+            log.info("Longitude from :Sg %r -> %.4f (East-positive)", cmd[3:], lon)
             return b"1"
         except Exception as e:
             log.warning("Could not parse :Sg longitude %r: %s", cmd[3:], e)
             return b"0"
     if cmd == ":Gt":
-        lat = cfg.latitude_deg or 0.0
-        sign = "+" if lat >= 0 else "-"
-        a = abs(lat); d = int(a); m = int(round((a - d) * 60.0))
-        return f"{sign}{d:02d}*{m:02d}#".encode("ascii")
+        return _format_site_dm(cfg.latitude_deg or 0.0, 2).encode("ascii")
     if cmd == ":Gg":
-        lon = cfg.longitude_deg or 0.0
-        sign = "+" if lon >= 0 else "-"
-        a = abs(lon); d = int(a); m = int(round((a - d) * 60.0))
-        return f"{sign}{d:03d}*{m:02d}#".encode("ascii")
+        # Reply in the LX200's West-positive convention (mirror of :Sg).
+        west = _horizon.east_longitude_to_lx200(cfg.longitude_deg or 0.0)
+        return _format_site_dm(west, 3).encode("ascii")
     if cmd.startswith(":SG"):
         try:
             time_state["sg"] = float(cmd[3:])

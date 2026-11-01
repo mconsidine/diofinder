@@ -91,6 +91,8 @@ class Config:
     arcsec_per_pixel: float = 50.78  # 13.54 deg * 3600 / 960 px
 
     latitude_deg: float = 0.0
+    # East-positive (west of Greenwich is negative). LX200 :Sg/:Gg use the
+    # opposite (West-positive) convention; comms converts at that boundary.
     longitude_deg: float = 0.0
 
     # Test-mode Alt/Az (bench exercise of the :GA/:GZ path on a static frame).
@@ -101,10 +103,12 @@ class Config:
     #       it is set, so the reading is deterministic/repeatable for a given
     #       test frame (and needs no NTP). Set test_epoch_utc to "" to use the
     #       wall clock instead (reading then drifts with sidereal time).
+    #       Any ISO-8601 UTC timestamp works, including a frames.json
+    #       exposure_start_utc pasted as-is (fractional seconds, +00:00, Z).
     # Defaults are a deliberately-round placeholder site (40 N, 75 W) — change
     # them to your bench location (or just set latitude_deg/longitude_deg).
     test_latitude_deg: float = 40.0
-    test_longitude_deg: float = -75.0
+    test_longitude_deg: float = -75.0     # East-positive, like longitude_deg
     test_epoch_utc: str = "2026-01-01T00:00:00Z"
 
     # Opt-in horizon-based solve rejection (olive-solve per-star prune). Default

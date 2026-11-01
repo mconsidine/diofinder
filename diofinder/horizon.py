@@ -91,6 +91,52 @@ def radec_to_altaz(ra_deg: float, dec_deg: float,
     return math.degrees(alt), math.degrees(az) % 360.0
 
 
+def lx200_longitude_to_east(lon_lx200: float) -> float:
+    """LX200 :Sg longitude -> diofinder's East-positive longitude in (-180, 180].
+
+    The Meade LX200 protocol (and SkySafari's LX200 drivers, OnStep, and
+    AstroKeith's eFinder: "Longitude as decimal degrees West +ve") measures
+    site longitude WEST-positive: east longitudes are negative, or 180-360
+    in the classic unsigned form. Everything inside diofinder (the conf, the
+    Config page "+E" label, local_sidereal_time_deg) is East-positive, so the
+    conversion happens only at the LX200 boundary, like the J2000<->JNow one.
+    Vermont, 72 deg 40' W:  "+072*40" -> -72.667.  10 deg E: "350*00" or
+    "-010*00" -> +10.0."""
+    east = (-float(lon_lx200) + 180.0) % 360.0 - 180.0
+    return 180.0 if east == -180.0 else east
+
+
+def east_longitude_to_lx200(lon_east: float) -> float:
+    """East-positive longitude -> LX200 West-positive signed degrees in
+    (-180, 180], for the :Gg reply (inverse of lx200_longitude_to_east)."""
+    west = (-float(lon_east) + 180.0) % 360.0 - 180.0
+    return 180.0 if west == -180.0 else west
+
+
+def parse_utc_timestamp(s) -> datetime.datetime | None:
+    """ISO-8601 timestamp -> naive UTC datetime, or None if it can't be parsed.
+
+    Accepts what diofinder itself writes, e.g. frames.json
+    `exposure_start_utc` = '2026-07-23T01:24:00.798+00:00' (fractional
+    seconds + an explicit offset), the plain '2026-07-23T01:24:00Z' form, a
+    space instead of 'T', and the easy-to-make hybrid '...+00:00Z'. A value
+    with no offset is taken as UTC; any other offset is converted to UTC."""
+    if s is None:
+        return None
+    t = str(s).strip()
+    if not t:
+        return None
+    if t[-1] in "Zz":
+        t = t[:-1]
+    try:
+        dt = datetime.datetime.fromisoformat(t)
+    except ValueError:
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
+    return dt
+
+
 def site_is_set(latitude_deg: float, longitude_deg: float) -> bool:
     """True unless lat/lon are the unconfigured (0, 0) default (null island)."""
     return not (latitude_deg == 0.0 and longitude_deg == 0.0)

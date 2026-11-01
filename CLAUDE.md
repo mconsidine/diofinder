@@ -291,6 +291,17 @@ Everything internal (solver, `imu_ref`, boresight, calibration) stays J2000.
 Gated by `shared_cfg["report_epoch"]` (`jnow` default; `j2000` = raw kill
 switch). Reused by the planned OnStep sync (`docs/onstep-design.md`).
 
+**Longitude boundary.** Same rule for site longitude: everything inside
+diofinder (`longitude_deg`, `test_longitude_deg`, the Config page "+E",
+`horizon.local_sidereal_time_deg`) is **East-positive**, but LX200 `:Sg`/`:Gg`
+are **West-positive** (Meade; SkySafari, OnStep, AstroKeith's eFinder). `:Sg`
+converts in via `horizon.lx200_longitude_to_east`, `:Gg` out via
+`east_longitude_to_lx200`. Before this, `:Sg` stored the raw value, so a US site
+came out ~145° of sidereal time off (wrong live Alt/Az and horizon-reject).
+`test_epoch_utc` is parsed by `horizon.parse_utc_timestamp`, which takes any
+ISO-8601 form incl. a pasted `frames.json` `exposure_start_utc`. Tests:
+`tests/test_lx200_site.py`.
+
 ---
 
 ## Adding a maintenance socket command
