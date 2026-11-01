@@ -44,10 +44,18 @@ _PROC_LOADAVG = "/proc/loadavg"
 _SYS_THERMAL = "/sys/class/thermal/thermal_zone0/temp"
 _SYS_ZRAM_MM = "/sys/block/zram0/mm_stat"
 
-# How long after start to ignore for the verdict/high-water-marks. The star-DB
-# load + process spawn + first solve all land in the first few seconds and peg
-# CPU0 / squeeze RAM — a benign boot transient, not sustained pressure.
+# Start-up window ignored by the verdict/high-water-marks. The star-DB load +
+# process spawn + web UI imports + first frames peg CPU0 / squeeze RAM — a
+# benign boot transient, not sustained pressure. On a COLD boot (cold SD reads,
+# empty zram) that can run past a fixed timer, so warm-up ends only when ALL of:
+#   * at least DEFAULT_WARMUP_S has elapsed, and
+#   * the caller has reported the system ready (solver publishing + web UI up),
+#     plus DEFAULT_SETTLE_S for the kernel to settle (first zram absorption);
+# with DEFAULT_MAX_WARMUP_S as a cap so a never-ready system still gets judged.
+# A caller that doesn't report readiness (ready=None) gets the plain timer.
 DEFAULT_WARMUP_S = 90.0
+DEFAULT_SETTLE_S = 30.0
+DEFAULT_MAX_WARMUP_S = 300.0
 
 # Verdict thresholds. Deliberately conservative for a 512 MB board; a finder
 # that is comfortable should sit solidly green. Tunable later via config if a
@@ -67,9 +75,18 @@ DEFAULT_WARMUP_S = 90.0
 #      "tight" — the "constrained" escalations are reserved for low available
 #      RAM, CPU-0 saturation, and thermal throttling (the states that actually
 #      stall the finder).
+#
+# NOTE on available RAM. MemAvailable counts free memory + droppable cache but
+# NOT anonymous pages zram could still compress (~3-4:1), so on this box it
+# understates real headroom — and it bottoms out by design at the moment the
+# kernel starts reclaiming (e.g. the first zram absorption after a cold boot),
+# then recovers. So the WARN rung needs a sustained streak below the line, like
+# swap. The CRIT rung stays single-sample: OOM kills are instantaneous, so even
+# a brief dip that deep is worth flagging.
 DEFAULT_THRESHOLDS = {
-    "mem_avail_warn_pct": 15.0,        # < this fraction of RAM available -> tight
-    "mem_avail_crit_pct": 8.0,
+    "mem_avail_warn_pct": 15.0,        # below this for a streak -> tight
+    "mem_avail_streak_tight": 3,       # consecutive low samples (~15 s) -> tight
+    "mem_avail_crit_pct": 8.0,         # below this even once -> constrained
     "swap_growth_warn_mb": 4.0,        # physical zram grew this much in one sample -> count it
     "swap_growth_streak_tight": 3,     # that many consecutive growing samples (~15 s) -> tight
     "swap_phys_backstop_pct": 40.0,    # physical zram footprint this fraction of RAM -> tight
@@ -249,13 +266,16 @@ def classify(snapshot: dict, thresholds: dict | None = None) -> dict:
             level = new
 
     hw = snapshot.get("high_water", {})
-    # Memory available (lower is worse): min seen post-warm-up.
+    # Memory available (lower is worse). Crit on any single dip (OOM risk is
+    # instantaneous); warn only on a sustained streak below the line.
     mem_lo = hw.get("min_mem_available_pct")
-    if mem_lo is not None:
-        if mem_lo < t["mem_avail_crit_pct"]:
-            bump("constrained"); reasons.append(f"available RAM fell to {mem_lo:.0f}%")
-        elif mem_lo < t["mem_avail_warn_pct"]:
-            bump("tight"); reasons.append(f"available RAM fell to {mem_lo:.0f}%")
+    low_streak = hw.get("max_mem_low_streak", 0) or 0
+    if mem_lo is not None and mem_lo < t["mem_avail_crit_pct"]:
+        bump("constrained"); reasons.append(f"available RAM fell to {mem_lo:.0f}%")
+    elif mem_lo is not None and low_streak >= t["mem_avail_streak_tight"]:
+        bump("tight")
+        reasons.append(f"available RAM stayed below {t['mem_avail_warn_pct']:.0f}% "
+                       f"({low_streak} samples running, low {mem_lo:.0f}%)")
     # Swap: judged on SUSTAINED eviction of the compressed zram footprint, not a
     # one-shot burst or uncompressed occupancy (zram is compressed RAM — a lone
     # page-render/solve-start eviction is normal and cheap). Swap alone only
@@ -305,12 +325,18 @@ def _read(path: str):
 class SysMon:
     """Periodically-sampled resource monitor with high-water-marks."""
 
-    def __init__(self, thresholds: dict | None = None, warmup_s: float = DEFAULT_WARMUP_S):
+    def __init__(self, thresholds: dict | None = None, warmup_s: float = DEFAULT_WARMUP_S,
+                 settle_s: float = DEFAULT_SETTLE_S,
+                 max_warmup_s: float = DEFAULT_MAX_WARMUP_S):
         self.thresholds = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
         self.warmup_s = float(warmup_s)
+        self.settle_s = float(settle_s)
+        self.max_warmup_s = float(max_warmup_s)
+        self._ready_mono = None         # when the caller first reported ready
         self._prev_cpu = None
         self._prev_swap_phys_mb = None  # physical zram footprint, for growth deltas
         self._swap_growth_streak = 0    # consecutive samples that grew >= warn
+        self._mem_low_streak = 0        # consecutive samples below mem warn
         self._prev_proc = {}          # pid -> (ticks, monotonic) for CPU% deltas
         self._last = {}
         self.started_mono = time.monotonic()
@@ -321,10 +347,14 @@ class SysMon:
             "max_swap_phys_mb": 0.0,     # compressed physical footprint (backstop)
             "max_swap_growth_mb": 0.0,   # largest single-sample growth (info)
             "max_swap_growth_streak": 0, # longest run of consecutive growing samples
+            "max_mem_low_streak": 0,     # longest run of samples below mem warn
             "max_cpu_pct": 0.0,
             "max_cpu0_pct": 0.0,
             "max_temp_c": None,
         }
+        # uptime_s (since this monitor started) at which each high-water mark
+        # was last set — tells a boot-settle dip from a mid-session squeeze.
+        self.high_water_at = {}
         # Seed the CPU baseline so the first sample() after an interval yields a
         # real delta.
         stat = _read(_PROC_STAT)
@@ -336,33 +366,59 @@ class SysMon:
         # spike CPU0 / RAM at boot and must not drive the verdict.
         if snap.get("in_warmup"):
             return
-        hw = self.high_water
+        hw, at, t = self.high_water, self.high_water_at, self.thresholds
+        up = snap.get("uptime_s")
+
+        def hi(key, val):          # raise a max-mark, stamping when it moved
+            if val is not None and (hw[key] is None or val > hw[key]):
+                hw[key] = val
+                at[key] = up
+
+        def lo(key, val):          # lower a min-mark, stamping when it moved
+            if val is not None and (hw[key] is None or val < hw[key]):
+                hw[key] = val
+                at[key] = up
+
         mp = snap.get("mem_available_pct")
+        lo("min_mem_available_pct", mp)
         if mp is not None:
-            hw["min_mem_available_pct"] = (mp if hw["min_mem_available_pct"] is None
-                                           else min(hw["min_mem_available_pct"], mp))
-        hw["max_swap_used_mb"] = max(hw["max_swap_used_mb"], snap.get("swap_used_mb", 0.0))
-        hw["max_swap_phys_mb"] = max(hw["max_swap_phys_mb"], snap.get("swap_phys_mb") or 0.0)
+            # Sustained-low streak: the warn rung needs this, a lone dip resets.
+            self._mem_low_streak = (self._mem_low_streak + 1
+                                    if mp < t["mem_avail_warn_pct"] else 0)
+            hi("max_mem_low_streak", self._mem_low_streak)
+        hi("max_swap_used_mb", snap.get("swap_used_mb"))
+        hi("max_swap_phys_mb", snap.get("swap_phys_mb"))
         g = snap.get("swap_growth_mb")
         if g is not None:
-            hw["max_swap_growth_mb"] = max(hw["max_swap_growth_mb"], g)
+            hi("max_swap_growth_mb", g)
             # A growth STREAK (consecutive samples each adding >= warn MB to the
             # physical footprint) is the sustained-eviction signal; a lone burst
             # resets to 0 on the next quiet sample and never reaches the tight gate.
-            if g >= self.thresholds["swap_growth_warn_mb"]:
-                self._swap_growth_streak += 1
-            else:
-                self._swap_growth_streak = 0
-            hw["max_swap_growth_streak"] = max(hw["max_swap_growth_streak"],
-                                               self._swap_growth_streak)
+            self._swap_growth_streak = (self._swap_growth_streak + 1
+                                        if g >= t["swap_growth_warn_mb"] else 0)
+            hi("max_swap_growth_streak", self._swap_growth_streak)
         cpu = snap.get("cpu_pct") or {}
-        if "cpu" in cpu:
-            hw["max_cpu_pct"] = max(hw["max_cpu_pct"], cpu["cpu"])
-        if "cpu0" in cpu:
-            hw["max_cpu0_pct"] = max(hw["max_cpu0_pct"], cpu["cpu0"])
-        tc = snap.get("temp_c")
-        if tc is not None:
-            hw["max_temp_c"] = tc if hw["max_temp_c"] is None else max(hw["max_temp_c"], tc)
+        hi("max_cpu_pct", cpu.get("cpu"))
+        hi("max_cpu0_pct", cpu.get("cpu0"))
+        hi("max_temp_c", snap.get("temp_c"))
+
+    def _warmup_state(self, now_mono: float, ready) -> str | None:
+        """None once warm-up is over, else a short reason string. `ready` is the
+        caller's "system is up" signal (solver publishing + web UI running);
+        None means the caller doesn't report readiness -> plain timer. Latches
+        the first ready time so settling is measured from it."""
+        if ready and self._ready_mono is None:
+            self._ready_mono = now_mono
+        up = now_mono - self.started_mono
+        if up < self.warmup_s:
+            return "starting"
+        if ready is None or up >= self.max_warmup_s:
+            return None
+        if self._ready_mono is None:
+            return "waiting for solver / web UI"
+        if now_mono - self._ready_mono < self.settle_s:
+            return "settling"
+        return None
 
     def _sample_processes(self, pids: dict, now_mono: float) -> list:
         """Per-process RSS / CPU% / core affinity for {label: pid}. Read-only."""
@@ -398,16 +454,20 @@ class SysMon:
             self._prev_proc.pop(dead, None)
         return out
 
-    def sample(self, pids: dict | None = None) -> dict:
+    def sample(self, pids: dict | None = None, ready=None) -> dict:
         """Read /proc + /sys, update CPU deltas and high-water-marks, and
         return the current snapshot (also cached for snapshot()). When `pids`
-        ({label: pid}) is given, also attach per-process RSS/CPU/affinity."""
+        ({label: pid}) is given, also attach per-process RSS/CPU/affinity.
+        `ready` (bool) ends warm-up only once the system is up + settled; omit
+        it for the plain DEFAULT_WARMUP_S timer."""
         now_mono = time.monotonic()
         uptime = round(now_mono - self.started_mono, 1)
+        reason = self._warmup_state(now_mono, ready)
         snap = {
             "uptime_s": uptime,
             "warmup_s": self.warmup_s,
-            "in_warmup": uptime < self.warmup_s,
+            "in_warmup": reason is not None,
+            "warmup_reason": reason,
         }
         if pids:
             snap["processes"] = self._sample_processes(pids, now_mono)
@@ -448,6 +508,7 @@ class SysMon:
 
         self._bump_marks(snap)
         snap["high_water"] = dict(self.high_water)
+        snap["high_water_at"] = dict(self.high_water_at)
         snap["verdict"] = classify(snap, self.thresholds)
         self._last = snap
         return snap

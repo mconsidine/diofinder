@@ -85,8 +85,8 @@ def test_parse_zram_mm_stat():
 def _hw(**kw):
     base = {"min_mem_available_pct": None, "max_swap_used_mb": 0.0,
             "max_swap_phys_mb": 0.0, "max_swap_growth_mb": 0.0,
-            "max_swap_growth_streak": 0, "max_cpu_pct": 0.0, "max_cpu0_pct": 0.0,
-            "max_temp_c": None}
+            "max_swap_growth_streak": 0, "max_mem_low_streak": 0,
+            "max_cpu_pct": 0.0, "max_cpu0_pct": 0.0, "max_temp_c": None}
     base.update(kw)
     return base
 
@@ -170,3 +170,92 @@ def test_swap_growth_streak_counts_consecutive():
     feed(6.0)                            # grows again
     assert sm._swap_growth_streak == 1
     assert sm.high_water["max_swap_growth_streak"] == 2   # max retained
+
+
+# --- Available-RAM: warn needs a sustained streak, crit stays single-sample ---
+
+def test_classify_single_ram_dip_is_benign():
+    # The real cold-boot reading: one dip to 14% (just under the 15% warn line)
+    # at the kernel's first zram absorption, then recovery -> must NOT flag.
+    snap = {"in_warmup": False, "mem_total_kb": 425000,
+            "high_water": _hw(min_mem_available_pct=14.0, max_mem_low_streak=1,
+                              max_cpu0_pct=40.0)}
+    assert sysmon.classify(snap)["level"] == "comfortable"
+
+
+def test_classify_tight_on_sustained_low_ram():
+    snap = {"in_warmup": False, "mem_total_kb": 425000,
+            "high_water": _hw(min_mem_available_pct=12.0, max_mem_low_streak=3)}
+    v = sysmon.classify(snap)
+    assert v["level"] == "tight"
+    assert any("stayed below 15%" in r for r in v["reasons"])
+
+
+def test_classify_ram_crit_is_single_sample():
+    # OOM risk is instantaneous: even a lone dip below 8% is constrained.
+    snap = {"in_warmup": False, "mem_total_kb": 425000,
+            "high_water": _hw(min_mem_available_pct=6.0, max_mem_low_streak=1)}
+    v = sysmon.classify(snap)
+    assert v["level"] == "constrained"
+    assert any("fell to 6%" in r for r in v["reasons"])
+
+
+def test_mem_low_streak_counts_and_resets():
+    sm = sysmon.SysMon(warmup_s=0.0)
+
+    def feed(pct):
+        sm._bump_marks({"in_warmup": False, "mem_available_pct": pct})
+
+    feed(14.0); feed(13.0)
+    assert sm._mem_low_streak == 2
+    feed(30.0)                                   # recovery resets
+    assert sm._mem_low_streak == 0
+    feed(14.0)
+    assert sm.high_water["max_mem_low_streak"] == 2
+
+
+# --- Readiness-gated warm-up ---
+
+def test_warmup_waits_for_ready_then_settles():
+    sm = sysmon.SysMon(warmup_s=90.0, settle_s=30.0, max_warmup_s=300.0)
+    sm.started_mono = 0.0
+    assert sm._warmup_state(50.0, False) == "starting"          # inside the floor
+    assert sm._warmup_state(100.0, False) == "waiting for solver / web UI"
+    assert sm._warmup_state(110.0, True) == "settling"          # ready latched at 110
+    assert sm._warmup_state(139.0, True) == "settling"
+    assert sm._warmup_state(141.0, True) is None                # 110 + 30 passed
+    # Latched: a later not-ready report does not re-open warm-up.
+    assert sm._warmup_state(150.0, False) is None
+
+
+def test_warmup_ready_before_floor_still_waits_for_floor():
+    sm = sysmon.SysMon(warmup_s=90.0, settle_s=30.0, max_warmup_s=300.0)
+    sm.started_mono = 0.0
+    assert sm._warmup_state(20.0, True) == "starting"           # ready early
+    assert sm._warmup_state(91.0, True) is None                 # 20 + 30 < 91
+
+
+def test_warmup_cap_when_never_ready():
+    sm = sysmon.SysMon(warmup_s=90.0, settle_s=30.0, max_warmup_s=300.0)
+    sm.started_mono = 0.0
+    assert sm._warmup_state(299.0, False) == "waiting for solver / web UI"
+    assert sm._warmup_state(301.0, False) is None                # cap: judge anyway
+
+
+def test_warmup_plain_timer_without_ready_signal():
+    sm = sysmon.SysMon(warmup_s=90.0)
+    sm.started_mono = 0.0
+    assert sm._warmup_state(89.0, None) == "starting"
+    assert sm._warmup_state(91.0, None) is None
+
+
+# --- When each worst reading happened ---
+
+def test_high_water_at_records_uptime_of_each_mark():
+    sm = sysmon.SysMon(warmup_s=0.0)
+    sm._bump_marks({"in_warmup": False, "uptime_s": 112.0,
+                    "mem_available_pct": 14.0, "cpu_pct": {"cpu0": 40.0}})
+    sm._bump_marks({"in_warmup": False, "uptime_s": 300.0,
+                    "mem_available_pct": 30.0, "cpu_pct": {"cpu0": 55.0}})
+    assert sm.high_water_at["min_mem_available_pct"] == 112.0   # min didn't move
+    assert sm.high_water_at["max_cpu0_pct"] == 300.0            # max moved later

@@ -16,11 +16,12 @@
     <h2>System headroom</h2>
     <p class="hint" style="margin:0 0 8px 0;">
       How much memory, CPU, and thermal margin the finder has. The verdict uses
-      the <strong>worst reading since start-up settles</strong> (the first ~90&nbsp;s
-      of boot are excluded), so a squeeze during a solve or slew shows up but the
-      normal boot spike doesn't. Swap here is <em>compressed RAM</em> (zram):
-      it's judged on its real compressed size and on <em>sustained</em> eviction,
-      not on the larger uncompressed figure or a one-off burst.
+      the <strong>worst reading since start-up settles</strong> (start-up is
+      excluded until the solver and web&nbsp;UI are running and have settled), so a
+      squeeze during a solve or slew shows up but the normal boot spike doesn't.
+      Low RAM and swap must be <em>sustained</em> to count; a one-off dip or burst
+      doesn't. Swap here is <em>compressed RAM</em> (zram), judged on its real
+      compressed size. Times are since the finder started.
     </p>
     <p id="sysmon-verdict" style="margin:0 0 8px 0;font-weight:bold;">&hellip;</p>
     <dl class="stats">
@@ -153,6 +154,13 @@
                tight: "Tight", constrained: "Constrained"};
   var COLOR = {warming_up: "#999", comfortable: "#4c9", tight: "#c93", constrained: "#d55"};
   function pctStr(v) { return (v === null || v === undefined) ? "—" : v + "%"; }
+  // " (at 1m52s)" from an uptime-seconds stamp, or "" if none.
+  function atStr(s) {
+    if (s === null || s === undefined) return "";
+    s = Math.round(s);
+    var m = Math.floor(s / 60), r = s % 60;
+    return " (at " + (m ? m + "m" + (r < 10 ? "0" : "") + r + "s" : r + "s") + ")";
+  }
   function set(id, txt) { var e = document.getElementById(id); if (e) e.textContent = txt; }
   function poll() {
     fetch("/api/sysmon").then(function (r) { return r.json(); }).then(function (j) {
@@ -163,8 +171,10 @@
         return;
       }
       var v = res.verdict || {}, cpu = res.cpu_pct || {}, hw = res.high_water || {};
+      var at = res.high_water_at || {};
       if (vEl) {
         vEl.textContent = (LABEL[v.level] || v.level || "—") +
+          (v.level === "warming_up" && res.warmup_reason ? " (" + res.warmup_reason + ")" : "") +
           (v.reasons && v.reasons.length ? " — " + v.reasons.join("; ") : "");
         vEl.style.color = COLOR[v.level] || "#999";
       }
@@ -175,10 +185,11 @@
              + (res.zram_ratio ? ", " + res.zram_ratio + "× compressed" : "") + ")" : "") : "—");
       set("sm-cpu", pctStr(cpu.cpu) + " / " + pctStr(cpu.cpu0));
       set("sm-temp", res.temp_c != null ? res.temp_c + " °C" : "n/a");
-      set("sm-hw", "min free " + pctStr(hw.min_mem_available_pct) +
+      set("sm-hw", "min free " + pctStr(hw.min_mem_available_pct) + atStr(at.min_mem_available_pct) +
           ", zram " + (hw.max_swap_phys_mb != null ? hw.max_swap_phys_mb + " MB" : "—") +
-          ", CPU0 " + pctStr(hw.max_cpu0_pct) +
-          (hw.max_temp_c != null ? ", " + hw.max_temp_c + " °C" : ""));
+          atStr(at.max_swap_phys_mb) +
+          ", CPU0 " + pctStr(hw.max_cpu0_pct) + atStr(at.max_cpu0_pct) +
+          (hw.max_temp_c != null ? ", " + hw.max_temp_c + " °C" + atStr(at.max_temp_c) : ""));
       var procs = res.processes || [], tbl = document.getElementById("sysmon-procs");
       if (procs.length && tbl) {
         tbl.querySelector("tbody").innerHTML = procs.map(function (p) {

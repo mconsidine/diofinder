@@ -1220,7 +1220,13 @@ def _sysmon_loop(ctx, interval_s=5.0):
                 webui_pid = _sysmon.discover_pid_by_cmdline("webui.app")
             if webui_pid:
                 pids["webui"] = webui_pid
-            _SYSMON.sample(pids)
+            # "System is up" = the solver has published (DB loaded, frames
+            # flowing; dark frames heartbeat too) AND the web UI is running.
+            # sysmon ends warm-up only after that + a settle window, so a slow
+            # cold-boot DB load / first zram absorption isn't judged as
+            # pressure. One .get() = one Manager round-trip.
+            solver_up = bool(ctx.latest_solution.get("epoch_monotonic") or 0)
+            _SYSMON.sample(pids, ready=solver_up and webui_pid is not None)
         except Exception as e:
             log.debug("sysmon sample failed: %s", e)
 
