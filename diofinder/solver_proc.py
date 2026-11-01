@@ -24,6 +24,7 @@ import time
 import numpy as np
 
 from diofinder.frame_slots import SHM_PREFIX, NUM_BUFFERS
+from diofinder.mp_util import snapshot as _mp_snapshot
 from diofinder.align import AlignResult
 from diofinder.calibration import FovCalibrator, FallbackGate
 from diofinder.imu_math import (quat_delta_rotvec, quat_to_rotvec,
@@ -1034,7 +1035,7 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
     cam_u = -dra_rad * sin_r + ddec_rad * cos_r
     # Solver-local: the pairs list is written and read only by this process,
     # and round-tripping 20 float tuples through shared_cfg inflated every
-    # dict(shared_cfg) snapshot in the system (audit 2026-07 P2).
+    # shared_cfg snapshot in the system (audit 2026-07 P2).
     pairs = _imu_calib_pairs
     # Full 3-D sky rotation vector (from consecutive SOLVED attitudes) rides
     # along with the 2-D projection: it feeds the frame-rotation fit that
@@ -1419,7 +1420,9 @@ def solver_main(slots, latest_solution, shared_cfg,
             # process on CPU 0; this loop previously issued ~30 per frame —
             # comparable to the entire extraction budget on a Pi Zero 2W.
             # Reads below use the snapshot; writes still go to shared_cfg.
-            snap = dict(shared_cfg)
+            # NB: must be proxy.copy() (via _mp_snapshot), NOT dict(proxy) —
+            # dict() on a DictProxy is keys() + one __getitem__ RPC PER KEY.
+            snap = _mp_snapshot(shared_cfg)
 
             # Update boresight target in-place only when it has changed.
             new_bs_y = snap.get("boresight_y", cfg.boresight_y)

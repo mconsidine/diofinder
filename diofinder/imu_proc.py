@@ -460,6 +460,34 @@ def _probe_sensor(smbus2, pref, restore, poll_hz, report="game"):
 
 # ---- Daemon thread ------------------------------------------------------------
 
+# How often the reader re-reads its live-tunable settings from shared_cfg.
+# Each shared_cfg.get() is a Manager IPC round-trip on CPU 0; the loop used to
+# do ~7 of them per sample (140 RPCs/s at 20 Hz) for knobs that change only via
+# a maint command. One snapshot per second makes toggles take <= 1 s to apply.
+_SETTINGS_TTL_S = 1.0
+
+
+def _read_imu_settings(shared_cfg):
+    """One-RPC snapshot of the reader's live settings (with defaults)."""
+    from diofinder.mp_util import snapshot
+    try:
+        snap = snapshot(shared_cfg)
+    except Exception:
+        snap = {}
+    try:
+        hz = float(snap.get("imu_poll_hz", _POLL_HZ))
+    except (TypeError, ValueError):
+        hz = _POLL_HZ
+    return {
+        "enabled": bool(snap.get("imu_enabled", True)),
+        "persist": bool(snap.get("imu_persist_bno055", False)),
+        "sensor": snap.get("imu_sensor", "auto"),
+        "report": snap.get("imu_bno085_report", "game"),
+        "poll_hz": min(50.0, max(1.0, hz)),
+        "hunt_filter": bool(snap.get("imu_hunt_filter", True)),
+    }
+
+
 def imu_thread(shared_cfg, stop_event=None):
     """
     Entry point for the IMU daemon thread.
@@ -491,15 +519,21 @@ def imu_thread(shared_cfg, stop_event=None):
     last_q = None
     last_status_pub = 0.0
     hunt_state = {}             # P3: BNO055 fusion-hunt suppression filter state
+    settings = None             # TTL-cached live settings (_read_imu_settings)
+    settings_t = 0.0
 
     while stop_event is None or not stop_event.is_set():
+        _now_s = time.monotonic()
+        if settings is None or _now_s - settings_t >= _SETTINGS_TTL_S:
+            settings = _read_imu_settings(shared_cfg)
+            settings_t = _now_s
         # ---- Park switch: shed the entire IMU load without unplugging ---------
         # imu_enabled=False stops sampling/publishing and drops imu_available —
         # the same end state as pulling the sensor: the pointing path reports
         # solves only, and the solve hint / slew detection fall back to their
         # non-IMU behavior. Live-toggled from the Camera page; re-enabling
         # re-probes (bus set None here forces the probe branch below).
-        if not shared_cfg.get("imu_enabled", True):
+        if not settings["enabled"]:
             if bus is not None:
                 try:
                     bus.close()
@@ -512,13 +546,10 @@ def imu_thread(shared_cfg, stop_event=None):
             time.sleep(0.3)
             continue
 
-        persist = bool(shared_cfg.get("imu_persist_bno055", False))
-        sensor_pref = shared_cfg.get("imu_sensor", "auto")
-        report_pref = shared_cfg.get("imu_bno085_report", "game")
-        try:
-            poll_hz_pref = float(shared_cfg.get("imu_poll_hz", _POLL_HZ))
-        except (TypeError, ValueError):
-            poll_hz_pref = _POLL_HZ
+        persist = settings["persist"]
+        sensor_pref = settings["sensor"]
+        report_pref = settings["report"]
+        poll_hz_pref = settings["poll_hz"]
         # ---- Device absent: probe periodically --------------------------------
         if bus is None:
             now = time.monotonic()
@@ -551,7 +582,7 @@ def imu_thread(shared_cfg, stop_event=None):
                 # P3: suppress fusion hunting before publishing so it never
                 # reaches the LX200 pointing prediction (reversible; off ->
                 # raw passthrough).
-                if shared_cfg.get("imu_hunt_filter", True):
+                if settings["hunt_filter"]:
                     q = _hunt_filter(hunt_state, q)
                 else:
                     hunt_state.clear()   # re-enable snaps cleanly next time
@@ -592,11 +623,7 @@ def imu_thread(shared_cfg, stop_event=None):
         # (imu_poll_hz): the pointing consumers (SkySafari ~4 Hz polls, solves
         # ~2-3 Hz) don't benefit from 20 Hz oversampling, so a lower rate cuts
         # the per-sample Manager-dict IPC on the shared CPU 0 proportionally.
-        try:
-            hz = float(shared_cfg.get("imu_poll_hz", _POLL_HZ))
-        except (TypeError, ValueError):
-            hz = _POLL_HZ
-        hz = min(50.0, max(1.0, hz))
+        hz = settings["poll_hz"]
         sleep_t = (1.0 / hz) - (time.monotonic() - t0)
         if sleep_t > 0:
             time.sleep(sleep_t)

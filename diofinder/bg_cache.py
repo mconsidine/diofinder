@@ -697,14 +697,13 @@ class BackgroundCache:
             # note; A/B before flipping the default. Model h/w are full
             # resolution (from cfg), since the stored frames are binned.
             h, w = self._full_hw
-            time_med_f = (np.median(np.stack(frames, axis=0), axis=0)
-                          .astype(np.float32) / (self.bin * self.bin))
+            time_med_f = (_temporal_median_f32(frames)
+                          / (self.bin * self.bin))
         else:
             # Default path: frames are full-resolution, so their own shape is
             # the model's h/w and drives the binning reshape.
             h, w = frames[0].shape
-            time_med_f = np.median(np.stack(frames, axis=0),
-                                   axis=0).astype(np.float32)
+            time_med_f = _temporal_median_f32(frames)
             if self.bin > 1:
                 # Downsample to the DETECTION resolution for any bin (1/2/4).
                 # This used to run only for bin == 2; at bin=4 the full-res
@@ -856,6 +855,70 @@ def _per_frame_background(frame_u8: np.ndarray, mode: str, *,
             pass
     # line_median and any unknown/scipy-missing fallback.
     return np.repeat(np.median(f, axis=1)[:, None], w, axis=1)
+
+
+# --- Temporal median (sorting network) ---------------------------------------
+# np.median(np.stack(frames), axis=0) partitions along a short axis of a large
+# array: ~170 ms for 8 x 960x760 on x86 and several times that on the Zero 2W —
+# a solver-core stall on every rebuild. A comparator network over whole frames
+# does the same job with elementwise np.minimum / np.maximum (vectorized, and
+# numpy releases the GIL inside those ufunc loops): ~17x faster, bit-identical
+# to np.median (including the even-N mean of the two middle values).
+_MAX_NET_N = 32
+
+
+def _batcher_network(n: int):
+    """Comparator list (i, j), i < j, that sorts n inputs ascending.
+
+    Batcher odd-even mergesort for the next power of two, with comparators
+    touching an index >= n dropped — equivalent to padding with +inf, which a
+    sorting network leaves in the tail, so the first n outputs are sorted."""
+    p2 = 1
+    while p2 < n:
+        p2 *= 2
+    pairs = []
+    p = 1
+    while p < p2:
+        k = p
+        while k >= 1:
+            for j in range(k % p, p2 - k, 2 * k):
+                for i in range(min(k, p2 - j - k)):
+                    a, b = i + j, i + j + k
+                    if (a // (2 * p)) == (b // (2 * p)) and b < n:
+                        pairs.append((a, b))
+            k //= 2
+        p *= 2
+    return tuple(pairs)
+
+
+_NET_CACHE: dict = {}
+
+
+def _temporal_median_f32(frames) -> np.ndarray:
+    """Per-pixel median across a list of equal-shape integer frames, float32.
+
+    Same values as ``np.median(np.stack(frames), axis=0)``. Uses a sorting
+    network for 2..``_MAX_NET_N`` frames; falls back to np.median otherwise."""
+    n = len(frames)
+    if n == 1:
+        return np.asarray(frames[0], dtype=np.float32)
+    if n > _MAX_NET_N or frames[0].dtype.kind not in "ui":
+        return np.median(np.stack(frames, axis=0), axis=0).astype(np.float32)
+    net = _NET_CACHE.get(n)
+    if net is None:
+        net = _NET_CACHE[n] = _batcher_network(n)
+    a = [np.array(f, copy=True) for f in frames]
+    tmp = np.empty_like(a[0])
+    for i, j in net:
+        np.minimum(a[i], a[j], out=tmp)
+        np.maximum(a[i], a[j], out=a[j])
+        a[i], tmp = tmp, a[i]          # swap buffers: no per-comparator alloc
+    if n % 2:
+        return a[n // 2].astype(np.float32)
+    lo = a[n // 2 - 1].astype(np.float32)
+    lo += a[n // 2]
+    lo *= 0.5
+    return lo
 
 
 def _model_kind(bg_mode: str) -> str:
