@@ -444,6 +444,7 @@ install -m 440 "$DIOFINDER_DIR/etc/sudoers.d/diofinder-wifi"   /etc/sudoers.d/di
 install -m 440 "$DIOFINDER_DIR/etc/sudoers.d/diofinder-factory-reset" /etc/sudoers.d/diofinder-factory-reset
 install -m 440 "$DIOFINDER_DIR/etc/sudoers.d/diofinder-update-launcher" /etc/sudoers.d/diofinder-update-launcher
 install -m 440 "$DIOFINDER_DIR/etc/sudoers.d/diofinder-factory-reset-launcher" /etc/sudoers.d/diofinder-factory-reset-launcher
+install -m 440 "$DIOFINDER_DIR/etc/sudoers.d/diofinder-power"   /etc/sudoers.d/diofinder-power
 
 # Auto-activate the venv for interactive login (ssh) shells.
 install -m 644 "$DIOFINDER_DIR/etc/profile.d/diofinder-venv.sh" /etc/profile.d/diofinder-venv.sh
@@ -459,6 +460,7 @@ install -m 755 "$DIOFINDER_DIR/scripts/diofinder-bg-test"         /usr/local/bin
 install -m 755 "$DIOFINDER_DIR/scripts/ap.sh"                   /usr/local/bin/ap.sh
 install -m 755 "$DIOFINDER_DIR/scripts/station.sh"              /usr/local/bin/station.sh
 install -m 755 "$DIOFINDER_DIR/scripts/diofinder-wifi-boot"     /usr/local/bin/diofinder-wifi-boot
+install -m 755 "$DIOFINDER_DIR/scripts/diofinder-power"         /usr/local/bin/diofinder-power
 install -m 755 "$DIOFINDER_DIR/scripts/ap-watchdog.sh"          /usr/local/bin/ap-watchdog.sh
 install -m 755 "$DIOFINDER_DIR/scripts/diofinder-gadget-connect"  /usr/local/bin/diofinder-gadget-connect
 install -m 755 "$DIOFINDER_DIR/scripts/diofinder-set-time"        /usr/local/bin/diofinder-set-time

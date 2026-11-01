@@ -752,7 +752,36 @@ def utilities_page():
         hotpix=(hotpix.result if hotpix.ok else None),
         version=(version.result.get("version") if version.ok else None),
         seeing=(seeing.result if seeing.ok else None),
+        boot_pref=_boot_pref(),
     )
+
+
+def _boot_pref():
+    """The Network at boot setting: 'ap' (default) or 'saved'."""
+    pref = getattr(_load_cfg_cached(), "wifi_boot_network", "ap")
+    return "saved" if pref == "saved" else "ap"
+
+
+@app.route("/power/<action>", methods=["POST"])
+def power(action):
+    """Reboot or power off the finder (Utilities -> Power). Runs the
+    sudo-authorized diofinder-power helper, which schedules the action a few
+    seconds out so this response reaches the browser first."""
+    if action not in ("reboot", "poweroff"):
+        return "unknown power action", 404
+    # Work out where the finder comes back BEFORE the network goes down.
+    pref = _boot_pref()
+    saved_ssid = _saved_network_ssid() if pref == "saved" else None
+    error = None
+    try:
+        p = subprocess.run(["sudo", "/usr/local/bin/diofinder-power", action],
+                           capture_output=True, text=True, timeout=15)
+        if p.returncode != 0:
+            error = (p.stdout + p.stderr).strip() or f"exit code {p.returncode}"
+    except Exception as e:
+        error = f"{type(e).__name__}: {e}"
+    return render_template("power.html", action=action, error=error,
+                           boot_pref=pref, saved_ssid=saved_ssid), (500 if error else 200)
 
 
 @app.route("/api/hotpixel")

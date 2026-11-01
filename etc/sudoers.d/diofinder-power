@@ -1,0 +1,6 @@
+# Allow the diofinder web UI (Utilities -> Power) to reboot or power off the
+# finder without a password, and only via this script with exactly these two
+# arguments. The script schedules `systemctl reboot|poweroff` a few seconds
+# out with systemd-run (see scripts/diofinder-power).
+diofinder ALL=(root) NOPASSWD: /usr/local/bin/diofinder-power reboot
+diofinder ALL=(root) NOPASSWD: /usr/local/bin/diofinder-power poweroff

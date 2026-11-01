@@ -95,6 +95,29 @@
     </p>
   </div>
 
+  {# ---- Power ---- #}
+  <div class="card">
+    <h2>Power</h2>
+    <p style="margin:0 0 8px 0;">
+      <strong>Shut down before unplugging the finder.</strong> Pulling the power
+      while it's running can corrupt the SD card.
+    </p>
+    <form method="post" action="{{ url_for('power', action='reboot') }}" style="display:inline;"
+          onsubmit="return confirm('Reboot the finder now? Solving and the SkySafari link stop for about a minute.');">
+      <button type="submit" class="btn">Reboot</button>
+    </form>
+    <form method="post" action="{{ url_for('power', action='poweroff') }}" style="display:inline; margin-left:4px;"
+          onsubmit="return confirm('Shut the finder down now? To start it again you will need to unplug and reconnect the power.');">
+      <button type="submit" class="btn btn-warning">Shut down</button>
+    </form>
+    <p class="hint" style="margin:8px 0 0 0;">
+      After a reboot it comes back on
+      {% if boot_pref == "saved" %}your saved network (or its own access point
+      if that isn't found){% else %}its own access point (10.42.0.1){% endif %}
+      &mdash; see <a href="{{ url_for('wifi_page') }}">Network at boot</a>.
+    </p>
+  </div>
+
   {# ---- Network, config & updates ---- #}
   <div class="card">
     <h2>Network, config &amp; updates</h2>

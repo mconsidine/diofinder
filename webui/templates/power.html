@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}diofinder {{ "Rebooting" if action == "reboot" else "Shutting down" }}{% endblock %}
+{% block content %}
+
+{% if error %}
+  <h2>{{ "Reboot" if action == "reboot" else "Shut down" }} didn't start</h2>
+  <div class="alert alert-warning">{{ error }}</div>
+  <p class="hint">The finder is still running. You can try again, or use
+    <code>sudo reboot</code> / <code>sudo poweroff</code> over SSH.</p>
+  <p><a class="btn" href="{{ url_for('utilities_page') }}">Back to Utilities</a></p>
+
+{% elif action == "reboot" %}
+  <h2>Rebooting…</h2>
+  <p>The finder will be back in about a minute, on
+    {% if boot_pref == "saved" and saved_ssid %}
+      your saved network <strong>{{ saved_ssid }}</strong>
+      (<code>diofinder.local</code>). If that network isn't found within about
+      30&nbsp;s, it starts its own access point instead (<code>10.42.0.1</code>).
+    {% else %}
+      its own access point (<code>10.42.0.1</code>). Join it from this device
+      if you were on another network.
+    {% endif %}
+  </p>
+  <p class="hint" id="power-status">Waiting for the finder to go down…</p>
+  <p><a class="btn" href="{{ url_for('dashboard') }}">Go to Status</a></p>
+  <script>
+  // Once the finder answers again, go back to Status. Give it time to go down
+  // first so the old (still-running) server doesn't count as "back".
+  (function () {
+    var st = document.getElementById('power-status');
+    var t0 = Date.now();
+    function ping() {
+      var ctl = new AbortController();
+      var to = setTimeout(function () { ctl.abort(); }, 2500);
+      fetch('/api/sysmon', {cache: 'no-store', signal: ctl.signal})
+        .then(function (r) {
+          clearTimeout(to);
+          if (r.ok) { location.href = '{{ url_for("dashboard") }}'; }
+          else { setTimeout(ping, 3000); }
+        })
+        .catch(function () { clearTimeout(to); setTimeout(ping, 3000); });
+    }
+    setTimeout(function () {
+      st.textContent = 'Waiting for the finder to come back… (this page reloads by itself)';
+      ping();
+    }, 20000);
+  })();
+  </script>
+
+{% else %}
+  <h2>Shutting down…</h2>
+  <p><strong>Wait until the green light on the board stops flashing and stays
+    off (about 20&nbsp;s) before unplugging the power.</strong></p>
+  <p class="hint">To start the finder again, unplug and reconnect the power.
+    It will come back on
+    {% if boot_pref == "saved" and saved_ssid %}your saved network
+      <strong>{{ saved_ssid }}</strong>, or its own access point if that isn't found.
+    {% else %}its own access point (<code>10.42.0.1</code>).{% endif %}
+  </p>
+{% endif %}
+
+{% endblock %}

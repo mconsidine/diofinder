@@ -1,0 +1,35 @@
+#!/bin/bash
+# diofinder-power -- reboot or power off the finder, a few seconds from now.
+#
+# Invoked (via sudo, for exactly these two arguments) by the web UI's
+# Utilities -> Power buttons. The action is scheduled with systemd-run a few
+# seconds out instead of run immediately, for two reasons:
+#   * it runs as its own transient unit, outside diofinder-webui.service's
+#     ProtectSystem=full sandbox and cgroup (same reasoning as
+#     diofinder-update-launcher); and
+#   * the web UI's request can return its "Rebooting..." page to the browser
+#     before the network goes away.
+# A normal systemd reboot/poweroff then stops every service cleanly
+# (diofinder flushes and exits on SIGTERM) and syncs the SD card, which is the
+# point of shutting down instead of pulling the power.
+#
+# Usage (as root):  diofinder-power reboot | poweroff
+# Test seam: DIOFINDER_POWER_SYSTEMD_RUN (default: systemd-run).
+
+set -euo pipefail
+
+SYSTEMD_RUN="${DIOFINDER_POWER_SYSTEMD_RUN:-systemd-run}"
+DELAY_S=3
+
+case "${1:-}" in
+  reboot|poweroff) action="$1" ;;
+  *)
+    echo "usage: $0 reboot|poweroff" >&2
+    exit 2
+    ;;
+esac
+
+logger -t diofinder-power "$action requested from the web UI (in ${DELAY_S}s)" 2>/dev/null || true
+exec "$SYSTEMD_RUN" --collect --unit="diofinder-power-$action" \
+  --on-active="${DELAY_S}s" --timer-property=AccuracySec=100ms \
+  /usr/bin/systemctl "$action"
