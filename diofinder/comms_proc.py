@@ -37,6 +37,7 @@ import threading
 import time
 from queue import Empty, Full, Queue
 
+from diofinder.mp_util import snapshot as _mp_snapshot
 from diofinder import config as cfg_mod
 from diofinder import bg_modes as bg_modes_mod
 from diofinder import precession as _precession
@@ -641,7 +642,7 @@ def _mount_loop(ctx, interval_s=2.0):
     while True:
         time.sleep(interval_s)
         try:
-            scfg = dict(ctx.shared_cfg)
+            scfg = _mp_snapshot(ctx.shared_cfg)
             if not scfg.get("mount_enabled", getattr(cfg, "mount_enabled", False)):
                 continue
             if str(scfg.get("mount_mode",
@@ -653,7 +654,7 @@ def _mount_loop(ctx, interval_s=2.0):
                 # Back off so a missing mount doesn't retry — and log — every
                 # cycle; mount_status still shows last_error + syncs_fail.
                 continue
-            sol = dict(ctx.latest_solution)
+            sol = _mp_snapshot(ctx.latest_solution)
             gates = _mount_gates(cfg, scfg)
             do, why = _mountlink.should_sync(
                 sol, now, last_sync, gates, _imu_is_moving(scfg))
@@ -697,7 +698,7 @@ def _auto_exposure_loop(ctx, interval_s=5.0):
             if _ae_paused() or not ctx.shared_cfg.get(
                     "auto_exposure_enabled", cfg.auto_exposure_enabled):
                 continue
-            sol = dict(ctx.latest_solution)
+            sol = _mp_snapshot(ctx.latest_solution)
             age = time.monotonic() - sol.get("epoch_monotonic", 0.0)
             if age > interval_s * 2:
                 continue                  # no fresh detection data
@@ -936,11 +937,11 @@ def _wait_fresh_solution(ctx, after_monotonic, timeout_s):
     ``after_monotonic``, or the latest available once ``timeout_s`` elapses."""
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        sol = dict(ctx.latest_solution)
+        sol = _mp_snapshot(ctx.latest_solution)
         if sol.get("epoch_monotonic", 0.0) > after_monotonic:
             return sol
         time.sleep(0.2)
-    return dict(ctx.latest_solution)
+    return _mp_snapshot(ctx.latest_solution)
 
 
 def _auto_tune_photometric(ctx, *, target_stars, target_matches,
@@ -960,7 +961,7 @@ def _auto_tune_photometric(ctx, *, target_stars, target_matches,
             break
         cur_s = float(reply.result.get("exposure_s", cfg.exposure_s))
         cur_g = float(reply.result.get("gain", cfg.gain))
-        sol = dict(ctx.latest_solution)
+        sol = _mp_snapshot(ctx.latest_solution)
         action = _auto_exposure_decision(
             solved=bool(sol.get("solved", False)),
             stars=sol.get("stars", 0), matches=sol.get("matches", 0),
@@ -1753,8 +1754,8 @@ def _poll_snapshots(shared_cfg, latest_solution):
     now = time.monotonic()
     with _poll_snap_lock:
         if _poll_snap["cfg"] is None or now - _poll_snap["t"] > _POLL_SNAP_TTL_S:
-            _poll_snap["cfg"] = dict(shared_cfg)
-            _poll_snap["sol"] = dict(latest_solution)
+            _poll_snap["cfg"] = _mp_snapshot(shared_cfg)
+            _poll_snap["sol"] = _mp_snapshot(latest_solution)
             _poll_snap["t"] = now
         return _poll_snap["cfg"], _poll_snap["sol"]
 
@@ -2057,8 +2058,8 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
         if cmd == "status":
             # ONE Manager snapshot instead of ~15 individual gets — this
             # command is polled at 0.8 Hz by the home page (audit 2026-07 P6).
-            scfg        = dict(ctx.shared_cfg)
-            sol         = dict(ctx.latest_solution)
+            scfg        = _mp_snapshot(ctx.shared_cfg)
+            sol         = _mp_snapshot(ctx.latest_solution)
             imu_n       = scfg.get("imu_calib_n", 0)
             imu_quality = scfg.get("imu_calib_quality", 0.0)
             imu_avail   = scfg.get("imu_available", False)
@@ -2293,18 +2294,18 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
         # ---- Mount link (outbound SYNC; sync-only, never slews) ----
         if cmd == "mount_status":
             return MaintResponse(
-                ok=True, result=_mount_mgr.status(ctx.cfg, dict(ctx.shared_cfg)))
+                ok=True, result=_mount_mgr.status(ctx.cfg, _mp_snapshot(ctx.shared_cfg)))
 
         if cmd == "mount_test":
-            ok, detail = _mount_mgr.test(ctx.cfg, dict(ctx.shared_cfg))
+            ok, detail = _mount_mgr.test(ctx.cfg, _mp_snapshot(ctx.shared_cfg))
             if not ok:
                 return MaintResponse(ok=False, error=detail)
             return MaintResponse(ok=True, result={"connected": True,
                                                   "mount_version": detail})
 
         if cmd == "mount_sync":
-            scfg = dict(ctx.shared_cfg)
-            sol = dict(ctx.latest_solution)
+            scfg = _mp_snapshot(ctx.shared_cfg)
+            sol = _mp_snapshot(ctx.latest_solution)
             fix = _solved_j2000(sol, _MOUNT_MANUAL_MAX_AGE_S)
             if fix is None:
                 return MaintResponse(ok=False, error="no fresh solution to sync")
@@ -2368,7 +2369,7 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             # auto-tune optimises detection on signal it can already see — it
             # cannot manufacture signal, so refuse with an actionable checklist
             # rather than running a doomed sweep.
-            sol = dict(ctx.latest_solution)
+            sol = _mp_snapshot(ctx.latest_solution)
             age = time.monotonic() - sol.get("epoch_monotonic", 0.0)
             peak = int(sol.get("peak", 0) or 0)
             if age > 10.0 or peak < 20:

@@ -52,6 +52,15 @@ LX200-pointing consumers, and the calibration loop).
 | `camera_cmd_reply_q` | `mp.Queue` | camera → comms | Camera replies |
 | `/run/diofinder/maint.sock` | Unix domain socket | webui/ctl → comms | JSON maintenance API |
 
+**Manager snapshot rule.** Take a multi-key snapshot of `shared_cfg` /
+`latest_solution` with `diofinder.mp_util.snapshot(proxy)` (= `proxy.copy()`,
+ONE IPC round-trip). **Never `dict(proxy)`**: on a `DictProxy` that is
+`keys()` plus one `__getitem__` RPC *per key* — N+1 round-trips to the Manager
+server on CPU 0 (measured 9.3 ms vs 0.14 ms for 81 keys on x86; worse on the
+A53). Previously the solver's per-frame snapshot and comms' `:GR/:GD` /
+`status` snapshots all used `dict(proxy)`. High-rate loops (the IMU reader)
+should also TTL-cache their settings reads rather than `.get()` per sample.
+
 ### `shared_cfg` keys and owners
 
 | Key | Type | Written by | Read by |
