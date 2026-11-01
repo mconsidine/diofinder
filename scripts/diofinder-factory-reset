@@ -63,6 +63,15 @@ factory_reset()
 # v0.11.30, just scoped to these two files instead of the parent directory.
 chown diofinder:diofinder "$CONF" "${CONF}.lock" 2>/dev/null || true
 
+# The restored conf sets the boot network back to the finder's own AP; put
+# NetworkManager's profiles in the same shape now, so the very next boot
+# starts on the AP rather than needing a one-boot repair. Does not change
+# the current connection (the user may be connected through it).
+if [ -f "$DIOFINDER_DIR/scripts/diofinder-wifi-boot" ]; then
+  DIOFINDER_CONFIG="$CONF" bash "$DIOFINDER_DIR/scripts/diofinder-wifi-boot" apply \
+    || LOG "WARN: could not apply the boot network setting (next boot repairs it)"
+fi
+
 if [ "$CLEAR_OVERRIDES" -eq 1 ]; then
   LOG "Clearing saved seeing overrides"
   rm -f /var/lib/diofinder/seeing_overrides.json

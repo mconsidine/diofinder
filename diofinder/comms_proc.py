@@ -2030,6 +2030,19 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "available": False, "reason": "resource monitor not started"})
             return MaintResponse(ok=True, result={"available": True, **sm.snapshot()})
 
+        if cmd == "wifi_boot_set":
+            # Persist the Wi-Fi page's "Network at boot" choice. The web UI
+            # can't write /etc (ProtectSystem=full), so it saves through here
+            # and then runs the root helper that updates NetworkManager's
+            # profiles (scripts/diofinder-wifi-boot apply).
+            mode = str(args.get("mode", "")).strip().lower()
+            if mode not in ("ap", "saved"):
+                return MaintResponse(ok=False, error="mode must be 'ap' or 'saved'")
+            cfg_mod.save_keys({"wifi_boot_network": mode})
+            ctx.cfg.wifi_boot_network = mode
+            log.info("Boot network set to %s", mode)
+            return MaintResponse(ok=True, result={"wifi_boot_network": mode})
+
         if cmd == "version":
             # Resolution order: OTA-written release file -> git describe of the
             # /opt/diofinder checkout -> the in-code config default. The git

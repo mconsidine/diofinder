@@ -79,12 +79,20 @@ if [ -n "$ACTIVE_WIFI" ] && [ "$ACTIVE_WIFI" != "$PROFILE" ]; then
   nmcli con down "$ACTIVE_WIFI" >/dev/null || true
 fi
 
-# Re-enable AP autoconnect and clear any suppression from previous failures
-# or from station.sh (which sets autoconnect=no on the AP profile).
-nmcli con modify "$PROFILE" \
-  connection.autoconnect yes \
-  connection.autoconnect-retries 0 \
-  2>/dev/null || true
+# Bringing the AP up is for NOW (button, watchdog fallback). Whether it is
+# also the boot network is the user's boot-network setting, so re-apply that
+# rather than forcing autoconnect=yes: otherwise a watchdog fallback in
+# "saved network" mode would silently switch the boot network back to the
+# AP. The helper also clears any autoconnect-retry suppression.
+WIFIBOOT="$(dirname "$(readlink -f "$0")")/diofinder-wifi-boot"
+if [ -f "$WIFIBOOT" ]; then
+  bash "$WIFIBOOT" apply || echo "WARNING: could not apply the boot network setting" >&2
+else
+  nmcli con modify "$PROFILE" \
+    connection.autoconnect yes \
+    connection.autoconnect-retries 0 \
+    2>/dev/null || true
+fi
 
 # Force WPA2-AES (RSN/CCMP) only — no WPA1/TKIP, PMF disabled. NM's default for
 # an unspecified wpa-psk AP is mixed WPA/WPA2 with a TKIP group cipher, which

@@ -28,11 +28,28 @@ NetworkManager profiles + one guard service (`scripts/ap.sh`,
   reboot after `diofinder-update` applies it; then **Forget** the network on
   Windows and reconnect with `12345678`.
 - **`diofinder-station`** (`station.sh SSID PASS`) — joins a named network as a
-  client, gets a **DHCP** address, and **demotes** `diofinder-ap` to
-  autoconnect=no (but keeps the profile).
-- **`diofinder-ensure-ap.service`** — at boot, polls `wlan0` for 60 s; if NM
-  connected to *any* WiFi it exits, otherwise it **forces the AP up**. So the
-  self-AP is the automatic fallback at boot.
+  client and gets a **DHCP** address. Joining is for *now*; it does not by
+  itself change what happens at the next boot (see below).
+- **Network at boot** (`wifi_boot_network` in the conf; Wi-Fi page card; one
+  helper, `scripts/diofinder-wifi-boot`) — **`ap`** (default): the finder's own
+  AP always wins at boot, so it is reachable at `10.42.0.1` in the field;
+  **`saved`**: join `diofinder-station` at boot, with the AP as the fallback.
+  NetworkManager picks the boot connection by itself (~28 s after power-on),
+  *before* `firstboot.sh` runs, so the choice is stored in the profiles'
+  `autoconnect` + `autoconnect-priority` and applied the moment it changes
+  (toggle, `station.sh`, `ap.sh`, factory reset). At boot `firstboot.sh` calls
+  `diofinder-wifi-boot boot`, which re-applies it and switches the connection
+  **only** if `wlan0` is on the wrong network (a one-time repair, e.g. right
+  after this arrived). Before this, `firstboot.sh` forced the AP's
+  autoconnect back on every boot and its "already connected?" check never
+  worked (awk `exit 0` in a rule still runs `END{exit 1}`), so it restarted the
+  AP ~10 s after NM had brought a connection up — dropping any phone that had
+  started to join — and a joined network never survived a reboot.
+- **`diofinder-ensure-ap.service`** — at boot, polls `wlan0` for 30 s (was 60);
+  if NM connected to *any* WiFi it exits, otherwise it **brings the AP up** for
+  that session (it no longer touches autoconnect, which would silently undo a
+  `saved` choice whenever that network is out of range). So the self-AP is the
+  automatic fallback at boot.
 - **`diofinder-ap-watchdog.service`** (`scripts/ap-watchdog.sh`) — the
   **mid-session** companion (built; deferred item 2 below). A continuous
   service (starts after `ensure-ap`, `Restart=always`) that checks `wlan0`

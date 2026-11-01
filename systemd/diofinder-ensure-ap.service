@@ -7,14 +7,19 @@ Wants=NetworkManager.service
 [Service]
 Type=oneshot
 RemainAfterExit=no
-# Poll wlan0 for up to 60 seconds. This gives NM enough time to either:
-#   (a) autoconnect the diofinder-ap profile (AP mode), or
-#   (b) connect to a saved station network.
-# If wlan0 is still idle after 60 s (station network unavailable, or AP
-# autoconnect was suppressed by a previous failure), force the AP up.
-# This makes the AP the automatic fallback in all conditions.
+# Poll wlan0 for up to 30 seconds. This gives NM time to either:
+#   (a) autoconnect the diofinder-ap profile (the default boot network), or
+#   (b) join the saved network (when the user chose "saved network" at boot).
+# If wlan0 is still idle after 30 s (saved network not in range, or the AP
+# failed to start), bring the AP up so the finder is always reachable. A join
+# itself takes ~1 s (measured), so 30 s leaves ample margin.
+#
+# It brings the AP up for THIS session only; it does not change autoconnect.
+# Which network is the boot network is the user's setting (Wi-Fi page ->
+# diofinder-wifi-boot); forcing autoconnect=yes here would silently undo a
+# "saved network" choice whenever that network was out of range.
 ExecStart=/bin/bash -c '\
-  for i in $(seq 1 12); do \
+  for i in $(seq 1 6); do \
     sleep 5; \
     ACTIVE=$(nmcli -t -f NAME,DEVICE con show --active 2>/dev/null \
              | awk -F: '"'"'$2=="wlan0"{print $1}'"'"'); \
@@ -23,9 +28,7 @@ ExecStart=/bin/bash -c '\
       exit 0; \
     fi; \
   done; \
-  logger -t diofinder-ensure-ap "wlan0 idle after 60s -- activating diofinder-ap"; \
-  nmcli con modify diofinder-ap connection.autoconnect yes \
-    connection.autoconnect-retries 0 2>/dev/null || true; \
+  logger -t diofinder-ensure-ap "wlan0 idle after 30s -- activating diofinder-ap"; \
   nmcli con up diofinder-ap >/dev/null 2>&1 \
     || logger -t diofinder-ensure-ap "WARNING: could not activate diofinder-ap"'
 

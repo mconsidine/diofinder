@@ -26,13 +26,50 @@
       <form method="post" action="{{ url_for('wifi_ap') }}">
         <button type="submit" class="btn btn-primary">Switch to AP Mode</button>
       </form>
-      <p class="hint">Restores the diofinder's own Wi-Fi hotspot.</p>
+      <p class="hint">Restores the diofinder's own Wi-Fi hotspot now.
+        What happens after a reboot is set under <em>Network at boot</em>.</p>
     {% else %}
       <p class="hint">
         Devices connect to the diofinder hotspot directly.
         Switch to station mode to join your home/observatory network.
       </p>
     {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>Network at boot</h2>
+    {% if boot_error %}
+      <div class="alert alert-warning" style="margin-bottom:0.75rem;">{{ boot_error }}</div>
+    {% endif %}
+    <form method="post" action="{{ url_for('wifi_boot') }}" id="boot-form">
+      <label style="display:block; margin-bottom:0.4rem;">
+        <input type="radio" name="mode" value="ap"
+               {% if boot_pref != 'saved' or not saved_ssid %}checked{% endif %}
+               onchange="this.form.submit()">
+        The finder's own access point <span class="muted">(default)</span>
+      </label>
+      <label style="display:block;">
+        <input type="radio" name="mode" value="saved"
+               {% if boot_pref == 'saved' and saved_ssid %}checked{% endif %}
+               {% if not saved_ssid %}disabled{% endif %}
+               onchange="this.form.submit()">
+        The saved network{% if saved_ssid %}: <strong>{{ saved_ssid }}</strong>{% endif %}
+      </label>
+      <noscript><button type="submit" class="btn" style="margin-top:0.5rem;">Save</button></noscript>
+    </form>
+    <p class="hint" style="margin-top:0.6rem;">
+      {% if boot_pref == 'saved' and saved_ssid %}
+        On reboot the finder joins <strong>{{ saved_ssid }}</strong>. If it isn't
+        found within about 30&nbsp;s, the finder starts its own access point
+        instead (10.42.0.1).
+      {% else %}
+        On reboot the finder always starts its own access point, so it's
+        reachable at 10.42.0.1. Joining a network below lasts until the next
+        reboot.
+        {% if not saved_ssid %}Join a network below first to make the saved-network
+        option available.{% endif %}
+      {% endif %}
+    </p>
   </div>
 
   <div class="card">

@@ -1308,12 +1308,62 @@ _wifi_connect_proc = None
 _WIFI_LOG = "/var/lib/diofinder/wifi-connect.log"
 
 
+def _saved_network_ssid():
+    """SSID of the saved network (the diofinder-station profile), or None."""
+    try:
+        out = subprocess.check_output(
+            ["nmcli", "-t", "-f", "802-11-wireless.ssid", "con", "show",
+             "diofinder-station"],
+            text=True, errors="replace", timeout=3, stderr=subprocess.DEVNULL,
+        )
+        m = _re.search(r"802-11-wireless\.ssid:(.*)", out)
+        return (m.group(1).strip() or None) if m else None
+    except Exception:
+        return None
+
+
 @app.route("/wifi")
 def wifi_page():
     """Wi-Fi management page: current status and list of visible networks."""
     status   = _get_wifi_status()
     networks = _scan_networks()
-    return render_template("wifi.html", status=status, networks=networks)
+    boot_pref = getattr(_load_cfg_cached(), "wifi_boot_network", "ap")
+    if boot_pref != "saved":
+        boot_pref = "ap"
+    return render_template("wifi.html", status=status, networks=networks,
+                           boot_pref=boot_pref,
+                           saved_ssid=_saved_network_ssid(),
+                           boot_error=request.args.get("boot_error"))
+
+
+@app.route("/wifi/boot", methods=["POST"])
+def wifi_boot():
+    """Set which network the finder joins at boot (ap|saved): persist it via
+    the daemon, then apply it to NetworkManager now so the next boot follows
+    it. Does not change the current connection."""
+    mode = request.form.get("mode", "")
+    if mode not in ("ap", "saved"):
+        return "mode must be 'ap' or 'saved'", 400
+    r = _safe_call("wifi_boot_set", {"mode": mode})
+    if not r.ok:
+        return redirect(url_for("wifi_page",
+                                boot_error=f"Could not save the setting: {r.error}"))
+    try:
+        p = subprocess.run(
+            ["sudo", "/usr/local/bin/diofinder-wifi-boot", "apply", mode],
+            timeout=20, capture_output=True, text=True)
+        if p.returncode != 0:
+            detail = (p.stdout + p.stderr).strip().splitlines()
+            return redirect(url_for(
+                "wifi_page",
+                boot_error="Saved, but NetworkManager wasn't updated"
+                           + (f" ({detail[-1]})" if detail else "")
+                           + ". The next reboot repairs it, and the one after follows it."))
+    except Exception as e:
+        return redirect(url_for(
+            "wifi_page",
+            boot_error=f"Saved, but NetworkManager wasn't updated ({type(e).__name__})."))
+    return redirect(url_for("wifi_page"))
 
 
 @app.route("/wifi/ap", methods=["POST"])

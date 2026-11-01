@@ -78,6 +78,15 @@ EOF
 fi
 PROFILE="diofinder-station"
 
+# Boot-network policy helper (sets autoconnect/priority per the user's
+# wifi_boot_network setting). Lives next to this script.
+WIFIBOOT="$(dirname "$(readlink -f "$0")")/diofinder-wifi-boot"
+apply_boot_pref() {
+  if [ -f "$WIFIBOOT" ]; then
+    bash "$WIFIBOOT" apply || echo "WARNING: could not apply the boot network setting" >&2
+  fi
+}
+
 # WPA2 requires 8+ chars; empty is allowed (open network).
 if [ -n "$NEW_PASS" ] && [ ${#NEW_PASS} -lt 8 ]; then
   echo "ERROR: WPA2 password must be 8+ characters (or empty for open network)." >&2
@@ -127,11 +136,11 @@ else
   fi
 fi
 
-# We want station to be the autoconnecting profile from now on. Demote AP
-# to manual-only so it doesn't auto-grab the radio at next boot.
-if nmcli -t -f NAME con show | grep -qx "diofinder-ap"; then
-  nmcli con modify "diofinder-ap" autoconnect no
-fi
+# Joining a network is for NOW. What happens at the next boot is decided by
+# the user's boot-network setting (Wi-Fi page), not by joining: the default
+# keeps the finder's own AP as the boot network. (This used to demote the AP
+# unconditionally, which firstboot.sh then undid on every boot.)
+apply_boot_pref
 
 # Activate.
 echo "Connecting to '$NEW_SSID'..."
@@ -145,7 +154,7 @@ if ! nmcli con up "$PROFILE"; then
   echo "  - Network requires more than WPA2-PSK auth" >&2
   echo "" >&2
   echo "Returning to AP mode so you can re-tether and try again..." >&2
-  nmcli con modify "diofinder-ap" autoconnect yes 2>/dev/null || true
+  # Bring the AP up now; leave the boot setting as the user chose it.
   nmcli con up diofinder-ap >/dev/null 2>&1 || true
   exit 1
 fi
@@ -174,5 +183,8 @@ using it or unplug now.
 
 To return to AP mode later:
   sudo /usr/local/bin/ap.sh
+
+At the next boot the finder joins: $(bash "$WIFIBOOT" get 2>/dev/null | sed 's/^ap$/its own access point (default)/;s/^saved$/this saved network/')
+(Change this on the Wi-Fi page under "Network at boot".)
 
 EOF

@@ -1,3 +1,6 @@
 # Allow the diofinder web UI to switch Wi-Fi modes without a password prompt.
 diofinder ALL=(ALL) NOPASSWD: /usr/local/bin/ap.sh
 diofinder ALL=(ALL) NOPASSWD: /usr/local/bin/station.sh *
+# Wi-Fi page "Network at boot" setting: apply ap|saved to the NM profiles.
+diofinder ALL=(ALL) NOPASSWD: /usr/local/bin/diofinder-wifi-boot apply ap
+diofinder ALL=(ALL) NOPASSWD: /usr/local/bin/diofinder-wifi-boot apply saved

@@ -10,8 +10,10 @@
 # The last-run timestamp is still written to /var/lib/diofinder/firstboot.done
 # for diagnostics (journalctl, support), but it is NOT read as a gate.
 #
-# Wi-Fi AP activation is NOT done here; diofinder-ensure-ap.service handles
-# that after NM has had time to try any station connections first.
+# Wi-Fi: which network wlan0 joins at boot is the user's wifi_boot_network
+# setting, applied by scripts/diofinder-wifi-boot (called below). It only
+# switches the connection when it must; diofinder-ensure-ap.service is the
+# fallback that starts the AP if nothing has connected ~30 s later.
 
 set -euo pipefail
 
@@ -50,28 +52,21 @@ if [ -r "$MODEL_FILE" ]; then
   esac
 fi
 
-# --- Camera detection ---------------------------------------------------------
-
-RPICAM_CMD=""
-if command -v rpicam-hello >/dev/null 2>&1; then
-  RPICAM_CMD="rpicam-hello"
-elif command -v libcamera-hello >/dev/null 2>&1; then
-  RPICAM_CMD="libcamera-hello"
-fi
-
-if [ -n "$RPICAM_CMD" ]; then
-  if $RPICAM_CMD --list-cameras 2>/dev/null | grep -q "Available cameras"; then
-    LOG "Camera detected"
-  else
-    WARN "No camera detected — check CSI ribbon cable"
-  fi
-fi
+# (The camera check runs after the Wi-Fi steps below: it takes ~4 s and
+# nothing about Wi-Fi depends on it.)
 
 # --- Avahi --------------------------------------------------------------------
+# Only (re-)enable when needed: `systemctl enable` on a unit that also has a
+# SysV init script goes through systemd-sysv-install/update-rc.d, measured at
+# ~5 s on a Zero 2W, and this runs every boot. Idempotent either way.
 
 if systemctl list-unit-files avahi-daemon.service >/dev/null 2>&1; then
-  systemctl enable --now avahi-daemon.service 2>/dev/null || \
-    WARN "Could not enable avahi-daemon"
+  systemctl is-enabled --quiet avahi-daemon.service 2>/dev/null \
+    || systemctl enable avahi-daemon.service 2>/dev/null \
+    || WARN "Could not enable avahi-daemon"
+  systemctl is-active --quiet avahi-daemon.service 2>/dev/null \
+    || systemctl start avahi-daemon.service 2>/dev/null \
+    || WARN "Could not start avahi-daemon"
 fi
 
 # --- WiFi regulatory domain + rfkill -----------------------------------------
@@ -160,25 +155,49 @@ nmcli con modify diofinder-ap \
   wifi.channel 6 \
   2>/dev/null || WARN "Could not pin AP band/channel (non-fatal)"
 
-# Ensure NM will always retry the AP connection. autoconnect-retries=0
-# means retry indefinitely; without this NM stops trying after a few
-# failures and will not retry until manually prompted, even across reboots.
-nmcli con modify diofinder-ap \
-  connection.autoconnect yes \
-  connection.autoconnect-retries 0 \
-  2>/dev/null || WARN "Could not set AP autoconnect-retries (non-fatal)"
+# Boot network: apply the user's wifi_boot_network setting to the profiles
+# (autoconnect, priority, unlimited retries) and make sure wlan0 is on the
+# right network -- without tearing down a connection that is already right.
+# All of that lives in diofinder-wifi-boot (shared with ap.sh/station.sh and
+# the Wi-Fi page).
+#
+# This replaces two things that fought the user's choice on every boot:
+#   * forcing the AP's autoconnect back to "yes", which undid joining a
+#     network from the Wi-Fi page; and
+#   * an "is wlan0 already connected?" check that never worked (in awk,
+#     `exit 0` in a rule still runs END, whose `exit 1` wins), so the AP was
+#     restarted every boot -- tearing down whatever NM had already brought
+#     up ~10 s earlier, and dropping any phone that had started to join.
+LOG "Applying the boot network setting"
+bash "$(dirname "$(readlink -f "$0")")/diofinder-wifi-boot" boot \
+  || WARN "diofinder-wifi-boot failed (diofinder-ensure-ap will still fall back to the AP)"
 
-# Explicitly activate the AP now. NM was already running when the profile
-# was created so it may have missed the startup autoconnect sweep. Calling
-# `nmcli con up` here avoids a 30-90 s delay waiting for NM's retry timer
-# or diofinder-ensure-ap's polling loop. This is a no-op if it is already up.
-if ! nmcli -t -f NAME,DEVICE con show --active 2>/dev/null \
-     | awk -F: '$2=="wlan0"{exit 0} END{exit 1}'; then
-  LOG "Activating AP profile on wlan0"
-  nmcli -w 30 con up diofinder-ap \
-    || WARN "Could not bring up AP immediately (diofinder-ensure-ap will retry)"
-else
-  LOG "wlan0 already has an active connection — leaving it"
+# --- Camera detection ---------------------------------------------------------
+
+RPICAM_CMD=""
+if command -v rpicam-hello >/dev/null 2>&1; then
+  RPICAM_CMD="rpicam-hello"
+elif command -v libcamera-hello >/dev/null 2>&1; then
+  RPICAM_CMD="libcamera-hello"
+fi
+
+if [ -n "$RPICAM_CMD" ]; then
+  if $RPICAM_CMD --list-cameras 2>/dev/null | grep -q "Available cameras"; then
+    LOG "Camera detected"
+  else
+    WARN "No camera detected — check CSI ribbon cable"
+  fi
+fi
+
+# --- Raspberry Pi OS first-user prompt ----------------------------------------
+# userconfig.service waits on the console to create a first user. This image
+# creates its own users, so here it only sits blocked forever, which keeps
+# systemd's "boot finished" open (systemd-analyze then refuses to report).
+# Disable it (takes effect next boot; not stopped mid-run). Idempotent.
+if systemctl is-enabled --quiet userconfig.service 2>/dev/null; then
+  systemctl disable userconfig.service 2>/dev/null \
+    && LOG "Disabled userconfig.service (unused first-user console prompt)" \
+    || WARN "Could not disable userconfig.service (non-fatal)"
 fi
 
 # --- CPU governor ---------------------------------------------------------------

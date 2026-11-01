@@ -244,6 +244,15 @@ match_radius: 0.01
 boresight_y: 380.0
 boresight_x: 480.0
 
+# ---- Wi-Fi ----
+# Network the finder joins at boot: ap (default) = its own access point,
+# always reachable at 10.42.0.1; saved = the network last joined from the
+# Wi-Fi page, with the AP as the fallback if it isn't found ~30 s after boot.
+# Change it on the Wi-Fi page ("Network at boot"), which also updates
+# NetworkManager right away; a hand edit here takes full effect after the
+# next reboot plus one.
+wifi_boot_network: ap
+
 # ---- Comms ----
 lx200_port: 4060
 lx200_client_timeout_s: 30.0

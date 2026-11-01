@@ -458,6 +458,7 @@ install -m 755 "$DIOFINDER_DIR/scripts/diofinder-bg-setup"        /usr/local/bin
 install -m 755 "$DIOFINDER_DIR/scripts/diofinder-bg-test"         /usr/local/bin/diofinder-bg-test
 install -m 755 "$DIOFINDER_DIR/scripts/ap.sh"                   /usr/local/bin/ap.sh
 install -m 755 "$DIOFINDER_DIR/scripts/station.sh"              /usr/local/bin/station.sh
+install -m 755 "$DIOFINDER_DIR/scripts/diofinder-wifi-boot"     /usr/local/bin/diofinder-wifi-boot
 install -m 755 "$DIOFINDER_DIR/scripts/ap-watchdog.sh"          /usr/local/bin/ap-watchdog.sh
 install -m 755 "$DIOFINDER_DIR/scripts/diofinder-gadget-connect"  /usr/local/bin/diofinder-gadget-connect
 install -m 755 "$DIOFINDER_DIR/scripts/diofinder-set-time"        /usr/local/bin/diofinder-set-time

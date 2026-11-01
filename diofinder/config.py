@@ -273,6 +273,15 @@ class Config:
     # separate dso_* solution fields. Live-mutable via solver_params_set.
     star_name_dso: bool = True
 
+    # -------- Wi-Fi --------
+    # Which network the finder joins at boot: "ap" (default) = its own access
+    # point, always reachable at 10.42.0.1; "saved" = the network last joined
+    # from the Wi-Fi page, falling back to the AP if it isn't found ~30 s
+    # after boot. Set from the Wi-Fi page ("Network at boot"); applied to the
+    # NetworkManager profiles by scripts/diofinder-wifi-boot, which also reads
+    # this key directly at boot (it runs before the daemon).
+    wifi_boot_network: str = "ap"
+
     # -------- Comms --------
     lx200_port: int = 4060
     lx200_client_timeout_s: float = 30.0

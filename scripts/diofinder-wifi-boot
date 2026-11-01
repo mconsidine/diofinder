@@ -1,0 +1,142 @@
+#!/bin/bash
+# diofinder-wifi-boot -- which Wi-Fi network the finder joins at boot.
+#
+# The preference is the `wifi_boot_network` key in diofinder.conf:
+#   ap     (default) the finder's own access point always wins at boot, so
+#          it is reachable at 10.42.0.1 in the field. Joining a network from
+#          the Wi-Fi page lasts until the next reboot.
+#   saved  join the saved network (the diofinder-station profile) at boot;
+#          if it isn't reachable, diofinder-ensure-ap starts the AP instead.
+#
+# NetworkManager chooses the boot connection by itself, BEFORE the boot
+# setup script (firstboot.sh) runs. So the preference has to live in the
+# profiles (autoconnect + autoconnect-priority), applied whenever it
+# changes; correcting it at boot would mean tearing down a connection that
+# is already up. This script is the one place that sets those fields.
+#
+# Usage (as root):
+#   diofinder-wifi-boot get                print the preference: ap | saved
+#   diofinder-wifi-boot apply [ap|saved]   set the profiles to match (default:
+#                                          the conf value). Never changes the
+#                                          current connection.
+#   diofinder-wifi-boot boot               apply, then make sure wlan0 matches
+#                                          the preference, switching only if
+#                                          it must (called by firstboot.sh)
+#   diofinder-wifi-boot status             human-readable summary
+#
+# Test seams: DIOFINDER_CONFIG (conf path), DIOFINDER_WIFIBOOT_NMCLI (nmcli).
+
+set -uo pipefail
+
+CONF="${DIOFINDER_CONFIG:-/etc/diofinder/diofinder.conf}"
+NMCLI="${DIOFINDER_WIFIBOOT_NMCLI:-nmcli}"
+AP="diofinder-ap"
+ST="diofinder-station"
+PRIO_HI=10
+PRIO_LO=0
+
+say() { echo "[wifi-boot] $*"; }
+
+# The conf value; anything other than "saved" (missing key, typo) means ap.
+get_pref() {
+  local v
+  v=$(sed -n 's/^[[:space:]]*wifi_boot_network[[:space:]]*:[[:space:]]*\([A-Za-z]*\).*/\1/p' \
+        "$CONF" 2>/dev/null | tail -n 1)
+  if [ "$v" = "saved" ]; then echo saved; else echo ap; fi
+}
+
+have() { "$NMCLI" -t -f NAME con show 2>/dev/null | grep -qx "$1"; }
+
+# Connection active (or activating) on wlan0, empty if idle.
+wlan_active() {
+  "$NMCLI" -t -f NAME,DEVICE con show --active 2>/dev/null \
+    | awk -F: '$2=="wlan0"{print $1; exit}'
+}
+
+# "saved" only takes effect if a saved network exists; otherwise it's the AP.
+effective() {
+  if [ "$1" = "saved" ] && have "$ST"; then echo saved; else echo ap; fi
+}
+
+apply() {
+  local pref="${1:-$(get_pref)}" eff
+  case "$pref" in
+    ap|saved) ;;
+    *) say "unknown preference '$pref' (expected ap or saved)"; return 2 ;;
+  esac
+  eff=$(effective "$pref")
+  if [ "$pref" = "saved" ] && [ "$eff" = "ap" ]; then
+    say "no saved network yet -- the AP stays the boot network"
+  fi
+  if [ "$eff" = "saved" ]; then
+    "$NMCLI" con modify "$ST" \
+      connection.autoconnect yes connection.autoconnect-priority "$PRIO_HI" || return 1
+    if have "$AP"; then
+      # AP off for autoconnect; diofinder-ensure-ap / the watchdog bring it up
+      # explicitly when the saved network isn't there. retries 0 = unlimited.
+      "$NMCLI" con modify "$AP" \
+        connection.autoconnect no connection.autoconnect-priority "$PRIO_LO" \
+        connection.autoconnect-retries 0 || return 1
+    fi
+    say "boot network: the saved network ($ST); the AP is the fallback"
+  else
+    if have "$AP"; then
+      "$NMCLI" con modify "$AP" \
+        connection.autoconnect yes connection.autoconnect-priority "$PRIO_HI" \
+        connection.autoconnect-retries 0 || return 1
+    fi
+    if have "$ST"; then
+      # Stays saved and can still autoconnect, but loses to the AP at boot.
+      "$NMCLI" con modify "$ST" \
+        connection.autoconnect yes connection.autoconnect-priority "$PRIO_LO" || return 1
+    fi
+    say "boot network: the finder's own access point ($AP)"
+  fi
+}
+
+boot() {
+  local pref eff active
+  pref=$(get_pref)
+  apply "$pref" || say "WARNING: could not apply the boot preference (continuing)"
+  eff=$(effective "$pref")
+  active=$(wlan_active)
+  if [ -n "$active" ]; then
+    if [ "$eff" = "ap" ] && [ "$active" != "$AP" ]; then
+      # Only reachable when the profiles disagreed with the preference at
+      # power-on (e.g. the first boot after this feature arrived). They are
+      # corrected above, so later boots start on the AP by themselves.
+      say "preference is the AP but wlan0 is on '$active' -- switching (one-time repair)"
+      "$NMCLI" -w 30 con up "$AP" >/dev/null 2>&1 \
+        || say "WARNING: could not bring up the AP (diofinder-ensure-ap will retry)"
+    else
+      say "wlan0 already on '$active' -- leaving it"
+    fi
+  elif [ "$eff" = "ap" ]; then
+    say "wlan0 idle -- activating the AP"
+    "$NMCLI" -w 30 con up "$AP" >/dev/null 2>&1 \
+      || say "WARNING: could not bring up the AP (diofinder-ensure-ap will retry)"
+  else
+    say "wlan0 idle -- leaving NetworkManager to join '$ST'; diofinder-ensure-ap falls back to the AP"
+  fi
+}
+
+status() {
+  local pref eff
+  pref=$(get_pref)
+  eff=$(effective "$pref")
+  echo "preference: $pref (in effect: $eff)"
+  echo "wlan0 now:  $(wlan_active || true)"
+  "$NMCLI" -f NAME,AUTOCONNECT,AUTOCONNECT-PRIORITY con show 2>/dev/null \
+    | grep -E "^(NAME|$AP|$ST)( |$)" || true
+}
+
+case "${1:-}" in
+  get)    get_pref ;;
+  apply)  apply "${2:-}" ;;
+  boot)   boot ;;
+  status) status ;;
+  *)
+    echo "usage: $0 {get | apply [ap|saved] | boot | status}" >&2
+    exit 2
+    ;;
+esac
