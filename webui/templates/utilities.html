@@ -18,13 +18,14 @@
       How much memory, CPU, and thermal margin the finder has. The verdict uses
       the <strong>worst reading since start-up settles</strong> (the first ~90&nbsp;s
       of boot are excluded), so a squeeze during a solve or slew shows up but the
-      normal boot spike doesn't. Swap is judged on <em>growth</em>, not leftover
-      occupancy.
+      normal boot spike doesn't. Swap here is <em>compressed RAM</em> (zram):
+      it's judged on its real compressed size and on <em>sustained</em> eviction,
+      not on the larger uncompressed figure or a one-off burst.
     </p>
     <p id="sysmon-verdict" style="margin:0 0 8px 0;font-weight:bold;">&hellip;</p>
     <dl class="stats">
       <dt>Memory free</dt><dd id="sm-mem">&mdash;</dd>
-      <dt>Swap used</dt><dd id="sm-swap">&mdash;</dd>
+      <dt>Swap (zram)</dt><dd id="sm-swap">&mdash;</dd>
       <dt>CPU (overall / core&nbsp;0)</dt><dd id="sm-cpu">&mdash;</dd>
       <dt>Temperature</dt><dd id="sm-temp">&mdash;</dd>
       <dt>Worst since start</dt><dd id="sm-hw">&mdash;</dd>
@@ -169,11 +170,13 @@
       }
       set("sm-mem", (res.mem_available_pct != null ? res.mem_available_pct + "% free" : "—") +
           (res.mem_total_kb ? " of " + Math.round(res.mem_total_kb / 1024) + " MB" : ""));
-      set("sm-swap", res.swap_used_mb != null ? res.swap_used_mb + " MB" : "—");
+      set("sm-swap", res.swap_used_mb != null ? res.swap_used_mb + " MB" +
+          (res.swap_phys_mb != null ? " (≈" + res.swap_phys_mb + " MB in RAM"
+             + (res.zram_ratio ? ", " + res.zram_ratio + "× compressed" : "") + ")" : "") : "—");
       set("sm-cpu", pctStr(cpu.cpu) + " / " + pctStr(cpu.cpu0));
       set("sm-temp", res.temp_c != null ? res.temp_c + " °C" : "n/a");
       set("sm-hw", "min free " + pctStr(hw.min_mem_available_pct) +
-          ", swap " + (hw.max_swap_used_mb != null ? hw.max_swap_used_mb + " MB" : "—") +
+          ", zram " + (hw.max_swap_phys_mb != null ? hw.max_swap_phys_mb + " MB" : "—") +
           ", CPU0 " + pctStr(hw.max_cpu0_pct) +
           (hw.max_temp_c != null ? ", " + hw.max_temp_c + " °C" : ""));
       var procs = res.processes || [], tbl = document.getElementById("sysmon-procs");

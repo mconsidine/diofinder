@@ -3,9 +3,10 @@
 Measures the three things that actually determine stability on the 512 MB /
 memory-bandwidth-bound Pi Zero 2W:
 
-* **Memory** — MemAvailable and, the sharpest "am I RAM-tight" signal, zram
-  **swap in use** (on a healthy diofinder this sits at ~0; sustained swap IS
-  the alarm, and is exactly what gates the solver catalog memory optimisation).
+* **Memory** — MemAvailable, plus zram swap judged by its *compressed physical
+  footprint* and *sustained* eviction (not the alarming-looking uncompressed
+  "swap used", and not a one-shot page-render burst). Sustained swap-out is the
+  signal that gates the solver catalog memory optimisation.
 * **CPU per core** — overall and **CPU 0 specifically**, since CPU 0 is shared
   by comms + webui + the IMU thread + kernel/IRQ, and CPU-0 saturation is what
   produced the "camera unavailable" / SkySafari-jitter class of symptoms.
@@ -41,6 +42,7 @@ _PROC_MEMINFO = "/proc/meminfo"
 _PROC_STAT = "/proc/stat"
 _PROC_LOADAVG = "/proc/loadavg"
 _SYS_THERMAL = "/sys/class/thermal/thermal_zone0/temp"
+_SYS_ZRAM_MM = "/sys/block/zram0/mm_stat"
 
 # How long after start to ignore for the verdict/high-water-marks. The star-DB
 # load + process spawn + first solve all land in the first few seconds and peg
@@ -51,19 +53,29 @@ DEFAULT_WARMUP_S = 90.0
 # that is comfortable should sit solidly green. Tunable later via config if a
 # device's "normal" differs.
 #
-# NOTE on swap: we flag on *activity* (zram GROWING between samples), not on
-# occupancy. Pages offloaded once during boot and never reclaimed sit in zram
-# indefinitely with no cost — that is not pressure. A large absolute occupancy
-# is kept only as a backstop (a big fraction of RAM swapped out IS a concern).
+# NOTE on swap (zram-aware). Swap on this box is zram: lz4/zstd-compressed RAM,
+# not disk. Two consequences drive how we judge it:
+#   1. The "swap used" number from /proc/meminfo is the UNCOMPRESSED size of the
+#      pages parked in zram. The real cost is the *compressed* physical RAM the
+#      zram device holds (/sys/block/zram0/mm_stat, field 3) — typically 3-4x
+#      smaller. We judge pressure on that physical footprint, and report both.
+#   2. Pushing a few MB of cold pages to zram on a page render or at solve start
+#      is normal and cheap (a little CPU to compress, no disk I/O). A single
+#      eviction burst is NOT pressure. Genuine pressure is *sustained* eviction
+#      (the footprint growing over several consecutive samples), so we flag on a
+#      growth STREAK, never on a one-shot spike, and swap alone only reaches
+#      "tight" — the "constrained" escalations are reserved for low available
+#      RAM, CPU-0 saturation, and thermal throttling (the states that actually
+#      stall the finder).
 DEFAULT_THRESHOLDS = {
-    "mem_avail_warn_pct": 15.0,      # < this fraction of RAM available -> tight
+    "mem_avail_warn_pct": 15.0,        # < this fraction of RAM available -> tight
     "mem_avail_crit_pct": 8.0,
-    "swap_growth_warn_mb": 4.0,      # zram grew this much in one sample -> swapping
-    "swap_growth_crit_mb": 16.0,
-    "swap_used_backstop_pct": 30.0,  # this fraction of RAM swapped out -> tight
-    "cpu0_warn_pct": 90.0,           # CPU 0 is the shared/limiting core
+    "swap_growth_warn_mb": 4.0,        # physical zram grew this much in one sample -> count it
+    "swap_growth_streak_tight": 3,     # that many consecutive growing samples (~15 s) -> tight
+    "swap_phys_backstop_pct": 40.0,    # physical zram footprint this fraction of RAM -> tight
+    "cpu0_warn_pct": 90.0,             # CPU 0 is the shared/limiting core
     "cpu0_crit_pct": 98.0,
-    "temp_warn_c": 70.0,             # Pi Zero 2W soft-throttles ~80-85 C
+    "temp_warn_c": 70.0,               # Pi Zero 2W soft-throttles ~80-85 C
     "temp_crit_c": 80.0,
 }
 
@@ -98,6 +110,25 @@ def parse_meminfo(text: str) -> dict:
         "swap_free_kb": sf,
         "swap_used_kb": swap_used,
         "swap_used_mb": round(swap_used / 1024.0, 1),
+    }
+
+
+def parse_zram_mm_stat(text: str):
+    """/sys/block/zram0/mm_stat -> {zram_orig_mb, zram_compr_mb, zram_phys_mb,
+    zram_ratio} or None. Whitespace-separated bytes; field 1 = orig_data_size
+    (uncompressed), 2 = compr_data_size, 3 = mem_used_total (physical RAM the
+    zram device actually occupies, incl. metadata)."""
+    try:
+        f = text.split()
+        orig = int(f[0]); compr = int(f[1]); used = int(f[2])
+    except (ValueError, IndexError, AttributeError):
+        return None
+    mb = 1024.0 * 1024.0
+    return {
+        "zram_orig_mb": round(orig / mb, 1),
+        "zram_compr_mb": round(compr / mb, 1),
+        "zram_phys_mb": round(used / mb, 1),
+        "zram_ratio": round(orig / used, 1) if used > 0 else None,
     }
 
 
@@ -225,18 +256,22 @@ def classify(snapshot: dict, thresholds: dict | None = None) -> dict:
             bump("constrained"); reasons.append(f"available RAM fell to {mem_lo:.0f}%")
         elif mem_lo < t["mem_avail_warn_pct"]:
             bump("tight"); reasons.append(f"available RAM fell to {mem_lo:.0f}%")
-    # Swap ACTIVITY (growth per sample), not occupancy — the real pressure sign.
-    sw_grow = hw.get("max_swap_growth_mb", 0.0)
-    if sw_grow is not None:
-        if sw_grow >= t["swap_growth_crit_mb"]:
-            bump("constrained"); reasons.append(f"actively swapping (+{sw_grow:.0f} MB/sample)")
-        elif sw_grow >= t["swap_growth_warn_mb"]:
-            bump("tight"); reasons.append(f"swapping (+{sw_grow:.0f} MB/sample)")
-    # Backstop: a large fraction of RAM swapped out is a concern even if idle.
+    # Swap: judged on SUSTAINED eviction of the compressed zram footprint, not a
+    # one-shot burst or uncompressed occupancy (zram is compressed RAM — a lone
+    # page-render/solve-start eviction is normal and cheap). Swap alone only
+    # reaches "tight"; the genuinely-stalling states escalate below.
+    streak = hw.get("max_swap_growth_streak", 0) or 0
+    if streak >= t["swap_growth_streak_tight"]:
+        sw_grow = hw.get("max_swap_growth_mb", 0.0)
+        bump("tight")
+        reasons.append(f"leaning on swap ({streak} samples running, peak +{sw_grow:.0f} MB)")
+    # Backstop: a large fraction of RAM *physically* held in zram is a concern
+    # even without active growth. Uses the compressed footprint, not the
+    # uncompressed "swap used".
     mem_total_mb = (snapshot.get("mem_total_kb") or 0) / 1024.0
-    sw_hi = hw.get("max_swap_used_mb", 0.0)
-    if mem_total_mb and sw_hi >= mem_total_mb * t["swap_used_backstop_pct"] / 100.0:
-        bump("tight"); reasons.append(f"{sw_hi:.0f} MB swapped out")
+    sw_phys_hi = hw.get("max_swap_phys_mb", 0.0)
+    if mem_total_mb and sw_phys_hi >= mem_total_mb * t["swap_phys_backstop_pct"] / 100.0:
+        bump("tight"); reasons.append(f"{sw_phys_hi:.0f} MB of RAM held in zram")
     # CPU 0 (the shared/limiting core): max seen post-warm-up.
     c0_hi = hw.get("max_cpu0_pct")
     if c0_hi is not None:
@@ -274,15 +309,18 @@ class SysMon:
         self.thresholds = {**DEFAULT_THRESHOLDS, **(thresholds or {})}
         self.warmup_s = float(warmup_s)
         self._prev_cpu = None
-        self._prev_swap_mb = None
+        self._prev_swap_phys_mb = None  # physical zram footprint, for growth deltas
+        self._swap_growth_streak = 0    # consecutive samples that grew >= warn
         self._prev_proc = {}          # pid -> (ticks, monotonic) for CPU% deltas
         self._last = {}
         self.started_mono = time.monotonic()
         self.started_wall = time.time()
         self.high_water = {
             "min_mem_available_pct": None,
-            "max_swap_used_mb": 0.0,     # occupancy (info + backstop)
-            "max_swap_growth_mb": 0.0,   # growth per sample (the pressure signal)
+            "max_swap_used_mb": 0.0,     # uncompressed occupancy (info/display only)
+            "max_swap_phys_mb": 0.0,     # compressed physical footprint (backstop)
+            "max_swap_growth_mb": 0.0,   # largest single-sample growth (info)
+            "max_swap_growth_streak": 0, # longest run of consecutive growing samples
             "max_cpu_pct": 0.0,
             "max_cpu0_pct": 0.0,
             "max_temp_c": None,
@@ -304,9 +342,19 @@ class SysMon:
             hw["min_mem_available_pct"] = (mp if hw["min_mem_available_pct"] is None
                                            else min(hw["min_mem_available_pct"], mp))
         hw["max_swap_used_mb"] = max(hw["max_swap_used_mb"], snap.get("swap_used_mb", 0.0))
+        hw["max_swap_phys_mb"] = max(hw["max_swap_phys_mb"], snap.get("swap_phys_mb") or 0.0)
         g = snap.get("swap_growth_mb")
         if g is not None:
             hw["max_swap_growth_mb"] = max(hw["max_swap_growth_mb"], g)
+            # A growth STREAK (consecutive samples each adding >= warn MB to the
+            # physical footprint) is the sustained-eviction signal; a lone burst
+            # resets to 0 on the next quiet sample and never reaches the tight gate.
+            if g >= self.thresholds["swap_growth_warn_mb"]:
+                self._swap_growth_streak += 1
+            else:
+                self._swap_growth_streak = 0
+            hw["max_swap_growth_streak"] = max(hw["max_swap_growth_streak"],
+                                               self._swap_growth_streak)
         cpu = snap.get("cpu_pct") or {}
         if "cpu" in cpu:
             hw["max_cpu_pct"] = max(hw["max_cpu_pct"], cpu["cpu"])
@@ -367,13 +415,21 @@ class SysMon:
         mem = _read(_PROC_MEMINFO)
         if mem:
             snap.update(parse_meminfo(mem))
-            # Swap GROWTH since the previous sample — the real pressure signal
-            # (static zram occupancy left over from boot is not).
-            cur_swap = snap.get("swap_used_mb")
-            if cur_swap is not None:
-                if self._prev_swap_mb is not None:
-                    snap["swap_growth_mb"] = round(max(0.0, cur_swap - self._prev_swap_mb), 1)
-                self._prev_swap_mb = cur_swap
+            # zram's real (compressed) physical footprint, when available. This is
+            # the number pressure is judged on; "swap used" from meminfo is the
+            # uncompressed size (3-4x larger) and is kept only for display.
+            zinfo = parse_zram_mm_stat(_read(_SYS_ZRAM_MM) or "")
+            if zinfo:
+                snap.update(zinfo)
+            phys = snap.get("zram_phys_mb")
+            if phys is None:          # no zram stats -> fall back to uncompressed
+                phys = snap.get("swap_used_mb")
+            snap["swap_phys_mb"] = phys
+            # GROWTH of the physical footprint since the previous sample.
+            if phys is not None:
+                if self._prev_swap_phys_mb is not None:
+                    snap["swap_growth_mb"] = round(max(0.0, phys - self._prev_swap_phys_mb), 1)
+                self._prev_swap_phys_mb = phys
 
         stat = _read(_PROC_STAT)
         if stat:

@@ -71,9 +71,21 @@ def test_parse_temp_and_loadavg():
     assert sysmon.parse_loadavg("") is None
 
 
+def test_parse_zram_mm_stat():
+    # orig compr mem_used_total ... (bytes). Real device reading:
+    # 150.2M uncompressed, 37.5M compressed, 40.4M physical.
+    text = "157498982 39321600 42362880 435159040 42362880 0 0 0 0"
+    z = sysmon.parse_zram_mm_stat(text)
+    assert z["zram_orig_mb"] == round(157498982 / 1048576.0, 1)
+    assert z["zram_phys_mb"] == round(42362880 / 1048576.0, 1)
+    assert z["zram_ratio"] == round(157498982 / 42362880, 1)  # ~3.7x
+    assert sysmon.parse_zram_mm_stat("garbage") is None
+
+
 def _hw(**kw):
     base = {"min_mem_available_pct": None, "max_swap_used_mb": 0.0,
-            "max_swap_growth_mb": 0.0, "max_cpu_pct": 0.0, "max_cpu0_pct": 0.0,
+            "max_swap_phys_mb": 0.0, "max_swap_growth_mb": 0.0,
+            "max_swap_growth_streak": 0, "max_cpu_pct": 0.0, "max_cpu0_pct": 0.0,
             "max_temp_c": None}
     base.update(kw)
     return base
@@ -95,37 +107,66 @@ def test_classify_comfortable():
 
 
 def test_classify_static_swap_occupancy_is_benign():
-    # 26 MB sitting in zram from boot, not growing, well under the backstop ->
-    # must NOT flag (the real-world false alarm this fix addresses).
+    # 150 MB uncompressed sitting in zram (the real-world reading), compressing
+    # to ~40 MB physical, not growing -> must NOT flag. This is the exact false
+    # alarm this recalibration fixes.
     snap = {"in_warmup": False, "mem_total_kb": 508000,
-            "high_water": _hw(min_mem_available_pct=30.0, max_swap_used_mb=26.0,
-                              max_swap_growth_mb=0.0, max_cpu0_pct=50.0)}
+            "high_water": _hw(min_mem_available_pct=20.0, max_swap_used_mb=150.0,
+                              max_swap_phys_mb=40.0, max_swap_growth_mb=6.0,
+                              max_swap_growth_streak=1, max_cpu0_pct=45.0)}
     assert sysmon.classify(snap)["level"] == "comfortable"
 
 
-def test_classify_tight_on_swap_growth():
+def test_classify_single_burst_is_benign():
+    # A lone page-render eviction: one big growth sample, streak 1 -> no flag.
+    snap = {"in_warmup": False, "mem_total_kb": 508000,
+            "high_water": _hw(min_mem_available_pct=25.0, max_swap_growth_mb=31.0,
+                              max_swap_growth_streak=1, max_cpu0_pct=50.0)}
+    assert sysmon.classify(snap)["level"] == "comfortable"
+
+
+def test_classify_tight_on_sustained_swap_streak():
+    # Three consecutive growing samples (~15 s of real eviction) -> tight.
     snap = {"in_warmup": False, "mem_total_kb": 508000,
             "high_water": _hw(min_mem_available_pct=25.0, max_swap_growth_mb=6.0,
-                              max_cpu0_pct=50.0)}
+                              max_swap_growth_streak=3, max_cpu0_pct=50.0)}
     v = sysmon.classify(snap)
     assert v["level"] == "tight"
-    assert any("swapping" in r for r in v["reasons"])
+    assert any("leaning on swap" in r for r in v["reasons"])
 
 
-def test_classify_swap_backstop():
-    # huge occupancy (>30% of RAM) flags even without growth
+def test_classify_swap_backstop_uses_physical():
+    # A large PHYSICAL footprint (>40% of RAM) flags even without growth;
+    # the uncompressed occupancy alone must not.
     snap = {"in_warmup": False, "mem_total_kb": 508000,
-            "high_water": _hw(max_swap_used_mb=200.0)}
+            "high_water": _hw(max_swap_used_mb=400.0, max_swap_phys_mb=220.0)}
     v = sysmon.classify(snap)
     assert v["level"] == "tight"
-    assert any("swapped out" in r for r in v["reasons"])
+    assert any("held in zram" in r for r in v["reasons"])
 
 
 def test_classify_constrained_escalates_to_worst():
     snap = {"in_warmup": False, "mem_total_kb": 508000,
             "high_water": _hw(min_mem_available_pct=25.0, max_swap_growth_mb=6.0,
-                              max_cpu0_pct=99.0, max_temp_c=50.0)}
+                              max_swap_growth_streak=3, max_cpu0_pct=99.0,
+                              max_temp_c=50.0)}
     v = sysmon.classify(snap)
     assert v["level"] == "constrained"          # CPU0 99% -> constrained, worst wins
     assert any("CPU 0" in r for r in v["reasons"])
-    assert any("swapping" in r for r in v["reasons"])  # tight reason still listed
+    assert any("leaning on swap" in r for r in v["reasons"])  # tight reason still listed
+
+
+def test_swap_growth_streak_counts_consecutive():
+    sm = sysmon.SysMon(warmup_s=0.0)
+
+    def feed(growth):
+        sm._bump_marks({"in_warmup": False, "swap_growth_mb": growth,
+                        "swap_phys_mb": 40.0, "swap_used_mb": 150.0})
+
+    feed(6.0); feed(6.0)                 # two consecutive growing samples
+    assert sm.high_water["max_swap_growth_streak"] == 2
+    feed(0.0)                            # quiet sample resets the streak
+    assert sm._swap_growth_streak == 0
+    feed(6.0)                            # grows again
+    assert sm._swap_growth_streak == 1
+    assert sm.high_water["max_swap_growth_streak"] == 2   # max retained
