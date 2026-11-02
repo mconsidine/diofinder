@@ -379,12 +379,14 @@ def test_clock_info_records_and_summarizes(tmp_path):
     from diofinder import clock_info as ci
     state, flag = str(tmp_path / "clock.json"), str(tmp_path / "synchronized")
     c = ci.current(state, flag)
-    assert not c["ntp_synchronized"] and c["last_skysafari"] is None
+    assert not c["ntp_synchronized"] and c["last_sync"] is None
     assert c["summary"].startswith("unknown")
     ci.record_sync("skysafari", "checked", 6.4, path=state)
     c = ci.current(state, flag)
-    assert c["last_skysafari"]["action"] == "checked" and c["last_skysafari"]["drift_s"] == 6.4
-    assert "SkySafari, checked" in c["summary"] and "6 s off" in c["summary"]
+    assert c["last_sync"]["action"] == "checked" and c["last_sync"]["drift_s"] == 6.4
+    assert "SkySafari, checked" in c["summary"] and "6.4 s off" in c["summary"]
+    ci.record_sync("phone", "set", -0.31, utc_set="2026-11-02 20:00:00", path=state)
+    assert "phone (web page), set" in ci.current(state, flag)["summary"]
     open(flag, "w").close()
     assert ci.current(state, flag)["summary"] == "network time (synchronized)"
 

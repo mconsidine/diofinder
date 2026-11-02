@@ -134,6 +134,26 @@
     </p>
   </div>
 
+  {# ---- Clock ---- #}
+  <div class="card" id="clock-card">
+    <h2>Clock</h2>
+    <p class="hint" style="margin:0 0 8px 0;">
+      The finder has no clock battery: its time comes from network time, or
+      from SkySafari when it connects (which only corrects errors over 10&nbsp;s).
+      Exposure times in live captures, satellite matching and the Alt/Az
+      readout all depend on it.
+    </p>
+    <dl class="stats">
+      <dt>Finder</dt><dd id="clk-finder">&mdash;</dd>
+      <dt>This device</dt><dd id="clk-phone">&mdash;</dd>
+      <dt>Source</dt><dd id="clk-src">&mdash;</dd>
+    </dl>
+    <p style="margin:8px 0 0 0;">
+      <button type="button" class="btn" id="clk-set">Set finder time from this device</button>
+      <span id="clk-msg" class="hint" style="margin-left:6px;"></span>
+    </p>
+  </div>
+
   {# ---- Network, config & updates ---- #}
   <div class="card">
     <h2>Network, config &amp; updates</h2>
@@ -251,6 +271,39 @@
   }
   poll();
   setInterval(poll, 3000);
+})();
+
+// ---- Clock: compare the finder's time with this device's, and set it ----
+(function () {
+  var offset = null;   // finder minus this device, seconds (half-RTT corrected)
+  function fmt(ms) { return new Date(ms).toISOString().replace("T", " ").slice(0, 19) + " UTC"; }
+  function poll() {
+    var t0 = Date.now();
+    fetch("/api/time").then(function (r) { return r.json(); }).then(function (j) {
+      var t1 = Date.now(), res = j.result || {};
+      offset = (res.server_ms - (t0 + t1) / 2) / 1000;
+      document.getElementById("clk-finder").textContent = fmt(res.server_ms) +
+        "  (" + (offset >= 0 ? "+" : "") + offset.toFixed(1) + " s vs this device)";
+      document.getElementById("clk-phone").textContent = fmt((t0 + t1) / 2);
+      document.getElementById("clk-src").textContent = (res.clock || {}).summary || "—";
+    }).catch(function () {});
+  }
+  document.getElementById("clk-set").addEventListener("click", function () {
+    var msg = document.getElementById("clk-msg");
+    if (!confirm("Set the finder's clock to this device's time? Only do this " +
+                 "if this device's own time is correct (phones normally are).")) return;
+    msg.textContent = "setting…";
+    fetch("/time/set", {method: "POST", headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({phone_ms: Date.now()})})
+      .then(function (r) { return r.json(); }).then(function (j) {
+        msg.textContent = j.ok ? "\u2713 set to " + j.result.set_utc +
+          " UTC (was " + Math.abs(j.result.drift_s).toFixed(1) + " s off)"
+          : "Error: " + (j.error || "failed");
+        poll();
+      }).catch(function (e) { msg.textContent = "Error: " + e; });
+  });
+  poll();
+  setInterval(poll, 5000);
 })();
 
 // ---- Live captures list (DOM-built: names are server-validated, but never

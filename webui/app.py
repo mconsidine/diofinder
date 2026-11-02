@@ -762,6 +762,57 @@ def _boot_pref():
     return "saved" if pref == "saved" else "ap"
 
 
+# ── Clock: show the finder's time and set it from the phone ────────────────────
+
+_SET_TIME = "/usr/local/bin/diofinder-set-time"
+
+
+@app.route("/api/time")
+def api_time():
+    """The finder's clock now, and where its time came from (clock_info)."""
+    import time as _t
+    from diofinder import clock_info as _ci
+    return jsonify({"ok": True, "result": {"server_ms": int(_t.time() * 1000),
+                                           "clock": _ci.current()}})
+
+
+@app.route("/time/set", methods=["POST"])
+def time_set():
+    """Set the finder's clock from the phone's (JSON {"phone_ms": epoch ms}).
+
+    The Pi has no real-time clock; away from a network its time comes from
+    SkySafari, which only corrects errors over 10 s. This sets it to the
+    phone's time, good to roughly the Wi-Fi round trip: the phone's offset is
+    measured on arrival, then the clock is set exactly on the next whole
+    second of phone time (timedatectl takes whole seconds)."""
+    import time as _t
+    from diofinder import clock_info as _ci
+    data = request.get_json(silent=True) or {}
+    try:
+        phone_s = float(data["phone_ms"]) / 1000.0
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"ok": False, "error": "phone_ms (epoch milliseconds) required"}), 400
+    phone_dt = datetime.fromtimestamp(phone_s, tz=timezone.utc)
+    if not 2025 <= phone_dt.year < 2100:
+        return jsonify({"ok": False, "error": f"phone time {phone_dt.isoformat()} "
+                                              "doesn't look right"}), 400
+    offset = phone_s - _t.time()                 # phone minus finder, seconds
+    target = math.floor(_t.time() + offset) + 1  # next whole second, phone time
+    _t.sleep(max(0.0, target - (_t.time() + offset)))
+    time_str = datetime.fromtimestamp(target, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        r = subprocess.run(["sudo", _SET_TIME, time_str],
+                           capture_output=True, text=True, timeout=15)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    if r.returncode != 0:
+        return jsonify({"ok": False, "error": (r.stderr or r.stdout or
+                                               f"exit {r.returncode}").strip()}), 500
+    _ci.record_sync("phone", "set", offset, utc_set=time_str)
+    return jsonify({"ok": True, "result": {"set_utc": time_str,
+                                           "drift_s": round(offset, 2)}})
+
+
 @app.route("/power/<action>", methods=["POST"])
 def power(action):
     """Reboot or power off the finder (Utilities -> Power). Runs the

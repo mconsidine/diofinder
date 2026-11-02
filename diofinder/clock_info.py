@@ -3,9 +3,10 @@
 The Pi Zero 2W has no real-time clock. The time comes from network time
 (systemd-timesyncd, when the finder is on a network with internet) or from
 SkySafari's LX200 time sync (``:SL``/``:SG``/``:SC`` on connect), which sets the
-clock only when it is more than ``SKYSAFARI_SKIP_S`` off, to whole seconds.
+clock only when it is more than 10 s off, to whole seconds.
 
-``record_sync`` stores the most recent SkySafari check/set in a small JSON file
+``record_sync`` stores the most recent manual check/set (SkySafari, or the
+Utilities page's "set from this phone" button) in a small JSON file
 (survives restarts of the service, not of a wiped card); ``current`` reports
 it alongside whether network time is synchronized right now. Live captures
 copy ``current()`` into ``session.json`` so satellite timing can be judged.
@@ -55,18 +56,27 @@ def ntp_synchronized(flag_path=NTP_FLAG_PATH):
     return os.path.exists(flag_path)
 
 
+_SOURCE_LABEL = {"skysafari": "SkySafari", "phone": "a phone (web page)"}
+_SOURCE_NOTE = {"skysafari": "SkySafari only corrects errors over 10 s, to whole seconds",
+                "phone": "good to a fraction of a second"}
+
+
 def current(path=STATE_PATH, flag_path=NTP_FLAG_PATH):
-    """{ntp_synchronized, last_skysafari: {...} or None, summary}."""
+    """{ntp_synchronized, last_sync: {...} or None, summary}. ``last_sync`` is
+    the most recent manual check/set (SkySafari or the web page's phone
+    button)."""
     ntp = ntp_synchronized(flag_path)
     last = last_sync(path)
     if ntp:
         summary = "network time (synchronized)"
     elif last:
+        src = last.get("source", "")
         drift = last.get("drift_s")
-        summary = ("SkySafari, " + ("set" if last.get("action") == "set" else "checked")
+        summary = (f"{_SOURCE_LABEL.get(src, src)}, "
+                   + ("set" if last.get("action") == "set" else "checked")
                    + f" at {last.get('at_utc')}"
-                   + (f" (was {drift:.0f} s off)" if drift is not None else "")
-                   + "; good to about 1 s at best")
+                   + (f" (was {abs(drift):.1f} s off)" if drift is not None else "")
+                   + (f"; {_SOURCE_NOTE[src]}" if src in _SOURCE_NOTE else ""))
     else:
-        summary = "unknown (no network time, no SkySafari sync recorded)"
-    return {"ntp_synchronized": ntp, "last_skysafari": last, "summary": summary}
+        summary = "unknown (no network time, and not set from SkySafari or a phone)"
+    return {"ntp_synchronized": ntp, "last_sync": last, "summary": summary}
