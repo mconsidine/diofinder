@@ -1136,10 +1136,8 @@ extractor and says so (banner + report `*** NOTE ***`); use `diag_solve.py
 auto_tune is **live-only**. To find the best parameters *in hindsight* for an
 already-captured burst (the `bg_ab_*.zip` archives the Background A/B run writes
 to `/var/lib/diofinder/bg_runs/`; since v0.11.76 `_bgrun_prune` keeps the newest
-10 within 300 MB and removes each run's loose frames folder once zipped), there
-are two paths:
-
-* **`tests/replay_corpus.py`** (off-device or on-device): the offline sweep.
+10 within 300 MB and removes each run's loose frames folder once zipped), use
+**`tests/replay_corpus.py`** (off-device or on-device), the offline sweep.
   `--corpus` accepts a **directory of PNGs OR a `.zip`** (burst archives /
   debug bundles — only the raw `*.png` frames are extracted). It sweeps
   presets × `--bg-modes` × `--sweep-sigma` × `--sweep-kernel`, honours
@@ -1149,15 +1147,10 @@ are two paths:
   the maint socket (`solver_params_set`/`match_params_set` with `persist`, plus
   an optional `seeing_override_save source=replay`) — the same machinery
   `auto_tune commit` uses. On-device, `--apply` needs the daemon running.
-* **Dashboard "Tune from burst" card** (`webui/app.py` `/tune/start`,
-  `/api/tune`, `/tune/apply`; `_tune_worker`): the on-device, button-driven
-  sibling. It replays a chosen `bg_ab_*.zip` through the **live** solver
-  (`solve_centroids`, resident DB — memory-safe, no second copy) over a grid of
-  **detection** params (bg_mode × sigma × kernel; solving uses the live
-  geometry), shows the winning combination, and "Apply winner" persists it
-  (`solver_params_set persist=true`, optional `seeing_override_save
-  source=replay`). For a sweep that *also* varies fov/max_stars, use
-  `replay_corpus.py` on the same zip.
+The on-device "Tune from burst" card (a subset of this sweep run through the
+live solver) was **removed in v0.11.76**: it duplicated `replay_corpus.py`
+while costing the Pi's CPU. The Advanced page still lists the saved archives
+for download.
 
 ## Hot-pixel mask
 

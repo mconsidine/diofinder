@@ -45,7 +45,7 @@ flowchart TD
     D2 --> E
 
     E{"STEP 5 · still stuck?"} -->|"let the device search the live sky"| E1["Auto-tune (current sky):<br/>bounded search over exposure / gain / sigma / kernel / bg<br/>→ applies the cheapest point that clears the match target"]
-    E -->|"hindsight on a saved burst"| E2["Tune from burst (dashboard)<br/>or tests/replay_corpus.py"]
+    E -->|"hindsight on a saved burst"| E2["tests/replay_corpus.py<br/>(on the saved burst zip)"]
     E1 --> DONE
     E2 --> DONE
 ```

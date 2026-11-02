@@ -140,8 +140,9 @@ cores: the reason to test bin-at-submit), and small background loops.
 
 - `/debug/collect` (old one-shot bundle route): KEPT — it is the documented
   `curl` path; it only accepted POST, so that command failed. Fixed (GET too).
-- Three tuners: auto-tune (live), the "Tune from burst" card (on device),
-  `replay_corpus.py` (off device): keep two. **Waiting on your choice.**
+- ✅ *Done:* three tuners → two. Kept auto-tune (live sky) and
+  `replay_corpus.py` (laptop); removed the on-device "Tune from burst" card
+  (it duplicated replay_corpus while using the Pi's CPU).
 - `save_failed_frames` / `save_solved_frames`: KEPT for now —
   `scripts/calibrate_lens.py` (lens distortion fit) reads the frames
   `save_solved_frames` writes. Could go once it reads live-capture zips.
