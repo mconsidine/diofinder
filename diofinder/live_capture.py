@@ -534,7 +534,7 @@ class LiveRecorder:
                               "only as accurate as the Pi clock",
             "clock_plausible": plausible,
             # Where the time came from when recording started (network time or
-            # SkySafari's sync, which only corrects errors over 10 s).
+            # SkySafari's sync, which sets whole seconds only).
             "clock": ctl.get("clock"),
             "test_mode": bool(ctl.get("test_mode", False)),
             "version": getattr(self._cfg, "version", None),

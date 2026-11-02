@@ -1757,8 +1757,29 @@ def _imu_predict_smoothed(shared_cfg):
         return ra, dec
 
 
+# SkySafari sends whole seconds (:SL hh:mm:ss) and some latency, so a clock
+# within ~2 s of it is already as good as SkySafari can make it. A clock set
+# from a phone this boot (sub-second) is better than SkySafari: only a big
+# disagreement replaces it. Network time is never overridden.
+_SKYSAFARI_SET_THRESHOLD_S = 2.0
+_SKYSAFARI_OVER_PHONE_S = 10.0
+
+
+def _skysafari_threshold(clock_state):
+    """Seconds of disagreement before a SkySafari time replaces the clock;
+    None = never (network time is synchronized)."""
+    if clock_state.get("ntp_synchronized"):
+        return None
+    last = clock_state.get("last_sync") or {}
+    if clock_state.get("this_boot") and last.get("source") == "phone" \
+            and last.get("action") == "set":
+        return _SKYSAFARI_OVER_PHONE_S
+    return _SKYSAFARI_SET_THRESHOLD_S
+
+
 def _sync_clock(sl, sg, sc):
     """Set system clock from SkySafari's :SG/:SL/:SC local-time + UTC-offset sequence."""
+    from diofinder import clock_info as _ci
     try:
         local_dt = datetime.datetime.strptime(f"{sc} {sl}", "%m/%d/%y %H:%M:%S")
         sg_hours = float(sg)
@@ -1766,26 +1787,38 @@ def _sync_clock(sl, sg, sc):
         time_str = utc_dt.strftime("%Y-%m-%d %H:%M:%S")
         now_utc  = datetime.datetime.utcnow()
         diff_s   = abs((utc_dt - now_utc).total_seconds())
-        if diff_s < 10:
-            log.debug("Clock already accurate (drift %.0fs); skipping", diff_s)
-            from diofinder import clock_info as _ci
+        threshold = _skysafari_threshold(_ci.current())
+        if threshold is None or diff_s < threshold:
+            log.debug("Clock kept (SkySafari differs by %.1fs; %s)", diff_s,
+                      "network time" if threshold is None else f"< {threshold:.0f}s")
             _ci.record_sync("skysafari", "checked", diff_s)
+            if threshold is not None:
+                _ci.save_last_known()
             return
-        log.info("Clock drift %.0fs — syncing from SkySafari: %s UTC",
+        log.info("Clock drift %.1fs — syncing from SkySafari: %s UTC",
                  diff_s, time_str)
-        result = subprocess.run(
-            ["sudo", "/usr/local/bin/diofinder-set-time", time_str],
-            capture_output=True, text=True, timeout=15,
-        )
-        if result.returncode == 0:
-            log.info("Clock synced to %s UTC", time_str)
-            from diofinder import clock_info as _ci
-            _ci.record_sync("skysafari", "set", diff_s, utc_set=time_str)
-        else:
-            log.warning("Clock sync failed (rc=%d): %s",
-                        result.returncode, result.stderr.strip())
+        how = _ci.set_clock(utc_dt.replace(tzinfo=datetime.timezone.utc).timestamp())
+        log.info("Clock synced to %s UTC (%s)", time_str, how)
+        _ci.record_sync("skysafari", "set", diff_s, utc_set=time_str)
+        _ci.save_last_known()
     except Exception as e:
-        log.warning("Clock sync error: %s", e)
+        log.warning("Clock sync failed: %s", e)
+
+
+_CLOCK_SAVE_EVERY_S = 300.0
+
+
+def _clock_save_loop():
+    """Every few minutes, remember the time while it is trusted, so the next
+    start-up can move the clock forward to it (clock_info.restore_at_start)."""
+    from diofinder import clock_info as _ci
+    while True:
+        try:
+            if _ci.current().get("trusted"):
+                _ci.save_last_known()
+        except Exception as e:                      # never let this die
+            log.debug("clock save failed: %s", e)
+        time.sleep(_CLOCK_SAVE_EVERY_S)
 
 
 # Snapshot cache for the :GR/:GD poll pair. :GD virtually always follows
@@ -3790,6 +3823,9 @@ def comms_main(latest_solution, shared_cfg,
 
     threading.Thread(target=_watchdog_loop, args=(ctx,),
                      name="diofinder-watchdog", daemon=True).start()
+
+    threading.Thread(target=_clock_save_loop, name="diofinder-clocksave",
+                     daemon=True).start()
 
     threading.Thread(target=_mount_loop, args=(ctx,),
                      name="diofinder-mount", daemon=True).start()

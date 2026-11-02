@@ -116,6 +116,19 @@ def main():
                 ", ".join(f"{k}={v}" for k, v in _applied.items()))
     except Exception as _e:
         logging.getLogger("diofinder.main").warning("conf migration failed: %s", _e)
+    # The Pi has no clock battery: it starts at the image build date. Move the
+    # clock forward to the last time it was known to be right (saved by comms),
+    # so logs and files stay in order. Not accurate time; clock_info says so.
+    try:
+        from diofinder import clock_info as _ci
+        _rest = _ci.restore_at_start()
+        if _rest:
+            logging.getLogger("diofinder.main").warning(
+                "Clock moved forward %.0f s to the last known time %s (not "
+                "accurate: set it from SkySafari or Utilities -> Clock)",
+                _rest["drift_s"] or 0.0, _rest["utc_set"])
+    except Exception as _e:
+        logging.getLogger("diofinder.main").warning("clock restore failed: %s", _e)
     cfg = load_config()
     os.sched_setaffinity(0, {cfg.cpu_comms})
     # Prefer the stamped release tag (written by install.sh / diofinder-update to

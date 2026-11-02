@@ -28,6 +28,11 @@ Restart=on-failure
 RestartSec=5
 
 NoNewPrivileges=true
+# NoNewPrivileges blocks sudo, so the daemon cannot use the sudo
+# diofinder-set-time helper. Grant just the right to set the clock instead:
+# SkySafari's :SL/:SC sync and the start-up restore of the last known time
+# (diofinder/clock_info.py) set it directly.
+AmbientCapabilities=CAP_SYS_TIME
 ProtectSystem=full
 ReadWritePaths=/var/lib/diofinder /etc/diofinder /run/diofinder
 

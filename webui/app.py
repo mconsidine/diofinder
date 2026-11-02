@@ -781,7 +781,7 @@ def time_set():
     """Set the finder's clock from the phone's (JSON {"phone_ms": epoch ms}).
 
     The Pi has no real-time clock; away from a network its time comes from
-    SkySafari, which only corrects errors over 10 s. This sets it to the
+    SkySafari, which sets whole seconds only. This sets it to the
     phone's time, good to roughly the Wi-Fi round trip: the phone's offset is
     measured on arrival, then the clock is set exactly on the next whole
     second of phone time (timedatectl takes whole seconds)."""
@@ -809,6 +809,7 @@ def time_set():
         return jsonify({"ok": False, "error": (r.stderr or r.stdout or
                                                f"exit {r.returncode}").strip()}), 500
     _ci.record_sync("phone", "set", offset, utc_set=time_str)
+    _ci.save_last_known()
     return jsonify({"ok": True, "result": {"set_utc": time_str,
                                            "drift_s": round(offset, 2)}})
 
