@@ -279,6 +279,21 @@ def test_comms_warns_about_clock_and_site(tmp_path, monkeypatch):
     assert "clock" in w and "location" in w
 
 
+def test_comms_test_mode_never_records_null_island(tmp_path, monkeypatch):
+    from diofinder import comms_proc as cp
+    monkeypatch.setattr(cp.cfg_mod, "load_config", lambda *a, **k: types.SimpleNamespace(
+        latitude_deg=0.0, longitude_deg=0.0, elevation_m=0.0,
+        test_latitude_deg=0.0, test_longitude_deg=0.0))
+    monkeypatch.setattr(cp._horizon, "clock_is_plausible", lambda *a, **k: True)
+    ctx = types.SimpleNamespace(cfg=types.SimpleNamespace(live_capture_dir=str(tmp_path)),
+                                shared_cfg={"test_mode": True})
+    r = cp._live_capture_cmd("live_capture_start", ctx)
+    site = ctx.shared_cfg["live_capture"]["site"]
+    assert (site["latitude_deg"], site["longitude_deg"]) == (40.0, -75.0)
+    assert site["source"] == "test mode (placeholder)"
+    assert not any("location" in w for w in r.result["warnings"])
+
+
 # ---- web routes -------------------------------------------------------------
 
 A = pytest.importorskip("webui.app")

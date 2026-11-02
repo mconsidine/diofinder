@@ -127,3 +127,44 @@ def test_test_mode_epoch_accepts_frames_json_timestamp(monkeypatch):
     assert out is not None
     assert seen["dt"] == datetime.datetime(2026, 7, 23, 1, 24, 0, 798000)
     assert seen["lon"] == pytest.approx(-72.6667)
+
+
+# ---- test-mode site: explicit test values > real site > placeholder --------
+
+def _cfg(**kw):
+    base = dict(latitude_deg=0.0, longitude_deg=0.0,
+                test_latitude_deg=0.0, test_longitude_deg=0.0, test_epoch_utc="")
+    base.update(kw)
+    return types.SimpleNamespace(**base)
+
+
+@pytest.mark.parametrize("kw, want", [
+    ({}, (40.0, -75.0, "placeholder")),                                  # nothing set
+    ({"latitude_deg": 43.95, "longitude_deg": -72.667}, (43.95, -72.667, "site")),
+    # The old shipped defaults count as "not set": an existing device's conf
+    # carries them, and its real site must win.
+    ({"latitude_deg": 43.95, "longitude_deg": -72.667,
+      "test_latitude_deg": 40.0, "test_longitude_deg": -75.0}, (43.95, -72.667, "site")),
+    # An explicit test site wins over the real one.
+    ({"latitude_deg": 43.95, "longitude_deg": -72.667,
+      "test_latitude_deg": 51.5, "test_longitude_deg": -0.1}, (51.5, -0.1, "test")),
+    ({"test_latitude_deg": "junk"}, (40.0, -75.0, "placeholder")),
+])
+def test_test_site_order(kw, want):
+    assert horizon.test_site(_cfg(**kw)) == want
+
+
+def test_test_mode_altaz_uses_real_site_and_never_null_island(monkeypatch):
+    seen = []
+    real_lst = horizon.local_sidereal_time_deg
+    monkeypatch.setattr(comms._horizon, "local_sidereal_time_deg",
+                        lambda dt, lon: seen.append(lon) or real_lst(dt, lon))
+    sol = {"solved": True, "ra_deg": 280.0, "dec_deg": 38.8}
+    epoch = "2026-07-23T01:24:00Z"
+    assert comms._report_altaz({"test_mode": True}, sol,
+                               _cfg(test_epoch_utc=epoch)) is not None
+    assert comms._report_altaz({"test_mode": True}, sol,
+                               _cfg(latitude_deg=43.95, longitude_deg=-72.667,
+                                    test_latitude_deg=40.0, test_longitude_deg=-75.0,
+                                    test_epoch_utc=epoch)) is not None
+    assert seen == [pytest.approx(-75.0), pytest.approx(-72.667)]

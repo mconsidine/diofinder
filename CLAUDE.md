@@ -301,6 +301,7 @@ are **West-positive** (Meade; SkySafari, OnStep, AstroKeith's eFinder). `:Sg`
 converts in via `horizon.lx200_longitude_to_east`, `:Gg` out via
 `east_longitude_to_lx200`. Before this, `:Sg` stored the raw value, so a US site
 came out ~145° of sidereal time off (wrong live Alt/Az and horizon-reject).
+**Test-mode site (v0.11.76):** `horizon.test_site(cfg)` = explicit `test_latitude_deg`/`test_longitude_deg` (0,0 or the old shipped 40/-75 placeholder count as unset) > the real site > 40 N / 75 W; never 0,0. Used by test-mode Alt/Az and by live captures started in test mode.
 `test_epoch_utc` is parsed by `horizon.parse_utc_timestamp`, which takes any
 ISO-8601 form incl. a pasted `frames.json` `exposure_start_utc`. Tests:
 `tests/test_lx200_site.py`.

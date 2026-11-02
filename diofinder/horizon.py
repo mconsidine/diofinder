@@ -142,6 +142,36 @@ def site_is_set(latitude_deg: float, longitude_deg: float) -> bool:
     return not (latitude_deg == 0.0 and longitude_deg == 0.0)
 
 
+# The round placeholder bench site test mode used to ship as its explicit
+# test_latitude_deg/test_longitude_deg defaults. Still the last resort, but no
+# longer treated as a deliberate choice: a conf carrying exactly these values
+# (every pre-0.11.76 device) gets the real site instead.
+TEST_SITE_PLACEHOLDER = (40.0, -75.0)
+
+
+def test_site(cfg):
+    """(latitude_deg, longitude_deg, source) to use in TEST MODE.
+
+    1. ``test_latitude_deg``/``test_longitude_deg`` when the user set them
+       (not 0,0 and not the old shipped placeholder) -> "test";
+    2. else the configured site ``latitude_deg``/``longitude_deg`` (set by
+       SkySafari or the Config page) -> "site";
+    3. else the 40 N / 75 W placeholder -> "placeholder".
+    Never (0, 0)."""
+    def _f(name):
+        try:
+            return float(getattr(cfg, name, 0.0) or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+    tlat, tlon = _f("test_latitude_deg"), _f("test_longitude_deg")
+    if site_is_set(tlat, tlon) and (tlat, tlon) != TEST_SITE_PLACEHOLDER:
+        return tlat, tlon, "test"
+    lat, lon = _f("latitude_deg"), _f("longitude_deg")
+    if site_is_set(lat, lon):
+        return lat, lon, "site"
+    return TEST_SITE_PLACEHOLDER[0], TEST_SITE_PLACEHOLDER[1], "placeholder"
+
+
 def clock_is_plausible(now_utc: datetime.datetime | None = None) -> bool:
     """True if the system clock has plausibly been set (year >= 2025)."""
     now_utc = now_utc or datetime.datetime.utcnow()

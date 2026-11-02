@@ -100,18 +100,18 @@ class Config:
 
     # Test-mode Alt/Az (bench exercise of the :GA/:GZ path on a static frame).
     # These have NO effect in live mode. In test mode, _report_altaz:
-    #   (a) falls back to test_latitude_deg/test_longitude_deg when the real
-    #       site above is unset (0,0), so Alt/Az computes out of the box; and
+    #   (a) uses horizon.test_site(): test_latitude_deg/test_longitude_deg when
+    #       you set them, else the real site above (as SkySafari / the Config
+    #       page set it), else a 40 N / 75 W placeholder -- never 0,0. 0,0 here
+    #       means "not set" (as does the old shipped 40/-75 placeholder); and
     #   (b) computes local sidereal time against the FIXED test_epoch_utc when
     #       it is set, so the reading is deterministic/repeatable for a given
     #       test frame (and needs no NTP). Set test_epoch_utc to "" to use the
     #       wall clock instead (reading then drifts with sidereal time).
     #       Any ISO-8601 UTC timestamp works, including a frames.json
     #       exposure_start_utc pasted as-is (fractional seconds, +00:00, Z).
-    # Defaults are a deliberately-round placeholder site (40 N, 75 W) — change
-    # them to your bench location (or just set latitude_deg/longitude_deg).
-    test_latitude_deg: float = 40.0
-    test_longitude_deg: float = -75.0     # East-positive, like longitude_deg
+    test_latitude_deg: float = 0.0
+    test_longitude_deg: float = 0.0      # East-positive, like longitude_deg
     test_epoch_utc: str = "2026-01-01T00:00:00Z"
 
     # Opt-in horizon-based solve rejection (olive-solve per-star prune). Default

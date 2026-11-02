@@ -102,15 +102,15 @@ longitude_deg: 0.0
 elevation_m: 0.0
 
 # Test-mode Alt/Az (bench exercise of :GA/:GZ on a static frame). No effect in
-# live mode. In test mode, _report_altaz falls back to these when the real site
-# above is 0,0, and computes sidereal time against the fixed test_epoch_utc so
-# the reading is deterministic (and needs no NTP). Set test_epoch_utc to an
-# empty value to use the wall clock instead. Defaults are a round placeholder
-# site -- change to your bench location, or just set latitude_deg/longitude_deg.
+# live mode. In test mode the site is test_latitude_deg/test_longitude_deg when
+# you set them, else the real site above, else a 40 N / 75 W placeholder --
+# never 0,0 (0,0 here means "not set"). Sidereal time is computed against the
+# fixed test_epoch_utc so the reading is deterministic (and needs no NTP). Set
+# test_epoch_utc to an empty value to use the wall clock instead.
 # test_epoch_utc takes any ISO-8601 UTC time, e.g. a frames.json
 # exposure_start_utc pasted as-is ("2026-07-23T01:24:00.798+00:00").
-test_latitude_deg: 40.0
-test_longitude_deg: -75.0
+test_latitude_deg: 0.0
+test_longitude_deg: 0.0
 test_epoch_utc: 2026-01-01T00:00:00Z
 
 # Horizon-based solve rejection (opt-in, olive-solve per-star prune). Default

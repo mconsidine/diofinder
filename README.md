@@ -1030,9 +1030,10 @@ To exercise the altitude/azimuth output without a real sky or mount:
 3. **Read it**: `:GZ#`/`:GA#` over port 4060 (or the `altaz` maint command).
 
 In test mode the site/clock gate is relaxed (`diofinder/config.py`
-`test_latitude_deg`/`test_longitude_deg`/`test_epoch_utc`): if the real
-`latitude_deg`/`longitude_deg` are unset it falls back to the test site, and a
-non-empty `test_epoch_utc` makes the reading **deterministic** (computed against
+`test_latitude_deg`/`test_longitude_deg`/`test_epoch_utc`): the site is the
+test site when you set one, else the real `latitude_deg`/`longitude_deg` (as
+SkySafari or the Config page set them), else a 40 N / 75 W placeholder — never
+0,0. A non-empty `test_epoch_utc` makes the reading **deterministic** (computed against
 that fixed instant, so it holds still and needs no NTP). The value reflects the
 test frame's sky coordinates at the configured site/time, **not** the device's
 physical orientation. Set `test_epoch_utc:` empty to use the wall clock instead

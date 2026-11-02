@@ -1838,8 +1838,9 @@ def _report_altaz(scfg, sol, cfg):
     convention: 0=N, 90=E, 180=S, 270=W.
 
     TEST MODE relaxes the site/clock gate so the path can be exercised on the
-    bench with a static frame: (a) when the real site is unset it falls back to
-    cfg.test_latitude_deg/test_longitude_deg, and (b) when cfg.test_epoch_utc is
+    bench with a static frame: (a) the site is horizon.test_site(cfg) -- the
+    user's explicit test_latitude_deg/test_longitude_deg, else the configured
+    site, else a 40 N / 75 W placeholder (never 0,0), and (b) when cfg.test_epoch_utc is
     set the LST is computed against that FIXED instant instead of the wall clock,
     making the reading deterministic/repeatable (and NTP-independent). Live
     (non-test) behaviour is unchanged: None unless a real site AND a plausible
@@ -1852,15 +1853,8 @@ def _report_altaz(scfg, sol, cfg):
 
     now_utc = None  # None -> use wall clock + the plausibility gate below
     if scfg.get("test_mode"):
-        # (a) fall back to the configured test site when the real site is unset.
-        if not _horizon.site_is_set(lat, lon):
-            try:
-                lat = float(getattr(cfg, "test_latitude_deg", 0.0) or 0.0)
-                lon = float(getattr(cfg, "test_longitude_deg", 0.0) or 0.0)
-            except (TypeError, ValueError):
-                return None
-            if not _horizon.site_is_set(lat, lon):
-                return None  # test site also unset — nothing sensible to report
+        # (a) explicit test site > configured site > placeholder (never 0,0).
+        lat, lon, _src = _horizon.test_site(cfg)
         # (b) use a fixed reference epoch when set, so a static frame yields a
         # deterministic reading without depending on the (RTC-less) wall clock.
         # Any ISO-8601 form is accepted, including frames.json's own
@@ -2073,6 +2067,10 @@ def _live_capture_cmd(cmd, ctx):
                 },
                 "test_mode": bool(ctx.shared_cfg.get("test_mode", False)),
             }
+            if ctl["test_mode"]:
+                tlat, tlon, tsrc = _horizon.test_site(fresh)
+                ctl["site"].update(latitude_deg=tlat, longitude_deg=tlon,
+                                   source=f"test mode ({tsrc})")
             try:
                 from diofinder import clock_info as _ci
                 ctl["clock"] = _ci.current()
