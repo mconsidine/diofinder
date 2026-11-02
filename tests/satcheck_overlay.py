@@ -33,6 +33,15 @@ Outputs (in --out, default ``<archive>_sats/``):
     obtained, and its fit residual.
   * ``chart_<n>.png`` (``--chart``): the notebook's sky chart per query group,
     with the real frame outline instead of a circle.
+  * ``stack_<n>_moving.png`` / ``stack_<n>.png`` (``--stack``): each query
+    group's frames aligned on its middle frame (through the fitted mappings,
+    so stars line up despite the drift) and stacked. ``_moving`` is the
+    brightest value at each pixel minus the median, so only what changed
+    remains: a satellite becomes a dashed line, one dash per exposure. Each
+    predicted pass is drawn as rails along its whole track, and each frame's
+    predicted dash sits just outside them, so the real dashes can be checked
+    against where and when they were predicted. The plain one keeps the
+    stars. ``--window 600`` stacks ten-minute stretches.
   * ``satchecker_responses.json``: every SatChecker response. Re-runs read it
     (``--responses FILE``) so you can re-plot offline without new queries.
 
@@ -78,7 +87,9 @@ RAIL_PX = 9               # half-gap between the two rails marking a prediction
 # --------------------------------------------------------------------------- #
 
 def jd_to_utc(jd):
-    return datetime.fromtimestamp((jd - 2440587.5) * 86400.0, tz=timezone.utc)
+    # Round to the millisecond: JD floats carry ~10 us of round-off, which
+    # otherwise prints 02:00:00.000 as 01:59:59.999.
+    return datetime.fromtimestamp(round((jd - 2440587.5) * 86400.0, 3), tz=timezone.utc)
 
 
 def utc_str(jd):
@@ -170,9 +181,28 @@ def roll_wcs(rec, width, height, flip_roll=False):
     return w
 
 
+def interp_wcs(wa, wb, f):
+    """WCS a fraction f of the way from wa to wb (same frame size). Both are
+    fitted with the tangent point at the frame centre, so interpolating the
+    tangent point (on the sphere) and the CD matrix is a good model of the
+    field drifting/rotating between two nearby frames."""
+    from astropy.wcs import WCS
+    va, vb = _vec(*wa.wcs.crval), _vec(*wb.wcs.crval)
+    v = (1 - f) * va + f * vb
+    v /= np.linalg.norm(v)
+    w = WCS(naxis=2)
+    w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    w.wcs.crval = [math.degrees(math.atan2(v[1], v[0])) % 360.0,
+                   math.degrees(math.asin(v[2]))]
+    w.wcs.crpix = (1 - f) * np.asarray(wa.wcs.crpix) + f * np.asarray(wb.wcs.crpix)
+    w.wcs.cd = (1 - f) * wa.wcs.cd + f * wb.wcs.cd
+    return w
+
+
 def assign_wcs(frames, width, height, flip_roll=False):
-    """Per frame: (wcs, source, rms_px). Source is 'fit', 'borrowed:<file>',
-    'approx' or None."""
+    """Per frame: (wcs, source, rms_px). Source is 'fit',
+    'interp:<a>+<b>' (unsolved, between two solved frames), 'borrowed:<file>'
+    (unsolved, nearest solved frame on one side), 'approx' or None."""
     fits = {}
     for i, r in enumerate(frames):
         f = fit_frame_wcs(r.get("matched"), width, height)
@@ -185,6 +215,7 @@ def assign_wcs(frames, width, height, flip_roll=False):
             out.append((fits[i][0], "fit", fits[i][1]))
             continue
         best = None
+        before = after = None
         if times[i] is not None:
             for j in fits:
                 if times[j] is None:
@@ -192,6 +223,21 @@ def assign_wcs(frames, width, height, flip_roll=False):
                 dt = abs(times[j] - times[i]) * 86400.0
                 if dt <= BORROW_S and (best is None or dt < best[0]):
                     best = (dt, j)
+                if dt <= BORROW_S and times[j] < times[i] and (
+                        before is None or times[j] > times[before]):
+                    before = j
+                if dt <= BORROW_S and times[j] > times[i] and (
+                        after is None or times[j] < times[after]):
+                    after = j
+        if before is not None and after is not None:
+            # Solved frames on both sides: interpolate in time, which follows
+            # the field's drift on a non-tracking mount (borrowing one side
+            # would be off by the drift since that frame).
+            f = (times[i] - times[before]) / (times[after] - times[before])
+            w = interp_wcs(fits[before][0], fits[after][0], f)
+            out.append((w, f"interp:{frames[before]['file']}+{frames[after]['file']}",
+                        max(fits[before][1], fits[after][1])))
+            continue
         if best is not None:
             j = best[1]
             out.append((fits[j][0], f"borrowed:{frames[j]['file']}", fits[j][1]))
@@ -560,6 +606,164 @@ def draw_chart(g, frames, res, path):
     plt.close(fig)
 
 
+# --------------------------------------------------------------------------- #
+# Stacked composite (one image per query group)
+# --------------------------------------------------------------------------- #
+
+STACK_MEDIAN_FRAMES = 30   # frames sampled for the median (background) stack
+
+
+def _poly_terms(x, y, width, height):
+    u, v = x / width, y / height
+    return np.stack([np.ones_like(u), u, v, u * u, u * v, v * v], -1)
+
+
+def ref_to_frame_map(w_ref, w_i, width, height, grid=9):
+    """Quadratic map from reference-frame pixels to frame-i pixels, fitted
+    through the sky on a grid (both mappings are TAN; the quadratic absorbs
+    the small difference between their tangent points). Returns (cx, cy)."""
+    gx, gy = np.meshgrid(np.linspace(0, width - 1, grid), np.linspace(0, height - 1, grid))
+    gx, gy = gx.ravel(), gy.ravel()
+    ra, dec = w_ref.pixel_to_world_values(gx, gy)
+    x, y = w_i.world_to_pixel_values(ra, dec)
+    A = _poly_terms(gx, gy, width, height)
+    cx, *_ = np.linalg.lstsq(A, x, rcond=None)
+    cy, *_ = np.linalg.lstsq(A, y, rcond=None)
+    return cx, cy
+
+
+def warp_to_ref(img, cx, cy, terms):
+    """Resample frame i onto the reference grid (nearest neighbour). `terms`
+    is _poly_terms over the whole reference grid. Returns (warped, valid)."""
+    h, w = img.shape
+    xi = np.rint(terms @ cx).astype(np.int64)
+    yi = np.rint(terms @ cy).astype(np.int64)
+    valid = (xi >= 0) & (xi < w) & (yi >= 0) & (yi < h)
+    out = np.zeros(xi.shape, np.float32)
+    out[valid] = img[yi[valid], xi[valid]]
+    return out, valid
+
+
+def stack_group(zf, g, res, include=("fit", "interp")):
+    """Align a query group's frames onto its middle frame and stack them.
+    Returns None if fewer than two frames have a usable mapping, else a dict:
+    max (brightest value per pixel), median (the steady sky), moving
+    (max - median: what changed, i.e. satellites/planes/meteors), the
+    reference result, and the member results."""
+    width, height = res["size"]
+    by_i = {r["i"]: r for r in res["results"]}
+    members = [by_i[i] for i in g["idx"]
+               if by_i[i]["wcs"] is not None
+               and str(by_i[i]["wcs_source"]).split(":")[0] in include]
+    if len(members) < 2:
+        return None
+    ref = members[len(members) // 2]
+    yy, xx = np.mgrid[0:height, 0:width]
+    terms = _poly_terms(xx.ravel().astype(float), yy.ravel().astype(float), width, height)
+    step = max(1, len(members) // STACK_MEDIAN_FRAMES)
+    mx = np.full(height * width, -1.0, np.float32)
+    cover = np.zeros(height * width, np.int32)
+    med_rows = []
+    for k, r in enumerate(members):
+        img = _load_frame(zf, r["rec"]["file"]).astype(np.float32)
+        cx, cy = ref_to_frame_map(ref["wcs"], r["wcs"], width, height)
+        warped, valid = warp_to_ref(img, cx, cy, terms)
+        np.maximum(mx, np.where(valid, warped, -1.0), out=mx)
+        cover += valid
+        if k % step == 0:
+            med_rows.append(np.where(valid, warped, np.nan))
+    med = np.nanmedian(np.stack(med_rows), axis=0) if len(med_rows) > 1 else mx.copy()
+    med = np.nan_to_num(med, nan=0.0)
+    mx = np.where(cover > 0, mx, 0.0)
+    moving = np.where(cover >= 2, np.clip(mx - med, 0, None), 0.0)
+    shape = (height, width)
+    return {"max": mx.reshape(shape), "median": med.reshape(shape),
+            "moving": moving.reshape(shape), "ref": ref, "members": members}
+
+
+def _track_ref_px(w_ref, track):
+    x, y = w_ref.world_to_pixel_values(np.array([p[1] for p in track]),
+                                       np.array([p[2] for p in track]))
+    return np.column_stack([x, y])
+
+
+def stack_scores(st, g, res):
+    """Per satellite: brightness along its whole predicted pass in the moving
+    image (sigmas). {name: score or None}."""
+    width, height = res["size"]
+    out = {}
+    for name, track in g["tracks"].items():
+        pts = _track_ref_px(st["ref"]["wcs"], track)
+        inside = [p for p in pts if 0 <= p[0] < width and 0 <= p[1] < height]
+        out[name] = (line_score(st["moving"], inside[0], inside[-1], extend=0.0)
+                     if len(inside) >= 2 else None)
+    return out
+
+
+def draw_stack(st, g, res, path, which="moving", scores=None):
+    """The stacked composite with every predicted pass as two rails along its
+    whole track, and each frame's predicted dash drawn just outside the rails
+    (so the real dashes, between the rails, can be compared with where and
+    when they were predicted)."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    width, height = res["size"]
+    img = st[which]
+    if which == "moving":
+        top = float(np.percentile(img[img > 0], 99.9)) if np.any(img > 0) else 1.0
+        disp = np.sqrt(np.clip(img / (top or 1.0), 0, 1))
+    else:
+        disp = stretch(img)
+    fig = plt.figure(figsize=(width / 80, height / 80 + 0.6), dpi=100)
+    ax = fig.add_axes([0, 0, 1, height / (height + 48)])
+    ax.imshow(disp, cmap="gray", origin="upper", interpolation="nearest")
+    ax.set_xlim(-0.5, width - 0.5)
+    ax.set_ylim(height - 0.5, -0.5)
+    ax.axis("off")
+    colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    w_ref = st["ref"]["wcs"]
+    for k, (name, track) in enumerate(g["tracks"].items()):
+        c = colors[k % len(colors)]
+        pts = _track_ref_px(w_ref, track)
+        inside = (pts[:, 0] > -50) & (pts[:, 0] < width + 50) & \
+                 (pts[:, 1] > -50) & (pts[:, 1] < height + 50)
+        if inside.sum() < 2:
+            continue
+        p = pts[inside]
+        d = np.gradient(p, axis=0)
+        nrm = np.column_stack([-d[:, 1], d[:, 0]])
+        nrm /= np.maximum(np.hypot(nrm[:, 0], nrm[:, 1]), 1e-9)[:, None]
+        for sgn in (1, -1):
+            q = p + sgn * RAIL_PX * nrm
+            ax.plot(q[:, 0], q[:, 1], "-", color=c, lw=1.0)
+        # Each frame's predicted dash, offset just outside one rail.
+        n0 = nrm[len(nrm) // 2] * (RAIL_PX + 6)
+        for r in st["members"]:
+            s0, s1 = interp_track(track, r["jd"][0]), interp_track(track, r["jd"][1])
+            if s0 and s1:
+                (x0, x1), (y0, y1) = w_ref.world_to_pixel_values(
+                    np.array([s0[0], s1[0]]), np.array([s0[1], s1[1]]))
+                ax.plot([x0 + n0[0], x1 + n0[0]], [y0 + n0[1], y1 + n0[1]],
+                        "-", color=c, lw=2.0, alpha=0.8)
+        lbl = name
+        if scores and scores.get(name) is not None:
+            lbl += f"  ({scores[name]:.0f}σ)"
+        ax.annotate(lbl, tuple(p[0]), color=c, fontsize=8, xytext=(8, -12),
+                    textcoords="offset points",
+                    bbox=dict(boxstyle="round,pad=0.2", fc="black", ec=c, alpha=0.7))
+    jd0, jd1 = st["members"][0]["jd"][0], st["members"][-1]["jd"][1]
+    kind = ("moving = brightest minus median, i.e. only what changed"
+            if which == "moving" else "brightest value per pixel")
+    fig.text(0.01, 1 - 0.3 * 48 / (height + 48),
+             f"{len(st['members'])} frames stacked on {st['ref']['rec']['file']}   "
+             f"{utc_str(jd0)} – {jd_to_utc(jd1).strftime('%H:%M:%S')} UTC   "
+             f"({kind}; rails = predicted pass, outside dashes = predicted "
+             f"position each exposure)", fontsize=8, va="top")
+    fig.savefig(path, dpi=100, facecolor="white")
+    plt.close(fig)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("archive")
@@ -574,6 +778,10 @@ def main(argv=None):
     ap.add_argument("--all-frames", action="store_true",
                     help="draw every frame, not just those with a satellite in it")
     ap.add_argument("--chart", action="store_true", help="also draw sky charts")
+    ap.add_argument("--stack", action="store_true",
+                    help="also align and stack each query group's frames into one "
+                         "composite (satellites become dashed lines); use a larger "
+                         "--window (e.g. 600) to stack a longer stretch")
     ap.add_argument("--sat-frame", choices=("icrs", "jnow"), default="icrs")
     ap.add_argument("--flip-roll", action="store_true",
                     help="approx WCS only: use -roll (convention check)")
@@ -628,6 +836,22 @@ def main(argv=None):
     if a.chart:
         for gi, g in enumerate(res["groups"]):
             draw_chart(g, res["frames"], res, os.path.join(out, f"chart_{gi + 1}.png"))
+    if a.stack:
+        with zipfile.ZipFile(a.archive) as zf:
+            for gi, g in enumerate(res["groups"]):
+                st = stack_group(zf, g, res)
+                if st is None:
+                    print(f"stack {gi + 1}: fewer than two frames with a fitted "
+                          f"mapping; skipped")
+                    continue
+                sc = stack_scores(st, g, res)
+                for which, suffix in (("moving", "_moving"), ("max", "")):
+                    draw_stack(st, g, res, os.path.join(out, f"stack_{gi + 1}{suffix}.png"),
+                               which, sc)
+                ranked = sorted(((v, k) for k, v in sc.items() if v is not None), reverse=True)
+                print(f"stack {gi + 1}: {len(st['members'])} frames; "
+                      + (", ".join(f"{k} {v:.0f}\u03c3" for v, k in ranked[:8])
+                         or "no predicted pass crosses the frame"))
 
     hits = [(r["rec"]["file"], s) for r in res["results"] for s in r["sats"]
             if s.get("in_frame")]

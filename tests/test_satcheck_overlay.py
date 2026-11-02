@@ -156,11 +156,19 @@ def test_overlay_lands_on_the_real_streak(tmp_path, mirrored):
     assert sats["STARLINK-1234 (45000)"]["score"] > 5 * max(1.0, sats["DECOY (1)"]["score"])
 
 
-def test_unsolved_frame_borrows_the_neighbours_wcs(tmp_path):
-    z, w = make_capture(tmp_path, unsolved=(2,))
+def test_unsolved_frame_gets_its_neighbours_wcs(tmp_path):
+    # Between two solved frames: interpolated; at the end: borrowed.
+    z, w = make_capture(tmp_path, unsolved=(2, 3), n_frames=4)
+    res = so.analyse(z, fetch=lambda p: fake_response(w), sleep_s=0)
+    src = {r["rec"]["seq"]: r["wcs_source"] for r in res["results"]}
+    assert src[2].startswith("interp:frame_000001.png+frame_000004.png")
+    z2, _ = make_capture(tmp_path / "b", unsolved=(3,))
+    res = so.analyse(z2, fetch=lambda p: fake_response(w), sleep_s=0)
+    r3 = [r for r in res["results"] if r["rec"]["seq"] == 3][0]
+    assert r3["wcs_source"] == "borrowed:frame_000002.png"
+    z, w = make_capture(tmp_path / "c", unsolved=(2,))
     res = so.analyse(z, fetch=lambda p: fake_response(w), sleep_s=0)
     r2 = [r for r in res["results"] if r["rec"]["seq"] == 2][0]
-    assert r2["wcs_source"].startswith("borrowed:frame_00000")
     seg = {s["satellite"]: s for s in r2["sats"]}["STARLINK-1234 (45000)"]["seg_px"]
     assert abs(seg[0][0] - 150) < 0.5
 
@@ -214,3 +222,124 @@ def test_cli_writes_images_report_and_reuses_cached_responses(tmp_path, monkeypa
     rows = (out / "report.csv").read_text().splitlines()
     hit = [r for r in rows if r.startswith("frame_000002.png") and "STARLINK" in r]
     assert hit and ",True," in hit[0]
+
+
+# ---- stacked composite (--stack) -------------------------------------------
+
+DRIFT_DEG = 0.08                     # field drift per frame (~6 px), exaggerated
+N_DRIFT = 6
+
+
+def wcs_at(k, mirrored=False):
+    """True mapping of frame k (1-based): the pointing drifts in RA and the
+    field rotates slightly, as on a non-tracking mount (sped up)."""
+    w = true_wcs(mirrored, rot_deg=23.0 + 0.05 * (k - 1))
+    w.wcs.crval = [RA0 + DRIFT_DEG * (k - 1), DEC0]
+    return w
+
+
+def make_drift_capture(tmp_path, unsolved=()):
+    """Frames 1..N_DRIFT with fixed stars on the sky (so they move in pixels)
+    and one satellite on a fixed sky path leaving a dash in every exposure.
+    Returns (zip path, satellite track as SatChecker positions)."""
+    rng = np.random.default_rng(5)
+    w1 = wcs_at(1)
+    sra, sdec = w1.pixel_to_world_values(rng.uniform(60, W - 60, 40),
+                                         rng.uniform(60, H - 60, 40))
+    # Satellite: a straight pixel path in frame 1's sky over the whole capture.
+    t_end = T0 + (N_DRIFT - 1) * 2.0 + EXP
+    track = sat_track(w1, 120, 600, 820, 140, T0, t_end, n=61)
+    scfg = {}
+    rec = lc.LiveRecorder(scfg, types.SimpleNamespace(
+        frame_width=W, frame_height=H, fov_deg=13.54, version="t",
+        live_capture_max_mb=4000, live_capture_min_free_mb=0),
+        directory=str(tmp_path), queue_max=64, clock=lambda: T0)
+    rec.sync({"on": True, "id": "20260724T022854Z",
+              "site": {"latitude_deg": 43.95, "longitude_deg": -72.667, "elevation_m": 330.0}})
+    ring = ()
+    for k in range(1, N_DRIFT + 1):
+        wk = wcs_at(k)
+        img = rng.normal(20, 2, (H, W)).clip(0, 255)
+        sx, sy = wk.world_to_pixel_values(sra, sdec)
+        for x, y in zip(sx, sy):
+            if 1 <= x < W - 1 and 1 <= y < H - 1:
+                img[int(round(y)) - 1:int(round(y)) + 2, int(round(x)) - 1:int(round(x)) + 2] = 200
+        t_start = T0 + (k - 1) * 2.0
+        p0 = so.interp_track([(q["julian_date"], q["ra"], q["dec"]) for q in track], jd(t_start))
+        p1 = so.interp_track([(q["julian_date"], q["ra"], q["dec"]) for q in track], jd(t_start + EXP))
+        (x0, x1), (y0, y1) = wk.world_to_pixel_values(np.array([p0[0], p1[0]]),
+                                                      np.array([p0[1], p1[1]]))
+        for t in np.linspace(0, 1, 400):
+            xi, yi = int(round(x0 + (x1 - x0) * t)), int(round(y0 + (y1 - y0) * t))
+            if 0 <= xi < W and 0 <= yi < H:
+                img[yi, xi] = 90
+        ring = fm.push(ring, (k, int((t_start + EXP) * 1e9), int(EXP * 1e6), 4.0, 0))
+        rec.offer_frame(img.astype(np.uint8), k, ring)
+        if k in unsolved:
+            rec.note_solution({"solved": False, "seq": k})
+            continue
+        ok = (sx > 0) & (sx < W) & (sy > 0) & (sy < H)
+        rec.note_matches(k, [(y + 0.5, x + 0.5) for x, y in zip(sx[ok], sy[ok])],
+                         [(r, d, 5.0) for r, d in zip(sra[ok], sdec[ok])])
+        c = wk.pixel_to_world_values((W - 1) / 2, (H - 1) / 2)
+        rec.note_solution({"solved": True, "seq": k, "center_ra_deg": float(c[0]),
+                           "center_dec_deg": float(c[1]), "roll_deg": 23.0,
+                           "fov_deg": 13.54})
+    rec.sync({})
+    z = tmp_path / "livecap_20260724T022854Z.zip"
+    import time
+    t = time.monotonic() + 20
+    while not z.exists() and time.monotonic() < t:
+        time.sleep(0.05)
+    assert z.exists()
+    decoy = sat_track(w1, 820, 600, 120, 140, T0, t_end, n=61)
+    return str(z), {"data": {"satellites": {"STARLINK-1234 (45000)": {"positions": track},
+                                            "DECOY (1)": {"positions": decoy}}}}, sra, sdec
+
+
+def test_stack_aligns_stars_and_turns_the_pass_into_dashes(tmp_path):
+    z, resp, sra, sdec = make_drift_capture(tmp_path, unsolved=(3,))
+    res = so.analyse(z, fetch=lambda p: resp, sleep_s=0)
+    assert len(res["groups"]) == 1
+    # Frame 3 didn't solve: its mapping is interpolated from frames 2 and 4.
+    r3 = [r for r in res["results"] if r["rec"]["seq"] == 3][0]
+    assert r3["wcs_source"].startswith("interp:")
+    tx, ty = wcs_at(3).world_to_pixel_values(sra[:5], sdec[:5])
+    ix, iy = r3["wcs"].world_to_pixel_values(sra[:5], sdec[:5])
+    assert np.allclose(tx, ix, atol=0.3) and np.allclose(ty, iy, atol=0.3)
+    with zipfile.ZipFile(z) as zf:
+        st = so.stack_group(zf, res["groups"][0], res)
+    assert len(st["members"]) == N_DRIFT
+    # Stars are fixed on the sky: aligned through the mappings they land on
+    # the same reference pixel in every frame, so they vanish from `moving`
+    # even though they moved ~30 px across the capture.
+    w_ref = st["ref"]["wcs"]
+    sx, sy = w_ref.world_to_pixel_values(sra, sdec)
+    ok = (sx > 5) & (sx < W - 5) & (sy > 5) & (sy < H - 5)
+    star_px = [(int(round(y)), int(round(x))) for x, y in zip(sx[ok], sy[ok])]
+    assert np.mean([st["max"][p] for p in star_px]) > 150        # stacked, sharp
+    assert np.mean([st["moving"][p] for p in star_px]) < 15       # and steady
+    # The satellite leaves one dash per exposure, between its rails.
+    sc = so.stack_scores(st, res["groups"][0], res)
+    assert sc["STARLINK-1234 (45000)"] > 10 * max(1.0, sc["DECOY (1)"])
+    track = [(q["julian_date"], q["ra"], q["dec"])
+             for q in resp["data"]["satellites"]["STARLINK-1234 (45000)"]["positions"]]
+    for k in range(1, N_DRIFT + 1):
+        mid = so.interp_track(track, jd(T0 + (k - 1) * 2.0 + EXP / 2))
+        x, y = w_ref.world_to_pixel_values(mid[0], mid[1])
+        patch = st["moving"][int(y) - 2:int(y) + 3, int(x) - 2:int(x) + 3]
+        assert patch.max() > 50, f"dash {k} missing at ({x:.0f}, {y:.0f})"
+    # And the gaps between exposures stay dark.
+    gap = so.interp_track(track, jd(T0 + EXP + 0.5))
+    gx, gy = w_ref.world_to_pixel_values(gap[0], gap[1])
+    assert st["moving"][int(gy) - 1:int(gy) + 2, int(gx) - 1:int(gx) + 2].max() < 30
+
+
+def test_cli_stack_writes_composites(tmp_path):
+    z, resp, *_ = make_drift_capture(tmp_path)
+    res = so.analyse(z, fetch=lambda p: resp, sleep_s=0)
+    cache = tmp_path / "cache.json"
+    cache.write_text(json.dumps(res["responses"]))
+    out = tmp_path / "out"
+    so.main([z, "--out", str(out), "--responses", str(cache), "--offline", "--stack"])
+    assert {"stack_1.png", "stack_1_moving.png"} <= set(os.listdir(out))

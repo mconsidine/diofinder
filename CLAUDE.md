@@ -1176,7 +1176,9 @@ POST) archives; names must match `livecap_<YYYYMMDDTHHMMSSZ>.zip` exactly.
 * **Offline:** `tests/satcheck_archive.py ARCHIVE.zip [--dry-run] [--group N]`
   (stdlib) lists SatChecker `/fov/satellite-passes/` hits per frame.
   `tests/satcheck_overlay.py ARCHIVE.zip` draws each predicted streak onto the
-  frame itself via the fitted WCS, scores it and writes `report.csv`. The
+  frame itself via the fitted WCS, scores it and writes `report.csv`;
+  `--stack` aligns and stacks each query group (brightest minus median), so a
+  pass shows as dashes between its rails. The
   response structure is `data.satellites[name].positions[{ra, dec,
   julian_date}]`.
 * Tests: `tests/test_live_capture.py` (recorder end-to-end on a temp dir,
