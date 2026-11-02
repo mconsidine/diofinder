@@ -456,6 +456,7 @@ class Config:
     live_capture_dir: str = "/var/lib/diofinder/live_captures"
     live_capture_max_mb: float = 4000.0
     live_capture_min_free_mb: float = 1000.0
+    live_capture_max_minutes: float = 60.0   # auto-stop after this long; 0 = no limit
 
     # -------- Shutdown --------
     shutdown_grace_s: float = 2.0

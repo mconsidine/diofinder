@@ -30,7 +30,7 @@
        centre RA/Dec into a timestamped zip (e.g. to identify satellites). #}
     <p style="margin:8px 0 0;">
       <button type="button" class="btn" id="livecap-btn" onclick="livecapToggle()">Start live capture</button>
-      {{ tip("Records every frame the finder processes (raw PNG) with its UTC exposure time and the solved RA/Dec of the frame centre. Press again to stop: the recording is saved as <b>livecap_&lt;UTC start&gt;.zip</b>, ready to download from <b>Utilities &rarr; Live captures</b>. Useful for identifying satellites crossing the field. About 200&nbsp;KB per frame; it stops by itself at the size limit or if the card gets nearly full.") }}
+      {{ tip("Records every frame the finder processes (raw PNG) with its UTC exposure time and the solved RA/Dec of the frame centre. Press again to stop: the recording is saved as <b>livecap_&lt;UTC start&gt;.zip</b>, ready to download from <b>Utilities &rarr; Live captures</b>. Useful for identifying satellites crossing the field. About 200&nbsp;KB per frame; it stops by itself after an hour (Config: live capture time limit), at the size limit, or if the card gets nearly full.") }}
       <span id="livecap-status" class="hint" style="margin-left:6px;"></span>
     </p>
     <p id="livecap-warn" class="hint" style="margin:4px 0 0;color:#c93;display:none;"></p>

@@ -371,3 +371,53 @@ def test_matched_stars_ride_with_their_own_frame_only(tmp_path):
     assert recs[0]["matched"] == [[20.5, 10.5, 100.0, 20.0, 3.1], [40.0, 30.0, 101.0, 21.0, 4.2]]
     assert "matched" not in recs[1]
     assert sess["camera"]["matched_columns"] == ["x", "y", "ra_deg", "dec_deg", "mag"]
+
+
+# ---- clock source + time limit ---------------------------------------------
+
+def test_clock_info_records_and_summarizes(tmp_path):
+    from diofinder import clock_info as ci
+    state, flag = str(tmp_path / "clock.json"), str(tmp_path / "synchronized")
+    c = ci.current(state, flag)
+    assert not c["ntp_synchronized"] and c["last_skysafari"] is None
+    assert c["summary"].startswith("unknown")
+    ci.record_sync("skysafari", "checked", 6.4, path=state)
+    c = ci.current(state, flag)
+    assert c["last_skysafari"]["action"] == "checked" and c["last_skysafari"]["drift_s"] == 6.4
+    assert "SkySafari, checked" in c["summary"] and "6 s off" in c["summary"]
+    open(flag, "w").close()
+    assert ci.current(state, flag)["summary"] == "network time (synchronized)"
+
+
+def test_session_json_carries_the_clock_source(tmp_path):
+    scfg = {}
+    rec = lc.LiveRecorder(scfg, _cfg(), directory=str(tmp_path), queue_max=64)
+    ctl = dict(_ctl(), clock={"ntp_synchronized": False, "summary": "SkySafari, set"})
+    rec.sync(ctl)
+    _record(rec, scfg, 1)
+    rec.sync({})
+    z = tmp_path / "livecap_20261102T013045Z.zip"
+    assert _wait(z.exists)
+    with zipfile.ZipFile(z) as zf:
+        assert json.loads(zf.read("session.json"))["clock"]["summary"] == "SkySafari, set"
+
+
+def test_time_limit_stops_a_forgotten_capture(tmp_path):
+    t = [1000.0]
+    scfg = {}
+    rec = lc.LiveRecorder(scfg, _cfg(live_capture_max_minutes=1.0), directory=str(tmp_path),
+                          queue_max=64, clock=lambda: t[0])
+    rec.sync(_ctl())
+    _record(rec, scfg, 2)                     # recorded within the limit
+    t[0] = 1000.0 + 61.0                      # a minute later, no more frames
+    z = tmp_path / "livecap_20261102T013045Z.zip"
+    assert _wait(z.exists)                    # writer noticed on its own
+    assert "time limit (1 min)" in scfg["live_capture_status"]["stop_reason"]
+    assert not rec.active
+
+
+def test_zero_minutes_means_no_time_limit(tmp_path):
+    rec = lc.LiveRecorder({}, _cfg(live_capture_max_minutes=0), directory=str(tmp_path),
+                          clock=lambda: 1e12)
+    rec._started_unix = 0.0
+    assert not rec._over_time()

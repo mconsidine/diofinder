@@ -304,6 +304,9 @@ log_solve_stats_every_n: 50
 live_capture_dir: /var/lib/diofinder/live_captures
 live_capture_max_mb: 4000
 live_capture_min_free_mb: 1000
+# Stop by itself after this many minutes, so a forgotten capture doesn't run
+# on to the size cap. 0 = no time limit.
+live_capture_max_minutes: 60
 
 # ---- Centroid extractor backend ----
 # "sycamore" (default: matched filter + temporal cache + hot-pixel) or

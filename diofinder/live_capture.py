@@ -245,6 +245,7 @@ class LiveRecorder:
         self._matches = None         # (seq, rows) from note_matches
         self.max_mb = float(getattr(cfg, "live_capture_max_mb", 4000.0))
         self.min_free_mb = float(getattr(cfg, "live_capture_min_free_mb", 1000.0))
+        self.max_minutes = float(getattr(cfg, "live_capture_max_minutes", 60.0))
 
     # ---- solver-loop side (cheap) -----------------------------------------
     def start_thread(self):
@@ -426,6 +427,8 @@ class LiveRecorder:
                 # While recording, notice a stop even when no frames arrive
                 # (dark frames skip the solver path that calls sync()).
                 now = time.monotonic()
+                if self.active and self._over_time():
+                    self._request_stop(f"time limit ({self.max_minutes:g} min) reached")
                 if self.active and now - last_poll >= _CONTROL_POLL_S:
                     last_poll = now
                     try:
@@ -439,6 +442,12 @@ class LiveRecorder:
             except Exception as e:      # never let the writer die
                 log.warning("live capture writer error: %s", e)
                 self._error = str(e)
+
+    def _over_time(self):
+        """True once a time limit is set (> 0) and the session has run it out,
+        so a forgotten capture doesn't run on until the size cap."""
+        return (self.max_minutes > 0 and self._started_unix is not None
+                and self._clock() - self._started_unix >= self.max_minutes * 60.0)
 
     def _write_frame(self, sid, pending, sol, last_solved=None):
         from PIL import Image
@@ -467,6 +476,8 @@ class LiveRecorder:
         self._bytes += size
         if self._bytes / 1e6 >= self.max_mb:
             self._request_stop(f"size limit ({self.max_mb:.0f} MB) reached")
+        elif self._over_time():
+            self._request_stop(f"time limit ({self.max_minutes:g} min) reached")
         else:
             fm = free_mb(self.directory)
             if fm is not None and fm < self.min_free_mb:
@@ -512,6 +523,9 @@ class LiveRecorder:
                               "start (rolling shutter: later rows are later); "
                               "only as accurate as the Pi clock",
             "clock_plausible": plausible,
+            # Where the time came from when recording started (network time or
+            # SkySafari's sync, which only corrects errors over 10 s).
+            "clock": ctl.get("clock"),
             "test_mode": bool(ctl.get("test_mode", False)),
             "version": getattr(self._cfg, "version", None),
         }

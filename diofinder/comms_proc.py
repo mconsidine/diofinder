@@ -1768,6 +1768,8 @@ def _sync_clock(sl, sg, sc):
         diff_s   = abs((utc_dt - now_utc).total_seconds())
         if diff_s < 10:
             log.debug("Clock already accurate (drift %.0fs); skipping", diff_s)
+            from diofinder import clock_info as _ci
+            _ci.record_sync("skysafari", "checked", diff_s)
             return
         log.info("Clock drift %.0fs — syncing from SkySafari: %s UTC",
                  diff_s, time_str)
@@ -1777,6 +1779,8 @@ def _sync_clock(sl, sg, sc):
         )
         if result.returncode == 0:
             log.info("Clock synced to %s UTC", time_str)
+            from diofinder import clock_info as _ci
+            _ci.record_sync("skysafari", "set", diff_s, utc_set=time_str)
         else:
             log.warning("Clock sync failed (rc=%d): %s",
                         result.returncode, result.stderr.strip())
@@ -2069,6 +2073,11 @@ def _live_capture_cmd(cmd, ctx):
                 },
                 "test_mode": bool(ctx.shared_cfg.get("test_mode", False)),
             }
+            try:
+                from diofinder import clock_info as _ci
+                ctl["clock"] = _ci.current()
+            except Exception:
+                pass
             ctx.shared_cfg["live_capture"] = ctl
             log.info("Live capture requested: %s", ctl["id"])
     elif cmd == "live_capture_stop":

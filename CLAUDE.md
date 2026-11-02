@@ -1164,7 +1164,10 @@ POST) archives; names must match `livecap_<YYYYMMDDTHHMMSSZ>.zip` exactly.
   recorded; they skip the solver path.
 * **Archive:** `session.json` (format `diofinder-livecap/1`, observer
   lat/lon (East+)/elevation, FOV width + half-diagonal radius, start/end,
-  frames/dropped/stop reason, `clock_plausible`, `test_mode`),
+  frames/dropped/stop reason, `clock_plausible`, `clock` = where the time came
+  from (`diofinder/clock_info.py`: network time synchronized, or the last
+  SkySafari check/set with its drift, from `/var/lib/diofinder/clock_sync.json`;
+  SkySafari only corrects errors over 10 s), `test_mode`),
   `frames.jsonl` (one record per frame: seq, sensor `exposure_start_utc` /
   `exposure_mid_utc` / `jd_start` / `jd_mid` / `exposure_s` / gain (from
   frame_meta; `time_source: handover` fallback when missing),
@@ -1181,8 +1184,8 @@ POST) archives; names must match `livecap_<YYYYMMDDTHHMMSSZ>.zip` exactly.
   stop zips it STORED file by file (deleting each source, so peak extra disk use
   is one frame) via `.zip.tmp` then rename. `recover_partials` zips any
   leftover `.partial` at solver start (crash / power cut). It stops by itself at
-  `live_capture_max_mb` (4000) or when free disk falls below
-  `live_capture_min_free_mb` (1000). That stop comes from the writer thread
+  `live_capture_max_mb` (4000), after `live_capture_max_minutes` (60; 0 = no
+  limit), or when free disk falls below `live_capture_min_free_mb` (1000). That stop comes from the writer thread
   through a flag, never a blocking put on its own queue. A session id is never
   restarted, and a new start is refused while the previous one is still
   zipping. comms warns when the clock is implausible (no RTC) or the site is

@@ -1823,6 +1823,7 @@ _CONFIG_SECTIONS = [
         ("log_solve_stats_every_n","Log stats every N",  "Print solve performance stats every N solves."),
         ("live_capture_max_mb",     "Live capture max (MB)",  "A live capture stops by itself at this size. Restart to change."),
         ("live_capture_min_free_mb","Live capture free floor (MB)", "A live capture stops when free disk falls below this. Restart to change."),
+        ("live_capture_max_minutes","Live capture time limit (min)", "A live capture stops by itself after this long; 0 = no limit. Restart to change."),
     ]),
     ("Shutdown", [
         ("shutdown_grace_s", "Grace period (s)", "Seconds between SIGTERM and SIGKILL."),
