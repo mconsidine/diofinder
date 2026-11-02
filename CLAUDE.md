@@ -18,7 +18,7 @@
 
 ```
 diofinder_main.py (launcher, CPU 0)
-  │── imu_thread (daemon, in-process) — BNO055 quaternion reader at 20 Hz
+  │── imu_thread (daemon, in-process) — BNO055 quaternion reader at 10 Hz (`imu_poll_hz`)
   │
   ├── camera_proc   (CPU 3)          — captures frames → shared memory
   ├── solver_proc   (CPUs 1+2+3)     — extracts stars, plate-solves
@@ -32,7 +32,7 @@ comms/webui share CPU 0 with the kernel (both are I/O-bound; kernel+IRQ load
 is far below one core), freeing CPU 1 as a third solver core. CPU affinity is set with `os.sched_setaffinity`.
 
 See `docs/imu.md` for a rendered flowchart of how the BNO055 feeds
-position/motion info (the 20 Hz reader, the solve-hint / slew-detection /
+position/motion info (the IMU reader, the solve-hint / slew-detection /
 LX200-pointing consumers, and the calibration loop).
 
 ### Inter-process communication
@@ -113,7 +113,7 @@ should also TTL-cache their settings reads rather than `.get()` per sample.
 | `star_name_whole_fov` | bool | comms (via maint `solver_params_set`) | solver (centered-star naming — brightest anywhere in the frame vs within `star_name_radius_deg` of boresight; implies brightest mode; an align anchor when boresight is off) |
 | `star_name_dso` | bool | comms (via maint `solver_params_set`) | solver (centered-**object** label — names the Messier DSO the aim point is on, from `messier.csv`; sets separate `dso_*` solution fields; display only) |
 | `imu_available` | bool | imu_thread | comms, webui |
-| `imu` | tuple ((w,x,y,z), t) | imu_thread | comms, solver (via `imu_math.get_imu_qt`; ONE atomic write per 20 Hz read since v0.11.24 — the split `imu_q`/`imu_t` keys are legacy-read only) |
+| `imu` | tuple ((w,x,y,z), t[, history]) | imu_thread | comms, solver (via `imu_math.get_imu_qt`; ONE atomic write per read since v0.11.24; a 3rd element, the last 2.5 s of `(t, q)` samples, only while `imu_report_smoothing` is on — the split `imu_q`/`imu_t` keys are legacy-read only) |
 | `imu_ref_q/ra/dec/roll/t` | varies | *(no longer published since v0.11.24 — readers use the `imu_ref` tuple; comms still accepts them from older solvers)* | — |
 | `imu_ref` | tuple (q, ra, dec, roll, t, sky_q) | solver (post-solve, single RPC) | comms LX200 pointing (tear-proof reference). `sky_q` (the solved attitude quaternion, v0.11.23) enables the exact frame-corrected prediction; comms still accepts 5-tuples from older solvers |
 | `solver_busy_t` | float | solver (set_db load window) | comms watchdog (skips enforcement while fresh, 120 s bound) |
@@ -427,6 +427,11 @@ and every registered poller runs once when the tab is shown again. So the live
 view (`/frame.jpg` every 1.25 s), status pollers and any future
 `setInterval` stop costing CPU 0 for background tabs; browsers only slow those
 down. One-off `setTimeout`s (debounces, the reboot-wait ping) are unaffected.
+**Off-screen cards don't poll either (v0.11.76):** `window.dioOnScreen(el)`
+(base.html, IntersectionObserver; true when unknown) gates the Home and
+Advanced live-view JPEG, the Advanced camera-state sync (5 s, was 3 s), the
+background-mode summary and the mount status (every 30 s while the link is
+off). Use it in any new poller for a card that can be scrolled away.
 
 **Info tooltips (v0.11.51).** Long explanatory prose on the settings pages is
 collapsed behind an ⓘ icon via one reusable macro: `{% from "_macros.html"
@@ -674,6 +679,12 @@ directory-ownership class of bug as the v0.11.30 fix, just scoped to these
 two files. Does not touch the star database, the code checkout, or Wi-Fi
 (NetworkManager-managed, not in this file); latitude/longitude ARE in the
 conf and do reset to 0/0.
+
+**One-shot conf migrations** (`conf_migrate.MIGRATIONS`, run by the launcher
+at start): a rule rewrites a key only while it still holds the old default,
+and carries the `conf_version` that introduced it, so a device already at v1
+gets only the v2 rules (a v1 key the user set back on purpose stays). v2
+(v0.11.76): `imu_poll_hz` 20 → 10, so OTA-updated cards get the new rate.
 
 New keys (this release):
 

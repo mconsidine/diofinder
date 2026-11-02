@@ -3,9 +3,10 @@
 Working branch: `claude/azimuth-on-0.11.74`. Items are grouped by area; each
 says why it matters. Items marked ✅ are done on the branch.
 
-**Release-candidate group (next):** IMU report smoothing behind a default-off
-switch (14), FOV drift recommits (13), restoring the clock at boot (11), and the
-test-mode location default (15).
+**Release candidate:** build #193 (IMU report smoothing behind a default-off
+switch, FOV drift recentre, clock fixes, test-mode location) plus the two
+follow-ups below (OTA IMU-rate migration, on-screen-only polling). Next: the
+on-sky A/B tests and the pruning they unlock (see "Resource assessment").
 
 ## Already on the branch (since v0.11.75)
 
@@ -103,3 +104,100 @@ test-mode location default (15).
    prediction on the same line but moving the other way is rejected. On the 2026-11-02
    capture it independently reports the trail as unidentified/flashing, 0.37°/s toward SW,
    "not STARLINK-30913: moves the opposite way".
+
+
+## Resource assessment (2026-11-02)
+
+**Web UI clutter is not a resource problem.** Pages poll only while their tab
+is visible, and (v0.11.76) only for cards on screen, so cards cost nothing
+unless looked at. The Advanced page was the most expensive page to leave open;
+it now fetches the live view, camera state, background summary and mount status
+only while each is on screen (mount: every 30 s while the link is off).
+
+**Always-on costs (all earn their keep):** SkySafari polling (largest CPU 0 load
+while connected; the readout rate is the lever), the IMU reader (10 Hz; OTA cards
+now migrate from 20), per-frame shared-state writes (frame timing, solution, IMU
+reference), the temporal background cache (100–300 ms rebuilds on the solver
+cores: the reason to test bin-at-submit), and small background loops.
+
+### Waiting on a decision (A/B or validation), then keep one and remove the other
+
+1. **Smooth crosshair** (`imu_report_smoothing`): if it wins, remove what it
+   replaces: the hold-on-fresh-solve gate, the alpha-beta rate filter, and the
+   legacy C-matrix IMU fit (still computed on every moving solve; it only serves
+   the `imu_exact_predict=false` fallback).
+2. **bg-cache bin-at-submit** (since v0.11.26): would save solver CPU and memory.
+3. **ROI tracking mode** (since v0.11.27): the most complex optional solver code;
+   run its A/B or remove it.
+4. **IMU Unit B (`imu_persist_bno055`) and Unit C (`imu_solve_cal_enabled`)**:
+   validate or remove; Unit C's chip-write mode was never implemented: remove.
+5. **`horizon_reject_enabled`**: low value (blind solves only, needs a correct clock).
+
+### Overlaps / candidates to drop
+
+- `/debug/collect` (old one-shot bundle route): unused by the web UI; drop.
+- Three tuners: auto-tune (live), the "Tune from burst" card (on device),
+  `replay_corpus.py` (off device): keep two.
+- `save_failed_frames` / `save_solved_frames`: live capture covers their use.
+- Polar alignment: hidden from the menu since earlier; restore or remove.
+- Background modes: 8 in the menu; trim to the ones in use (zero cost otherwise).
+- Kept on purpose: the Legacy/tetra3 baseline (expert-only), debug bundles vs
+  live captures (they complement each other), the Background A/B run.
+
+### Still open
+
+- On-sky A/B tests above; check SkySafari now sets the clock (log shows
+  `Clock synced … (direct)`; Utilities → Clock names SkySafari).
+- Live captures are never pruned: add a size cap like bundles and A/B runs.
+- Mid-exposure IMU timing for the Kabsch pairs and the solve hint (crosshair
+  reference only so far).
+- Deferred: "promote tested image" release mode; more mount dialects
+  (LX200, Alpaca, OnStep).
+- ✅ *Done:* OTA cards move `imu_poll_hz` 20 → 10 once (conf migration v2,
+  per-rule versions); on-screen-only polling.
+
+## Proposal: identify (and refine elements for) satellites from a live capture
+
+Goal: an off-device script that takes a live capture, finds the satellite
+trails in its stacked frames, and identifies them, including against
+classified-object element sets when SatChecker has no match.
+
+Assessment:
+
+- **Identify first, derive second.** A finder trail spans 10–60 s from one
+  site. Deriving a usable TLE from scratch from such a short single arc is
+  ill-conditioned: the direction and rate are well measured, the range (so the
+  altitude and the orbit) is not. With an assumed circular orbit you get a
+  coarse orbit, good as a search key, not as a TLE to publish.
+- **Old element sets are not a blocker.** SGP4 propagates either way in time;
+  a weeks-old element set keeps its orbital plane far longer than its timing.
+  So match on the plane (cross-track position, direction, rate) and let the
+  along-track time float (a fitted "N seconds early/late"). The best match's
+  elements can then be refined to the observation (mean anomaly and mean
+  motion), which is the honest form of "an estimated TLE".
+- **Element sources:** CelesTrak GP (public catalog), CelesTrak supplemental GP
+  (operator data, e.g. Starlink, more accurate), Mike McCants' classified file
+  (`classfd.tle`; amateur-tracked classified objects). Space-Track needs an
+  account. SatChecker covers the public catalog only, so the classified file is
+  where the extra matches would come from. URLs to confirm on your laptop (this
+  sandbox cannot reach them).
+- **Output observations in the standard IOD format** too, so existing tools can
+  take over: Bill Gray's Find_Orb (fits element sets, including TLEs, to
+  satellite astrometry) and sat_id, Scott Campbell's satfit (the Python port
+  from the TruSat project), and the SeeSat-L community.
+- **Accuracy budget:** ~1 px (51″) across-track; along-track is set by the
+  clock: 0.1 s at 0.5°/s is ~3.5 px, so set the clock from the phone first.
+  Exposure start/end times come from the sensor timestamps already recorded.
+
+Plan (each step useful on its own):
+1. Per-trail observations: from the frame-by-frame timing `satcheck_overlay`
+   already does, RA/Dec at exposure start/mid/end per frame; write IOD + JSON.
+2. Identify: local SGP4 (`sgp4` package) against downloaded element files;
+   score cross-track distance, direction and rate with a free time offset;
+   report candidates with their offset; shadow test as now.
+3. Refine the best candidate's elements to the observations (2 parameters).
+4. Optional, research-grade: circular-orbit fit from the arc alone, flagged as
+   such; validate on a capture with a known Starlink pass.
+
+Needs: a capture with real sunlit satellite trails (dusk, 1–2 h after sunset)
+for validation; the 2026-11-02 capture's only trail was an aircraft.

@@ -621,7 +621,9 @@
 const _STATUS_LABELS = {0:'waiting', 3:'timeout', 5:'too few stars'};
 async function refreshFrame() {
   const img = document.getElementById('live-frame');
-  if (img) {
+  // The JPEG encode is the heaviest web-UI job on CPU 0: skip it while the
+  // live view is scrolled out of sight (the readouts below still update).
+  if (img && window.dioOnScreen(img)) {
     const next = new Image();
     next.onload = function() {
       img.src = next.src;
@@ -978,6 +980,10 @@ function _syncSelect(id, value) {
 }
 async function syncCameraState() {
   if (Date.now() - _lastLocalEdit < 2500) return;   // cooldown after a local edit
+  // Only while one of the synced controls is on screen (three daemon calls).
+  const _ids = ['exp_num', 'sigma_num', 'bg_mode_sel', 'solvecal-readout'];
+  if (!_ids.some(id => { const el = document.getElementById(id);
+                         return el && window.dioOnScreen(el); })) return;
   try {
     const r = await fetch('/api/camera/state', {cache: 'no-store'});
     if (!r.ok) return;
@@ -1006,7 +1012,7 @@ function _syncSolveCal(sc) {
     el.textContent = 'no estimate yet — enable, then solve across a spread of altitudes';
   }
 }
-setInterval(syncCameraState, 3000);
+setInterval(syncCameraState, 5000);   // was 3000; auto-exposure acts every 5 s
 
 // --- Tune from burst ---------------------------------------------------------
 (function() {
@@ -1163,6 +1169,7 @@ setInterval(syncCameraState, 3000);
   const el = document.getElementById('bg-effective');
   if (!el) return;
   async function refresh() {
+    if (!window.dioOnScreen(el)) return;   // a solver round trip; skip off screen
     try {
       const j = await (await fetch('/api/bgcache')).json();
       el.textContent = (j.ok && j.result && j.result.resolved &&
@@ -1197,11 +1204,20 @@ setInterval(syncCameraState, 3000);
     if (m.last_error) lines.push('error:     ' + m.last_error);
     statusEl.textContent = lines.join('\n');
   }
-  async function refresh(){
+  // Poll every 4 s only while the card is on screen; with the link off the
+  // status cannot change by itself, so then only every 30 s.
+  let enabled = false, lastT = 0;
+  async function refresh(force){
+    const now = Date.now();
+    if (force !== true) {
+      if (!window.dioOnScreen(statusEl)) return;
+      if (!enabled && now - lastT < 30000) return;
+    }
+    lastT = now;
     try {
       const r = await fetch('/api/mount');
       const d = await r.json();
-      if (d.ok) render(d.result);
+      if (d.ok) { enabled = !!(d.result && d.result.enabled); render(d.result); }
     } catch (e) { /* leave previous */ }
   }
   const testBtn = document.getElementById('mount-test');
@@ -1213,17 +1229,17 @@ setInterval(syncCameraState, 3000);
     actionEl.textContent = d.ok
       ? ('connected: v' + ((d.result && d.result.mount_version) || '?'))
       : ('error: ' + d.error);
-    refresh();
+    refresh(true);
   });
   if (syncBtn) syncBtn.addEventListener('click', async () => {
     actionEl.textContent = 'syncing…';
     const r = await fetch('/mount/sync', {method:'POST'});
     const d = await r.json();
     actionEl.textContent = d.ok ? 'sync sent' : ('error: ' + d.error);
-    refresh();
+    refresh(true);
   });
   setInterval(refresh, 4000);
-  refresh();
+  refresh(true);
 })();
 
 // (Debug-bundle button handler is shared in base.html via .js-debug-bundle.)

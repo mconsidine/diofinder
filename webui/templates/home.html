@@ -321,7 +321,7 @@ function _set(id, v){ const e = document.getElementById(id); if (e) e.textConten
 async function refreshHome(){
   // Live frame
   const img = document.getElementById('live-frame');
-  if (img){
+  if (img && window.dioOnScreen(img)){   // skip the JPEG while scrolled away
     const next = new Image();
     next.onload = function(){
       img.src = next.src; img.style.opacity = '1';

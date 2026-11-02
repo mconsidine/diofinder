@@ -26,7 +26,7 @@ class MigrateTests(unittest.TestCase):
             # star_db_deep was absent -> added.
             self.assertIn("star_db_deep", applied)
             txt = open(p).read()
-            self.assertIn("conf_version: 1", txt)
+            self.assertIn(f"conf_version: {conf_migrate.CONF_VERSION}", txt)
             self.assertIn("block_percentile", txt)
             # Second call: stamped, nothing to do.
             self.assertEqual(conf_migrate.migrate(p), {})
@@ -68,9 +68,28 @@ class MigrateTests(unittest.TestCase):
 
     def test_already_stamped_is_noop(self):
         with tempfile.TemporaryDirectory() as d:
-            p = _write(d, "conf_version: 1\ndetect_bg_mode: row_percentile\n")
+            p = _write(d, f"conf_version: {conf_migrate.CONF_VERSION}\n"
+                          "detect_bg_mode: row_percentile\nimu_poll_hz: 20\n")
             self.assertEqual(conf_migrate.migrate(p), {})
             self.assertIn("row_percentile", open(p).read())
+
+    def test_v1_device_gets_only_the_v2_rules(self):
+        # Migrated to v1 earlier, then the user chose row_percentile on
+        # purpose: the v2 run moves the IMU rate and leaves that choice alone.
+        with tempfile.TemporaryDirectory() as d:
+            p = _write(d, "conf_version: 1\ndetect_bg_mode: row_percentile\n"
+                          "imu_poll_hz: 20\n")
+            self.assertEqual(conf_migrate.migrate(p), {"imu_poll_hz": "10"})
+            txt = open(p).read()
+            self.assertIn("row_percentile", txt)
+            self.assertIn("imu_poll_hz: 10", txt)
+            self.assertIn("conf_version: 2", txt)
+
+    def test_user_chosen_imu_rate_is_kept(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = _write(d, "conf_version: 1\nimu_poll_hz: 15\n")
+            self.assertEqual(conf_migrate.migrate(p), {})
+            self.assertIn("imu_poll_hz: 15", open(p).read())
 
 
 class DiffTests(unittest.TestCase):

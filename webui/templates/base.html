@@ -46,6 +46,26 @@
         });
       });
     })();
+
+    // dioOnScreen(el): true while any part of el is in the viewport. Pollers
+    // for a card you have scrolled past (the live view, the mount status, the
+    // background summary) use it to skip their fetch, so a long page only
+    // costs the finder what is actually on screen. True when unknown (no
+    // IntersectionObserver, or not observed yet), so nothing ever stops
+    // updating by mistake.
+    (function () {
+      var seen = new WeakMap(), io = null;
+      try {
+        io = new IntersectionObserver(function (entries) {
+          entries.forEach(function (e) { seen.set(e.target, e.isIntersecting); });
+        });
+      } catch (e) {}
+      window.dioOnScreen = function (el) {
+        if (!el || !io) return true;
+        if (!seen.has(el)) { seen.set(el, true); io.observe(el); }
+        return seen.get(el) !== false;
+      };
+    })();
   </script>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>

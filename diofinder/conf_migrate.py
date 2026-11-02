@@ -35,12 +35,15 @@ from diofinder import config as cfg_mod
 log = logging.getLogger("diofinder.conf_migrate")
 
 # Bump when adding rules. Stored in the conf as ``conf_version``.
-CONF_VERSION = 1
+CONF_VERSION = 2
 
-# (key, old_default_values, new_value, reason)
+# (key, old_default_values, new_value, reason[, version])
 # A rule fires only when the conf's current value is IN old_default_values
 # (string comparison after strip). ``None`` in old_default_values means
-# "key absent from the file".
+# "key absent from the file". ``version`` (default 1) is the conf_version
+# that introduced the rule: it fires only on a conf stamped BELOW it, so a
+# device already migrated to v1 gets just the v2 rules (a user who changed a
+# v1 key back on purpose is never overridden again).
 MIGRATIONS = [
     ("camera_tuning_file",
      ("/usr/share/libcamera/ipa/rpi/vc4/imx477_scientific.json",),
@@ -80,6 +83,12 @@ MIGRATIONS = [
      "/var/lib/diofinder/diofinder_13deg_mag85.npz",
      "lets the Bad-seeing preset use the deeper catalog when installed "
      "(missing key silently kept the preset on the standard db)"),
+    ("imu_poll_hz",
+     ("20",),
+     "10",
+     "pointing consumers need far less than 20 Hz; halves the IMU's IPC on "
+     "CPU 0 (default since v0.11.76)",
+     2),
 ]
 
 
@@ -106,10 +115,14 @@ def pending_migrations(path: Optional[str] = None) -> list:
     if not os.path.exists(p):
         return []
     conf = _parse_conf(p)
-    if int(conf.get("conf_version", "0") or 0) >= CONF_VERSION:
+    have = int(conf.get("conf_version", "0") or 0)
+    if have >= CONF_VERSION:
         return []
     fires = []
-    for key, olds, new, reason in MIGRATIONS:
+    for rule in MIGRATIONS:
+        key, olds, new, reason = rule[:4]
+        if have >= (rule[4] if len(rule) > 4 else 1):
+            continue                      # this conf already had that rule run
         cur = conf.get(key)
         # Numeric-aware matching (audit 2026-07 F-L3): save_keys writes
         # floats as %.10g, so a user-persisted old default "1.0" lands in
