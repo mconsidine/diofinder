@@ -105,6 +105,7 @@ should also TTL-cache their settings reads rather than `.get()` per sample.
 | `report_epoch` | str (`jnow`/`j2000`) | comms (seed from cfg; `solver_params_set`) | comms LX200 boundary — precesses J2000→JNow for `:GR/:GD` + the status `report_*`, JNow→J2000 for the `:CM#` align target (v0.11.53). `j2000` = raw kill switch |
 | `mount_enabled`, `mount_mode`, `mount_epoch` | bool / str (`manual`/`auto`) / str (`jnow`/`j2000`) | comms (seed from cfg; `mount_set`) | comms `_mount_loop` + `mount_sync`/`mount_status` — outbound SynScan mount sync (the mount's OWN epoch, distinct from `report_epoch`). `mount_auto_*` gates are read live too. Transport keys (`mount_protocol`/`mount_serial_port`/`mount_serial_baud`) are cfg-only (restart) |
 | `live_capture` | dict `{on, id, site, test_mode}` | comms (maint `live_capture_start`/`_stop`) | solver `LiveRecorder` (start/stop; `site` = lat/lon/elevation from the conf at start) |
+| `matches_wanted_until` | float (monotonic) | comms (maint `matches_want`, ≤120 s; debug bundles) | solver (`return_matches` on while fresh or while live capture records; matches kept per seq for `solution_for_seq`) |
 | `live_capture_status` | dict | solver `LiveRecorder` (≤1/s while recording, + on state changes) | comms `live_capture_status` → Home/Utilities pollers |
 | `display_wanted_until` | float (monotonic) | comms (via maint `display_start` keepalive) | solver (demand-gates the `diofinder_display` write; no viewer → no copy) |
 | `star_name_brightest` | bool | comms (via maint `solver_params_set`) | solver (centered-star naming) |
@@ -724,6 +725,18 @@ consecutive frames), not just a single snapshot. Raw PNGs are saved for every
 frame; the large arcsinh **display JPGs are capped at the first 2** to keep the
 bundle email-friendly.
 
+**Built to a file, downloaded by link (v0.11.76).** The bundle button posts
+`/debug/start`; a background thread builds the zip straight to
+`/var/lib/diofinder/diofinder_debug_<YYYYmmddHHMMSS>.zip` (`.tmp` then
+`os.replace`; newest 10 kept), the page polls `/api/debug`, then fetches
+`/debug/download/<name>` as an ordinary download — the zip never sits in web UI
+memory or one long response. `/debug/collect` stays for scripts (builds, then
+serves from disk). Each `frames.json` solution also carries **`matched`**
+(`[x, y, ra, dec, mag]` rows, like live captures): the bundle asks
+`matches_want {"seconds": 90}` first, which sets `shared_cfg["matches_wanted_until"]`
+so the solver passes `return_matches` and keeps them in
+`_SolverState.recent_matches` for `solution_for_seq`.
+
 **Exact per-frame timing & attitude (v0.11.46).** `diofinder/frame_meta.py`:
 the camera captures each frame via a picamera2 *request* and publishes the
 libcamera metadata — `SensorTimestamp` (CLOCK_BOOTTIME ns at first-row readout
@@ -1195,7 +1208,15 @@ POST) archives; names must match `livecap_<YYYYMMDDTHHMMSSZ>.zip` exactly.
   `tests/satcheck_overlay.py ARCHIVE.zip` draws each predicted streak onto the
   frame itself via the fitted WCS, scores it and writes `report.csv`;
   `--stack` aligns and stacks each query group (brightest minus median), so a
-  pass shows as dashes between its rails. The
+  pass shows as dashes between its rails. Predictions in Earth's shadow and
+  near-stationary objects are hidden by default (`--show-unlit`,
+  `--show-stationary`, `--min-rate`); labels and arrows give each
+  prediction's compass direction and rate. In the stack, straight trails are
+  detected, timed frame by frame (direction + rate, even when the dashes
+  merge), matched to a prediction only if it lies on the same line AND moves
+  the same way at a similar speed, and written to `trails.csv`; unmatched
+  ones are outlined red, "flashing → aircraft?" when the brightness along
+  them comes in regular knots. The
   response structure is `data.satellites[name].positions[{ra, dec,
   julian_date}]`.
 * Tests: `tests/test_live_capture.py` (recorder end-to-end on a temp dir,

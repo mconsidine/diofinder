@@ -1,7 +1,11 @@
 # Next release — to-do list (after v0.11.75)
 
 Working branch: `claude/azimuth-on-0.11.74`. Items are grouped by area; each
-says why it matters. Nothing under "To do" has been started.
+says why it matters. Items marked ✅ are done on the branch.
+
+**Release-candidate group (next):** IMU report smoothing behind a default-off
+switch (14), FOV drift recommits (13), restoring the clock at boot (11), and the
+test-mode location default (15).
 
 ## Already on the branch (since v0.11.75)
 
@@ -41,7 +45,7 @@ says why it matters. Nothing under "To do" has been started.
    web UI asked). Have the solver keep the last few solutions and look them up
    by seq. Files: `webui/app.py` `_solution_for_seq`, `diofinder/solver_proc.py`,
    comms maint command.
-4. **Debug bundle: build to a file, serve a download link.** It is built entirely
+4. ✅ *Done (v0.11.76 base):* **Debug bundle: build to a file, serve a download link.** It is built entirely
    in web UI memory on CPU 0 and returned as one large response — the heaviest
    CPU 0 job, and fragile on phones. Build it in the background, then offer a
    normal GET download (like live captures).
@@ -50,49 +54,52 @@ says why it matters. Nothing under "To do" has been started.
    94% turned the field card "Tight". File: `diofinder/sysmon.py`.
 6. ✅ *Done (v0.11.76 base):* **Add `ap-watchdog.sh` to the OTA refresh list** in `scripts/diofinder-update`,
    so watchdog fixes reach devices by update.
-7. **Cap or prune `/var/lib/diofinder/bg_runs/`** (Background A/B archives);
+7. ✅ *Done (v0.11.76 base):* **Cap or prune `/var/lib/diofinder/bg_runs/`** (Background A/B archives);
    only `captures/` has a size cap today.
-8. **SkySafari readout-rate hint** in the UI/docs: each SkySafari poll is a new
+8. ✅ *Done (v0.11.76 base):* **SkySafari readout-rate hint** in the UI/docs: each SkySafari poll is a new
    TCP connection (11–30 per 5 s seen), and a lower readout rate cuts CPU 0 load.
-9. **Test-suite CI workflow** (pytest with numpy + flask), so regressions show
+9. ✅ *Done (v0.11.76 base):* **Test-suite CI workflow** (pytest with numpy + flask), so regressions show
    up before an image build; only `release.yml` exists.
-10. **"Promote tested image" release mode**, so the shipped image is
+10. *Deferred (a convenience):* **"Promote tested image" release mode**, so the shipped image is
     byte-identical to the one flashed and tested.
-11. **Clock:** logs before a time sync carry the image build date (no RTC).
+11. *Phone button done (v0.11.76 base, Utilities → Clock); restoring the last-known time at boot is in the release-candidate group:* **Clock:** logs before a time sync carry the image build date (no RTC).
     Check whether later boots restore the last-known time, and consider a web
     UI "set time from this phone" button (`diofinder-set-time` exists).
-12. **Cosmetic picamera2 traceback at every boot** from the `tuning_file=` probe;
+12. *Dropped (cosmetic):* **Cosmetic picamera2 traceback at every boot** from the `tuning_file=` probe;
     try the working `tuning=` path first. Low priority (touches camera init).
 13. **Watch with field data before changing:** FOV drift recommits after
     refocus (4 in a session, 13.50–13.60°); the default-off features awaiting
     on-sky validation (ROI tracking, bg-cache bin-at-submit, IMU Units B/C).
 14. **Bigger:** the shelved IMU report smoothing (jumpy crosshair while moving;
     `docs/decisions/2026-11-01-imu-report-smoothing-shelved.md`).
-15. **Needs a decision:** whether test-mode defaults should use `test.png`'s real
-    capture site/time (would publish a location).
+15. *Decided (release-candidate group):* test mode uses explicit `test_*` values
+    when set, otherwise the configured site, otherwise a placeholder — never 0/0.
 
-16. **Record the clock source in live captures:** when and how the clock was
+16. ✅ *Done (v0.11.76 base):* **Record the clock source in live captures:** when and how the clock was
     last set (SkySafari `:SC`, network time), in `session.json`. Satellite
     timing depends on it, and "clock plausible" only rules out a clock years off.
-17. **Matched stars in debug bundles too** (`frames.json`), like live captures,
+17. ✅ *Done (v0.11.76 base):* **Matched stars in debug bundles too** (`frames.json`), like live captures,
     so any bundle can be fitted and overlaid offline.
-18. **Bump the in-code version to 0.11.76** (`diofinder/config.py`); docs already
+18. ✅ *Done (v0.11.76 base):* **Bump the in-code version to 0.11.76** (`diofinder/config.py`); docs already
     say the settle gate arrived in 0.11.76.
-19. **Live capture time limit:** optional auto-stop after N minutes, so a
+19. ✅ *Done (v0.11.76 base):* **Live capture time limit:** optional auto-stop after N minutes, so a
     forgotten capture doesn't run until the size cap.
 
 ## To do — satellite tools (`tests/satcheck_overlay.py`)
 
-1. **Hide predictions in Earth's shadow.** SatChecker lists everything inside
+1. ✅ *Done (v0.11.76 base):* **Hide predictions in Earth's shadow.** (`--show-unlit` shows them) SatChecker lists everything inside
    the circle, lit or not; at night nearly every low-orbit object is in shadow.
    Use the Sun's position and a cylindrical shadow test (as done by hand for
    STARLINK-30913).
-2. **Optionally hide near-stationary objects** (geostationary satellites and
+2. ✅ *Done (v0.11.76 base):* **Optionally hide near-stationary objects** (`--show-stationary`, `--min-rate`) (geostationary satellites and
    rocket stages), which are too faint for sub-second exposures and cluttered
    the 2026-11-02 report (≈40 of 51 objects in frame).
-3. **Score with the median along the line, not the mean,** so a predicted track
+3. ✅ *Done (v0.11.76 base):* **Score robustly along the line** (trimmed mean: a median would miss dashed stacked trails), so a predicted track
    that merely crosses a bright trail can't score high (FALCON 9 R/B scored 69σ
    that way).
-4. **Label each prediction with its direction of travel.**
-5. **Flag detected trails that match no prediction,** with rate and flash
-   pattern, as possible aircraft.
+4. ✅ *Done (v0.11.76 base):* **Label each prediction with its direction of travel** (compass point, rate, arrow).
+5. ✅ *Done (v0.11.76 base):* **Flag detected trails that match no prediction,** with rate and flash
+   pattern, as possible aircraft (`trails.csv`). Each trail is timed frame by frame, so a
+   prediction on the same line but moving the other way is rejected. On the 2026-11-02
+   capture it independently reports the trail as unidentified/flashing, 0.37°/s toward SW,
+   "not STARLINK-30913: moves the opposite way".

@@ -343,3 +343,119 @@ def test_cli_stack_writes_composites(tmp_path):
     out = tmp_path / "out"
     so.main([z, "--out", str(out), "--responses", str(cache), "--offline", "--stack"])
     assert {"stack_1.png", "stack_1_moving.png"} <= set(os.listdir(out))
+
+
+# ---- which predictions could be seen; trails nobody predicted --------------
+
+def test_line_score_ignores_a_prediction_that_only_crosses_a_trail():
+    img = np.random.default_rng(1).normal(20, 2, (H, W))
+    for t in np.linspace(0, 1, 1200):                 # bright trail, top-left to bottom-right
+        img[int(100 + 500 * t), int(100 + 700 * t)] = 200
+    along = so.line_score(img, (100, 100), (800, 600), extend=0.0)
+    across = so.line_score(img, (100, 600), (800, 100), extend=0.0)
+    assert along > 100 and across < 5
+
+
+def _pos_at(t, gcrs_xyz_km, site):
+    """SatChecker-style altitude/azimuth/range for a geocentric position."""
+    import astropy.units as u
+    from astropy.coordinates import (AltAz, CartesianRepresentation, EarthLocation,
+                                     GCRS, SkyCoord)
+    loc = EarthLocation(lat=site["latitude_deg"] * u.deg, lon=site["longitude_deg"] * u.deg)
+    c = SkyCoord(CartesianRepresentation(*(np.asarray(gcrs_xyz_km) * u.km)),
+                 frame=GCRS(obstime=t)).transform_to(AltAz(obstime=t, location=loc))
+    return {"altitude": float(c.alt.deg), "azimuth": float(c.az.deg),
+            "range_km": float(c.distance.to(u.km).value), "julian_date": float(t.jd)}
+
+
+def test_sat_properties_rate_direction_and_earth_shadow():
+    from astropy.coordinates import get_sun
+    from astropy.time import Time
+    site = {"latitude_deg": 43.95, "longitude_deg": -72.667, "elevation_m": 330.0}
+    t = Time(jd(T0), format="jd", scale="utc")
+    sun = get_sun(t).cartesian.xyz.value
+    sun = sun / np.linalg.norm(sun)
+    resp = {"data": {"satellites": {
+        "SUNLIT (1)": {"positions": [_pos_at(t, sun * 7000.0, site)]},
+        "SHADOW (2)": {"positions": [_pos_at(t, -sun * 7000.0, site)]},
+    }}}
+    j = jd(T0)
+    tracks = {"SUNLIT (1)": [(j, 100.0, 10.0), (j + 10 / 86400, 100.0, 11.0)],     # north, 0.1 deg/s
+              "SHADOW (2)": [(j, 100.0, 10.0), (j + 10 / 86400, 99.0, 10.0)],      # west
+              "GEO (3)": [(j, 100.0, 0.0), (j + 100 / 86400, 100.4, 0.0)]}        # 0.004 deg/s
+    p = so.sat_properties(resp, site, tracks)
+    assert p["SUNLIT (1)"]["lit"] is True and p["SHADOW (2)"]["lit"] is False
+    assert p["GEO (3)"]["lit"] is None                            # no position data: unknown
+    assert abs(p["SUNLIT (1)"]["rate_deg_s"] - 0.1) < 1e-3
+    assert p["SUNLIT (1)"]["toward"] == "N" and p["SHADOW (2)"]["toward"] == "W"
+    keep, hidden = so.filter_tracks(tracks, p)
+    assert list(keep) == ["SUNLIT (1)"]
+    assert hidden == {"unlit": ["SHADOW (2)"], "stationary": ["GEO (3)"]}
+    keep, _ = so.filter_tracks(tracks, p, show_unlit=True, show_stationary=True)
+    assert len(keep) == 3
+
+
+def test_detect_trails_ignores_stars_and_finds_a_dashed_line():
+    rng = np.random.default_rng(2)
+    img = np.clip(rng.normal(3, 1.5, (H, W)), 0, None)
+    for x, y in rng.uniform(30, [W - 30, H - 30], (60, 2)):      # round star residuals
+        img[int(y) - 1:int(y) + 2, int(x) - 1:int(x) + 2] = 60
+    assert so.detect_trails(img) == []
+    for k in range(6):                                            # 6 dashes, gaps between
+        for t in np.linspace(0, 1, 120):
+            s = k * 2 + t
+            img[int(round(500 - 30 * s)), int(round(100 + 60 * s))] = 80
+    tr = so.detect_trails(img)
+    assert len(tr) == 1 and tr[0]["n_dashes"] == 6
+    assert abs(tr[0]["dash_px"] - math.hypot(60, 30)) < 8
+    assert tr[0]["flash_ratio"] < 1.5
+    rate = so.trail_rate_deg_s(tr[0], 13.54 / W, 1.0)
+    assert abs(rate / (math.hypot(60, 30) * 13.54 / W) - 1) < 0.05
+
+
+def test_flash_ratio_spots_strobes():
+    img = np.zeros((H, W))
+    img[400, 100:700] = 50
+    assert so._flash_ratio(img, (100, 400), (699, 400), 10) < 1.2
+    for x in range(100, 700, 20):                                 # a 4-px knot every 20 px
+        img[399:402, x:x + 4] = 180                               # (like the real strobes)
+    assert so._flash_ratio(img, (100, 400), (699, 400), 10) >= so.FLASH_RATIO
+
+
+def test_trail_in_the_stack_is_matched_timed_and_checked_for_direction(tmp_path):
+    z, resp, *_ = make_drift_capture(tmp_path)
+    res = so.analyse(z, fetch=lambda p: resp, sleep_s=0)
+    g = res["groups"][0]
+    with zipfile.ZipFile(z) as zf:
+        st = so.stack_group(zf, g, res)
+        trails = so.trail_kinematics(zf, st, res, so.detect_trails(st["moving"]))
+    assert len(trails) == 1
+    t = trails[0]
+    assert t["n_seen"] == N_DRIFT
+    # True motion: 830 px in 11 s in frame 1's pixels (the reference frame is
+    # within a few px of that).
+    assert abs(abs(t["px_per_s"]) - math.hypot(700, 460) / 11.0) < 5
+    so.match_trails(trails, st, g, res)
+    assert t["satellite"] == "STARLINK-1234 (45000)"
+    # Same line, but predicted to run the other way: not a match.
+    track = g["tracks"]["STARLINK-1234 (45000)"]
+    rev = [(track[i][0], track[-1 - i][1], track[-1 - i][2]) for i in range(len(track))]
+    g2 = dict(g, tracks={"BACKWARDS (9)": rev})
+    so.match_trails(trails, st, g2, res)
+    assert t["satellite"] is None
+    assert t["rejected"] == [("BACKWARDS (9)", "moves the opposite way")]
+    assert so.trail_label(t) == "unidentified"
+
+
+def test_cli_stack_writes_trails_csv(tmp_path):
+    z, resp, *_ = make_drift_capture(tmp_path)
+    res = so.analyse(z, fetch=lambda p: resp, sleep_s=0)
+    cache = tmp_path / "cache.json"
+    cache.write_text(json.dumps(res["responses"]))
+    out = tmp_path / "out"
+    so.main([z, "--out", str(out), "--responses", str(cache), "--offline", "--stack"])
+    rows = (out / "trails.csv").read_text().splitlines()
+    assert rows[0].startswith("stack,") and len(rows) == 2
+    assert "STARLINK-1234 (45000)" in rows[1]
+    rep = (out / "report.csv").read_text().splitlines()[0]
+    assert "rate_deg_s,toward,lit" in rep

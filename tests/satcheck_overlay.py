@@ -29,8 +29,9 @@ Outputs (in --out, default ``<archive>_sats/``):
   * ``frame_000123_sats.png``: the frame with the predictions drawn on it, for
     every frame with at least one satellite inside it (``--all-frames``: all).
   * ``report.csv``: one row per (frame, satellite): exposure segment ends in
-    pixels, whether it falls in the frame, the score, how the WCS was
-    obtained, and its fit residual.
+    pixels, whether it falls in the frame, the score, rate (deg/s), compass
+    direction of motion, whether it was sunlit, how the WCS was obtained,
+    and its fit residual.
   * ``chart_<n>.png`` (``--chart``): the notebook's sky chart per query group,
     with the real frame outline instead of a circle.
   * ``stack_<n>_moving.png`` / ``stack_<n>.png`` (``--stack``): each query
@@ -41,7 +42,20 @@ Outputs (in --out, default ``<archive>_sats/``):
     predicted pass is drawn as rails along its whole track, and each frame's
     predicted dash sits just outside them, so the real dashes can be checked
     against where and when they were predicted. The plain one keeps the
-    stars. ``--window 600`` stacks ten-minute stretches.
+    stars. ``--window 600`` stacks ten-minute stretches. Straight trails in
+    the moving image that no prediction explains are outlined in red and
+    labelled "unidentified"; one whose brightness comes in regular bright
+    knots (strobes/navigation lights) is flagged "flashing -> aircraft?".
+  * ``trails.csv`` (``--stack``): every straight trail found in each stack,
+    its length, number of dashes, rate (from the dash length; blank when the
+    dashes merged into one line), flash ratio, and the satellite it matched.
+
+Predictions you could not have seen are hidden by default and counted in the
+console output: satellites in Earth's shadow (``--show-unlit``) and
+near-stationary objects such as geostationary satellites, which don't streak
+(``--show-stationary``; threshold ``--min-rate`` deg/s). Labels give each
+satellite's direction of motion on the sky (compass point) and rate, and an
+arrow marks the direction on the image.
   * ``satchecker_responses.json``: every SatChecker response. Re-runs read it
     (``--responses FILE``) so you can re-plot offline without new queries.
 
@@ -384,7 +398,13 @@ def line_score(img, p0, p1, tol_px=8, extend=0.5):
     """Brightness along the segment p0->p1 (extended by `extend` of its length
     each way, for along-track timing error), best over cross-track offsets of
     up to +/-tol_px, in noise sigmas above the frame median. None if the
-    segment misses the frame."""
+    segment misses the frame.
+
+    Uses a trimmed mean (the brightest 5% of samples dropped): a prediction
+    that merely CROSSES a bright trail touches it for a few pixels only, which
+    a plain mean let dominate (a crossing rocket body scored 69 sigma on real
+    data). A median would also stop that, but it would miss stacked trails,
+    which are dashed (gaps between exposures)."""
     h, w = img.shape
     f = img.astype(np.float32)
     med = float(np.median(f))
@@ -407,7 +427,9 @@ def line_score(img, p0, p1, tol_px=8, extend=0.5):
         ok = (xi >= 0) & (xi < w) & (yi >= 0) & (yi < h)
         if ok.sum() < 5:
             continue
-        val = (float(np.mean(f[yi[ok], xi[ok]])) - med) / noise * math.sqrt(ok.sum())
+        v = np.sort(f[yi[ok], xi[ok]])
+        v = v[:max(1, int(len(v) * 0.95))]
+        val = (float(np.mean(v)) - med) / noise * math.sqrt(len(v))
         best = val if best is None else max(best, val)
     return best
 
@@ -426,6 +448,95 @@ def segment_in_frame(p0, p1, w, h, margin=0):
 # Main
 # --------------------------------------------------------------------------- #
 
+# --------------------------------------------------------------------------- #
+# Which predictions could actually be seen
+# --------------------------------------------------------------------------- #
+
+MIN_RATE_DEG_S = 0.02     # slower than this = near-stationary (GEO is ~0.004)
+_COMPASS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"]
+
+
+def _offline_astropy():
+    """Never let astropy try to download Earth-orientation tables (the tool
+    must work offline); the bundled tables are ample for a shadow test."""
+    try:
+        from astropy.utils import iers
+        iers.conf.auto_download = False
+    except Exception:
+        pass
+
+
+def sat_properties(resp, site, tracks):
+    """Per satellite: {"rate_deg_s", "toward" (sky direction of motion, e.g.
+    "SW"), "lit" (True / False = in Earth's shadow / None = unknown)}.
+
+    The shadow test uses SatChecker's own altitude, azimuth and range at the
+    middle of the pass, the Sun's position, and a cylindrical Earth shadow
+    (penumbra ignored). Satellites in shadow can't be seen at all; at night
+    that is most low-orbit objects."""
+    out = {}
+    for name, tr in tracks.items():
+        if len(tr) >= 2:
+            (j0, r0, d0), (j1, r1, d1) = tr[0], tr[-1]
+            dt = (j1 - j0) * 86400.0
+            rate = sep_deg(r0, d0, r1, d1) / dt if dt > 0 else None
+            dra = ((r1 - r0 + 180.0) % 360.0 - 180.0) * math.cos(math.radians((d0 + d1) / 2))
+            pa = math.degrees(math.atan2(dra, d1 - d0)) % 360.0     # E of N
+            toward = _COMPASS[int((pa + 22.5) // 45) % 8]
+        else:
+            rate, toward = None, None
+        out[name] = {"rate_deg_s": rate, "toward": toward, "lit": None}
+    sats = ((resp or {}).get("data") or {}).get("satellites") if isinstance(resp, dict) else None
+    if not isinstance(sats, dict) or not sats:
+        return out
+    mids = []
+    for name, sd in sats.items():
+        pos = [p for p in (sd or {}).get("positions") or []
+               if all(k in p for k in ("altitude", "azimuth", "range_km", "julian_date"))]
+        if name in out and pos:
+            mids.append((name, pos[len(pos) // 2]))
+    if not mids:
+        return out
+    try:
+        _offline_astropy()
+        import astropy.units as u
+        from astropy.coordinates import AltAz, EarthLocation, GCRS, SkyCoord, get_sun
+        from astropy.time import Time
+        t = Time([m[1]["julian_date"] for m in mids], format="jd", scale="utc")
+        loc = EarthLocation(lat=site["latitude_deg"] * u.deg, lon=site["longitude_deg"] * u.deg,
+                            height=(site.get("elevation_m") or 0.0) * u.m)
+        sat = SkyCoord(alt=[m[1]["altitude"] for m in mids] * u.deg,
+                       az=[m[1]["azimuth"] for m in mids] * u.deg,
+                       distance=[m[1]["range_km"] for m in mids] * u.km,
+                       frame=AltAz(obstime=t, location=loc))
+        g = sat.transform_to(GCRS(obstime=t)).cartesian.xyz.to(u.km).value.T
+        sun = get_sun(t).cartesian.xyz.value.T
+        sun = sun / np.linalg.norm(sun, axis=1)[:, None]
+        along = np.sum(g * sun, axis=1)
+        perp = np.linalg.norm(g - along[:, None] * sun, axis=1)
+        for (name, _), a, pp in zip(mids, along, perp):
+            out[name]["lit"] = not (a < 0 and pp < 6378.137)
+    except Exception as e:                     # never fatal: just unknown
+        print(f"note: shadow test skipped ({e})", file=sys.stderr)
+    return out
+
+
+def filter_tracks(tracks, props, show_unlit=False, show_stationary=False,
+                  min_rate=MIN_RATE_DEG_S):
+    """(visible tracks, {"unlit": [...], "stationary": [...]} hidden names)."""
+    keep, hidden = {}, {"unlit": [], "stationary": []}
+    for name, tr in tracks.items():
+        p = props.get(name, {})
+        if not show_unlit and p.get("lit") is False:
+            hidden["unlit"].append(name)
+        elif (not show_stationary and p.get("rate_deg_s") is not None
+              and p["rate_deg_s"] < min_rate):
+            hidden["stationary"].append(name)
+        else:
+            keep[name] = tr
+    return keep, hidden
+
+
 def parse_frames_arg(spec, n):
     if not spec:
         return list(range(n))
@@ -442,7 +553,8 @@ def parse_frames_arg(spec, n):
 
 def analyse(archive, frames_spec=None, window_s=60.0, responses=None,
             sat_frame="icrs", flip_roll=False, fetch=None, base=sa.DEFAULT_BASE,
-            sleep_s=1.0):
+            sleep_s=1.0, show_unlit=False, show_stationary=False,
+            min_rate=MIN_RATE_DEG_S):
     """Do everything except drawing. Returns a dict with per-frame results.
     ``fetch(params) -> response`` can be injected (tests / offline)."""
     import time
@@ -466,7 +578,10 @@ def analyse(archive, frames_spec=None, window_s=60.0, responses=None,
             cache[k] = fetch(g["params"])
             if gi + 1 < len(groups):
                 time.sleep(sleep_s)
-        g["tracks"] = to_icrs_tracks(sa.parse_satellites(cache[k]), sat_frame)
+        all_tracks = to_icrs_tracks(sa.parse_satellites(cache[k]), sat_frame)
+        g["props"] = sat_properties(cache[k], site, all_tracks)
+        g["tracks"], g["hidden"] = filter_tracks(all_tracks, g["props"], show_unlit,
+                                                 show_stationary, min_rate)
     results = []
     for g in groups:
         for i in g["idx"]:
@@ -477,6 +592,8 @@ def analyse(archive, frames_spec=None, window_s=60.0, responses=None,
             for name, track in g["tracks"].items():
                 s0, s1 = interp_track(track, jd0), interp_track(track, jd1)
                 entry = {"satellite": name}
+                entry.update({k: g["props"].get(name, {}).get(k)
+                              for k in ("rate_deg_s", "toward", "lit")})
                 if w is not None:
                     tx, ty = w.world_to_pixel_values(
                         np.array([p[1] for p in track]), np.array([p[2] for p in track]))
@@ -510,6 +627,31 @@ def _load_frame(zf, name):
     return np.array(Image.open(io.BytesIO(zf.read(name))).convert("L"))
 
 
+def _motion_text(p):
+    """'  NE 0.34°/s' for a label, from a properties dict (empty if unknown)."""
+    out = ""
+    if p.get("toward"):
+        out += f"  \u2192{p['toward']}"
+    if p.get("rate_deg_s") is not None:
+        out += f" {p['rate_deg_s']:.2f}\u00b0/s"
+    if p.get("lit") is False:
+        out += " (in shadow)"
+    return out
+
+
+def _arrow(ax, tip_from, d, color, length=18):
+    """An arrowhead just past `tip_from`, pointing along `d` (direction of
+    motion), so the real trail between the rails stays uncovered."""
+    d = np.asarray(d, float)
+    n = float(np.hypot(*d))
+    if n < 1e-9:
+        return
+    u = d / n
+    a = np.asarray(tip_from, float) + u * 4
+    ax.annotate("", xy=tuple(a + u * length), xytext=tuple(a),
+                arrowprops=dict(arrowstyle="-|>", color=color, lw=1.2))
+
+
 def draw_frame(img, r, path):
     import matplotlib
     matplotlib.use("Agg")
@@ -540,9 +682,11 @@ def draw_frame(img, r, path):
                 ax.plot([x0 + sgn * nv[0], x1 + sgn * nv[0]],
                         [y0 + sgn * nv[1], y1 + sgn * nv[1]], "-", color=c, lw=1.2)
             ax.plot([x0], [y0], "o", color=c, ms=6, mfc="none")   # exposure start
+            _arrow(ax, (x1, y1), d, c)                              # direction
             lbl = s["satellite"]
             if s.get("score") is not None:
                 lbl += f"  ({s['score']:.0f}σ)"
+            lbl += _motion_text(s)
             if s.get("in_frame"):
                 ax.annotate(lbl, (x0, y0), color=c, fontsize=8,
                             xytext=(8, -12), textcoords="offset points",
@@ -700,7 +844,304 @@ def stack_scores(st, g, res):
     return out
 
 
-def draw_stack(st, g, res, path, which="moving", scores=None):
+# --------------------------------------------------------------------------- #
+# Trails nobody predicted (aircraft, uncatalogued or mis-predicted objects)
+# --------------------------------------------------------------------------- #
+
+TRAIL_SIGMA = 6.0          # moving-image threshold, in noise sigmas
+TRAIL_MIN_DASHES = 4       # dashes needed on one line to call it a trail
+TRAIL_LONG_PX = 60.0       # ...or a single dash at least this long
+TRAIL_LINE_TOL_PX = 4.0    # dash centre's distance from the line
+TRAIL_ANGLE_TOL_DEG = 12.0
+TRAIL_MATCH_PX = 20.0      # trail-to-prediction distance for a match
+TRAIL_MATCH_DEG = 10.0
+FLASH_RATIO = 2.0         # along-trail peak/typical brightness suggesting strobes
+
+
+def _label(mask):
+    """4-connected components of a boolean image -> list of (ys, xs) arrays.
+    Pure numpy/Python (no scipy); fine for the sparse masks used here."""
+    h, w = mask.shape
+    seen = np.zeros_like(mask, bool)
+    out = []
+    for y0, x0 in zip(*np.nonzero(mask)):
+        if seen[y0, x0]:
+            continue
+        seen[y0, x0] = True
+        stack, ys, xs = [(y0, x0)], [], []
+        while stack:
+            y, x = stack.pop()
+            ys.append(y)
+            xs.append(x)
+            for yy, xx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
+                if 0 <= yy < h and 0 <= xx < w and mask[yy, xx] and not seen[yy, xx]:
+                    seen[yy, xx] = True
+                    stack.append((yy, xx))
+        out.append((np.array(ys), np.array(xs)))
+    return out
+
+
+def _bg_noise(img):
+    v = img[img > 0]
+    if v.size < 10:
+        return None, None
+    med = float(np.median(v))
+    return med, 1.4826 * float(np.median(np.abs(v - med))) or 1.0
+
+
+def _blobs(img, sigma=TRAIL_SIGMA, min_px=3):
+    """Bright blobs in the moving image with their shape: centroid, length
+    along the major axis, elongation, orientation (deg, 0..180), flux."""
+    med, noise = _bg_noise(img)
+    if med is None:
+        return []
+    blobs = []
+    for ys, xs in _label(img > med + sigma * noise):
+        if len(ys) < min_px:
+            continue
+        wgt = img[ys, xs].astype(float) - med
+        cx, cy = np.average(xs, weights=wgt), np.average(ys, weights=wgt)
+        cov = np.cov(np.vstack([xs, ys]).astype(float)) if len(ys) > 2 else np.eye(2) * 0.1
+        evals, evecs = np.linalg.eigh(cov)
+        lmin, lmax = max(evals[0], 0.08), max(evals[1], 0.08)
+        ax_ = evecs[:, 1]
+        blobs.append({"x": float(cx), "y": float(cy),
+                      "length": float(math.sqrt(12.0 * lmax)) + 1.0,
+                      "ratio": float(math.sqrt(lmax / lmin)),
+                      "angle": float(math.degrees(math.atan2(ax_[1], ax_[0])) % 180.0),
+                      "flux": float(wgt.sum()), "npix": int(len(ys))})
+    return blobs
+
+
+def _angle_diff(a, b):
+    d = abs(a - b) % 180.0
+    return min(d, 180.0 - d)
+
+
+def _flash_ratio(img, p0, p1, thr, half_width=3):
+    """Peak (90th percentile) over typical (median) brightness along a trail,
+    using only samples on the trail itself (gaps between dashes skipped).
+    A satellite's trail is steady (about 1-1.5); an aircraft's strobes and
+    navigation lights make regular bright knots (2-3 or more)."""
+    h, w = img.shape
+    p0, p1 = np.asarray(p0, float), np.asarray(p1, float)
+    L = float(np.hypot(*(p1 - p0)))
+    if L < 10:
+        return None
+    u_ = (p1 - p0) / L
+    n_ = np.array([-u_[1], u_[0]])
+    prof = []
+    for s in np.arange(0.0, L, 1.0):
+        best = 0.0
+        for o in range(-half_width, half_width + 1):
+            x, y = np.rint(p0 + u_ * s + n_ * o).astype(int)
+            if 0 <= x < w and 0 <= y < h:
+                best = max(best, float(img[y, x]))
+        if best > thr:
+            prof.append(best)
+    if len(prof) < 10:
+        return None
+    p50 = float(np.percentile(prof, 50))
+    return float(np.percentile(prof, 90)) / p50 if p50 > 0 else None
+
+
+def detect_trails(img, min_dashes=TRAIL_MIN_DASHES, sigma=TRAIL_SIGMA):
+    """Find straight dashed (or long continuous) trails in a stack's moving
+    image. Stars leave round residuals; a moving object leaves one elongated
+    dash per exposure, all on one line and all pointing along it. When the
+    exposures nearly touch (short gaps, slow object) the dashes merge into one
+    long blob, which counts too.
+
+    Returns a list of {"p0", "p1" (end points, px), "angle", "n_dashes",
+    "dash_px" (median dash length; for a merged trail, its whole length),
+    "flash_ratio" (see _flash_ratio), "dashes"}."""
+    med, noise = _bg_noise(img)
+    dashes = [b for b in _blobs(img, sigma) if b["ratio"] >= 2.5 and b["length"] >= 6.0]
+    dashes.sort(key=lambda b: -b["flux"])
+    used = set()
+    trails = []
+    for i, b in enumerate(dashes):
+        if i in used:
+            continue
+        th = math.radians(b["angle"])
+        u_ = np.array([math.cos(th), math.sin(th)])
+        n_ = np.array([-u_[1], u_[0]])
+        members = [j for j, c in enumerate(dashes)
+                   if j not in used
+                   and abs(np.dot([c["x"] - b["x"], c["y"] - b["y"]], n_)) <= TRAIL_LINE_TOL_PX
+                   and _angle_diff(c["angle"], b["angle"]) <= TRAIL_ANGLE_TOL_DEG]
+        if len(members) < min_dashes and b["length"] < TRAIL_LONG_PX:
+            continue
+        ms = [dashes[j] for j in members]
+        # Refit the line through the member centres, weighted by length.
+        pts = np.array([[c["x"], c["y"]] for c in ms])
+        if len(ms) >= 2:
+            c0 = pts.mean(axis=0)
+            _, _, vt = np.linalg.svd(pts - c0)
+            u_ = vt[0]
+        else:
+            c0 = pts[0]
+        t = (pts - c0) @ u_
+        half = np.array([c["length"] / 2 for c in ms])
+        p0, p1 = c0 + u_ * float((t - half).min()), c0 + u_ * float((t + half).max())
+        trails.append({"p0": (float(p0[0]), float(p0[1])), "p1": (float(p1[0]), float(p1[1])),
+                       "angle": float(math.degrees(math.atan2(u_[1], u_[0])) % 180.0),
+                       "n_dashes": len(ms),
+                       "dash_px": float(np.median([c["length"] for c in ms])),
+                       "flash_ratio": _flash_ratio(img, p0, p1, med + sigma * noise),
+                       "dashes": ms})
+        used.update(members)
+    return trails
+
+
+def trail_kinematics(zf, st, res, trails, sigma=TRAIL_SIGMA, half_width=4):
+    """When and where along each trail the object was, from the individual
+    frames: each member frame is re-aligned onto the stack, the median sky
+    subtracted, and the bright samples on the trail averaged into one
+    position. A straight-line fit of position against exposure mid-time gives
+    the speed and which way it moved, even when the dashes merged into one
+    line. Sets t["px_per_s"] (signed, along t["u"] = p0->p1) and t["n_seen"]
+    (frames it was seen in); leaves them None with fewer than 3 frames."""
+    if not trails:
+        return trails
+    width, height = res["size"]
+    med_img = st["median"]
+    _, noise = _bg_noise(st["moving"])
+    thr = sigma * (noise or 1.0)
+    lines = []
+    for t in trails:
+        p0, p1 = np.array(t["p0"]), np.array(t["p1"])
+        L = float(np.hypot(*(p1 - p0))) or 1.0
+        u_ = (p1 - p0) / L
+        n_ = np.array([-u_[1], u_[0]])
+        ss = np.arange(0.0, L, 1.0)
+        oo = np.arange(-half_width, half_width + 1)
+        S, O = np.meshgrid(ss, oo, indexing="ij")
+        pts = p0[None, None, :] + S[..., None] * u_ + O[..., None] * n_
+        xr = np.clip(np.rint(pts[..., 0]).astype(int), 0, width - 1)
+        yr = np.clip(np.rint(pts[..., 1]).astype(int), 0, height - 1)
+        lines.append((u_, ss, xr, yr, []))
+        t["u"] = (float(u_[0]), float(u_[1]))
+    for r in st["members"]:
+        img = _load_frame(zf, r["rec"]["file"]).astype(np.float32)
+        cx, cy = ref_to_frame_map(st["ref"]["wcs"], r["wcs"], width, height)
+        for u_, ss, xr, yr, obs in lines:
+            # Map the strip's reference pixels into this frame directly
+            # (cheaper than warping the whole frame).
+            terms = _poly_terms(xr.ravel().astype(float), yr.ravel().astype(float),
+                                width, height)
+            fx = np.rint(terms @ cx).astype(int).reshape(xr.shape)
+            fy = np.rint(terms @ cy).astype(int).reshape(xr.shape)
+            ok = (fx >= 0) & (fx < width) & (fy >= 0) & (fy < height)
+            v = np.where(ok, img[np.clip(fy, 0, height - 1), np.clip(fx, 0, width - 1)]
+                         - med_img[yr, xr], 0.0)
+            prof = v.max(axis=1)
+            hit = prof > thr
+            if hit.sum() >= 3:
+                wgt = prof[hit]
+                obs.append(((r["jd"][0] + r["jd"][1]) / 2,
+                            float(np.average(ss[hit], weights=wgt))))
+    for t, (_, _, _, _, obs) in zip(trails, lines):
+        t["n_seen"] = len(obs)
+        t["px_per_s"] = None
+        if len(obs) >= 3:
+            jd = np.array([o[0] for o in obs])
+            pos = np.array([o[1] for o in obs])
+            tsec = (jd - jd[0]) * 86400.0
+            if np.ptp(tsec) > 0:
+                t["px_per_s"] = float(np.polyfit(tsec, pos, 1)[0])
+    return trails
+
+
+def _predicted_px_per_s(w_ref, track, k):
+    """Predicted velocity (px/s, 2-vector) along a track at sample k."""
+    i0, i1 = max(0, k - 1), min(len(track) - 1, k + 1)
+    if i1 == i0:
+        return None
+    (x0, x1), (y0, y1) = w_ref.world_to_pixel_values(
+        np.array([track[i0][1], track[i1][1]]), np.array([track[i0][2], track[i1][2]]))
+    dt = (track[i1][0] - track[i0][0]) * 86400.0
+    return np.array([x1 - x0, y1 - y0]) / dt if dt > 0 else None
+
+
+def match_trails(trails, st, g, res, max_px=TRAIL_MATCH_PX, max_deg=TRAIL_MATCH_DEG):
+    """Attach the predicted satellite (if any) each trail lies along:
+    trail["satellite"] = name or None. When the trail's own motion is known
+    (trail_kinematics) the prediction must also move the SAME WAY at a
+    similar speed (within 2x); a prediction that lies on the line but runs
+    the other way is recorded in trail["rejected"] instead."""
+    w_ref = st["ref"]["wcs"]
+    paths = {name: _track_ref_px(w_ref, tr) for name, tr in g["tracks"].items()}
+    for t in trails:
+        mid = (np.array(t["p0"]) + np.array(t["p1"])) / 2
+        best = None
+        t["rejected"] = []
+        for name, p in paths.items():
+            if len(p) < 2:
+                continue
+            k = int(np.argmin(np.hypot(p[:, 0] - mid[0], p[:, 1] - mid[1])))
+            a, b = p[max(0, k - 1)], p[min(len(p) - 1, k + 1)]
+            d = b - a
+            L = float(np.hypot(*d)) or 1.0
+            dist = abs((mid[0] - a[0]) * d[1] - (mid[1] - a[1]) * d[0]) / L
+            ang = math.degrees(math.atan2(d[1], d[0])) % 180.0
+            if dist > max_px or _angle_diff(ang, t["angle"]) > max_deg:
+                continue
+            if t.get("px_per_s") is not None and t.get("u") is not None:
+                vel = _predicted_px_per_s(w_ref, g["tracks"][name], k)
+                if vel is not None:
+                    along = float(np.dot(vel, t["u"]))
+                    seen = t["px_per_s"]
+                    if along * seen <= 0:
+                        t["rejected"].append((name, "moves the opposite way"))
+                        continue
+                    ratio = abs(seen) / (abs(along) or 1e-9)
+                    if not 0.5 <= ratio <= 2.0:
+                        t["rejected"].append((name, f"speed differs {ratio:.1f}x"))
+                        continue
+            if best is None or dist < best[0]:
+                best = (dist, name)
+        t["satellite"] = best[1] if best else None
+    return trails
+
+
+def trail_rate_deg_s(t, plate_deg_px, exposure_s):
+    """Angular rate: from the frame-by-frame motion when trail_kinematics
+    measured it, else from the dash length (one dash = one exposure). None
+    for a merged trail with no timing: its length spans many exposures."""
+    if not plate_deg_px:
+        return None
+    if t.get("px_per_s") is not None:
+        return abs(t["px_per_s"]) * plate_deg_px
+    if not exposure_s or t["n_dashes"] < 2:
+        return None
+    return t["dash_px"] * plate_deg_px / exposure_s
+
+
+def trail_direction(t, w_ref):
+    """Compass direction of motion on the sky ("NE", ...), or None."""
+    if t.get("px_per_s") is None or t.get("u") is None or w_ref is None:
+        return None
+    sgn = 1.0 if t["px_per_s"] > 0 else -1.0
+    mid = (np.array(t["p0"]) + np.array(t["p1"])) / 2
+    a = mid - sgn * np.array(t["u"]) * 10
+    b = mid + sgn * np.array(t["u"]) * 10
+    (r0, r1), (d0, d1) = w_ref.pixel_to_world_values(np.array([a[0], b[0]]),
+                                                     np.array([a[1], b[1]]))
+    dra = ((r1 - r0 + 180.0) % 360.0 - 180.0) * math.cos(math.radians((d0 + d1) / 2))
+    pa = math.degrees(math.atan2(dra, d1 - d0)) % 360.0
+    return _COMPASS[int((pa + 22.5) // 45) % 8]
+
+
+def trail_label(t):
+    if t.get("satellite"):
+        return t["satellite"]
+    if t.get("flash_ratio") is not None and t["flash_ratio"] >= FLASH_RATIO:
+        return "unidentified (flashing → aircraft?)"
+    return "unidentified"
+
+
+def draw_stack(st, g, res, path, which="moving", scores=None, trails=None):
     """The stacked composite with every predicted pass as two rails along its
     whole track, and each frame's predicted dash drawn just outside the rails
     (so the real dashes, between the rails, can be compared with where and
@@ -746,20 +1187,52 @@ def draw_stack(st, g, res, path, which="moving", scores=None):
                     np.array([s0[0], s1[0]]), np.array([s0[1], s1[1]]))
                 ax.plot([x0 + n0[0], x1 + n0[0]], [y0 + n0[1], y1 + n0[1]],
                         "-", color=c, lw=2.0, alpha=0.8)
+        _arrow(ax, tuple(p[-1]), p[-1] - p[-2], c)
         lbl = name
         if scores and scores.get(name) is not None:
             lbl += f"  ({scores[name]:.0f}σ)"
+        lbl += _motion_text(g.get("props", {}).get(name, {}))
         ax.annotate(lbl, tuple(p[0]), color=c, fontsize=8, xytext=(8, -12),
                     textcoords="offset points",
                     bbox=dict(boxstyle="round,pad=0.2", fc="black", ec=c, alpha=0.7))
+    for t in trails or []:
+        if t.get("satellite"):
+            continue                  # already drawn as its prediction
+        (x0, y0), (x1, y1) = t["p0"], t["p1"]
+        d = np.array([x1 - x0, y1 - y0], float)
+        nv = np.array([-d[1], d[0]]) / (np.hypot(*d) or 1.0) * (RAIL_PX + 4)
+        for sgn in (1, -1):
+            ax.plot([x0 + sgn * nv[0], x1 + sgn * nv[0]],
+                    [y0 + sgn * nv[1], y1 + sgn * nv[1]], "--", color="red", lw=1.0)
+        # Label on one side of the trail's middle, direction arrow on the
+        # other (the ends are often at the frame edge).
+        mid = np.array([(x0 + x1) / 2, (y0 + y1) / 2])
+        side = nv / (np.hypot(*nv) or 1.0)
+        if side[0] < 0 or (abs(side[0]) < 1e-6 and side[1] < 0):
+            side = -side
+        if t.get("px_per_s") is not None and t.get("u") is not None:
+            u = np.array(t["u"]) * (1 if t["px_per_s"] > 0 else -1)
+            a0 = mid - side * (RAIL_PX + 14)
+            _arrow(ax, tuple(a0 - u * 16), u, "red", length=28)
+        lbl = trail_label(t)
+        toward = trail_direction(t, st["ref"]["wcs"])
+        rate = t.get("rate_deg_s")
+        if toward:
+            lbl += f"  \u2192{toward}"
+        if rate is not None:
+            lbl += f" {rate:.2f}\u00b0/s"
+        ax.annotate(lbl, tuple(mid + side * (RAIL_PX + 10)), color="white", fontsize=8,
+                    va="center", ha="left" if side[0] > 0.3 else "center",
+                    bbox=dict(boxstyle="round,pad=0.2", fc="darkred", ec="red", alpha=0.85))
     jd0, jd1 = st["members"][0]["jd"][0], st["members"][-1]["jd"][1]
     kind = ("moving = brightest minus median, i.e. only what changed"
             if which == "moving" else "brightest value per pixel")
     fig.text(0.01, 1 - 0.3 * 48 / (height + 48),
              f"{len(st['members'])} frames stacked on {st['ref']['rec']['file']}   "
-             f"{utc_str(jd0)} – {jd_to_utc(jd1).strftime('%H:%M:%S')} UTC   "
+             f"{utc_str(jd0)} – {jd_to_utc(jd1).strftime('%H:%M:%S')} UTC\n"
              f"({kind}; rails = predicted pass, outside dashes = predicted "
-             f"position each exposure)", fontsize=8, va="top")
+             f"position each exposure, red dashed = trail nobody predicted)",
+             fontsize=8, va="top")
     fig.savefig(path, dpi=100, facecolor="white")
     plt.close(fig)
 
@@ -782,6 +1255,15 @@ def main(argv=None):
                     help="also align and stack each query group's frames into one "
                          "composite (satellites become dashed lines); use a larger "
                          "--window (e.g. 600) to stack a longer stretch")
+    ap.add_argument("--show-unlit", action="store_true",
+                    help="also show satellites in Earth's shadow (invisible; "
+                         "hidden by default)")
+    ap.add_argument("--show-stationary", action="store_true",
+                    help="also show near-stationary objects (geostationary etc.; "
+                         "hidden by default: they don't streak)")
+    ap.add_argument("--min-rate", type=float, default=MIN_RATE_DEG_S,
+                    help=f"deg/s below which an object counts as stationary "
+                         f"({MIN_RATE_DEG_S})")
     ap.add_argument("--sat-frame", choices=("icrs", "jnow"), default="icrs")
     ap.add_argument("--flip-roll", action="store_true",
                     help="approx WCS only: use -roll (convention check)")
@@ -802,7 +1284,8 @@ def main(argv=None):
 
     res = analyse(a.archive, a.frames, a.window, cache, a.sat_frame, a.flip_roll,
                   fetch=offline_fetch if a.offline else None, base=a.base_url,
-                  sleep_s=a.sleep)
+                  sleep_s=a.sleep, show_unlit=a.show_unlit,
+                  show_stationary=a.show_stationary, min_rate=a.min_rate)
     with open(resp_path, "w") as f:
         json.dump(res["responses"], f)
     if res["session"].get("clock_plausible") is False:
@@ -816,7 +1299,8 @@ def main(argv=None):
         wr = csv.writer(fcsv)
         wr.writerow(["frame", "exposure_start_utc", "exposure_s", "satellite",
                      "x_start", "y_start", "x_end", "y_end", "in_frame",
-                     "score_sigma", "wcs_source", "wcs_rms_px"])
+                     "score_sigma", "rate_deg_s", "toward", "lit",
+                     "wcs_source", "wcs_rms_px"])
         for r in res["results"]:
             rec = r["rec"]
             for s in r["sats"]:
@@ -826,6 +1310,8 @@ def main(argv=None):
                              *[None if v is None else round(v, 1) for v in (*seg[0], *seg[1])],
                              s.get("in_frame"),
                              None if s.get("score") is None else round(s["score"], 1),
+                             None if s.get("rate_deg_s") is None else round(s["rate_deg_s"], 4),
+                             s.get("toward"), s.get("lit"),
                              r["wcs_source"],
                              None if r["wcs_rms_px"] is None else round(r["wcs_rms_px"], 2)])
             if a.all_frames or any(s.get("in_frame") for s in r["sats"]):
@@ -836,8 +1322,23 @@ def main(argv=None):
     if a.chart:
         for gi, g in enumerate(res["groups"]):
             draw_chart(g, res["frames"], res, os.path.join(out, f"chart_{gi + 1}.png"))
+    for gi, g in enumerate(res["groups"]):
+        hid = g.get("hidden") or {}
+        if hid.get("unlit") or hid.get("stationary"):
+            print(f"query {gi + 1}: {len(g['tracks'])} predictions shown; hidden "
+                  f"{len(hid.get('unlit', []))} in Earth's shadow (--show-unlit), "
+                  f"{len(hid.get('stationary', []))} near-stationary (--show-stationary)")
     if a.stack:
-        with zipfile.ZipFile(a.archive) as zf:
+        cam = res["session"].get("camera") or {}
+        plate = (cam.get("fov_width_deg") or 0) / res["size"][0] or None
+        exps = [r["rec"].get("exposure_s") for r in res["results"] if r["rec"].get("exposure_s")]
+        exp_s = float(np.median(exps)) if exps else None
+        with zipfile.ZipFile(a.archive) as zf, \
+                open(os.path.join(out, "trails.csv"), "w", newline="") as ftr:
+            tw = csv.writer(ftr)
+            tw.writerow(["stack", "x_start", "y_start", "x_end", "y_end", "length_px",
+                         "n_dashes", "frames_seen", "rate_deg_s", "toward",
+                         "flash_ratio", "identified_as", "rejected_predictions"])
             for gi, g in enumerate(res["groups"]):
                 st = stack_group(zf, g, res)
                 if st is None:
@@ -845,13 +1346,35 @@ def main(argv=None):
                           f"mapping; skipped")
                     continue
                 sc = stack_scores(st, g, res)
+                trails = match_trails(trail_kinematics(zf, st, res, detect_trails(st["moving"])),
+                                      st, g, res)
+                for t in trails:
+                    t["rate_deg_s"] = trail_rate_deg_s(t, plate, exp_s)
                 for which, suffix in (("moving", "_moving"), ("max", "")):
                     draw_stack(st, g, res, os.path.join(out, f"stack_{gi + 1}{suffix}.png"),
-                               which, sc)
+                               which, sc, trails)
                 ranked = sorted(((v, k) for k, v in sc.items() if v is not None), reverse=True)
                 print(f"stack {gi + 1}: {len(st['members'])} frames; "
                       + (", ".join(f"{k} {v:.0f}\u03c3" for v, k in ranked[:8])
                          or "no predicted pass crosses the frame"))
+                for t in trails:
+                    rate = t["rate_deg_s"]
+                    L = float(np.hypot(t["p1"][0] - t["p0"][0], t["p1"][1] - t["p0"][1]))
+                    fr = t.get("flash_ratio")
+                    toward = trail_direction(t, st["ref"]["wcs"])
+                    rej = "; ".join(f"{n}: {why}" for n, why in t.get("rejected", []))
+                    tw.writerow([gi + 1, *[round(v, 1) for v in (*t["p0"], *t["p1"])],
+                                 round(L, 1), t["n_dashes"], t.get("n_seen"),
+                                 None if rate is None else round(rate, 4), toward,
+                                 None if fr is None else round(fr, 2),
+                                 t.get("satellite") or "", rej])
+                    print(f"  trail {L:.0f} px, {t['n_dashes']} dash(es), seen in "
+                          f"{t.get('n_seen')} frames"
+                          + (f", {rate:.2f}\u00b0/s" if rate is not None else "")
+                          + (f" toward {toward}" if toward else "")
+                          + (f", flash ratio {fr:.1f}" if fr is not None else "")
+                          + f": {trail_label(t)}"
+                          + (f"  [not {rej}]" if rej else ""))
 
     hits = [(r["rec"]["file"], s) for r in res["results"] for s in r["sats"]
             if s.get("in_frame")]
