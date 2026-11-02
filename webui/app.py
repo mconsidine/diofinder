@@ -2733,6 +2733,7 @@ def _bgrun_worker(n_frames, max_seconds, solve_frames):
         _bgrun_set(phase="zipping", progress=92, message="packaging results…")
         zip_name = f"bg_ab_{ts}.zip"
         _bgrun_make_zip(_BGRUN_DIR / zip_name, frames_dir, report, len(frames), peak)
+        _bgrun_prune(_BGRUN_DIR, keep_dir=None)
 
         _bgrun_set(phase="done", progress=100, running=False, finished=ts,
                    table=table, zip_name=zip_name, backend=backend,
@@ -2777,6 +2778,40 @@ def _bgrun_report(table, n_frames, peak, p):
         "re-analysis: python3 tests/diag_background.py --solve --image frames/...",
     ]
     return "\n".join(lines) + "\n"
+
+
+_BGRUN_KEEP = 10                       # newest Background A/B archives kept
+_BGRUN_CAP_BYTES = 300 * 1024 * 1024   # ...and at most this much in total
+
+
+def _bgrun_prune(directory, keep_dir=None, keep=_BGRUN_KEEP, cap_bytes=_BGRUN_CAP_BYTES):
+    """Keep bg_runs from growing without bound (it had no cap; only captures/
+    did). Each run's loose frames folder is redundant once its zip exists, so
+    every timestamped run folder except `keep_dir` is removed; then the oldest
+    bg_ab_*.zip archives go until at most `keep` remain and they total under
+    `cap_bytes`. Best-effort: never raises."""
+    import shutil
+    directory = pathlib.Path(directory)
+    try:
+        for d in directory.iterdir():
+            if d.is_dir() and _re.fullmatch(r"\d{8}_\d{6}", d.name) and d != keep_dir:
+                shutil.rmtree(d, ignore_errors=True)
+        zips = sorted(directory.glob("bg_ab_*.zip"), key=lambda p: p.name, reverse=True)
+        total = 0
+        for i, z in enumerate(zips):           # newest first
+            try:
+                size = z.stat().st_size
+            except OSError:
+                continue
+            if i >= keep or total + size > cap_bytes:
+                try:
+                    z.unlink()
+                except OSError:
+                    pass
+            else:
+                total += size
+    except OSError:
+        pass
 
 
 def _bgrun_make_zip(zip_path, frames_dir, report, n_frames, peak):

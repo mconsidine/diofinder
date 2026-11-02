@@ -1084,7 +1084,9 @@ extractor and says so (banner + report `*** NOTE ***`); use `diag_solve.py
 
 auto_tune is **live-only**. To find the best parameters *in hindsight* for an
 already-captured burst (the `bg_ab_*.zip` archives the Background A/B run writes
-to `/var/lib/diofinder/bg_runs/`), there are two paths:
+to `/var/lib/diofinder/bg_runs/`; since v0.11.76 `_bgrun_prune` keeps the newest
+10 within 300 MB and removes each run's loose frames folder once zipped), there
+are two paths:
 
 * **`tests/replay_corpus.py`** (off-device or on-device): the offline sweep.
   `--corpus` accepts a **directory of PNGs OR a `.zip`** (burst archives /
