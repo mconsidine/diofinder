@@ -1360,6 +1360,7 @@ _LX200_STORM_WARN_EVERY_S = 120.0
 _lx200_conn_count = 0
 _lx200_conn_window_t = 0.0
 _lx200_storm_warned_t = 0.0
+_lx200_last_window = (0, 0.0)     # (connections, monotonic end) of the last full window
 
 
 def _lx200_note_connection(addr):
@@ -1367,20 +1368,33 @@ def _lx200_note_connection(addr):
     only from the single-threaded accept loop, so the module counters are safe
     without a lock."""
     global _lx200_conn_count, _lx200_conn_window_t, _lx200_storm_warned_t
+    global _lx200_last_window
     now = time.monotonic()
     if now - _lx200_conn_window_t > 5.0:
         prev = _lx200_conn_count
+        _lx200_last_window = (prev, now)
         _lx200_conn_window_t = now
         _lx200_conn_count = 0
         if prev >= _LX200_STORM_PER_5S and \
                 now - _lx200_storm_warned_t > _LX200_STORM_WARN_EVERY_S:
             _lx200_storm_warned_t = now
             log.warning(
-                "LX200: %d rapid reconnects in ~5s from %s — some SkySafari "
-                "configs open a new connection per poll. Tolerated (align target "
-                "is shared), but a persistent connection is lighter on CPU 0.",
-                prev, addr)
+                "LX200: %d connections in ~5s from %s — SkySafari opens a new "
+                "connection for every position poll. Harmless, but each costs "
+                "CPU 0 time: lowering the readout rate in SkySafari's "
+                "telescope settings reduces it.", prev, addr)
     _lx200_conn_count += 1
+
+
+def lx200_conn_per_5s(now=None):
+    """LX200 connections in the most recent 5 s window (SkySafari opens one per
+    position poll), or 0 if no client has connected in the last ~10 s. Shown
+    on the headroom card so the readout-rate cost is visible."""
+    now = time.monotonic() if now is None else now
+    count, t_end = _lx200_last_window
+    if now - max(t_end, _lx200_conn_window_t) > 10.0:
+        return 0
+    return int(count)
 
 
 def _do_alignment(align_state, cfg, shared_cfg,
@@ -2120,7 +2134,9 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             if sm is None:
                 return MaintResponse(ok=True, result={
                     "available": False, "reason": "resource monitor not started"})
-            return MaintResponse(ok=True, result={"available": True, **sm.snapshot()})
+            return MaintResponse(ok=True, result={
+                "available": True, **sm.snapshot(),
+                "lx200_conn_per_5s": lx200_conn_per_5s()})
 
         if cmd == "wifi_boot_set":
             # Persist the Wi-Fi page's "Network at boot" choice. The web UI

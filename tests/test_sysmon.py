@@ -300,3 +300,21 @@ def test_cpu0_streaks_count_consecutive_samples():
     assert sm._cpu0_warn_streak == 1
     assert sm.high_water["max_cpu0_warn_streak"] == 2       # longest run kept
     assert sm.high_water["max_cpu0_pct"] == 99.0
+
+
+# --- SkySafari connection rate on the headroom card ---
+
+def test_lx200_conn_rate_reports_last_window_then_goes_quiet(monkeypatch):
+    from diofinder import comms_proc as cp
+    monkeypatch.setattr(cp, "_lx200_conn_count", 0)
+    monkeypatch.setattr(cp, "_lx200_conn_window_t", 0.0)
+    monkeypatch.setattr(cp, "_lx200_last_window", (0, 0.0))
+    t = [1000.0]
+    monkeypatch.setattr(cp.time, "monotonic", lambda: t[0])
+    for i in range(21):                      # 21 polls within one 5 s window...
+        t[0] = 1000.0 + i * 0.25
+        cp._lx200_note_connection(("phone", 1))
+    t[0] = 1006.0
+    cp._lx200_note_connection(("phone", 1))  # ...the next one closes the window
+    assert cp.lx200_conn_per_5s(1006.5) == 21
+    assert cp.lx200_conn_per_5s(1030.0) == 0  # SkySafari gone: not a stale number

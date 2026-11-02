@@ -29,6 +29,7 @@
       <dt>Swap (zram)</dt><dd id="sm-swap">&mdash;</dd>
       <dt>CPU (overall / core&nbsp;0)</dt><dd id="sm-cpu">&mdash;</dd>
       <dt>Temperature</dt><dd id="sm-temp">&mdash;</dd>
+      <dt>SkySafari polls</dt><dd id="sm-lx">&mdash;</dd>
       <dt>Worst since start</dt><dd id="sm-hw">&mdash;</dd>
     </dl>
     <table class="preset-table" id="sysmon-procs" style="margin-top:10px;display:none;">
@@ -223,6 +224,12 @@
              + (res.zram_ratio ? ", " + res.zram_ratio + "× compressed" : "") + ")" : "") : "—");
       set("sm-cpu", pctStr(cpu.cpu) + " / " + pctStr(cpu.cpu0));
       set("sm-temp", res.temp_c != null ? res.temp_c + " °C" : "n/a");
+      // SkySafari opens a new connection for every position poll, each costing
+      // CPU 0 time; past ~2/s, suggest lowering its readout rate.
+      var lx = res.lx200_conn_per_5s;
+      set("sm-lx", lx == null ? "—" : !lx ? "none (not connected)" :
+          (lx / 5).toFixed(1) + " per second" +
+          (lx >= 10 ? " — lower the readout rate in SkySafari's telescope settings to ease CPU 0" : ""));
       set("sm-hw", "min free " + pctStr(hw.min_mem_available_pct) + atStr(at.min_mem_available_pct) +
           ", zram " + (hw.max_swap_phys_mb != null ? hw.max_swap_phys_mb + " MB" : "—") +
           atStr(at.max_swap_phys_mb) +
