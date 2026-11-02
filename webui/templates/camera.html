@@ -284,7 +284,7 @@
   </div>
 
   <div class="card expert-only" id="mount-card">
-    <h2>Mount sync (SynScan) {{ tip("Push the finder's solved position to a GoTo mount as a <strong>sync</strong> (never a slew) over the GPIO serial line — turning the plate solver into an alignment source (e.g. a SkyWatcher Virtuoso via GPIO14/15 &rarr; MAX232 &rarr; RS-232). <strong>Manual</strong>: press Sync now. <strong>Auto</strong>: syncs after each confident, settled solve. Sync-only — it cannot move the mount. Transport (port/baud) is set in the config file; restart to change it.") }}</h2>
+    <h2>Mount sync (SynScan) {{ tip("Push the finder's solved position to a GoTo mount as a <strong>sync</strong> (never a slew) over the GPIO serial line — turning the plate solver into an alignment source (e.g. a SkyWatcher Virtuoso via GPIO14/15 &rarr; MAX3232 &rarr; RS-232; a 3.3&nbsp;V MAX3232, not a 5&nbsp;V MAX232). <strong>Manual</strong>: press Sync now. <strong>Auto</strong>: syncs after each confident, settled solve. Sync-only — it cannot move the mount. Transport (port/baud) is set in the config file; restart to change it.") }}</h2>
     {% if mount %}
       <form method="post" action="{{ url_for('mount_set') }}" style="margin:0 0 10px;">
         <input type="hidden" name="next" value="camera_page">
@@ -1181,6 +1181,7 @@ setInterval(syncCameraState, 3000);
                  ' · ' + s.result + ' · ' + (s.utc || ''));
     }
     lines.push('syncs:     ' + m.syncs_ok + ' ok / ' + m.syncs_fail + ' failed');
+    if (m.mode === 'auto' && m.auto_reason) lines.push('auto:      ' + m.auto_reason);
     if (m.last_error) lines.push('error:     ' + m.last_error);
     statusEl.textContent = lines.join('\n');
   }

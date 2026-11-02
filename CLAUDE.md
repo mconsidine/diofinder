@@ -1167,8 +1167,9 @@ SkySafari over Wi-Fi and drives the mount over the GPIO serial line at the same
 time. Full design + rationale in `docs/onstep-design.md`.
 
 **v1 dialect: SynScan** (SkyWatcher Virtuoso). The transport is the **GPIO
-UART** `/dev/serial0` (GPIO14/15) through a **MAX232 → true RS-232** to the
-Virtuoso's wired serial port; the tether (USB CDC-ACM console) is untouched.
+UART** `/dev/serial0` (GPIO14/15) through a **MAX3232 → true RS-232** to the
+Virtuoso's wired serial port (a 3.3 V MAX3232 — **not** a 5 V MAX232, which can
+damage the Pi's 3.3 V GPIO); the tether (USB CDC-ACM console) is untouched.
 `mountlink.py` is **dialect- and transport-pluggable**:
 
 - `SerialTransport` (pyserial, imported lazily — the module and its tests need
@@ -1193,9 +1194,16 @@ Virtuoso's wired serial port; the tether (USB CDC-ACM console) is untouched.
   retries next cycle.
 - `_MountManager` (module singleton) owns the one serial connection, shared by
   the loop and the manual commands under a lock so pushes can't interleave.
-- `mountlink.should_sync(solution, now, last_sync, gates, moving)` — the pure
-  auto-push policy (solved & fresh, ≥ `min_matches`, not slewing, outside the
-  arcmin deadband, past the min interval), unit-tested in `tests/test_mountlink.py`.
+- `mountlink.should_sync(solution, now, last_sync, gates, moving, last_motion_t)` —
+  the pure auto-push policy (solved & fresh, ≥ `min_matches`, not slewing,
+  **settled**, outside the arcmin deadband, past the min interval), unit-tested
+  in `tests/test_mountlink.py`. **Settle gate** (`mount_auto_settle_s`, wired
+  v0.11.76 — before that the key existed but nothing read it): the solve must
+  be published ≥ `settle_s` after the IMU last saw motion, so a frame from the
+  tail of a slew is never synced. `_mount_loop` keeps `last_motion_t` via the
+  pure `mountlink.track_last_motion` (first still reading starts a full settle
+  period); with no IMU (`_imu_is_moving` → None) the gate is skipped. 0 = off.
+  The loop's latest decision is in `mount_status.auto_reason`.
 - Maint commands: `mount_status`, `mount_sync` (one-shot manual push of the
   fresh solved position — `no fresh solution` otherwise), `mount_test` (open +
   query version, for wiring setup), `mount_set` (live keys: enabled/mode/epoch +

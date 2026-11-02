@@ -8,7 +8,8 @@ GPIO serial line at the same time (see docs/onstep-design.md).
 
 **v1 dialect: SynScan** (SkyWatcher, e.g. the Virtuoso). The mount's wired
 serial port speaks the NexStar-derived SynScan ASCII protocol; the Pi's 3.3 V
-GPIO UART reaches it through a MAX232 (TTL -> true RS-232). The architecture is
+GPIO UART reaches it through a MAX3232 (3.3 V TTL -> true RS-232; not the
+5 V-only MAX232, which can damage the Pi's 3.3 V GPIO). The architecture is
 dialect- and transport-pluggable — the interface a mount link exposes is:
 
     ping() -> bool                 # liveness handshake
@@ -243,7 +244,26 @@ def make_link(protocol: str, transport, epoch: str = "jnow", now_fn=None):
 # Auto-push policy (pure, unit-tested) — mirrors _auto_exposure_decision
 # --------------------------------------------------------------------------- #
 
-def should_sync(solution, now, last_sync, gates, moving):
+def track_last_motion(last_motion_t, moving, now):
+    """Update the "last seen moving" time the settle gate measures from.
+
+    ``moving`` is the IMU motion signal: True, False, or None when there is
+    no usable IMU (absent, parked, or stale). Returns the new value:
+
+    * moving        -> ``now`` (the scope is moving at this instant)
+    * still         -> unchanged, or ``now`` when there was no reference yet,
+      so the first still reading (startup, or the IMU coming back) starts a
+      full settle period rather than assuming the scope was already settled
+    * no IMU (None) -> None: the settle gate can't be measured and is skipped
+    """
+    if moving is None:
+        return None
+    if moving:
+        return now
+    return now if last_motion_t is None else last_motion_t
+
+
+def should_sync(solution, now, last_sync, gates, moving, last_motion_t=None):
     """Decide whether an auto-mode sync should fire this cycle.
 
     Pure so it is testable without hardware. Returns ``(do_sync, reason)`` —
@@ -259,6 +279,11 @@ def should_sync(solution, now, last_sync, gates, moving):
     * ``gates``     — dict: ``max_age_s``, ``min_matches``, ``settle_s``,
       ``deadband_arcmin``, ``min_interval_s``.
     * ``moving``    — True if the mount/scope is slewing (IMU rate gate).
+    * ``last_motion_t`` — monotonic time the scope was last seen moving (see
+      ``track_last_motion``), or None when there is no IMU signal. The settle
+      gate requires the solve to come from at least ``settle_s`` after that,
+      so a sync never uses a frame from the end of a slew while the tube is
+      still ringing. ``settle_s`` 0 disables it; None skips it.
     """
     if not solution or not solution.get("solved"):
         return False, "no solution"
@@ -270,6 +295,12 @@ def should_sync(solution, now, last_sync, gates, moving):
         return False, f"stale ({age:.1f}s)"
     if solution.get("matches", 0) < gates["min_matches"]:
         return False, f"weak ({solution.get('matches', 0)} matches)"
+
+    settle_s = gates.get("settle_s", 0.0)
+    if last_motion_t is not None and settle_s > 0:
+        settled_for = solution.get("epoch_monotonic", 0.0) - last_motion_t
+        if settled_for < settle_s:
+            return False, f"settling ({max(0.0, now - last_motion_t):.1f}s still)"
 
     ra = solution.get("ra_deg")
     dec = solution.get("dec_deg")

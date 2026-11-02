@@ -1740,12 +1740,13 @@ _CONFIG_SECTIONS = [
     ("Mount sync (SynScan)", [
         ("mount_enabled",       "Mount link",       "Push solved position to a GoTo mount as a sync (never a slew). Default off."),
         ("mount_protocol",      "Protocol",         "Mount dialect: synscan (SkyWatcher). Restart to change."),
-        ("mount_serial_port",   "Serial port",      "GPIO UART device, e.g. /dev/serial0 (GPIO14/15 -> MAX232 -> RS-232). Restart."),
+        ("mount_serial_port",   "Serial port",      "GPIO UART device, e.g. /dev/serial0 (GPIO14/15 -> MAX3232 -> RS-232; not a 5 V MAX232). Restart."),
         ("mount_serial_baud",   "Serial baud",      "SynScan default 9600. Restart to change."),
         ("mount_epoch",         "Mount epoch",      "The mount's coordinate epoch (jnow/j2000). Separate from the LX200 report epoch."),
         ("mount_mode",          "Push mode",        "manual (Sync-now button) or auto (gated sync after each solve)."),
         ("mount_auto_min_interval_s", "Auto min interval (s)", "Auto mode: minimum seconds between syncs."),
         ("mount_auto_deadband_arcmin", "Auto deadband (')", "Auto mode: skip a re-sync within this angle of the last."),
+        ("mount_auto_settle_s", "Auto settle (s)",  "Auto mode: only sync a solve taken at least this long after the scope stopped moving (IMU). 0 = off."),
     ]),
     ("CPU Affinity", [
         ("cpu_camera", "Camera CPU",  "Core for camera_proc. Also shared with solver rayon threads."),

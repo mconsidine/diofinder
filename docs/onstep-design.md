@@ -7,7 +7,7 @@ plate-solve alignment source for a GoTo mount.
 > **As built — SynScan (SkyWatcher Virtuoso), first dialect.** The pluggable
 > `MountLink` design below is realized in **`diofinder/mountlink.py`** with the
 > **SynScan/NexStar** dialect (`SynScanLink`) + a pyserial `SerialTransport`
-> over the GPIO UART (`/dev/serial0`, GPIO14/15 → **MAX232 → RS-232** to the
+> over the GPIO UART (`/dev/serial0`, GPIO14/15 → **MAX3232 → RS-232** to the
 > Virtuoso's wired serial port). It follows this spec's shape:
 > `sync(ra,dec)` (precise NexStar `s` command, sync-only — never slews),
 > `version()`, `get_radec()`, `ping()`; epoch conversion via

@@ -551,6 +551,7 @@ class _MountManager:
         self.syncs_ok = 0
         self.syncs_fail = 0
         self.last_error = None
+        self.auto_reason = None     # auto mode's last decision ("sync", "settling (1.2s still)", ...)
 
     def _teardown(self):
         if self._transport is not None:
@@ -631,6 +632,7 @@ class _MountManager:
                 "last_sync": self.last_sync,
                 "syncs_ok": self.syncs_ok, "syncs_fail": self.syncs_fail,
                 "last_error": self.last_error,
+                "auto_reason": self.auto_reason,
             }
 
 
@@ -646,6 +648,7 @@ def _mount_loop(ctx, interval_s=2.0):
     """
     cfg = ctx.cfg
     last_sync = None          # {"ra","dec","t"} of the last accepted auto sync
+    last_motion_t = None      # last time the IMU saw the scope moving (settle gate)
     fail_until = 0.0          # back off attempts until this monotonic time
     fail_logged = False       # WARNING logged once per failure streak, not per cycle
     while True:
@@ -653,20 +656,30 @@ def _mount_loop(ctx, interval_s=2.0):
         try:
             scfg = _mp_snapshot(ctx.shared_cfg)
             if not scfg.get("mount_enabled", getattr(cfg, "mount_enabled", False)):
+                last_motion_t = None
+                _mount_mgr.auto_reason = None
                 continue
             if str(scfg.get("mount_mode",
                             getattr(cfg, "mount_mode", "manual"))).lower() != "auto":
+                last_motion_t = None
+                _mount_mgr.auto_reason = None
                 continue
             now = time.monotonic()
+            # Track motion every cycle (even while backing off) so the settle
+            # gate measures from the real end of the last slew.
+            moving = _imu_is_moving(scfg)
+            last_motion_t = _mountlink.track_last_motion(last_motion_t, moving, now)
             if now < fail_until:
                 # A recent sync failed (no mount / wrong port / rejected).
                 # Back off so a missing mount doesn't retry — and log — every
                 # cycle; mount_status still shows last_error + syncs_fail.
+                _mount_mgr.auto_reason = "backing off after a failed sync"
                 continue
             sol = _mp_snapshot(ctx.latest_solution)
             gates = _mount_gates(cfg, scfg)
             do, why = _mountlink.should_sync(
-                sol, now, last_sync, gates, _imu_is_moving(scfg))
+                sol, now, last_sync, gates, moving, last_motion_t=last_motion_t)
+            _mount_mgr.auto_reason = why
             if not do:
                 continue
             ra, dec = float(sol["ra_deg"]), float(sol["dec_deg"])
@@ -1549,16 +1562,18 @@ _mount_rate_state = {}          # dedicated motion state for the mount push loop
 _mount_rate_lock = threading.Lock()
 
 
-def _imu_is_moving(scfg) -> bool:
+def _imu_is_moving(scfg):
     """Best-effort slew detector for the mount auto-push (its own rate state,
-    so it never perturbs the LX200 pointing path). Returns False when the IMU
-    is unavailable — a missing motion signal must not silently block syncs; the
-    freshness / deadband gates still protect against a mid-slew push."""
+    so it never perturbs the LX200 pointing path). Returns True/False, or None
+    when the IMU is unavailable or stale. None is falsy, so a missing motion
+    signal never silently blocks syncs (the freshness / deadband gates still
+    protect against a mid-slew push); it also tells the settle gate that it
+    has nothing to measure from (``mountlink.track_last_motion``)."""
     if not scfg.get("imu_available", False):
-        return False
+        return None
     q_now, imu_t = get_imu_qt(scfg)
     if q_now is None or time.monotonic() - imu_t > 2.0:
-        return False
+        return None
     ref = scfg.get("imu_ref")
     ref_t = ref[4] if ref is not None and len(ref) >= 5 else 0.0
     rate_gate = float(scfg.get("imu_rate_gate_dps", _IMU_RATE_GATE_DPS))

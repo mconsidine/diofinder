@@ -353,8 +353,9 @@ imu_exact_predict: true
 # ---- Mount link (outbound sync to a GoTo mount; default OFF) ----
 # After a confident solve the finder can SYNC its solved position to a mount
 # (never a slew), correcting the mount's pointing model. v1 speaks the
-# SynScan/NexStar protocol over the GPIO UART (GPIO14/15 -> MAX232 -> RS-232,
-# e.g. a SkyWatcher Virtuoso). Sync-only: nothing here can move the mount.
+# SynScan/NexStar protocol over the GPIO UART (GPIO14/15 -> MAX3232 -> RS-232,
+# e.g. a SkyWatcher Virtuoso). Use a MAX3232 (3.3 V), NOT a 5 V MAX232: the
+# Pi's GPIO is 3.3 V. Sync-only: nothing here can move the mount.
 mount_enabled: false          # master switch (live)
 mount_protocol: synscan       # dialect; restart
 mount_serial_port: /dev/serial0   # GPIO UART; restart
@@ -364,7 +365,7 @@ mount_mode: manual            # manual (button) / auto (gated); live
 # Auto-mode gates (live):
 mount_auto_max_age_s: 3.0
 mount_auto_min_matches: 8
-mount_auto_settle_s: 3.0
+mount_auto_settle_s: 3.0      # solve must come >= this long after the IMU last saw motion (0 = off)
 mount_auto_deadband_arcmin: 1.0
 mount_auto_min_interval_s: 15.0
 

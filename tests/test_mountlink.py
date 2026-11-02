@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from diofinder import mountlink
 from diofinder.mountlink import (
     SynScanLink, MountError, deg_to_nexstar_hex, nexstar_hex_to_deg, should_sync,
+    track_last_motion,
 )
 
 
@@ -166,3 +167,99 @@ def test_should_sync_when_moved_far_enough():
     last = {"ra": 90.0, "dec": 20.0, "t": 900.0}   # ~9deg away, old enough
     do, why = should_sync(_sol(), 1001.0, last, _GATES, False)
     assert do is True and why == "sync"
+
+
+# ---- settle gate (settle_s) ----------------------------------------------
+# The solve must come from at least settle_s (3 s) after the scope was last
+# seen moving, so a sync never uses a frame from the tail of a slew.
+
+def test_settle_blocks_solve_too_soon_after_motion():
+    # Motion last seen at 998.5; solve published at 1000.0 = only 1.5 s later.
+    do, why = should_sync(_sol(), 1001.0, None, _GATES, False,
+                          last_motion_t=998.5)
+    assert do is False and why.startswith("settling")
+
+
+def test_settle_passes_once_solve_is_late_enough():
+    # Motion last seen at 996.5; solve at 1000.0 = 3.5 s later.
+    do, why = should_sync(_sol(), 1001.0, None, _GATES, False,
+                          last_motion_t=996.5)
+    assert do is True and why == "sync"
+
+
+def test_settle_judges_the_solve_time_not_the_clock():
+    # Plenty of wall time has passed since motion (now - 997 = 3.9 s), but the
+    # newest solve (1000.0) is from only 3.0 - 0.1 s after it: still blocked,
+    # because that frame may hold the end of the slew.
+    do, why = should_sync(_sol(), 1000.9, None, _GATES, False,
+                          last_motion_t=997.1)
+    assert do is False and why.startswith("settling")
+
+
+def test_settle_zero_disables_gate():
+    gates = dict(_GATES, settle_s=0.0)
+    do, why = should_sync(_sol(), 1001.0, None, gates, False,
+                          last_motion_t=1000.5)
+    assert do is True and why == "sync"
+
+
+def test_settle_skipped_without_imu_signal():
+    # last_motion_t None (no IMU): the settle gate can't be measured, so it
+    # never blocks; the other gates still apply.
+    do, why = should_sync(_sol(), 1001.0, None, _GATES, None,
+                          last_motion_t=None)
+    assert do is True and why == "sync"
+
+
+def test_settle_default_kwarg_keeps_old_call_shape():
+    do, why = should_sync(_sol(), 1001.0, None, _GATES, False)
+    assert do is True and why == "sync"
+
+
+def test_track_last_motion_moving_stamps_now():
+    assert track_last_motion(None, True, 50.0) == 50.0
+    assert track_last_motion(10.0, True, 50.0) == 50.0
+
+
+def test_track_last_motion_still_keeps_reference():
+    assert track_last_motion(10.0, False, 50.0) == 10.0
+
+
+def test_track_last_motion_first_still_reading_starts_settle():
+    # Startup / IMU just came back: don't assume it was already settled.
+    assert track_last_motion(None, False, 50.0) == 50.0
+
+
+def test_track_last_motion_no_imu_clears():
+    assert track_last_motion(10.0, None, 50.0) is None
+
+
+def test_settle_end_to_end_after_a_slew():
+    # Loop cadence 2 s; slewing until t=100, still from t=102.
+    lm = None
+    for t, mv in [(96.0, True), (98.0, True), (100.0, True), (102.0, False)]:
+        lm = track_last_motion(lm, mv, t)
+    assert lm == 100.0
+    # Solve published at 101.5 (tail of the slew): blocked.
+    assert should_sync(_sol(epoch_monotonic=101.5), 102.0, None, _GATES,
+                       False, last_motion_t=lm)[0] is False
+    # Solve published at 103.2 = 3.2 s after the last motion: syncs.
+    assert should_sync(_sol(epoch_monotonic=103.2), 104.0, None, _GATES,
+                       False, last_motion_t=lm)[0] is True
+
+
+def test_comms_imu_is_moving_reports_no_signal_as_none():
+    # No IMU -> None (not False), so the settle gate knows it has nothing to
+    # measure from; None stays falsy for the "slewing" gate.
+    from diofinder import comms_proc
+    assert comms_proc._imu_is_moving({}) is None
+    assert comms_proc._imu_is_moving({"imu_available": False}) is None
+
+
+def test_comms_mount_status_exposes_auto_reason():
+    from diofinder import comms_proc
+
+    class _Cfg:
+        pass
+    st = comms_proc._MountManager().status(_Cfg(), {})
+    assert "auto_reason" in st and st["auto_reason"] is None
