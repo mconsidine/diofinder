@@ -62,17 +62,17 @@ test-mode location default (15).
    up before an image build; only `release.yml` exists.
 10. *Deferred (a convenience):* **"Promote tested image" release mode**, so the shipped image is
     byte-identical to the one flashed and tested.
-11. *Phone button done (v0.11.76 base, Utilities → Clock); restoring the last-known time at boot is in the release-candidate group:* **Clock:** logs before a time sync carry the image build date (no RTC).
+11. ✅ *Done: phone button (Utilities → Clock); daemon sets the clock directly (CAP_SYS_TIME — sudo was blocked by NoNewPrivileges); SkySafari threshold 2 s; last-known time restored at start; only this boot's sync counts as the source.* **Clock:** logs before a time sync carry the image build date (no RTC).
     Check whether later boots restore the last-known time, and consider a web
     UI "set time from this phone" button (`diofinder-set-time` exists).
 12. *Dropped (cosmetic):* **Cosmetic picamera2 traceback at every boot** from the `tuning_file=` probe;
     try the working `tuning=` path first. Low priority (touches camera init).
-13. **Watch with field data before changing:** FOV drift recommits after
+13. ✅ *FOV part done (release-candidate group): recentre on the long-run median of window medians, staying calibrated.* **Watch with field data before changing:** FOV drift recommits after
     refocus (4 in a session, 13.50–13.60°); the default-off features awaiting
     on-sky validation (ROI tracking, bg-cache bin-at-submit, IMU Units B/C).
 14. **Bigger:** the shelved IMU report smoothing (jumpy crosshair while moving;
     `docs/decisions/2026-11-01-imu-report-smoothing-shelved.md`).
-15. *Decided (release-candidate group):* test mode uses explicit `test_*` values
+15. ✅ *Done:* test mode uses explicit `test_*` values
     when set, otherwise the configured site, otherwise a placeholder — never 0/0.
 
 16. ✅ *Done (v0.11.76 base):* **Record the clock source in live captures:** when and how the clock was

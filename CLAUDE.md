@@ -219,11 +219,18 @@ but keeps `fov_deg` as the starting search estimate.
 **Self-healing (v0.11.19).** Two mechanisms keep a wrong committed FOV from
 persisting:
 
-* **Drift recommit**: every 50 solves the rolling median is compared against
-  the committed value, with a dead band of 3× the **measured window stddev**
-  (floored at `fov_drift_stddev_floor` = 0.01°). The old dead band used the
-  0.05° convergence constant (0.15° band, ~44× real measurement noise), which
-  let the 13.64-vs-13.55 sensor-mode miscentering sit uncorrected forever.
+* **Drift recentre**: every 50 solves the window median joins a short
+  history (5); the **long-run value** = the median of those window medians
+  (≥ 3 needed) is compared against the committed value, with a dead band of
+  3× the **measured window stddev** (floored at `fov_drift_stddev_floor` =
+  0.01°). Past it the commit is **recentred on the long-run value directly**,
+  staying CALIBRATED (tight tolerance kept). The old dead band used the 0.05°
+  convergence constant (0.15° band, ~44× real measurement noise), which let the
+  13.64-vs-13.55 sensor-mode miscentering sit uncorrected forever; v0.11.19–75
+  then compared each single window and dropped to CALIBRATING, which chased
+  the ±0.05° field-to-field wander (field log 2026-11-01: four recommits in an
+  evening, 13.504–13.599, one 0.06° off truth). `calibration_status` shows
+  `window_medians` and `long_run_median`.
 * **Failure-driven loose fallback** (`FallbackGate`, config
   `fov_fallback_fails` = 20, 0 disables): after 20 consecutive failed solve
   *attempts* (detection healthy — the solver only attempts with

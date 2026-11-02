@@ -20,9 +20,19 @@ The calibration state machine:
   * CALIBRATED: N solves accumulated, the spread (stddev) is below
     threshold, and we've written the median to the config. Subsequent
     solves use a TIGHT tolerance (cfg.fov_calibrated_max_error_deg).
-    We keep accumulating to detect drift -- if the rolling median
-    drifts > 3*stddev from the committed value, we revert to
-    CALIBRATING and recommit when stable.
+    We keep accumulating to detect drift: every drift-check interval the
+    current window's median is added to a short history, and when the
+    median of that history (the LONG-RUN value, needs >= 3 windows) is
+    > 3*stddev from the committed value, we recentre the commit on it
+    directly (staying CALIBRATED, tight tolerance kept).
+
+    Why the long run (v0.11.76): one window's median wanders +/-0.05 deg
+    from field to field (field log 2026-11-01: 13.540 -> 13.504 -> 13.538
+    -> 13.599 -> 13.536 in one evening, every step a "drift"). Recommitting
+    to each window chased that wander, once to 0.06 deg off the truth, more
+    than half of the +/-0.1 deg tight search window. The median of the last
+    few window medians sits still, while a real shift (refocus, the 13.64 vs
+    13.55 sensor-mode miscentering) still moves it within ~150 solves.
 
 The same mechanism handles distortion. Distortion's measurement noise
 is higher (it's a small correction term) so we use a longer window
@@ -76,6 +86,10 @@ class CalibrationParams:
     distortion_convergence_stddev: float = 0.005
     # How many solves between recalibration checks once CALIBRATED
     drift_check_interval: int = 50
+    # Window medians kept for the long-run value, and how many are needed
+    # before it may recentre the commit.
+    drift_history: int = 5
+    drift_min_windows: int = 3
 
 
 class FovCalibrator:
@@ -100,6 +114,7 @@ class FovCalibrator:
         self._fov_window = deque(maxlen=self.params.window_size)
         self._distortion_window = deque(maxlen=self.params.window_size)
         self._solves_since_check = 0
+        self._window_medians = deque(maxlen=self.params.drift_history)
         self._last_log_state = None
 
     @property
@@ -218,30 +233,57 @@ class FovCalibrator:
             self.shared_cfg["distortion"] = dist_med
 
         self.state = CalState.CALIBRATED
+        self._window_medians.clear()
         self._log_state_change()
 
+    def long_run_fov(self):
+        """Median of the recent window medians, or None until there are
+        drift_min_windows of them."""
+        if len(self._window_medians) < self.params.drift_min_windows:
+            return None
+        return statistics.median(self._window_medians)
+
     def _check_for_drift(self) -> None:
-        """Rolling median moved too far from committed value -> recalibrate."""
+        """Long-run median moved too far from the committed value -> recentre."""
         if self.committed_fov is None or self.committed_fov_stddev is None:
             return
         recent_med = statistics.median(self._fov_window)
         recent_std = (statistics.stdev(self._fov_window)
                       if len(self._fov_window) > 1 else 0.0)
+        self._window_medians.append(recent_med)
+        long_run = self.long_run_fov()
+        if long_run is None:
+            return
         # Drift in units of the CURRENT window's measured stddev (floored).
         # The old scale - max(committed stddev, 0.05 convergence constant) -
         # gave a 0.15 deg dead band, ~44x the real measurement noise, so a
         # 0.09 deg miscentering (sensor-mode change) was "1.75 sigma" to the
         # code while being a 26-sigma error to the data, and never healed.
         scale = max(recent_std, self.params.fov_drift_stddev_floor)
-        drift = abs(recent_med - self.committed_fov) / scale
+        drift = abs(long_run - self.committed_fov) / scale
         if drift > self.params.fov_drift_sigmas:
-            log.warning("FOV drift detected: was %.4f, now %.4f (%.1f sigma); "
-                        "recalibrating", self.committed_fov, recent_med, drift)
-            self.state = CalState.CALIBRATING
-            self._log_state_change()
-            # Don't clear committed_fov yet; keep using it until the next
-            # commit lands so we don't briefly lose tight tolerance during
-            # the recalibration window.
+            self._recentre(long_run, recent_std, drift)
+
+    def _recentre(self, fov, stddev, drift_sigmas) -> None:
+        """Move the commit to the long-run value without leaving CALIBRATED
+        (the tight tolerance stays on; the old path dropped to the loose one
+        and recommitted whatever the latest window said)."""
+        arcsec_per_pixel = fov * 3600.0 / self.cfg.frame_width
+        try:
+            cfg_mod.save_keys({"fov_deg": fov, "fov_calibrated_stddev": stddev,
+                               "arcsec_per_pixel": arcsec_per_pixel})
+        except Exception as e:
+            log.warning("Could not persist FOV recentre: %s", e)
+            return
+        log.warning("FOV recentred: was %.4f, long-run %.4f over %d windows "
+                    "(%.1f sigma)", self.committed_fov, fov,
+                    len(self._window_medians), drift_sigmas)
+        self.committed_fov = fov
+        self.committed_fov_stddev = stddev
+        self.cfg.fov_deg = fov
+        self.cfg.arcsec_per_pixel = arcsec_per_pixel
+        self.shared_cfg["fov_deg"] = fov
+        self.shared_cfg["arcsec_per_pixel"] = arcsec_per_pixel
 
     def _log_state_change(self) -> None:
         if self.state != self._last_log_state:
@@ -265,6 +307,8 @@ class FovCalibrator:
             "convergence_threshold": self.params.fov_convergence_stddev,
             "recent_median": recent_med,
             "recent_stddev": recent_std,
+            "long_run_median": self.long_run_fov(),
+            "window_medians": list(self._window_medians),
             "committed_fov": self.committed_fov,
             "committed_fov_stddev": self.committed_fov_stddev,
             "committed_distortion": self.committed_distortion,
@@ -282,6 +326,7 @@ class FovCalibrator:
         log.info("Force recalibrate: clearing window and committed state")
         self._fov_window.clear()
         self._distortion_window.clear()
+        self._window_medians.clear()
         self.committed_fov = None
         self.committed_fov_stddev = None
         self.committed_distortion = 0.0

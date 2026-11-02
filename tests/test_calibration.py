@@ -47,11 +47,13 @@ class DriftSelfHealTests(unittest.TestCase):
         # fire at the first interval and the next window recommit ~13.55.
         cal, cfg, shared = _mk(calibrated=True)
         with mock.patch.object(calibration.cfg_mod, "save_keys") as sk:
-            # Fill the window (30) + reach the drift-check interval (50);
-            # the drift check fires (~9 sigma of the measured noise) and the
-            # already-converged window recommits on the very next solve.
+            # Fill the window (30) + three drift checks (3 x 50): the
+            # long-run median (~9 sigma off) recentres the commit, staying
+            # CALIBRATED throughout (tight tolerance never dropped).
             _feed(cal, 13.552, cal.params.window_size
-                  + cal.params.drift_check_interval + 1)
+                  + 2 * cal.params.drift_check_interval)
+            self.assertAlmostEqual(cal.committed_fov, 13.64)        # 2 windows: not yet
+            _feed(cal, 13.552, cal.params.drift_check_interval)
             self.assertEqual(cal.state, CalState.CALIBRATED)
             self.assertAlmostEqual(cal.committed_fov, 13.552, places=2)
             self.assertTrue(sk.called)
@@ -79,6 +81,30 @@ class DriftSelfHealTests(unittest.TestCase):
             _feed(cal, 13.70, cal.params.window_size
                   + cal.params.drift_check_interval + 5, jitter=0.04)
             self.assertEqual(cal.state, CalState.CALIBRATED)
+
+
+    def test_field_wander_does_not_chase_one_window(self):
+        # 2026-11-01 field log: window medians 13.504, 13.538, 13.599, 13.536
+        # around a true ~13.54, each a "drift" to the old code (which
+        # recommitted 13.599, 0.06 deg off). The long-run median stays put.
+        cal, cfg, shared = _mk(calibrated=True)
+        cal.committed_fov = cfg.fov_deg = 13.540
+        with mock.patch.object(calibration.cfg_mod, "save_keys") as sk:
+            _feed(cal, 13.540, cal.params.window_size, jitter=0.01)
+            for med in (13.504, 13.538, 13.599, 13.536, 13.55):
+                _feed(cal, med, cal.params.drift_check_interval, jitter=0.01)
+            self.assertFalse(sk.called)
+        self.assertEqual(cal.state, CalState.CALIBRATED)
+        self.assertAlmostEqual(cal.committed_fov, 13.540)
+        self.assertEqual(len(cal.get_status()["window_medians"]), 5)
+
+    def test_force_recalibrate_clears_the_history(self):
+        cal, cfg, shared = _mk(calibrated=True)
+        with mock.patch.object(calibration.cfg_mod, "save_keys"):
+            _feed(cal, 13.64, cal.params.window_size + 3 * cal.params.drift_check_interval)
+            self.assertIsNotNone(cal.long_run_fov())
+            cal.force_recalibrate()
+        self.assertIsNone(cal.long_run_fov())
 
 
 class FallbackGateTests(unittest.TestCase):
