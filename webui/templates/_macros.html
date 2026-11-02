@@ -22,8 +22,9 @@
     with a unique `bid`:
       {% from "_macros.html" import debug_bundle %}
       {{ debug_bundle("home-live-debug") }}
-    POSTs /debug/collect and streams the ZIP back as a download (a copy is also
-    saved on the device); nothing on the device changes. -#}
+    Builds the ZIP in the background on the device (/debug/start, /api/debug),
+    then downloads it as a plain file (/debug/download/<name>); the newest 10
+    stay in /var/lib/diofinder. Nothing else on the device changes. -#}
 {% macro debug_bundle(bid, label="Download debug bundle", cls="btn btn-primary") -%}
 <button id="{{ bid }}" type="button" class="{{ cls }} js-debug-bundle">{{ label }}</button><span id="{{ bid }}-status" class="debug-bundle-status" style="margin-left:8px;font-size:0.85rem;color:#888;"></span>
 {%- endmacro %}

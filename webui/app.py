@@ -2145,14 +2145,100 @@ def focus_reset():
 
 # ---- Health -----------------------------------------------------------------
 
+_DEBUG_DIR = pathlib.Path("/var/lib/diofinder")
+_DEBUG_RE = _re.compile(r"^diofinder_debug_\d{14}\.zip$")
+_DEBUG_KEEP = 10                     # newest debug bundles kept on the card
+_debug_job = {"state": "idle", "name": None, "error": None, "started": None}
+_debug_lock = threading.Lock()
+
+
+def _debug_frames_arg():
+    try:
+        n = int(request.args.get("frames") or request.form.get("frames") or 12)
+    except (ValueError, TypeError):
+        n = 12
+    return max(1, min(30, n))
+
+
+def _debug_prune(directory=None, keep=_DEBUG_KEEP):
+    """Keep only the newest `keep` debug bundles (they used to pile up)."""
+    directory = pathlib.Path(directory or _DEBUG_DIR)
+    try:
+        old = sorted((p for p in directory.iterdir() if _DEBUG_RE.match(p.name)),
+                     key=lambda p: p.name, reverse=True)[keep:]
+        for p in old:
+            try:
+                p.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def _debug_new_name():
+    return f"diofinder_debug_{datetime.now().strftime('%Y%m%d%H%M%S')}.zip"
+
+
 @app.route("/debug/collect", methods=["POST"])
 def debug_collect():
-    """Build and return a timestamped debug ZIP (frames + config + journal + status)."""
+    """Build a debug ZIP and return it (kept for scripts/curl). The web pages use
+    /debug/start + /api/debug + /debug/download instead, so the bundle is built
+    in the background and downloaded as a plain file."""
+    zip_name = _debug_new_name()
+    path = _debug_build(zip_name, _debug_frames_arg())
+    return send_file(str(path), mimetype="application/zip",
+                     as_attachment=True, download_name=zip_name)
+
+
+def _debug_worker(zip_name, n_frames):
+    try:
+        _debug_build(zip_name, n_frames)
+        with _debug_lock:
+            _debug_job.update(state="done", error=None)
+    except Exception as e:
+        log.exception("debug bundle failed")
+        with _debug_lock:
+            _debug_job.update(state="error", error=str(e))
+
+
+@app.route("/debug/start", methods=["POST"])
+def debug_start():
+    """Start building a debug bundle in the background (one at a time)."""
+    with _debug_lock:
+        if _debug_job["state"] == "running":
+            return jsonify({"ok": True, "result": dict(_debug_job)})
+        zip_name = _debug_new_name()
+        _debug_job.update(state="running", name=zip_name, error=None,
+                          started=datetime.now().isoformat(timespec="seconds"))
+    threading.Thread(target=_debug_worker, args=(zip_name, _debug_frames_arg()),
+                     daemon=True, name="debug-bundle").start()
+    return jsonify({"ok": True, "result": dict(_debug_job)})
+
+
+@app.route("/api/debug")
+def api_debug():
+    with _debug_lock:
+        return jsonify({"ok": True, "result": dict(_debug_job)})
+
+
+@app.route("/debug/download/<name>")
+def debug_download(name):
+    if not _DEBUG_RE.match(name or ""):
+        return "not found", 404
+    path = _DEBUG_DIR / name
+    if not path.is_file():
+        return "not found", 404
+    return send_file(str(path), mimetype="application/zip",
+                     as_attachment=True, download_name=name)
+
+
+def _debug_build(zip_name, n_frames):
+    """Build a timestamped debug ZIP (frames + config + journal + status)
+    straight into /var/lib/diofinder/<zip_name> and return its path. Written
+    to a .tmp file and renamed, so a half-built bundle is never offered; built
+    on disk rather than in web UI memory (CPU 0 and the Pi's 512 MB)."""
     import numpy as np
     from multiprocessing import shared_memory
-
-    ts = datetime.now().strftime("%Y%m%d%H%M%S")
-    zip_name = f"diofinder_debug_{ts}.zip"
 
     try:
         from diofinder.config import load_config as _lcfg
@@ -2162,8 +2248,10 @@ def debug_collect():
     except Exception:
         W, H, arcsec_px = 960, 760, 50.8
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+    _DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+    zip_path = _DEBUG_DIR / zip_name
+    tmp_path = _DEBUG_DIR / (zip_name + ".tmp")
+    with zipfile.ZipFile(str(tmp_path), "w", zipfile.ZIP_DEFLATED) as zf:
 
         # ── Config file ──────────────────────────────────────────────────────
         conf_path = os.environ.get("DIOFINDER_CONFIG", "/etc/diofinder/diofinder.conf")
@@ -2487,22 +2575,9 @@ def debug_collect():
         # tests/bundle_solve.py merges/refreshes it offline.
         zf.writestr("frames.json", json.dumps(frames_map, indent=2))
 
-    # Save a copy to disk so scp/curl also works
-    out_dir = pathlib.Path("/var/lib/diofinder")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    zip_path = out_dir / zip_name
-    try:
-        zip_path.write_bytes(buf.getvalue())
-    except Exception:
-        pass
-
-    buf.seek(0)
-    return send_file(
-        buf,
-        mimetype="application/zip",
-        as_attachment=True,
-        download_name=zip_name,
-    )
+    os.replace(str(tmp_path), str(zip_path))
+    _debug_prune()
+    return zip_path
 
 
 _BGRUN_DIR = pathlib.Path("/var/lib/diofinder/bg_runs")

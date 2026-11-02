@@ -128,44 +128,54 @@
     })();
 
     // Debug bundle: ONE handler for every .js-debug-bundle button (macro in
-    // _macros.html), so the "Download debug bundle" button can sit below the
-    // live view on any page without per-page JS. POSTs /debug/collect and
-    // streams the ZIP back as a download; status goes to <btn.id>-status.
+    // _macros.html). The finder builds the bundle in the background straight
+    // to a file (POST /debug/start, progress via /api/debug); when it's ready
+    // the browser fetches it as an ordinary download (/debug/download/<name>),
+    // which is sturdier on phones than holding a big response open and keeps
+    // the zip out of the web UI's memory. Status goes to <btn.id>-status.
     document.addEventListener('DOMContentLoaded', function () {
       document.querySelectorAll('.js-debug-bundle').forEach(function (btn) {
         btn.addEventListener('click', async function () {
           var st = document.getElementById(btn.id + '-status');
-          btn.disabled = true;
           var label = btn.textContent;
-          btn.textContent = 'Collecting… (~15 s)';
+          btn.disabled = true;
+          btn.textContent = 'Collecting… (~15–40 s)';
           if (st) st.textContent = '';
+          function done(msg) { btn.textContent = label; btn.disabled = false;
+                               if (st && msg !== undefined) st.textContent = msg; }
           try {
-            var r = await fetch('/debug/collect', {method: 'POST'});
-            if (!r.ok) { if (st) st.textContent = 'Error: server returned ' + r.status; }
-            else {
-              var blob = await r.blob();
-              var n = new Date();
-              var ts = n.getFullYear().toString()
-                + String(n.getMonth() + 1).padStart(2, '0')
-                + String(n.getDate()).padStart(2, '0')
-                + String(n.getHours()).padStart(2, '0')
-                + String(n.getMinutes()).padStart(2, '0')
-                + String(n.getSeconds()).padStart(2, '0');
-              var fn = 'diofinder_debug_' + ts + '.zip';
-              var a = document.createElement('a');
-              a.href = URL.createObjectURL(blob);
-              a.download = fn;
-              document.body.appendChild(a);
-              a.click();
-              document.body.removeChild(a);
-              URL.revokeObjectURL(a.href);
-              if (st) st.textContent = '✓ ' + fn;
-            }
+            var r = await fetch('/debug/start', {method: 'POST'});
+            var j = await r.json();
+            if (!r.ok || !j.ok) { done('Error: could not start (' + r.status + ')'); return; }
+            var t0 = Date.now();
+            (function poll() {
+              fetch('/api/debug').then(function (r) { return r.json(); }).then(function (j) {
+                var job = j.result || {};
+                if (job.state === 'done' && job.name) {
+                  var url = '/debug/download/' + encodeURIComponent(job.name);
+                  var a = document.createElement('a');
+                  a.href = url; a.download = job.name;
+                  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+                  done();
+                  if (st) {
+                    st.textContent = '\u2713 ';
+                    var link = document.createElement('a');
+                    link.href = url; link.textContent = job.name;
+                    st.appendChild(link);
+                  }
+                } else if (job.state === 'error') {
+                  done('Error: ' + (job.error || 'bundle failed'));
+                } else if (Date.now() - t0 > 180000) {
+                  done('Still building after 3 min \u2014 check Utilities later');
+                } else {
+                  if (st) st.textContent = 'building\u2026 ' + Math.round((Date.now() - t0) / 1000) + ' s';
+                  setTimeout(poll, 1500);
+                }
+              }).catch(function () { setTimeout(poll, 3000); });
+            })();
           } catch (e) {
-            if (st) st.textContent = 'Error: ' + e.message;
+            done('Error: ' + e.message);
           }
-          btn.textContent = label;
-          btn.disabled = false;
         });
       });
     });
