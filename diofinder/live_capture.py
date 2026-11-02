@@ -137,8 +137,8 @@ def frame_record(fname, seq, meta, sol, last_solved, saved_unix):
             "exposure_start_utc": _iso(t_start),
             "exposure_mid_utc": _iso(t_mid),
             "exposure_s": exp_s,
-            "jd_start": round(unix_to_jd(t_start), 8),
-            "jd_mid": round(unix_to_jd(t_mid), 8),
+            "jd_start": round(unix_to_jd(t_start), 10),
+            "jd_mid": round(unix_to_jd(t_mid), 10),
         })
     else:
         # No sensor timing (test mode / older picamera2): the hand-over time is
@@ -146,10 +146,12 @@ def frame_record(fname, seq, meta, sol, last_solved, saved_unix):
         rec.update({
             "time_source": "handover",
             "saved_utc": _iso(saved_unix),
-            "jd_saved": round(unix_to_jd(saved_unix), 8),
+            "jd_saved": round(unix_to_jd(saved_unix), 10),
         })
     if sol is not None:
         rec.update({k: sol[k] for k in _SOL_KEYS if k in sol})
+        if sol.get("matched"):
+            rec["matched"] = sol["matched"]
     else:
         rec["solved"] = False
     if not rec.get("solved") and last_solved:
@@ -240,6 +242,7 @@ class LiveRecorder:
         self._last_status_t = 0.0
         self._thread = None
         self._finalize_sid = None    # set by _request_stop; the writer zips it
+        self._matches = None         # (seq, rows) from note_matches
         self.max_mb = float(getattr(cfg, "live_capture_max_mb", 4000.0))
         self.min_free_mb = float(getattr(cfg, "live_capture_min_free_mb", 1000.0))
 
@@ -293,7 +296,32 @@ class LiveRecorder:
         p = self._pending
         if p is not None and sol.get("seq") == p[0]:
             self._pending = None
+            m = self._matches
+            if m is not None and m[0] == p[0]:
+                sol = dict(sol, matched=m[1])
+            self._matches = None
             self._enqueue(p, sol)
+
+    def note_matches(self, seq, matched_centroids, matched_stars):
+        """The solver's matched star pairs for frame ``seq`` (olive-solve
+        ``return_matches``: centroids as (y, x) in the solver's pixel
+        coordinates, stars as (RA, Dec, mag) J2000). Stored as
+        [x, y, ra, dec, mag] rows so a WCS can be fitted to each frame
+        offline — the exact pixel<->sky mapping, with no roll/mirror
+        convention to get wrong. Must be called before the frame's solution
+        is published (it rides along with it)."""
+        if not self.active or matched_centroids is None or matched_stars is None:
+            return
+        rows = []
+        try:
+            for (yy, xx), st in zip(matched_centroids, matched_stars):
+                rows.append([round(float(xx), 3), round(float(yy), 3),
+                             round(float(st[0]), 7), round(float(st[1]), 7),
+                             round(float(st[2]), 2) if len(st) > 2 else None])
+        except (TypeError, ValueError, IndexError):
+            return
+        if rows:
+            self._matches = (int(seq), rows)
 
     # ---- internals ---------------------------------------------------------
     def _session_dir(self, sid):
@@ -471,9 +499,12 @@ class LiveRecorder:
             },
             "camera": {
                 "width_px": w, "height_px": h,
+                "matched_columns": ["x", "y", "ra_deg", "dec_deg", "mag"],
                 "fov_width_deg": fov,
                 "fov_radius_deg": fov_radius_deg(fov, w, h),
-                "pixel_origin": "top-left; (0.5, 0.5) is the centre of pixel (0, 0)",
+                "pixel_origin": "top-left; (0.5, 0.5) is the centre of pixel "
+                                "(0, 0) (sycamore extractor convention, used "
+                                "by the matched x, y)",
             },
             "coordinates": "J2000/ICRS; center_ra_deg/center_dec_deg = image "
                            "centre, ra_deg/dec_deg = aim point (boresight)",

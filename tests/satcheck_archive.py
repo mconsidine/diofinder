@@ -121,16 +121,62 @@ def build_queries(session, frames, group=1, every=1, site=None, radius=None):
     return out
 
 
-def query(base, params, timeout=60):
-    url = base.rstrip("/") + "/fov/satellite-passes/?" + urllib.parse.urlencode(params)
+def _get_json(url, timeout=60):
     req = urllib.request.Request(url, headers={"User-Agent": "diofinder-satcheck/1"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
-        return url, json.loads(r.read().decode())
+        return json.loads(r.read().decode())
+
+
+def query(base, params, timeout=60, poll_s=5.0, max_wait_s=600.0):
+    """GET /fov/satellite-passes/. With async=False the result comes back
+    directly; if the service answers with a task_id instead (async=True, or
+    a request it chose to queue), poll /fov/task-status/<id> until done."""
+    url = base.rstrip("/") + "/fov/satellite-passes/?" + urllib.parse.urlencode(params)
+    resp = _get_json(url, timeout)
+    if isinstance(resp, dict) and resp.get("task_id") and "data" not in resp:
+        status_url = base.rstrip("/") + f"/fov/task-status/{resp['task_id']}"
+        t_end = time.monotonic() + max_wait_s
+        while True:
+            resp = _get_json(status_url, timeout)
+            if str(resp.get("status", "")).upper() not in ("PENDING", "STARTED",
+                                                           "PROGRESS", "RETRY"):
+                break
+            if time.monotonic() > t_end:
+                raise TimeoutError(f"SatChecker task {status_url} still pending")
+            time.sleep(poll_s)
+    return url, resp
+
+
+def parse_satellites(resp):
+    """{name: [(jd, ra_deg, dec_deg), ...] sorted by time} from a SatChecker
+    FOV response grouped by satellite: resp["data"]["satellites"][name]
+    ["positions"] = [{"ra", "dec", "julian_date", ...}, ...]."""
+    out = {}
+    data = resp.get("data") if isinstance(resp, dict) else None
+    sats = (data.get("satellites") if isinstance(data, dict) else None) or {}
+    if isinstance(sats, dict):
+        items = sats.items()
+    else:                                  # tolerate a list form
+        items = ((s.get("name") or s.get("satellite_name") or str(i), s)
+                 for i, s in enumerate(sats))
+    for name, sd in items:
+        pts = []
+        for p in (sd or {}).get("positions") or []:
+            try:
+                pts.append((float(p["julian_date"]), float(p["ra"]), float(p["dec"])))
+            except (KeyError, TypeError, ValueError):
+                continue
+        if pts:
+            out[str(name)] = sorted(pts)
+    return out
 
 
 def summarize(resp):
-    """Best-effort list of satellite names from a SatChecker response (the
-    full JSON is always saved with --out)."""
+    """Satellite names in a SatChecker response (the full JSON is always
+    saved with --out)."""
+    sats = parse_satellites(resp)
+    if sats:
+        return list(sats)
     names = []
 
     def walk(o):

@@ -1156,7 +1156,13 @@ POST) archives; names must match `livecap_<YYYYMMDDTHHMMSSZ>.zip` exactly.
   frame_meta; `time_source: handover` fallback when missing),
   `center_ra_deg`/`center_dec_deg` (J2000 image centre) + aim point, roll,
   mirrored, FOV, matches; unsolved frames carry `last_solved`, captured at
-  enqueue time), then `frame_000001.png`…
+  enqueue time; solved frames carry `matched` = the solver's matched stars as
+  `[x, y, ra, dec, mag]` rows), then `frame_000001.png`…
+* **Matched stars:** while recording, the solve calls pass
+  `return_matches=live_rec.active` (otherwise `False`, unchanged). Just before
+  each publish, `note_matches(seq, matched_centroids, matched_stars)` attaches
+  them to that frame only (matched by seq). They let an offline tool fit an
+  exact per-frame WCS, with no roll or mirror convention to guess.
 * **Robustness:** recording goes to `livecap_<id>.partial/`, flushed per frame;
   stop zips it STORED file by file (deleting each source, so peak extra disk use
   is one frame) via `.zip.tmp` then rename. `recover_partials` zips any
@@ -1168,7 +1174,11 @@ POST) archives; names must match `livecap_<YYYYMMDDTHHMMSSZ>.zip` exactly.
   zipping. comms warns when the clock is implausible (no RTC) or the site is
   0,0; `elevation_m` is a new conf key, used only here.
 * **Offline:** `tests/satcheck_archive.py ARCHIVE.zip [--dry-run] [--group N]`
-  queries SatChecker's `/fov/satellite-passes/` per frame.
+  (stdlib) lists SatChecker `/fov/satellite-passes/` hits per frame.
+  `tests/satcheck_overlay.py ARCHIVE.zip` draws each predicted streak onto the
+  frame itself via the fitted WCS, scores it and writes `report.csv`. The
+  response structure is `data.satellites[name].positions[{ra, dec,
+  julian_date}]`.
 * Tests: `tests/test_live_capture.py` (recorder end-to-end on a temp dir,
   writer-side stop, drop-not-block, recovery, comms commands, web routes, the
   SatChecker query builder).

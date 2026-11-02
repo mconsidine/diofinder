@@ -344,6 +344,30 @@ def test_satcheck_queries_from_a_real_archive(tmp_path):
     g = sa.build_queries(session, frames, group=2)
     assert len(g) == 2 and g[0]["frames"] == ["frame_000001.png", "frame_000002.png"]
     assert g[0]["params"]["duration"] > 0.25
-    assert sa.summarize({"data": [{"name": "STARLINK-1234", "norad_id": 45000},
-                                  {"name": "STARLINK-1234", "norad_id": 45000}]}) == [
+    assert sa.summarize({"data": {"satellites": {"STARLINK-1234 (45000)": {
+        "positions": [{"ra": 1.0, "dec": 2.0, "julian_date": 2460000.5}]}}}}) == [
         "STARLINK-1234 (45000)"]
+    assert sa.parse_satellites({"data": []}) == {} and sa.parse_satellites(None) == {}
+
+
+def test_matched_stars_ride_with_their_own_frame_only(tmp_path):
+    scfg = {}
+    rec = lc.LiveRecorder(scfg, _cfg(), directory=str(tmp_path), queue_max=64)
+    rec.sync(_ctl())
+    frame = np.zeros((48, 64), np.uint8)
+    rec.offer_frame(frame, 1)
+    rec.note_matches(1, [(10.5, 20.5), (30.0, 40.0)], [(100.0, 20.0, 3.1), (101.0, 21.0, 4.2)])
+    rec.note_solution({"solved": True, "seq": 1, "center_ra_deg": 100.5, "center_dec_deg": 20.5})
+    rec.offer_frame(frame, 2)
+    rec.note_matches(99, [(1.0, 1.0)], [(1.0, 1.0, 1.0)])    # another frame's: ignored
+    rec.note_solution({"solved": True, "seq": 2, "center_ra_deg": 100.5, "center_dec_deg": 20.5})
+    rec.sync({})
+    z = tmp_path / "livecap_20261102T013045Z.zip"
+    assert _wait(z.exists)
+    with zipfile.ZipFile(z) as zf:
+        recs = [json.loads(l) for l in zf.read("frames.jsonl").decode().splitlines()]
+        sess = json.loads(zf.read("session.json"))
+    # (y, x) from the solver -> [x, y, ra, dec, mag] rows.
+    assert recs[0]["matched"] == [[20.5, 10.5, 100.0, 20.0, 3.1], [40.0, 30.0, 101.0, 21.0, 4.2]]
+    assert "matched" not in recs[1]
+    assert sess["camera"]["matched_columns"] == ["x", "y", "ra_deg", "dec_deg", "mag"]

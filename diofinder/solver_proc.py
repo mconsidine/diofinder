@@ -1830,7 +1830,9 @@ def solver_main(slots, latest_solution, shared_cfg,
                 distortion=calibrator.get_distortion_estimate(),
                 target_pixel=target_pixel,
                 target_sky_coord=target_sky,
-                return_matches=False,
+                # Matched star pairs only while a live capture records them
+                # (per-frame WCS offline); otherwise unchanged.
+                return_matches=live_rec.active,
                 attitude_hint=solve_q_hint,
                 hint_uncertainty_deg=solve_hint_unc,
             )
@@ -1863,7 +1865,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                         distortion=calibrator.get_distortion_estimate(),
                         target_pixel=target_pixel,
                         target_sky_coord=target_sky,
-                        return_matches=False,
+                        return_matches=live_rec.active,
                     )
                 else:
                     soln = state.solver_t3.solve_from_centroids(
@@ -2103,6 +2105,9 @@ def solver_main(slots, latest_solution, shared_cfg,
                     dso = messier.centered(ra_out, dec_out)
                 except Exception as e:
                     log.debug("Messier lookup failed: %s", e)
+            if live_rec.active:
+                live_rec.note_matches(frame_seq, soln.get("matched_centroids"),
+                                      soln.get("matched_stars"))
             latest_solution.update(_filled_solution(
                 ra=ra_out, dec=dec_out,
                 center_ra=soln.get("RA"), center_dec=soln.get("Dec"),
