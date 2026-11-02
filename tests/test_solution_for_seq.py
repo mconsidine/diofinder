@@ -69,3 +69,27 @@ def test_comms_command_routes_to_the_solver(monkeypatch):
                                                  args={"seq": 7}), ctx)
     assert r.ok and r.result["solutions"]["7"]["seq"] == 7
     assert calls == [(SOLVER_OP_SOLUTION_FOR_SEQ, {"seqs": [7]})]
+
+
+def test_matched_rows_join_their_own_frame():
+    from diofinder.live_capture import matched_rows
+    state, _ = _state_with_publishes()
+    rows = matched_rows([(10.5, 20.5)], [(100.0, 20.0, 3.1)])
+    assert rows == [[20.5, 10.5, 100.0, 20.0, 3.1]]
+    assert matched_rows(None, None) == []
+    state.recent_matches.append((59, rows))
+    reply = _handle_solver_cmd(
+        SolverCmd(request_id="t", op=SOLVER_OP_SOLUTION_FOR_SEQ, args={"seqs": [59, 60]}),
+        None, None, cfg=_Cfg(), state=state)
+    sols = reply.result["solutions"]
+    assert sols["59"]["matched"] == rows and "matched" not in sols["60"]
+
+
+def test_matches_want_sets_a_lapsing_deadline(monkeypatch):
+    monkeypatch.setattr(cp.time, "monotonic", lambda: 500.0)
+    ctx = types.SimpleNamespace(solver_cmd_q=None, solver_cmd_reply_q=None,
+                                cfg=types.SimpleNamespace(), shared_cfg={})
+    r = cp._handle_maint_command(cp.MaintRequest(cmd="matches_want",
+                                                 args={"seconds": 1000}), ctx)
+    assert r.ok and r.result["seconds"] == 120.0       # capped
+    assert ctx.shared_cfg["matches_wanted_until"] == 620.0

@@ -325,6 +325,10 @@ class _SolverState:
         # frame seq (SOLVER_OP_SOLUTION_FOR_SEQ). Fed by SolutionTap; one deque
         # append per publish. 48 covers a debug-bundle burst at ~3 frames/s.
         self.recent_solutions = _deque(maxlen=48)
+        # (seq, [x, y, ra, dec, mag] rows) for recent solves made while matches
+        # were wanted (live capture / debug bundle); joined into
+        # SOLVER_OP_SOLUTION_FOR_SEQ replies as "matched".
+        self.recent_matches = _deque(maxlen=48)
 
 
 def _handle_solver_cmd(cmd, calibrator, polar,
@@ -583,6 +587,9 @@ def _handle_solver_cmd(cmd, calibrator, polar,
             for d in list(state.recent_solutions) if state is not None else []:
                 if int(d.get("seq", -1)) in want:
                     found[str(int(d["seq"]))] = dict(d)   # latest publish wins
+            for mseq, rows in list(state.recent_matches) if state is not None else []:
+                if str(mseq) in found:
+                    found[str(mseq)]["matched"] = rows
             return SolverCmdReply(request_id=cmd.request_id, ok=True,
                                   result={"solutions": found})
 
@@ -1839,6 +1846,12 @@ def solver_main(slots, latest_solution, shared_cfg,
                     # match — drop it and solve blind until a success
                     # re-anchors it.
                     solve_q_hint, solve_hint_unc = None, 0.0
+            # Matched star pairs are worth their (small) cost only while
+            # something records them: a live capture, or a debug bundle that
+            # asked via shared_cfg["matches_wanted_until"] (a monotonic
+            # deadline, like the live view's display keepalive).
+            want_matches = (live_rec.active
+                            or time.monotonic() < snap.get("matches_wanted_until", 0.0))
             _solve_kw = dict(
                 fov_estimate=calibrator.get_fov_estimate(),
                 fov_max_error=calibrator.get_fov_max_error(snap),
@@ -1851,7 +1864,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                 target_sky_coord=target_sky,
                 # Matched star pairs only while a live capture records them
                 # (per-frame WCS offline); otherwise unchanged.
-                return_matches=live_rec.active,
+                return_matches=want_matches,
                 attitude_hint=solve_q_hint,
                 hint_uncertainty_deg=solve_hint_unc,
             )
@@ -1884,7 +1897,7 @@ def solver_main(slots, latest_solution, shared_cfg,
                         distortion=calibrator.get_distortion_estimate(),
                         target_pixel=target_pixel,
                         target_sky_coord=target_sky,
-                        return_matches=live_rec.active,
+                        return_matches=want_matches,
                     )
                 else:
                     soln = state.solver_t3.solve_from_centroids(
@@ -2124,6 +2137,11 @@ def solver_main(slots, latest_solution, shared_cfg,
                     dso = messier.centered(ra_out, dec_out)
                 except Exception as e:
                     log.debug("Messier lookup failed: %s", e)
+            if want_matches:
+                _rows = _livecap.matched_rows(soln.get("matched_centroids"),
+                                              soln.get("matched_stars"))
+                if _rows:
+                    state.recent_matches.append((int(frame_seq), _rows))
             if live_rec.active:
                 live_rec.note_matches(frame_seq, soln.get("matched_centroids"),
                                       soln.get("matched_stars"))

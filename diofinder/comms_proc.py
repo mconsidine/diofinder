@@ -3433,6 +3433,17 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 return MaintResponse(ok=False, error=reply.error)
             return MaintResponse(ok=True, result=reply.result)
 
+        if cmd == "matches_want":
+            # Ask the solver to return matched star pairs for the next
+            # `seconds` (debug bundles fit each frame's pixel<->sky mapping
+            # offline from them). A deadline, not a switch: it lapses alone.
+            try:
+                secs = max(0.0, min(120.0, float(args.get("seconds", 60.0))))
+            except (TypeError, ValueError):
+                secs = 60.0
+            ctx.shared_cfg["matches_wanted_until"] = time.monotonic() + secs
+            return MaintResponse(ok=True, result={"seconds": secs})
+
         if cmd == "solution_for_seq":
             # The solution published for specific frames (debug bundles pair
             # each burst frame with its own result). args: {"seqs": [...]}.

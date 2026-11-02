@@ -159,6 +159,23 @@ def frame_record(fname, seq, meta, sol, last_solved, saved_unix):
     return rec
 
 
+def matched_rows(matched_centroids, matched_stars):
+    """olive-solve's matched pairs -> [x, y, ra, dec, mag] rows (centroids come
+    as (y, x) in the solver's pixel coordinates, stars as (RA, Dec, mag) J2000).
+    Enough to fit a frame's exact pixel<->sky mapping offline. [] if absent."""
+    if matched_centroids is None or matched_stars is None:
+        return []
+    rows = []
+    try:
+        for (yy, xx), st in zip(matched_centroids, matched_stars):
+            rows.append([round(float(xx), 3), round(float(yy), 3),
+                         round(float(st[0]), 7), round(float(st[1]), 7),
+                         round(float(st[2]), 2) if len(st) > 2 else None])
+    except (TypeError, ValueError, IndexError):
+        return []
+    return rows
+
+
 def zip_dir_streaming(src_dir, dest_zip, delete_sources=True):
     """Zip every file in src_dir (flat) into dest_zip, STORED, removing each
     source right after it is added. Writes dest_zip + '.tmp' then renames.
@@ -311,16 +328,9 @@ class LiveRecorder:
         offline — the exact pixel<->sky mapping, with no roll/mirror
         convention to get wrong. Must be called before the frame's solution
         is published (it rides along with it)."""
-        if not self.active or matched_centroids is None or matched_stars is None:
+        if not self.active:
             return
-        rows = []
-        try:
-            for (yy, xx), st in zip(matched_centroids, matched_stars):
-                rows.append([round(float(xx), 3), round(float(yy), 3),
-                             round(float(st[0]), 7), round(float(st[1]), 7),
-                             round(float(st[2]), 2) if len(st) > 2 else None])
-        except (TypeError, ValueError, IndexError):
-            return
+        rows = matched_rows(matched_centroids, matched_stars)
         if rows:
             self._matches = (int(seq), rows)
 

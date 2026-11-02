@@ -2420,12 +2420,10 @@ def _debug_build(zip_name, n_frames):
         # so a real solve RATE needs several frames, and replaying the sycamore
         # temporal cache needs >= bg_cache_stack consecutive frames. Default 12
         # (> the default stack of 8, with margin); override with ?frames=N.
-        try:
-            n_frames = int(request.args.get("frames")
-                           or request.form.get("frames") or 12)
-        except (ValueError, TypeError):
-            n_frames = 12
-        n_frames = max(1, min(30, n_frames))
+        n_frames = max(1, min(30, int(n_frames)))
+        # Ask the solver to include matched star pairs for the burst, so each
+        # bundled frame can be fitted offline (tests/satcheck_overlay.py etc.).
+        _safe_call("matches_want", {"seconds": 90.0})
         # Cap the display JPGs (large, human-only) regardless of frame count.
         n_display = min(2, n_frames)
 
@@ -2497,7 +2495,7 @@ def _debug_build(zip_name, n_frames):
                                     "center_ra_deg", "center_dec_deg",
                                     "roll_deg", "is_mirrored",
                                     "fov_deg", "stars", "matches",
-                                    "peak", "solve_ms", "seq")
+                                    "peak", "solve_ms", "seq", "matched")
                                 if k in sol}
                         else:
                             entry["solution"] = None
