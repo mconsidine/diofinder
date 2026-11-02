@@ -348,10 +348,11 @@ imu_predict_enabled: true
 # stop sampling entirely (same as unplugging it: pointing reports solves only,
 # hint/slew fall back to non-IMU). Live-toggled via the Camera page.
 imu_enabled: true
-# IMU reader poll rate (Hz, 1–50). 20 = shipped. Lower to 5–10 to cut the
-# per-sample IPC load on CPU 0 — the pointing consumers don't need 20 Hz.
-# Live-mutable via solver_params_set / the Camera page.
-imu_poll_hz: 20
+# IMU reader poll rate (Hz, 1–50). 10 = shipped (was 20 before v0.11.76): the
+# pointing consumers (SkySafari ~4 polls/s, ~3 solves/s) don't need more, and
+# each sample is an IPC round trip on the shared CPU 0. 5 also works for a
+# hand-moved finder. Live-mutable via solver_params_set / the Advanced page.
+imu_poll_hz: 10
 # Suppress BNO055 fusion "hunting" (toggling between two nearby orientations
 # while stationary) in the published quaternion. Real motion snaps through
 # unfiltered. true = on (recommended); false = raw passthrough. Restart to apply.

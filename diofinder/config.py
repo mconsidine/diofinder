@@ -326,9 +326,9 @@ class Config:
     # polls ~4 Hz, solves ~2–3 Hz) don't benefit from 20 Hz oversampling, so
     # lowering this to 5–10 cuts the per-sample Manager-dict IPC on the shared
     # CPU 0 proportionally, at the cost of slightly coarser slew detection and a
-    # slower-converging solve-hint fit. 20 keeps the shipped behavior. Seeded
-    # into shared_cfg; read live by the reader loop (no restart).
-    imu_poll_hz: int = 20
+    # slower-converging solve-hint fit. Default 10 since v0.11.76 (was 20).
+    # Seeded into shared_cfg; read live by the reader loop (no restart).
+    imu_poll_hz: int = 10
     # Which IMU chip to drive. "auto" probes both and uses whichever answers —
     # BNO085 over SH-2 at I2C 0x4A/0x4B, BNO055 over register reads at 0x28/0x29;
     # the addresses are disjoint so detection is unambiguous. "bno055"/"bno085"

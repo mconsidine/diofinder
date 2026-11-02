@@ -321,6 +321,10 @@ class _SolverState:
         # matches, ra_deg, dec_deg).
         from collections import deque as _deque
         self.solve_history = _deque(maxlen=512)
+        # The last few dicts published to latest_solution, each tagged with its
+        # frame seq (SOLVER_OP_SOLUTION_FOR_SEQ). Fed by SolutionTap; one deque
+        # append per publish. 48 covers a debug-bundle burst at ~3 frames/s.
+        self.recent_solutions = _deque(maxlen=48)
 
 
 def _handle_solver_cmd(cmd, calibrator, polar,
@@ -336,7 +340,7 @@ def _handle_solver_cmd(cmd, calibrator, polar,
         SOLVER_OP_HOT_PIXEL_STATUS, SOLVER_OP_HOT_PIXEL_CLEAR,
         SOLVER_OP_FRAME_GET, SOLVER_OP_BG_PREVIEW,
         SOLVER_OP_TRACKING_STATUS, SOLVER_OP_SOLVE_STATS,
-        SOLVER_OP_AUTO_TUNE_EVAL,
+        SOLVER_OP_AUTO_TUNE_EVAL, SOLVER_OP_SOLUTION_FOR_SEQ,
     )
     try:
         if cmd.op == SOLVER_OP_SET_DB:
@@ -567,6 +571,20 @@ def _handle_solver_cmd(cmd, calibrator, polar,
                 "recover_fail":   int(state.tracking_recover_fail),
                 "solve_fail":     int(state.tracking_solve_fail),
             })
+
+        if cmd.op == SOLVER_OP_SOLUTION_FOR_SEQ:
+            want = set()
+            for s in cmd.args.get("seqs") or []:
+                try:
+                    want.add(int(s))
+                except (TypeError, ValueError):
+                    pass
+            found = {}
+            for d in list(state.recent_solutions) if state is not None else []:
+                if int(d.get("seq", -1)) in want:
+                    found[str(int(d["seq"]))] = dict(d)   # latest publish wins
+            return SolverCmdReply(request_id=cmd.request_id, ok=True,
+                                  result={"solutions": found})
 
         if cmd.op == SOLVER_OP_SOLVE_STATS:
             recs = list(state.solve_history) if state is not None else []
@@ -1231,7 +1249,8 @@ def solver_main(slots, latest_solution, shared_cfg,
     live_rec = _livecap.LiveRecorder(shared_cfg, cfg, directory=_livecap_dir)
     threading.Thread(target=_livecap.recover_partials, args=(_livecap_dir,),
                      daemon=True, name="live-capture-recover").start()
-    latest_solution = _livecap.SolutionTap(latest_solution, live_rec)
+    latest_solution = _livecap.SolutionTap(latest_solution, live_rec,
+                                           history=state.recent_solutions)
 
     def _read_current_frame(with_seq=False, after_seq=-1):
         """Copy the most-recent published SHM frame via the FrameSlots

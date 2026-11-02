@@ -522,7 +522,7 @@
             style="margin-top:8px;">
         <input type="hidden" name="next" value="camera_page">
         <label>
-          IMU sample rate {{ tip("How often the BNO055 is read and published. The pointing consumers (SkySafari polls ~4/s, solves ~2–3/s) don't need 20 Hz, so 5–10 Hz cuts the per-sample inter-process traffic on the shared CPU 0 with no visible pointing change — only slightly coarser slew detection and a slower-converging mounting fit. 20 Hz is the shipped default.") }}
+          IMU sample rate {{ tip("How often the BNO055 is read and published. The pointing consumers (SkySafari polls ~4/s, solves ~2–3/s) don't need 20 Hz, so 5–10 Hz cuts the per-sample inter-process traffic on the shared CPU 0 with no visible pointing change — only slightly coarser slew detection and a slower-converging mounting fit. 10 Hz is the shipped default (20 before v0.11.76).") }}
           <select name="imu_poll_hz" onchange="this.form.submit()">
             {% for hz in [5, 10, 20] %}
             <option value="{{ hz }}"

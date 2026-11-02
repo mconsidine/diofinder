@@ -90,8 +90,13 @@ DEFAULT_THRESHOLDS = {
     "swap_growth_warn_mb": 4.0,        # physical zram grew this much in one sample -> count it
     "swap_growth_streak_tight": 3,     # that many consecutive growing samples (~15 s) -> tight
     "swap_phys_backstop_pct": 40.0,    # physical zram footprint this fraction of RAM -> tight
-    "cpu0_warn_pct": 90.0,             # CPU 0 is the shared/limiting core
+    # CPU 0 is the shared/limiting core. Like RAM and swap, both rungs need a
+    # SUSTAINED run of samples: one busy 5 s sample (a debug bundle, a page
+    # load) turned the field card "Tight" while nothing was actually starved.
+    "cpu0_warn_pct": 90.0,
+    "cpu0_streak_tight": 3,            # consecutive samples >= warn (~15 s) -> tight
     "cpu0_crit_pct": 98.0,
+    "cpu0_streak_crit": 3,             # consecutive samples >= crit (~15 s) -> constrained
     "temp_warn_c": 70.0,               # Pi Zero 2W soft-throttles ~80-85 C
     "temp_crit_c": 80.0,
 }
@@ -292,13 +297,19 @@ def classify(snapshot: dict, thresholds: dict | None = None) -> dict:
     sw_phys_hi = hw.get("max_swap_phys_mb", 0.0)
     if mem_total_mb and sw_phys_hi >= mem_total_mb * t["swap_phys_backstop_pct"] / 100.0:
         bump("tight"); reasons.append(f"{sw_phys_hi:.0f} MB of RAM held in zram")
-    # CPU 0 (the shared/limiting core): max seen post-warm-up.
-    c0_hi = hw.get("max_cpu0_pct")
-    if c0_hi is not None:
-        if c0_hi >= t["cpu0_crit_pct"]:
-            bump("constrained"); reasons.append(f"CPU 0 peaked at {c0_hi:.0f}%")
-        elif c0_hi >= t["cpu0_warn_pct"]:
-            bump("tight"); reasons.append(f"CPU 0 peaked at {c0_hi:.0f}%")
+    # CPU 0 (the shared/limiting core): longest busy run post-warm-up. The peak
+    # alone is shown on the card but no longer decides the verdict.
+    c0_hi = hw.get("max_cpu0_pct") or 0.0
+    crit_run = hw.get("max_cpu0_crit_streak", 0) or 0
+    warn_run = hw.get("max_cpu0_warn_streak", 0) or 0
+    if crit_run >= t["cpu0_streak_crit"]:
+        bump("constrained")
+        reasons.append(f"CPU 0 at {t['cpu0_crit_pct']:.0f}%+ for {crit_run} samples "
+                       f"running (peak {c0_hi:.0f}%)")
+    elif warn_run >= t["cpu0_streak_tight"]:
+        bump("tight")
+        reasons.append(f"CPU 0 at {t['cpu0_warn_pct']:.0f}%+ for {warn_run} samples "
+                       f"running (peak {c0_hi:.0f}%)")
     # Temperature: max seen post-warm-up.
     tmp_hi = hw.get("max_temp_c")
     if tmp_hi is not None:
@@ -337,6 +348,8 @@ class SysMon:
         self._prev_swap_phys_mb = None  # physical zram footprint, for growth deltas
         self._swap_growth_streak = 0    # consecutive samples that grew >= warn
         self._mem_low_streak = 0        # consecutive samples below mem warn
+        self._cpu0_warn_streak = 0      # consecutive samples with CPU 0 >= warn
+        self._cpu0_crit_streak = 0      # consecutive samples with CPU 0 >= crit
         self._prev_proc = {}          # pid -> (ticks, monotonic) for CPU% deltas
         self._last = {}
         self.started_mono = time.monotonic()
@@ -350,6 +363,8 @@ class SysMon:
             "max_mem_low_streak": 0,     # longest run of samples below mem warn
             "max_cpu_pct": 0.0,
             "max_cpu0_pct": 0.0,
+            "max_cpu0_warn_streak": 0,   # longest run of samples with CPU 0 >= warn
+            "max_cpu0_crit_streak": 0,   # longest run of samples with CPU 0 >= crit
             "max_temp_c": None,
         }
         # uptime_s (since this monitor started) at which each high-water mark
@@ -399,7 +414,16 @@ class SysMon:
             hi("max_swap_growth_streak", self._swap_growth_streak)
         cpu = snap.get("cpu_pct") or {}
         hi("max_cpu_pct", cpu.get("cpu"))
-        hi("max_cpu0_pct", cpu.get("cpu0"))
+        c0 = cpu.get("cpu0")
+        hi("max_cpu0_pct", c0)
+        if c0 is not None:
+            # Sustained-busy streaks: a lone busy sample resets on the next one.
+            self._cpu0_warn_streak = (self._cpu0_warn_streak + 1
+                                      if c0 >= t["cpu0_warn_pct"] else 0)
+            self._cpu0_crit_streak = (self._cpu0_crit_streak + 1
+                                      if c0 >= t["cpu0_crit_pct"] else 0)
+            hi("max_cpu0_warn_streak", self._cpu0_warn_streak)
+            hi("max_cpu0_crit_streak", self._cpu0_crit_streak)
         hi("max_temp_c", snap.get("temp_c"))
 
     def _warmup_state(self, now_mono: float, ready) -> str | None:

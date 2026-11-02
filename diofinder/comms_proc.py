@@ -60,7 +60,7 @@ from diofinder.worker_cmds import (
     SOLVER_OP_HOT_PIXEL_STATUS, SOLVER_OP_HOT_PIXEL_CLEAR,
     SOLVER_OP_FRAME_GET, SOLVER_OP_BG_PREVIEW,
     SOLVER_OP_TRACKING_STATUS, SOLVER_OP_SOLVE_STATS,
-    SOLVER_OP_AUTO_TUNE_EVAL,
+    SOLVER_OP_AUTO_TUNE_EVAL, SOLVER_OP_SOLUTION_FOR_SEQ,
     CAMERA_OP_GET_EXPOSURE, CAMERA_OP_SET_EXPOSURE, CAMERA_OP_SET_GAIN,
 )
 from diofinder import seeing as seeing_mod
@@ -2747,7 +2747,7 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 "imu_enabled": ctx.shared_cfg.get(
                     "imu_enabled", getattr(ctx.cfg, "imu_enabled", True)),
                 "imu_poll_hz": ctx.shared_cfg.get(
-                    "imu_poll_hz", getattr(ctx.cfg, "imu_poll_hz", 20)),
+                    "imu_poll_hz", getattr(ctx.cfg, "imu_poll_hz", 10)),
                 "report_epoch": ctx.shared_cfg.get(
                     "report_epoch",
                     str(getattr(ctx.cfg, "report_epoch", "jnow")).lower()),
@@ -3402,6 +3402,20 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             reply = _cached_call_solver(SOLVER_OP_TRACKING_STATUS,
                                         ctx.solver_cmd_q, ctx.solver_cmd_reply_q,
                                         ttl_s=0.5)
+            if reply is None:
+                return MaintResponse(ok=False, error="solver did not respond")
+            if not reply.ok:
+                return MaintResponse(ok=False, error=reply.error)
+            return MaintResponse(ok=True, result=reply.result)
+
+        if cmd == "solution_for_seq":
+            # The solution published for specific frames (debug bundles pair
+            # each burst frame with its own result). args: {"seqs": [...]}.
+            seqs = args.get("seqs")
+            if seqs is None and args.get("seq") is not None:
+                seqs = [args.get("seq")]
+            reply = _call_solver(SOLVER_OP_SOLUTION_FOR_SEQ, {"seqs": list(seqs or [])},
+                                 ctx.solver_cmd_q, ctx.solver_cmd_reply_q)
             if reply is None:
                 return MaintResponse(ok=False, error="solver did not respond")
             if not reply.ok:

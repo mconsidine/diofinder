@@ -99,7 +99,7 @@ should also TTL-cache their settings reads rather than `.get()` per sample.
 | `imu_predict_hold_solve_s` | float | comms (seed from cfg; `solver_params_set`) | comms LX200 pointing (P1 — `_imu_predict` reports a solve fresher than this instead of IMU extrapolation; the SkySafari reticle-oscillation fix. 0 disables) |
 | `imu_predict_enabled` | bool | comms (seed from cfg; `solver_params_set` — Camera-page "Use IMU between solves" toggle) | comms LX200 pointing (master switch; false → `_imu_predict` returns None so `:GR/:GD` report plate solves only, IMU never used for pointing. Solve hint + slew detection still use the IMU) |
 | `imu_enabled` | bool | main (seed from cfg); comms (`solver_params_set` — Camera-page "IMU sensor" toggle) | imu_thread (park switch; false → the reader thread stops sampling/publishing and drops `imu_available`, the same end state as unplugging the BNO055. Reversible; re-enabling re-probes) |
-| `imu_poll_hz` | int (1–50) | main (seed from cfg); comms (`solver_params_set`) | imu_thread (reader poll rate; read live each loop. 20 = shipped; 5–10 cuts per-sample Manager IPC on CPU 0 with no visible pointing change) |
+| `imu_poll_hz` | int (1–50) | main (seed from cfg); comms (`solver_params_set`) | imu_thread (reader poll rate; read live each loop. 10 = shipped since v0.11.76 (was 20); 5–10 cuts per-sample Manager IPC on CPU 0 with no visible pointing change) |
 | `imu_hunt_filter` | bool | main (seed from cfg) | imu_thread (P3 — `_hunt_filter` damps BNO055 fusion hunting in the published quaternion; real motion snaps through. false = raw passthrough) |
 | `imu_exact_predict` | bool | comms (seed from cfg; `solver_params_set`) | comms LX200 pointing (kill switch for the exact quaternion path; false → legacy C-matrix) |
 | `report_epoch` | str (`jnow`/`j2000`) | comms (seed from cfg; `solver_params_set`) | comms LX200 boundary — precesses J2000→JNow for `:GR/:GD` + the status `report_*`, JNow→J2000 for the `:CM#` align target (v0.11.53). `j2000` = raw kill switch |
@@ -364,7 +364,12 @@ burst frames (debug bundles and A/B captures use it, and it is the live view's
 *fallback*). `display_start` arms the demand-gated `diofinder_display` segment
 (the web live view's fast path — see below). `solve_stats {"after"?}` returns
 the solver's rolling per-successful-solve records (FULL vs TRACKING) for the
-tracking A/B harness.
+tracking A/B harness. `solution_for_seq {"seqs":[...]}` returns the solution
+published for specific frames from the solver's last ~48 publishes
+(`_SolverState.recent_solutions`, fed by `SolutionTap`). Debug bundles use it so
+each burst frame gets its own result even at 0.3 s exposures, where
+`latest_solution` has always moved on by the time the web UI asks (every frame
+used to come back `null`).
 
 1. Add an `if cmd == "my_command":` branch anywhere in the function.
 2. Read arguments from the `args` dict (always a plain dict, may be empty).
@@ -405,6 +410,13 @@ def my_endpoint():
 
 Templates live in `webui/templates/`. Static assets in `webui/static/`.
 The Jinja2 environment has a `log10` filter registered for log-scale sliders.
+
+**Hidden tabs don't poll (v0.11.76).** `base.html` wraps `window.setInterval`
+before any page script runs: callbacks are skipped while `document.hidden`,
+and every registered poller runs once when the tab is shown again. So the live
+view (`/frame.jpg` every 1.25 s), status pollers and any future
+`setInterval` stop costing CPU 0 for background tabs; browsers only slow those
+down. One-off `setTimeout`s (debounces, the reboot-wait ping) are unaffected.
 
 **Info tooltips (v0.11.51).** Long explanatory prose on the settings pages is
 collapsed behind an ⓘ icon via one reusable macro: `{% from "_macros.html"

@@ -572,12 +572,15 @@ class SolutionTap:
     seen by the recorder (no change to the many publish sites). Only
     ``update`` is intercepted; everything else passes through."""
 
-    def __init__(self, proxy, recorder):
+    def __init__(self, proxy, recorder, history=None):
         self._proxy = proxy
         self._rec = recorder
+        self._history = history      # optional deque of recent seq-tagged publishes
 
     def update(self, d=None, **kw):
         self._proxy.update(d or {}, **kw)
+        if self._history is not None and isinstance(d, dict) and d.get("seq") is not None:
+            self._history.append(d)
         if self._rec.active:
             try:
                 self._rec.note_solution(d)

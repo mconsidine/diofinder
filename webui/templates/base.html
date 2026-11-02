@@ -14,6 +14,38 @@
       } catch (e) {}
       document.documentElement.classList.add('mode-' + m);
     })();
+
+    // Pause every page poller while its tab is hidden. Pages poll with
+    // setInterval (the live view every 1.25 s, status every few seconds), and
+    // browsers keep background tabs running — only slowed — so each extra tab
+    // or device cost CPU 0 work on the finder for a page nobody was looking at.
+    // Wrapping setInterval here (before any page script runs) covers every
+    // page; when the tab is shown again each poller runs once at once, then
+    // resumes its normal rhythm.
+    (function () {
+      var origSet = window.setInterval, origClear = window.clearInterval;
+      var live = {};
+      window.setInterval = function (fn, ms) {
+        if (typeof fn !== 'function') return origSet.apply(window, arguments);
+        var args = Array.prototype.slice.call(arguments, 2);
+        var run = function () { fn.apply(window, args); };
+        var id = origSet.call(window, function () {
+          if (!document.hidden) run();
+        }, ms);
+        live[id] = run;
+        return id;
+      };
+      window.clearInterval = function (id) {
+        delete live[id];
+        return origClear.call(window, id);
+      };
+      document.addEventListener('visibilitychange', function () {
+        if (document.hidden) return;
+        Object.keys(live).forEach(function (id) {
+          try { live[id](); } catch (e) {}
+        });
+      });
+    })();
   </script>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>

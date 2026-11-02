@@ -26,16 +26,17 @@ says why it matters. Nothing under "To do" has been started.
 
 ## To do — finder
 
-1. **Pause page polling in hidden browser tabs.** The live view (Home and
+1. ✅ *Done (v0.11.76 base):* **Pause page polling in hidden browser tabs.** The live view (Home and
    Advanced) and the status pollers keep running in background tabs; desktop
    browsers only slow them. Pause on `visibilitychange`, resume on show.
    Files: `webui/templates/home.html`, `camera.html`, other pages with
    `setInterval`.
-2. **Default IMU sample rate 20 Hz → 10 Hz** (`imu_poll_hz`). Consumers need far
+2. ✅ *Done (v0.11.76 base; the hunting filter's per-sample blend now scales
+   with the rate so its lag in seconds is unchanged):* **Default IMU sample rate 20 Hz → 10 Hz** (`imu_poll_hz`). Consumers need far
    less than 20 Hz (SkySafari ~4/s, solves ~3/s, slew detector compares ~0.8 s
    apart); halves the IMU's traffic through CPU 0. Devices with a saved rate
    keep it. Files: `diofinder/config.py`, `etc/diofinder.conf.default`, docs.
-3. **Debug bundle: match each frame to its own solve.** At 0.3 s exposures every
+3. ✅ *Done (v0.11.76 base; `solution_for_seq`):* **Debug bundle: match each frame to its own solve.** At 0.3 s exposures every
    frame in a bundle had `solution: null` (the solver had moved on before the
    web UI asked). Have the solver keep the last few solutions and look them up
    by seq. Files: `webui/app.py` `_solution_for_seq`, `diofinder/solver_proc.py`,
@@ -44,10 +45,10 @@ says why it matters. Nothing under "To do" has been started.
    in web UI memory on CPU 0 and returned as one large response — the heaviest
    CPU 0 job, and fragile on phones. Build it in the background, then offer a
    normal GET download (like live captures).
-5. **Headroom card: CPU 0 must stay high across several readings** before the
+5. ✅ *Done (v0.11.76 base; 3 samples ≈ 15 s for both Tight and Constrained):* **Headroom card: CPU 0 must stay high across several readings** before the
    verdict says "Tight", like RAM and swap already do. A single 5 s reading of
    94% turned the field card "Tight". File: `diofinder/sysmon.py`.
-6. **Add `ap-watchdog.sh` to the OTA refresh list** in `scripts/diofinder-update`,
+6. ✅ *Done (v0.11.76 base):* **Add `ap-watchdog.sh` to the OTA refresh list** in `scripts/diofinder-update`,
    so watchdog fixes reach devices by update.
 7. **Cap or prune `/var/lib/diofinder/bg_runs/`** (Background A/B archives);
    only `captures/` has a size cap today.
@@ -69,6 +70,16 @@ says why it matters. Nothing under "To do" has been started.
     `docs/decisions/2026-11-01-imu-report-smoothing-shelved.md`).
 15. **Needs a decision:** whether test-mode defaults should use `test.png`'s real
     capture site/time (would publish a location).
+
+16. **Record the clock source in live captures:** when and how the clock was
+    last set (SkySafari `:SC`, network time), in `session.json`. Satellite
+    timing depends on it, and "clock plausible" only rules out a clock years off.
+17. **Matched stars in debug bundles too** (`frames.json`), like live captures,
+    so any bundle can be fitted and overlaid offline.
+18. **Bump the in-code version to 0.11.76** (`diofinder/config.py`); docs already
+    say the settle gate arrived in 0.11.76.
+19. **Live capture time limit:** optional auto-stop after N minutes, so a
+    forgotten capture doesn't run until the size cap.
 
 ## To do — satellite tools (`tests/satcheck_overlay.py`)
 

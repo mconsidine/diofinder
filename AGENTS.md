@@ -267,7 +267,7 @@ Released through **v0.11.65** (latest).
   but still feeds the solve hint + slew detection; **`imu_enabled`** (default on)
   — off *parks the whole reader thread* (no sampling/IPC, `imu_available` drops),
   the same end state as unplugging the BNO055 but reversible with no reboot;
-  **`imu_poll_hz`** (default 20, clamped 1–50) — read live each loop, 5–10 Hz
+  **`imu_poll_hz`** (default 10 since v0.11.76, was 20; clamped 1–50) — read live each loop, 5–10 Hz
   cuts the per-sample IPC proportionally with no visible pointing change. All
   seeded into `shared_cfg` and live via `solver_params_set`. Tests:
   `test_imu_park.py` (faked-bus park/resume) + the master-switch case in

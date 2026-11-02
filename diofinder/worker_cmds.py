@@ -82,6 +82,12 @@ SOLVER_OP_TRACKING_STATUS = "tracking_status"
 # records. Result: {"records": [[epoch, tracked, solve_ms, extract_ms,
 # matches, ra, dec], ...], "now": monotonic}.
 SOLVER_OP_SOLVE_STATS = "solve_stats"
+# Look up the solution the solver published for specific frames, from a short
+# in-process history (the last ~48 publishes). Lets a debug bundle pair each
+# burst frame with ITS OWN result even at fast frame rates, where the shared
+# latest_solution has already moved on. args: {"seqs": [int, ...]}.
+# Result: {"solutions": {"<seq>": {...published dict...}}} (found ones only).
+SOLVER_OP_SOLUTION_FOR_SEQ = "solution_for_seq"
 # Clear the hot-pixel mask (delete file + unload). args: {}.
 SOLVER_OP_HOT_PIXEL_CLEAR = "hot_pixel_clear"
 # Return the newest published camera frame (bytes + shape + seq), read via

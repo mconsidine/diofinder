@@ -2273,6 +2273,20 @@ def debug_collect():
             daemon without seq tagging, or the solve never landed)."""
             import time as _t
             deadline = _t.monotonic() + budget_s
+            # Preferred: ask the solver for THIS frame's result from its short
+            # history. At fast frame rates (0.3 s exposures) the shared latest
+            # solution has always moved on by the time we look, so the status
+            # poll below matched nothing and every bundle frame got null.
+            while _t.monotonic() < deadline:
+                r = _safe_call("solution_for_seq", {"seqs": [int(seq)]}, timeout=2.0)
+                if not r.ok:
+                    break                      # older daemon: use the status poll
+                sol = ((r.result or {}).get("solutions") or {}).get(str(int(seq)))
+                if sol is not None:
+                    return sol
+                _t.sleep(0.15)                 # not solved yet; ask again
+            else:
+                return None
             while _t.monotonic() < deadline:
                 sr = _safe_call("status", timeout=1.0)
                 sol = (sr.result or {}).get("solution") if sr.ok else None

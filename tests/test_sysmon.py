@@ -86,7 +86,8 @@ def _hw(**kw):
     base = {"min_mem_available_pct": None, "max_swap_used_mb": 0.0,
             "max_swap_phys_mb": 0.0, "max_swap_growth_mb": 0.0,
             "max_swap_growth_streak": 0, "max_mem_low_streak": 0,
-            "max_cpu_pct": 0.0, "max_cpu0_pct": 0.0, "max_temp_c": None}
+            "max_cpu_pct": 0.0, "max_cpu0_pct": 0.0, "max_cpu0_warn_streak": 0,
+            "max_cpu0_crit_streak": 0, "max_temp_c": None}
     base.update(kw)
     return base
 
@@ -149,9 +150,10 @@ def test_classify_constrained_escalates_to_worst():
     snap = {"in_warmup": False, "mem_total_kb": 508000,
             "high_water": _hw(min_mem_available_pct=25.0, max_swap_growth_mb=6.0,
                               max_swap_growth_streak=3, max_cpu0_pct=99.0,
+                              max_cpu0_warn_streak=4, max_cpu0_crit_streak=3,
                               max_temp_c=50.0)}
     v = sysmon.classify(snap)
-    assert v["level"] == "constrained"          # CPU0 99% -> constrained, worst wins
+    assert v["level"] == "constrained"          # CPU0 sustained 98%+ -> constrained, worst wins
     assert any("CPU 0" in r for r in v["reasons"])
     assert any("leaning on swap" in r for r in v["reasons"])  # tight reason still listed
 
@@ -259,3 +261,42 @@ def test_high_water_at_records_uptime_of_each_mark():
                     "mem_available_pct": 30.0, "cpu_pct": {"cpu0": 55.0}})
     assert sm.high_water_at["min_mem_available_pct"] == 112.0   # min didn't move
     assert sm.high_water_at["max_cpu0_pct"] == 300.0            # max moved later
+
+
+# --- CPU 0: both rungs need a sustained run, not one busy sample ---
+
+def test_classify_single_cpu0_spike_is_benign():
+    # The field reading: one 5 s sample at 94% (a debug bundle) -> comfortable.
+    snap = {"in_warmup": False, "mem_total_kb": 425000,
+            "high_water": _hw(min_mem_available_pct=30.0, max_cpu0_pct=94.0,
+                              max_cpu0_warn_streak=1)}
+    assert sysmon.classify(snap)["level"] == "comfortable"
+    # Even a single 100% sample is not "constrained".
+    snap["high_water"].update(max_cpu0_pct=100.0, max_cpu0_crit_streak=1)
+    assert sysmon.classify(snap)["level"] == "comfortable"
+
+
+def test_classify_sustained_cpu0():
+    hw = _hw(min_mem_available_pct=30.0, max_cpu0_pct=95.0, max_cpu0_warn_streak=3)
+    v = sysmon.classify({"in_warmup": False, "mem_total_kb": 425000, "high_water": hw})
+    assert v["level"] == "tight" and "3 samples running" in v["reasons"][0]
+    hw.update(max_cpu0_pct=100.0, max_cpu0_crit_streak=3)
+    assert sysmon.classify({"in_warmup": False, "mem_total_kb": 425000,
+                            "high_water": hw})["level"] == "constrained"
+
+
+def test_cpu0_streaks_count_consecutive_samples():
+    sm = sysmon.SysMon(warmup_s=0.0)
+
+    def feed(c0):
+        sm._bump_marks({"in_warmup": False, "cpu_pct": {"cpu0": c0}})
+
+    feed(95.0); feed(99.0)
+    assert sm.high_water["max_cpu0_warn_streak"] == 2
+    assert sm.high_water["max_cpu0_crit_streak"] == 1
+    feed(40.0)                                   # a quiet sample resets both
+    assert sm._cpu0_warn_streak == 0 and sm._cpu0_crit_streak == 0
+    feed(92.0)
+    assert sm._cpu0_warn_streak == 1
+    assert sm.high_water["max_cpu0_warn_streak"] == 2       # longest run kept
+    assert sm.high_water["max_cpu0_pct"] == 99.0

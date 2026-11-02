@@ -66,7 +66,7 @@ _OPR_CONFIG   = 0x00    # configuration mode (required before mode changes)
 _OPR_IMUPLUS  = 0x08    # accel + gyro fusion; no magnetometer
 _PWR_NORMAL   = 0x00
 
-_POLL_HZ      = 20
+_POLL_HZ      = 10
 _POLL_INTERVAL = 1.0 / _POLL_HZ
 _PROBE_INTERVAL = 3.0   # seconds between probe attempts when device absent
 
@@ -132,7 +132,20 @@ def _quat_angle_deg(q1, q2):
 # via imu_hunt_filter (default on); when off the raw quaternion is published
 # byte-for-byte.
 _HUNT_SNAP_DEG = 2.0     # change above this is real motion -> pass through
-_HUNT_ALPHA    = 0.35    # blend factor for sub-snap (hunting) readings
+_HUNT_ALPHA    = 0.35    # blend factor for sub-snap (hunting) readings...
+_HUNT_ALPHA_HZ = 20.0    # ...tuned at this sample rate (see hunt_alpha_for)
+
+
+def hunt_alpha_for(poll_hz, alpha=_HUNT_ALPHA, ref_hz=_HUNT_ALPHA_HZ):
+    """Per-sample blend factor giving the same smoothing TIME constant at any
+    sample rate as `alpha` gives at `ref_hz`. A fixed per-sample alpha would
+    double the lag when the rate is halved (20 -> 10 Hz default, v0.11.76):
+    the residual after one second is (1 - alpha) ** hz, so match that."""
+    try:
+        hz = max(1.0, float(poll_hz))
+    except (TypeError, ValueError):
+        return alpha
+    return 1.0 - (1.0 - alpha) ** (ref_hz / hz)
 
 
 def _nlerp(q_from, q_to, alpha):
@@ -583,7 +596,8 @@ def imu_thread(shared_cfg, stop_event=None):
                 # reaches the LX200 pointing prediction (reversible; off ->
                 # raw passthrough).
                 if settings["hunt_filter"]:
-                    q = _hunt_filter(hunt_state, q)
+                    q = _hunt_filter(hunt_state, q,
+                                     alpha=hunt_alpha_for(settings["poll_hz"]))
                 else:
                     hunt_state.clear()   # re-enable snaps cleanly next time
                 shared_cfg["imu"] = (q, t0)

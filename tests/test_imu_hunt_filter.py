@@ -110,3 +110,15 @@ def test_disabled_semantics_via_clear():
     st = {"q": Q_A}
     st.clear()
     assert _hunt_filter(st, Q_B) == Q_B
+
+
+
+def test_hunt_alpha_keeps_the_same_time_constant_at_any_rate():
+    from diofinder.imu_proc import hunt_alpha_for, _HUNT_ALPHA
+    assert abs(hunt_alpha_for(20) - _HUNT_ALPHA) < 1e-12      # tuned rate: unchanged
+    # Residual after one second must match the 20 Hz behaviour.
+    one_s_20 = (1 - _HUNT_ALPHA) ** 20
+    for hz in (5, 10, 50):
+        assert abs((1 - hunt_alpha_for(hz)) ** hz - one_s_20) < 1e-12
+    assert hunt_alpha_for(10) > _HUNT_ALPHA                   # fewer, bigger steps
+    assert hunt_alpha_for("junk") == _HUNT_ALPHA
