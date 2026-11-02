@@ -156,7 +156,7 @@ cores: the reason to test bin-at-submit), and small background loops.
 - ✅ *Done:* OTA cards move `imu_poll_hz` 20 → 10 once (conf migration v2,
   per-rule versions); on-screen-only polling.
 
-## Proposal: identify (and refine elements for) satellites from a live capture
+## Satellite identification and element refinement — steps 1–3 done (`tests/sat_identify.py`)
 
 Goal: an off-device script that takes a live capture, finds the satellite
 trails in its stacked frames, and identifies them, including against
@@ -188,6 +188,15 @@ Assessment:
 - **Accuracy budget:** ~1 px (51″) across-track; along-track is set by the
   clock: 0.1 s at 0.5°/s is ~3.5 px, so set the clock from the phone first.
   Exposure start/end times come from the sensor timestamps already recorded.
+
+Status (2026-11-02): steps 1–3 below are implemented in `tests/sat_identify.py`
+(per-frame observations as IOD + JSON; identification against McCants/CelesTrak
+files with a free time offset; refinement; output as classic TLE incl. Alpha-5,
+CCSDS OMM KVN/XML and OMM JSON/CSV). Verified end to end on a synthetic capture
+drawn from a real classfd element set (found among 436, timing error recovered to
+<1 s, refined elements reproduce the pass). On the 2026-11-02 capture the
+aircraft trail is correctly unmatched. Still needed: a capture with real sunlit
+satellite trails; step 4 is not started.
 
 Plan (each step useful on its own):
 1. Per-trail observations: from the frame-by-frame timing `satcheck_overlay`

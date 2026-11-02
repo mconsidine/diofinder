@@ -1252,6 +1252,23 @@ POST) archives; names must match `livecap_<YYYYMMDDTHHMMSSZ>.zip` exactly.
   them comes in regular knots. The
   response structure is `data.satellites[name].positions[{ra, dec,
   julian_date}]`.
+  **`tests/sat_identify.py ARCHIVE.zip --elements classfd.zip inttles.zip
+  [--download] [--responses …]`** (needs `pip install sgp4`) goes past
+  SatChecker's public catalog: each timed trail becomes per-frame RA/Dec
+  observations, matched against supplied element sets (TLE/3LE, OMM CSV/XML/
+  JSON, or zips; newest epoch per object wins; `--download` fetches Mike
+  McCants' `classfd.zip`/`inttles.zip` from mmccants.org) by line, direction
+  and rate with the along-track time FREE (stale elements keep their plane;
+  the report gives "N s early/late"); a match is then refined (moved to the
+  pass epoch, mean anomaly + node fitted). Outputs: `observations_iod.txt`
+  (IOD format for Find_Orb / sat_id / satfit / SeeSat-L; `--station`),
+  `identification.txt/json`, and the refined elements as classic TLE
+  (Alpha-5 for 100000–339999), CCSDS OMM KVN and XML, and CelesTrak-style
+  OMM JSON/CSV (9-digit catalog numbers: OMM only; SGP4's Satrec can't hold
+  them, so they ride in `ElementSet.extra`). A single arc can't determine an
+  orbit from scratch; refinement of a known element set is the honest
+  output. Tests: `tests/test_sat_identify.py` (end to end on a synthetic
+  capture drawn from a real classfd element set, 37 s timing error).
 * Tests: `tests/test_live_capture.py` (recorder end-to-end on a temp dir,
   writer-side stop, drop-not-block, recovery, comms commands, web routes, the
   SatChecker query builder).

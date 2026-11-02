@@ -19,9 +19,9 @@ jobs:
           python-version: "3.11"
       - name: Install test dependencies
         # Device runtime deps that the tests import, plus the off-device
-        # satellite tools' deps (astropy, matplotlib) so those tests run too.
+        # satellite tools' deps (astropy, matplotlib, sgp4) so those tests run too.
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest numpy pillow flask pyserial smbus2 astropy matplotlib
+          python -m pip install pytest numpy pillow flask pyserial smbus2 astropy matplotlib sgp4
       - name: Run tests
         run: python -m pytest -q tests

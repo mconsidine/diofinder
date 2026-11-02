@@ -1043,6 +1043,9 @@ def trail_kinematics(zf, st, res, trails, sigma=TRAIL_SIGMA, half_width=4):
                             float(np.average(ss[hit], weights=wgt))))
     for t, (_, _, _, _, obs) in zip(trails, lines):
         t["n_seen"] = len(obs)
+        # (exposure-mid JD, position along p0->p1 in reference pixels) per
+        # frame: the raw observations sat_identify turns into RA/Dec.
+        t["track_obs"] = sorted(obs)
         t["px_per_s"] = None
         if len(obs) >= 3:
             jd = np.array([o[0] for o in obs])
