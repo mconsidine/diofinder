@@ -1,0 +1,27 @@
+name: Tests
+
+# Run the unit-test suite on every push and pull request, so a regression shows
+# up here instead of in an image build or on the device. Hardware is never
+# needed: the tests stub the camera, IMU, solver wheels and serial port.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        # Device runtime deps that the tests import, plus the off-device
+        # satellite tools' deps (astropy, matplotlib) so those tests run too.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest numpy pillow flask pyserial smbus2 astropy matplotlib
+      - name: Run tests
+        run: python -m pytest -q tests
