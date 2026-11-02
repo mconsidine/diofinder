@@ -130,17 +130,24 @@ cores: the reason to test bin-at-submit), and small background loops.
 3. **ROI tracking mode** (since v0.11.27): the most complex optional solver code;
    run its A/B or remove it.
 4. **IMU Unit B (`imu_persist_bno055`) and Unit C (`imu_solve_cal_enabled`)**:
-   validate or remove; Unit C's chip-write mode was never implemented: remove.
+   validate or remove. Unit C's chip-write mode (`imu_solve_cal_write_chip`) was
+   **deferred by design, not dropped**: the 2026-07-21 IMU decision staged it
+   after Unit C's software correction (Mode 1) is field-validated, and it needs
+   Unit B on (it writes through B's channel). Keep the reserved key.
 5. **`horizon_reject_enabled`**: low value (blind solves only, needs a correct clock).
 
 ### Overlaps / candidates to drop
 
-- `/debug/collect` (old one-shot bundle route): unused by the web UI; drop.
+- `/debug/collect` (old one-shot bundle route): KEPT — it is the documented
+  `curl` path; it only accepted POST, so that command failed. Fixed (GET too).
 - Three tuners: auto-tune (live), the "Tune from burst" card (on device),
-  `replay_corpus.py` (off device): keep two.
-- `save_failed_frames` / `save_solved_frames`: live capture covers their use.
-- Polar alignment: hidden from the menu since earlier; restore or remove.
-- Background modes: 8 in the menu; trim to the ones in use (zero cost otherwise).
+  `replay_corpus.py` (off device): keep two. **Waiting on your choice.**
+- `save_failed_frames` / `save_solved_frames`: KEPT for now —
+  `scripts/calibrate_lens.py` (lens distortion fit) reads the frames
+  `save_solved_frames` writes. Could go once it reads live-capture zips.
+- Polar alignment: stays hidden (decided 2026-11-02).
+- ✅ *Done:* background-mode menus trimmed to block_percentile, row_percentile,
+  uniform_mean, temporal_median (the rest still work and show while active).
 - Kept on purpose: the Legacy/tetra3 baseline (expert-only), debug bundles vs
   live captures (they complement each other), the Background A/B run.
 
@@ -148,7 +155,8 @@ cores: the reason to test bin-at-submit), and small background loops.
 
 - On-sky A/B tests above; check SkySafari now sets the clock (log shows
   `Clock synced … (direct)`; Utilities → Clock names SkySafari).
-- Live captures are never pruned: add a size cap like bundles and A/B runs.
+- ✅ *Done:* live captures capped (`live_capture_keep_mb`, 8000 MB, oldest
+  deleted first, newest always kept).
 - Mid-exposure IMU timing for the Kabsch pairs and the solve hint (crosshair
   reference only so far).
 - Deferred: "promote tested image" release mode; more mount dialects

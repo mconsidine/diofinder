@@ -216,6 +216,33 @@ def list_archives(directory=DEFAULT_DIR):
     return out
 
 
+def prune_archives(directory=DEFAULT_DIR, keep_mb=8000.0, protect=None):
+    """Delete the OLDEST finished archives until the total is at most
+    ``keep_mb`` (0 or less = no limit). ``protect`` (an archive name, e.g.
+    the one just written) and the newest archive are never deleted, even if
+    one alone is over the limit. Returns the names deleted."""
+    if not keep_mb or keep_mb <= 0:
+        return []
+    arcs = list_archives(directory)                    # newest first
+    total = sum(a["bytes"] for a in arcs) / 1e6
+    gone = []
+    for a in reversed(arcs[1:]):                       # oldest first, skip newest
+        if total <= keep_mb:
+            break
+        if a["name"] == protect:
+            continue
+        try:
+            os.remove(os.path.join(directory, a["name"]))
+        except OSError as e:
+            log.warning("Could not delete old live capture %s: %s", a["name"], e)
+            continue
+        total -= a["bytes"] / 1e6
+        gone.append(a["name"])
+        log.info("Deleted old live capture %s (keeping captures under %.0f MB)",
+                 a["name"], keep_mb)
+    return gone
+
+
 def free_mb(directory):
     try:
         st = os.statvfs(directory)
@@ -263,6 +290,7 @@ class LiveRecorder:
         self.max_mb = float(getattr(cfg, "live_capture_max_mb", 4000.0))
         self.min_free_mb = float(getattr(cfg, "live_capture_min_free_mb", 1000.0))
         self.max_minutes = float(getattr(cfg, "live_capture_max_minutes", 60.0))
+        self.keep_mb = float(getattr(cfg, "live_capture_keep_mb", 8000.0))
 
     # ---- solver-loop side (cheap) -----------------------------------------
     def start_thread(self):
@@ -552,6 +580,8 @@ class LiveRecorder:
                 self._last_archive = os.path.basename(dest)
                 log.info("Live capture %s closed: %d frames (%d dropped) -> %s",
                          sid, self._frames, self._dropped, dest)
+                prune_archives(self.directory, self.keep_mb,
+                               protect=self._last_archive)
                 if n <= 2 and self._frames == 0:
                     log.info("Live capture %s recorded no frames", sid)
         except Exception as e:
@@ -562,9 +592,10 @@ class LiveRecorder:
         self._publish_status(force=True)
 
 
-def recover_partials(directory=DEFAULT_DIR):
-    """Zip any ``.partial`` session left by a crash / power cut. Returns the
-    archive names written. Safe to call at every solver start."""
+def recover_partials(directory=DEFAULT_DIR, keep_mb=None):
+    """Zip any ``.partial`` session left by a crash / power cut, then (when
+    ``keep_mb`` is given) apply the size cap. Returns the archive names
+    written. Safe to call at every solver start."""
     out = []
     try:
         names = os.listdir(directory)
@@ -588,6 +619,8 @@ def recover_partials(directory=DEFAULT_DIR):
             log.info("Recovered unfinished live capture -> %s", dest)
         except Exception as e:
             log.warning("Could not recover live capture %s: %s", name, e)
+    if keep_mb is not None:
+        prune_archives(directory, keep_mb)
     return out
 
 

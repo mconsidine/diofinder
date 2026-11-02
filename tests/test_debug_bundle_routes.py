@@ -72,6 +72,10 @@ def test_legacy_collect_still_returns_the_zip(web):
     r = c.post("/debug/collect")
     assert r.status_code == 200 and r.data == b"PK fake bundle"
     assert calls and calls[0][1] == 12
+    # The documented curl command is a plain GET.
+    r = c.get("/debug/collect?frames=5")
+    assert r.status_code == 200 and r.data == b"PK fake bundle"
+    assert calls[-1][1] == 5
 
 
 def test_prune_keeps_newest_ten(tmp_path):

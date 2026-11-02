@@ -150,7 +150,7 @@
           <select name="bg_mode" id="bg_mode_sel">
             {# Registry-rendered (bg_modes.for_ui) — same source as the
                Background page and the engine's cache logic. #}
-            {% for m in bg_modes %}
+            {% for m in bg_modes if m.menu or bgm == m.name %}
             <option value="{{ m.name }}" {{ 'selected' if bgm == m.name }}>{{ m.label }}</option>
             {% endfor %}
           </select>

@@ -307,6 +307,10 @@ live_capture_min_free_mb: 1000
 # Stop by itself after this many minutes, so a forgotten capture doesn't run
 # on to the size cap. 0 = no time limit.
 live_capture_max_minutes: 60
+# Keep all finished live captures together under this many MB: after each
+# capture (and at start-up) the OLDEST are deleted. The newest is always kept.
+# Download the ones you want first (Utilities -> Live captures). 0 = keep all.
+live_capture_keep_mb: 8000
 
 # ---- Centroid extractor backend ----
 # "sycamore" (default: matched filter + temporal cache + hot-pixel) or

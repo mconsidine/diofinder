@@ -1278,7 +1278,8 @@ def solver_main(slots, latest_solution, shared_cfg,
     from diofinder import live_capture as _livecap
     _livecap_dir = getattr(cfg, "live_capture_dir", _livecap.DEFAULT_DIR)
     live_rec = _livecap.LiveRecorder(shared_cfg, cfg, directory=_livecap_dir)
-    threading.Thread(target=_livecap.recover_partials, args=(_livecap_dir,),
+    threading.Thread(target=_livecap.recover_partials,
+                     args=(_livecap_dir, live_rec.keep_mb),
                      daemon=True, name="live-capture-recover").start()
     latest_solution = _livecap.SolutionTap(latest_solution, live_rec,
                                            history=state.recent_solutions)

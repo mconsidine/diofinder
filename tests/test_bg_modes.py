@@ -61,8 +61,25 @@ def test_for_ui_shape():
     ui = bg_modes.for_ui()
     assert [m["name"] for m in ui] == list(bg_modes.MODE_NAMES)
     assert all(set(m) == {"name", "label", "size_param", "size_word",
-                          "per_frame_form", "noise_row", "cache_kind"}
+                          "per_frame_form", "noise_row", "cache_kind", "menu"}
                for m in ui)
+
+
+def test_menu_is_trimmed_but_every_preset_mode_stays():
+    from diofinder import seeing
+    menu = {m["name"] for m in bg_modes.for_ui() if m["menu"]}
+    assert menu == {"row_percentile", "block_percentile", "uniform_mean", "temporal_median"}
+    for preset in seeing.SEEING_PRESETS.values():
+        assert preset["detect_bg_mode"] in menu
+
+
+def test_trimmed_mode_still_shows_while_active():
+    from jinja2 import Environment
+    env = Environment()
+    t = env.from_string('{% for m in bg_modes if m.menu or bgm == m.name %}'
+                        '{{ m.name }} {% endfor %}')
+    out = t.render(bg_modes=bg_modes.for_ui(), bgm="top_hat").split()
+    assert "top_hat" in out and "line_median" not in out and "block_percentile" in out
 
 
 def test_registry_is_importable_without_native_wheels():

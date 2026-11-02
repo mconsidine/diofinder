@@ -104,7 +104,10 @@
       zip holds the raw frames, <code>frames.jsonl</code> (UTC exposure time and
       solved centre RA/Dec for every frame) and <code>session.json</code>
       (observer site, field of view). Download them to look up satellites
-      offline, then delete them here to free the card.
+      offline, then delete them here to free the card. To keep the card from
+      filling up, the oldest captures are deleted automatically once all of
+      them together pass the limit set on the Config page (8000 MB unless
+      changed; the newest is always kept), so download the ones you want.
     </p>
     <p class="hint" id="livecap-free" style="margin:0 0 6px 0;"></p>
     <ul id="livecap-list" style="margin:0; padding-left:1.2rem; font-size:0.9rem;"></ul>

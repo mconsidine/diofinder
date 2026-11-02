@@ -571,10 +571,15 @@ Detection is routed through `diofinder/bg_cache.py::BackgroundCache`, not by cal
 `detect_stars` directly. This gives three composable background strategies, all
 toggleable from config (and live-overridable via `shared_cfg`):
 
-- **Per-frame background mode** (`detect_bg_mode`): seven modes available
+- **Per-frame background mode** (`detect_bg_mode`): eight modes available
   (all per-mode facts — cache kind, size param, UI labels — live in the
   `diofinder/bg_modes.py` registry since v0.11.48; bg_cache, comms
-  validation, and both web menus derive from it):
+  validation, and both web menus derive from it). **Menu trim (v0.11.76):** the
+  registry's `menu` flag keeps only `block_percentile` (default),
+  `row_percentile`, `uniform_mean` and `temporal_median` in the Advanced and
+  Background "set the mode" menus; the other four stay fully supported (conf,
+  maint, presets, the Background preview) and still appear in a menu while
+  they are the active mode:
   - `row_percentile` — default, cheapest; per-row percentile floor
   - `line_median` — robust to per-row offset / vignetting
   - `column_percentile` — per-column percentile floor (sycamore >= 0.10.0)
@@ -763,7 +768,8 @@ bundle email-friendly.
 `os.replace`; newest 10 kept), the page polls `/api/debug`, then fetches
 `/debug/download/<name>` as an ordinary download — the zip never sits in web UI
 memory or one long response. `/debug/collect` stays for scripts (builds, then
-serves from disk). Each `frames.json` solution also carries **`matched`**
+serves from disk; GET or POST, so `curl …/debug/collect?frames=12 -o b.zip`
+works). Each `frames.json` solution also carries **`matched`**
 (`[x, y, ra, dec, mag]` rows, like live captures): the bundle asks
 `matches_want {"seconds": 90}` first, which sets `shared_cfg["matches_wanted_until"]`
 so the solver passes `return_matches` and keeps them in
@@ -1231,7 +1237,11 @@ POST) archives; names must match `livecap_<YYYYMMDDTHHMMSSZ>.zip` exactly.
   is one frame) via `.zip.tmp` then rename. `recover_partials` zips any
   leftover `.partial` at solver start (crash / power cut). It stops by itself at
   `live_capture_max_mb` (4000), after `live_capture_max_minutes` (60; 0 = no
-  limit), or when free disk falls below `live_capture_min_free_mb` (1000). That stop comes from the writer thread
+  limit), or when free disk falls below `live_capture_min_free_mb` (1000).
+  **Size cap (v0.11.76):** after each capture closes and at solver start
+  (`recover_partials`), `prune_archives` deletes the OLDEST finished
+  archives until all together are under `live_capture_keep_mb` (8000; 0 =
+  keep all); the newest is never deleted. That stop comes from the writer thread
   through a flag, never a blocking put on its own queue. A session id is never
   restarted, and a new start is refused while the previous one is still
   zipping. comms warns when the clock is implausible (no RTC) or the site is
@@ -1395,7 +1405,7 @@ finder's solving/LX200 path is unaffected regardless.
 | `/var/lib/diofinder/imu_solve_cal.json` | Persisted plate-solve-derived accel-tilt bias + gyro scale-factor (Unit C; gated by `imu_solve_cal_enabled`, default off). Learned by the solver from solve-vs-IMU residuals (`imu_solve_cal.py`), applied as the Mode-1 software correction in comms; self-heals on divergence; cleared by factory reset `--clear-imu-calib`. |
 | `/var/lib/diofinder/star_names.csv` | Star naming catalog (from astro_databases release); powers the "Centered star" label (default: the BRIGHTEST cataloged star within `star_name_radius_deg` (2°) of the boresight, falling back to nearest; the expert toggle `star_name_brightest=false` reverts to pure nearest; `star_name_whole_fov=true` widens the brightest search to the whole frame — a stable align anchor when boresight is off). Optional — missing file disables naming. Refreshed by `diofinder-db-update`. |
 | `/var/lib/diofinder/messier.csv` | Messier catalog (from astro_databases release ≥ `2026.07.01`); powers the "Centered object" DSO label (`messier.py`: the Messier object the aim point is on, matched by each object's own extent). Display only — separate from the star label, never touches the solve/align/aim. Gated by `star_name_dso` (default on). Optional — missing file disables it. Refreshed by `diofinder-db-update`. |
-| `/var/lib/diofinder/live_captures/` | Live-capture archives `livecap_<UTC>.zip` (Home-page button; frames + `frames.jsonl` + `session.json`). `*.partial/` = recording in progress, zipped on stop or at the next solver start. Not auto-pruned — delete from Utilities → Live captures. |
+| `/var/lib/diofinder/live_captures/` | Live-capture archives `livecap_<UTC>.zip` (Home-page button; frames + `frames.jsonl` + `session.json`). `*.partial/` = recording in progress, zipped on stop or at the next solver start. Oldest deleted automatically past `live_capture_keep_mb` (8000 MB; the newest is kept); delete by hand from Utilities → Live captures. |
 | `/var/lib/diofinder/captures/` | PNG captures when `save_failed_frames=true` (100 MB cap, oldest evicted) |
 | `/run/diofinder/maint.sock` | Maintenance Unix socket |
 | `/var/lib/diofinder/version` | Running release tag + ISO date. Stamped at image build (`install.sh`, from `DIOFINDER_VERSION`) and rewritten by `diofinder-update`. The `version` maint command resolves it as: this file → `git describe` of `/opt/diofinder` → in-code `cfg.version` (so a fresh burn reports its real tag instead of the stale default). |

@@ -55,7 +55,7 @@
             {# Rendered from the bg_modes registry — the same source that
                drives the engine's cache logic and comms validation, so this
                menu can never diverge from the Advanced page again. #}
-            {% for m in bg_modes %}
+            {% for m in bg_modes if m.menu or (params and params.detect_bg_mode == m.name) %}
             <option value="{{ m.name }}"
               {% if params and params.detect_bg_mode == m.name %}selected{% endif %}>
               {{ m.label }}

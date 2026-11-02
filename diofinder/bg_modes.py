@@ -32,37 +32,45 @@ from collections import OrderedDict
 
 MODES = OrderedDict([
     ("row_percentile", dict(
-        label="row_percentile (default, fastest)",
+        menu=True,
+        label="row_percentile (fastest)",
         cache_kind="row", size_param=None, size_word=None,
         capability_flag=None, per_frame_form=True, noise_row=False)),
     ("line_median", dict(
+        menu=False,
         label="line_median (robust row correction)",
         cache_kind="row", size_param=None, size_word=None,
         capability_flag=None, per_frame_form=True, noise_row=False)),
     ("column_percentile", dict(
+        menu=False,
         label="column_percentile (vertical gradient removal)",
         cache_kind=None, size_param=None, size_word=None,
         capability_flag=None, per_frame_form=True, noise_row=False)),
     ("row_column_percentile", dict(
+        menu=False,
         label="row_column_percentile (separable 2-D)",
         cache_kind=None, size_param=None, size_word=None,
         capability_flag=None, per_frame_form=True, noise_row=False)),
     ("block_percentile", dict(
-        label="block_percentile (bilinear tile median, fast 2-D)",
+        menu=True,
+        label="block_percentile (default; 2-D gradients, fast)",
         cache_kind="block", size_param="detect_bg_block_size",
         size_word="tile", capability_flag="block_cache_supported",
         per_frame_form=True, noise_row=True)),
     ("uniform_mean", dict(
+        menu=True,
         label="uniform_mean (sliding-window mean, tetra3-compatible)",
         cache_kind=None, size_param="detect_uniform_filter_size",
         size_word="window", capability_flag=None,
         per_frame_form=True, noise_row=True)),
     ("top_hat", dict(
+        menu=False,
         label="top_hat (morphological, slowest)",
         cache_kind="row", size_param="detect_tophat_radius",
         size_word="radius", capability_flag="tophat_supported",
         per_frame_form=True, noise_row=False)),
     ("temporal_median", dict(
+        menu=True,
         label="temporal_median (2-D stack, cache-only; sycamore≥0.13)",
         cache_kind="image", size_param=None, size_word=None,
         capability_flag="bg_image_supported", per_frame_form=False,
@@ -74,7 +82,13 @@ MODE_NAMES = tuple(MODES)
 
 def for_ui():
     """Menu-ready list: [{name, label, size_param, size_word,
-    per_frame_form, noise_row, cache_kind}, ...] in display order."""
+    per_frame_form, noise_row, cache_kind, menu}, ...] in display order.
+    ``menu`` False = left out of the "set the mode" menus (still accepted
+    everywhere, still in the Background page's preview, and still shown in
+    a menu while it is the active mode, so a conf that uses it is never
+    silently changed). Trimmed 2026-11-02 to the modes the presets and the
+    A/B work actually use; the others are covered by these (line_median and
+    top_hat by row/block_percentile; column/row_column by block_percentile)."""
     return [dict(name=n, **{k: d[k] for k in (
         "label", "size_param", "size_word", "per_frame_form",
-        "noise_row", "cache_kind")}) for n, d in MODES.items()]
+        "noise_row", "cache_kind", "menu")}) for n, d in MODES.items()]

@@ -1879,6 +1879,7 @@ _CONFIG_SECTIONS = [
         ("live_capture_max_mb",     "Live capture max (MB)",  "A live capture stops by itself at this size. Restart to change."),
         ("live_capture_min_free_mb","Live capture free floor (MB)", "A live capture stops when free disk falls below this. Restart to change."),
         ("live_capture_max_minutes","Live capture time limit (min)", "A live capture stops by itself after this long; 0 = no limit. Restart to change."),
+        ("live_capture_keep_mb",    "Live captures kept (MB)", "All finished live captures together; the oldest are deleted to stay under this; the newest is always kept. 0 = keep all. Restart to change."),
     ]),
     ("Shutdown", [
         ("shutdown_grace_s", "Grace period (s)", "Seconds between SIGTERM and SIGKILL."),
@@ -2234,9 +2235,11 @@ def _debug_new_name():
     return f"diofinder_debug_{datetime.now().strftime('%Y%m%d%H%M%S')}.zip"
 
 
-@app.route("/debug/collect", methods=["POST"])
+@app.route("/debug/collect", methods=["GET", "POST"])
 def debug_collect():
-    """Build a debug ZIP and return it (kept for scripts/curl). The web pages use
+    """Build a debug ZIP and return it (kept for scripts/curl; GET too, so the
+    documented `curl http://diofinder.local/debug/collect?frames=12 -o
+    bundle.zip` works without -X POST). The web pages use
     /debug/start + /api/debug + /debug/download instead, so the bundle is built
     in the background and downloaded as a plain file."""
     zip_name = _debug_new_name()

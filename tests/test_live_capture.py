@@ -438,3 +438,35 @@ def test_zero_minutes_means_no_time_limit(tmp_path):
                           clock=lambda: 1e12)
     rec._started_unix = 0.0
     assert not rec._over_time()
+
+
+# ---- size cap -------------------------------------------------------------
+
+def _arc(d, sid, mb):
+    p = d / lc.archive_name(sid)
+    with open(p, "wb") as f:
+        f.truncate(int(mb * 1e6))
+    return p.name
+
+
+def test_prune_deletes_oldest_and_keeps_newest_and_protected(tmp_path):
+    a = _arc(tmp_path, "20261101T010000Z", 3)
+    b = _arc(tmp_path, "20261101T020000Z", 3)
+    c = _arc(tmp_path, "20261101T030000Z", 3)
+    assert lc.prune_archives(str(tmp_path), keep_mb=0) == []          # 0 = keep all
+    assert lc.prune_archives(str(tmp_path), keep_mb=6.5, protect=a) == [b]
+    assert sorted(x["name"] for x in lc.list_archives(str(tmp_path))) == [a, c]
+    # The newest alone over the limit is still kept.
+    assert lc.prune_archives(str(tmp_path), keep_mb=1) == [a]
+    assert [x["name"] for x in lc.list_archives(str(tmp_path))] == [c]
+
+
+def test_recover_partials_applies_the_cap(tmp_path):
+    _arc(tmp_path, "20261101T010000Z", 3)
+    _arc(tmp_path, "20261101T020000Z", 3)
+    part = tmp_path / "livecap_20261101T030000Z.partial"
+    part.mkdir()
+    (part / "frame_000001.png").write_bytes(b"x" * 100)
+    assert lc.recover_partials(str(tmp_path), keep_mb=3.5) == [lc.archive_name("20261101T030000Z")]
+    names = [x["name"] for x in lc.list_archives(str(tmp_path))]
+    assert names == [lc.archive_name("20261101T030000Z"), lc.archive_name("20261101T020000Z")]

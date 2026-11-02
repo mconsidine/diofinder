@@ -466,6 +466,7 @@ class Config:
     live_capture_max_mb: float = 4000.0
     live_capture_min_free_mb: float = 1000.0
     live_capture_max_minutes: float = 60.0   # auto-stop after this long; 0 = no limit
+    live_capture_keep_mb: float = 8000.0     # all archives together; oldest deleted first; 0 = keep all
 
     # -------- Shutdown --------
     shutdown_grace_s: float = 2.0
