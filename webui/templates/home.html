@@ -26,6 +26,14 @@
     {# Debug bundle right under the frame so a state can be captured without
        scrolling away (12-frame burst + settings + logs; nothing changes). #}
     <p style="margin:6px 0 0;">{{ debug_bundle("home-live-debug") }}</p>
+    {# Live capture: toggle recording of every frame + UTC time + solved
+       centre RA/Dec into a timestamped zip (e.g. to identify satellites). #}
+    <p style="margin:8px 0 0;">
+      <button type="button" class="btn" id="livecap-btn" onclick="livecapToggle()">Start live capture</button>
+      {{ tip("Records every frame the finder processes (raw PNG) with its UTC exposure time and the solved RA/Dec of the frame centre. Press again to stop: the recording is saved as <b>livecap_&lt;UTC start&gt;.zip</b>, ready to download from <b>Utilities &rarr; Live captures</b>. Useful for identifying satellites crossing the field. About 200&nbsp;KB per frame; it stops by itself at the size limit or if the card gets nearly full.") }}
+      <span id="livecap-status" class="hint" style="margin-left:6px;"></span>
+    </p>
+    <p id="livecap-warn" class="hint" style="margin:4px 0 0;color:#c93;display:none;"></p>
   </div>
 
   <div class="card" id="solution-card">
@@ -528,6 +536,65 @@ if (gainNum)  gainNum.addEventListener('input',  e => gainNumChange(e.target.val
 if (sigmaNum) sigmaNum.addEventListener('input', e => sigmaNumChange(e.target.value));
 
 // (Debug-bundle button handler is shared in base.html via .js-debug-bundle.)
+</script>
+
+<script>
+// ---- Live capture toggle -------------------------------------------------
+(function () {
+  let lcOn = false, lcBusy = false;
+  function mb(b) { return (b / 1e6).toFixed(b >= 1e9 ? 0 : 1) + ' MB'; }
+  function dur(s) {
+    s = Math.round(s || 0);
+    const m = Math.floor(s / 60), r = s % 60;
+    return m ? m + 'm' + (r < 10 ? '0' : '') + r + 's' : r + 's';
+  }
+  function render(res) {
+    const btn = document.getElementById('livecap-btn');
+    const st  = document.getElementById('livecap-status');
+    const wn  = document.getElementById('livecap-warn');
+    if (!btn || !res) return;
+    const s = res.status || {};
+    lcOn = !!res.on;
+    btn.textContent = lcOn ? 'Stop live capture' : 'Start live capture';
+    btn.classList.toggle('btn-warning', lcOn);
+    let txt = '';
+    if (res.recording) {
+      txt = '● recording: ' + (s.frames || 0) + ' frames, ' + mb(s.bytes || 0) +
+            ', ' + dur(s.elapsed_s) + (s.dropped ? ' (' + s.dropped + ' skipped)' : '');
+    } else if (res.waiting) {
+      txt = 'starting — waits for a frame with stars…';
+    } else if (s.state === 'finalizing') {
+      txt = 'saving the archive…';
+    } else if (s.last_archive) {
+      txt = 'saved ' + s.last_archive + ' (' + (s.frames || 0) + ' frames' +
+            (s.stop_reason && s.stop_reason !== 'stopped by user' ? '; ' + s.stop_reason : '') + ')';
+    }
+    if (s.error) txt += (txt ? ' — ' : '') + 'error: ' + s.error;
+    st.textContent = txt;
+    const w = (res.warnings || []).join(' ');
+    wn.textContent = w; wn.style.display = (w && lcOn) ? '' : 'none';
+  }
+  function poll() {
+    if (document.hidden) return;
+    fetch('/api/livecap').then(r => r.json()).then(j => {
+      if (j.ok) render(j.result);
+    }).catch(() => {});
+  }
+  window.livecapToggle = function () {
+    if (lcBusy) return;
+    lcBusy = true;
+    fetch('/livecap/toggle', {method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({action: lcOn ? 'stop' : 'start'})})
+      .then(r => r.json()).then(j => {
+        if (j.ok) render(j.result);
+        else alert('Live capture: ' + (j.error || 'failed'));
+      }).catch(e => alert('Live capture: ' + e))
+      .finally(() => { lcBusy = false; });
+  };
+  poll();
+  setInterval(poll, 2000);
+})();
 </script>
 
 {% endblock %}

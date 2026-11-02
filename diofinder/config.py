@@ -94,6 +94,9 @@ class Config:
     # East-positive (west of Greenwich is negative). LX200 :Sg/:Gg use the
     # opposite (West-positive) convention; comms converts at that boundary.
     longitude_deg: float = 0.0
+    # Site height above sea level (m). Recorded into live-capture archives only
+    # (satellite pass prediction wants it); the solver never uses it.
+    elevation_m: float = 0.0
 
     # Test-mode Alt/Az (bench exercise of the :GA/:GZ path on a static frame).
     # These have NO effect in live mode. In test mode, _report_altaz:
@@ -445,6 +448,14 @@ class Config:
     save_solved_frames: bool = False
     failed_frames_dir: str = "/var/lib/diofinder/captures"
     log_solve_stats_every_n: int = 50
+
+    # -------- Live capture (diofinder/live_capture.py) --------
+    # Home-page toggle: record each processed frame + UTC time + solved
+    # image-centre RA/Dec, zipped to livecap_<UTC start>.zip on stop. Stops
+    # itself at the size cap or when free disk falls below the floor.
+    live_capture_dir: str = "/var/lib/diofinder/live_captures"
+    live_capture_max_mb: float = 4000.0
+    live_capture_min_free_mb: float = 1000.0
 
     # -------- Shutdown --------
     shutdown_grace_s: float = 2.0

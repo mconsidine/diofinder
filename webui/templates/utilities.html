@@ -95,6 +95,21 @@
     </p>
   </div>
 
+  {# ---- Live captures (archives from the Home-page Live capture button) ---- #}
+  <div class="card" id="livecap-card">
+    <h2>Live captures</h2>
+    <p class="hint" style="margin:0 0 8px 0;">
+      Recordings made with <strong>Live capture</strong> on the Home page. Each
+      zip holds the raw frames, <code>frames.jsonl</code> (UTC exposure time and
+      solved centre RA/Dec for every frame) and <code>session.json</code>
+      (observer site, field of view). Download them to look up satellites
+      offline, then delete them here to free the card.
+    </p>
+    <p class="hint" id="livecap-free" style="margin:0 0 6px 0;"></p>
+    <ul id="livecap-list" style="margin:0; padding-left:1.2rem; font-size:0.9rem;"></ul>
+    <p class="hint" id="livecap-none" style="margin:0;">No captures yet.</p>
+  </div>
+
   {# ---- Power ---- #}
   <div class="card">
     <h2>Power</h2>
@@ -229,6 +244,55 @@
   }
   poll();
   setInterval(poll, 3000);
+})();
+
+// ---- Live captures list (DOM-built: names are server-validated, but never
+// trust them as HTML anyway) ----
+(function () {
+  function mb(b) { return (b / 1e6).toFixed(1) + ' MB'; }
+  function render(res) {
+    const ul = document.getElementById('livecap-list');
+    const none = document.getElementById('livecap-none');
+    const free = document.getElementById('livecap-free');
+    const arch = (res && res.archives) || [];
+    free.textContent = (res && res.free_mb != null)
+      ? 'Free space on the card: ' + Math.round(res.free_mb) + ' MB' +
+        (res.recording ? ' — a capture is recording now' : '')
+      : '';
+    ul.replaceChildren(...arch.map(a => {
+      const li = document.createElement('li');
+      const link = document.createElement('a');
+      link.href = '/livecap/download/' + encodeURIComponent(a.name);
+      link.textContent = a.name;
+      li.append(link, ' ');
+      const sz = document.createElement('span');
+      sz.className = 'muted';
+      sz.textContent = '(' + mb(a.bytes) + ') ';
+      li.append(sz);
+      const del = document.createElement('button');
+      del.type = 'button'; del.className = 'btn btn-warning';
+      del.style.padding = '0 6px'; del.textContent = 'Delete';
+      del.addEventListener('click', () => {
+        if (!confirm('Delete ' + a.name + '? This cannot be undone.')) return;
+        fetch('/livecap/delete/' + encodeURIComponent(a.name), {method: 'POST'})
+          .then(r => r.json()).then(j => {
+            if (!j.ok) alert('Delete failed: ' + (j.error || ''));
+            poll();
+          }).catch(e => alert('Delete failed: ' + e));
+      });
+      li.append(del);
+      return li;
+    }));
+    none.hidden = arch.length !== 0;
+  }
+  function poll() {
+    if (document.hidden) return;
+    fetch('/api/livecap').then(r => r.json()).then(j => {
+      if (j.ok) render(j.result);
+    }).catch(() => {});
+  }
+  poll();
+  setInterval(poll, 5000);
 })();
 </script>
 

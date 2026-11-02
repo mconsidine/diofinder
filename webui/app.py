@@ -1000,6 +1000,63 @@ def api_mount():
     return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
 
 
+# ── Live capture (record frames + UTC + solved centre, e.g. for satellites) ──
+
+def _livecap_dir():
+    from diofinder import live_capture as _lc
+    return pathlib.Path(getattr(_load_cfg_cached(), "live_capture_dir",
+                                _lc.DEFAULT_DIR))
+
+
+def _livecap_archive_path(name):
+    """Resolve a finished-archive name to its path, or None if the name isn't
+    exactly a livecap_<UTC>.zip (no paths, no partials)."""
+    from diofinder import live_capture as _lc
+    if not name or not _lc.ARCHIVE_RE.match(name):
+        return None
+    p = _livecap_dir() / name
+    return p if p.is_file() else None
+
+
+@app.route("/api/livecap")
+def api_livecap():
+    """JSON live-capture state + finished archives (Home/Utilities pollers)."""
+    r = _safe_call("live_capture_status")
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
+@app.route("/livecap/toggle", methods=["POST"])
+def livecap_toggle():
+    """Start or stop a live capture. Form/JSON field action=start|stop."""
+    data = request.get_json(silent=True) or request.form
+    action = (data.get("action") or "").strip().lower()
+    if action not in ("start", "stop"):
+        return jsonify({"ok": False, "error": "action must be start or stop"}), 400
+    r = _safe_call("live_capture_" + action)
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
+@app.route("/livecap/download/<name>")
+def livecap_download(name):
+    p = _livecap_archive_path(name)
+    if p is None:
+        return "capture not found", 404
+    return send_file(str(p), mimetype="application/zip",
+                     as_attachment=True, download_name=name)
+
+
+@app.route("/livecap/delete/<name>", methods=["POST"])
+def livecap_delete(name):
+    p = _livecap_archive_path(name)
+    if p is None:
+        return jsonify({"ok": False, "error": "capture not found"}), 404
+    try:
+        p.unlink()
+    except OSError as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+    return jsonify({"ok": True})
+
+
 @app.route("/tuning/set", methods=["POST"])
 def tuning_set():
     """Switch the libcamera tuning profile (persists; needs a service restart)."""
@@ -1698,6 +1755,7 @@ _CONFIG_SECTIONS = [
     ("Observer Location", [
         ("latitude_deg",  "Latitude (°)",  "Observer latitude (+N)."),
         ("longitude_deg", "Longitude (°)", "Observer longitude (+E)."),
+        ("elevation_m",   "Elevation (m)", "Height above sea level. Only recorded in live captures (for satellite pass prediction)."),
     ]),
     ("Star Detection", [
         ("detect_sigma", "Detection sigma",
@@ -1763,6 +1821,8 @@ _CONFIG_SECTIONS = [
         ("save_failed_frames",     "Save failed frames", "Write PNG for every failed solve."),
         ("failed_frames_dir",      "Captures dir",       "Directory for saved frame PNGs."),
         ("log_solve_stats_every_n","Log stats every N",  "Print solve performance stats every N solves."),
+        ("live_capture_max_mb",     "Live capture max (MB)",  "A live capture stops by itself at this size. Restart to change."),
+        ("live_capture_min_free_mb","Live capture free floor (MB)", "A live capture stops when free disk falls below this. Restart to change."),
     ]),
     ("Shutdown", [
         ("shutdown_grace_s", "Grace period (s)", "Seconds between SIGTERM and SIGKILL."),

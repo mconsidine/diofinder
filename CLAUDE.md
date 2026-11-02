@@ -104,6 +104,8 @@ should also TTL-cache their settings reads rather than `.get()` per sample.
 | `imu_exact_predict` | bool | comms (seed from cfg; `solver_params_set`) | comms LX200 pointing (kill switch for the exact quaternion path; false → legacy C-matrix) |
 | `report_epoch` | str (`jnow`/`j2000`) | comms (seed from cfg; `solver_params_set`) | comms LX200 boundary — precesses J2000→JNow for `:GR/:GD` + the status `report_*`, JNow→J2000 for the `:CM#` align target (v0.11.53). `j2000` = raw kill switch |
 | `mount_enabled`, `mount_mode`, `mount_epoch` | bool / str (`manual`/`auto`) / str (`jnow`/`j2000`) | comms (seed from cfg; `mount_set`) | comms `_mount_loop` + `mount_sync`/`mount_status` — outbound SynScan mount sync (the mount's OWN epoch, distinct from `report_epoch`). `mount_auto_*` gates are read live too. Transport keys (`mount_protocol`/`mount_serial_port`/`mount_serial_baud`) are cfg-only (restart) |
+| `live_capture` | dict `{on, id, site, test_mode}` | comms (maint `live_capture_start`/`_stop`) | solver `LiveRecorder` (start/stop; `site` = lat/lon/elevation from the conf at start) |
+| `live_capture_status` | dict | solver `LiveRecorder` (≤1/s while recording, + on state changes) | comms `live_capture_status` → Home/Utilities pollers |
 | `display_wanted_until` | float (monotonic) | comms (via maint `display_start` keepalive) | solver (demand-gates the `diofinder_display` write; no viewer → no copy) |
 | `star_name_brightest` | bool | comms (via maint `solver_params_set`) | solver (centered-star naming) |
 | `star_name_whole_fov` | bool | comms (via maint `solver_params_set`) | solver (centered-star naming — brightest anywhere in the frame vs within `star_name_radius_deg` of boresight; implies brightest mode; an align anchor when boresight is off) |
@@ -1127,6 +1129,50 @@ hot-pixel rejection during slews, when the temporal cache is offline.
 
 ---
 
+## Live capture (frames + UTC + pointing, e.g. for satellites)
+
+`diofinder/live_capture.py`. The Home page **Start/Stop live capture** button
+(`/livecap/toggle` → maint `live_capture_start`/`_stop`) records every frame the
+solver processes, each paired with **its own** solve result, and on stop closes
+`livecap_<UTC start>.zip` in `live_capture_dir`
+(`/var/lib/diofinder/live_captures`). Utilities → **Live captures** lists,
+downloads (`/livecap/download/<name>`) and deletes (`/livecap/delete/<name>`,
+POST) archives; names must match `livecap_<YYYYMMDDTHHMMSSZ>.zip` exactly.
+
+* **Where it runs: the solver process.** It already holds the frame and the
+  result, so pairing is exact and needs no IPC. `SolutionTap` wraps
+  `latest_solution` so every publish is seen (no edits to the many publish
+  sites); `sync()` reads the control dict from the per-frame snapshot. Idle
+  cost: one dict compare per frame. While recording the loop pays one frame
+  `np.copy`. PNG encode (Pillow, level 3, ~200 KB per 960×760 frame) and file
+  writes happen on a writer thread behind a 3-frame queue, and frames are
+  **dropped (counted), never waited on**. Dark frames (peak < 20) are never
+  recorded; they skip the solver path.
+* **Archive:** `session.json` (format `diofinder-livecap/1`, observer
+  lat/lon (East+)/elevation, FOV width + half-diagonal radius, start/end,
+  frames/dropped/stop reason, `clock_plausible`, `test_mode`),
+  `frames.jsonl` (one record per frame: seq, sensor `exposure_start_utc` /
+  `exposure_mid_utc` / `jd_start` / `jd_mid` / `exposure_s` / gain (from
+  frame_meta; `time_source: handover` fallback when missing),
+  `center_ra_deg`/`center_dec_deg` (J2000 image centre) + aim point, roll,
+  mirrored, FOV, matches; unsolved frames carry `last_solved`, captured at
+  enqueue time), then `frame_000001.png`…
+* **Robustness:** recording goes to `livecap_<id>.partial/`, flushed per frame;
+  stop zips it STORED file by file (deleting each source, so peak extra disk use
+  is one frame) via `.zip.tmp` then rename. `recover_partials` zips any
+  leftover `.partial` at solver start (crash / power cut). It stops by itself at
+  `live_capture_max_mb` (4000) or when free disk falls below
+  `live_capture_min_free_mb` (1000). That stop comes from the writer thread
+  through a flag, never a blocking put on its own queue. A session id is never
+  restarted, and a new start is refused while the previous one is still
+  zipping. comms warns when the clock is implausible (no RTC) or the site is
+  0,0; `elevation_m` is a new conf key, used only here.
+* **Offline:** `tests/satcheck_archive.py ARCHIVE.zip [--dry-run] [--group N]`
+  queries SatChecker's `/fov/satellite-passes/` per frame.
+* Tests: `tests/test_live_capture.py` (recorder end-to-end on a temp dir,
+  writer-side stop, drop-not-block, recovery, comms commands, web routes, the
+  SatChecker query builder).
+
 ## Solver-hang watchdog & IPC cleanup
 
 `comms_proc._watchdog_loop` (daemon thread, gated by `watchdog_enabled`)
@@ -1249,6 +1295,7 @@ finder's solving/LX200 path is unaffected regardless.
 | `/var/lib/diofinder/imu_solve_cal.json` | Persisted plate-solve-derived accel-tilt bias + gyro scale-factor (Unit C; gated by `imu_solve_cal_enabled`, default off). Learned by the solver from solve-vs-IMU residuals (`imu_solve_cal.py`), applied as the Mode-1 software correction in comms; self-heals on divergence; cleared by factory reset `--clear-imu-calib`. |
 | `/var/lib/diofinder/star_names.csv` | Star naming catalog (from astro_databases release); powers the "Centered star" label (default: the BRIGHTEST cataloged star within `star_name_radius_deg` (2°) of the boresight, falling back to nearest; the expert toggle `star_name_brightest=false` reverts to pure nearest; `star_name_whole_fov=true` widens the brightest search to the whole frame — a stable align anchor when boresight is off). Optional — missing file disables naming. Refreshed by `diofinder-db-update`. |
 | `/var/lib/diofinder/messier.csv` | Messier catalog (from astro_databases release ≥ `2026.07.01`); powers the "Centered object" DSO label (`messier.py`: the Messier object the aim point is on, matched by each object's own extent). Display only — separate from the star label, never touches the solve/align/aim. Gated by `star_name_dso` (default on). Optional — missing file disables it. Refreshed by `diofinder-db-update`. |
+| `/var/lib/diofinder/live_captures/` | Live-capture archives `livecap_<UTC>.zip` (Home-page button; frames + `frames.jsonl` + `session.json`). `*.partial/` = recording in progress, zipped on stop or at the next solver start. Not auto-pruned — delete from Utilities → Live captures. |
 | `/var/lib/diofinder/captures/` | PNG captures when `save_failed_frames=true` (100 MB cap, oldest evicted) |
 | `/run/diofinder/maint.sock` | Maintenance Unix socket |
 | `/var/lib/diofinder/version` | Running release tag + ISO date. Stamped at image build (`install.sh`, from `DIOFINDER_VERSION`) and rewritten by `diofinder-update`. The `version` maint command resolves it as: this file → `git describe` of `/opt/diofinder` → in-code `cfg.version` (so a fresh burn reports its real tag instead of the stale default). |

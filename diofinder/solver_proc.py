@@ -20,6 +20,7 @@ import logging
 import math
 import os
 import time
+import threading
 
 import numpy as np
 
@@ -1219,6 +1220,19 @@ def solver_main(slots, latest_solution, shared_cfg,
     if display_writer.available:
         log.info("Display SHM segment attached (live view reads direct)")
 
+    # Live capture (satellite recording): the comms toggle sets
+    # shared_cfg["live_capture"]; the recorder pairs each frame with ITS OWN
+    # solve result by tapping every latest_solution publish (SolutionTap), and
+    # PNG-encodes on its own thread so the solve loop only pays a frame copy
+    # while recording. Idle cost: one dict compare per frame. Any session left
+    # unfinished by a crash/power cut is zipped in the background at start.
+    from diofinder import live_capture as _livecap
+    _livecap_dir = getattr(cfg, "live_capture_dir", _livecap.DEFAULT_DIR)
+    live_rec = _livecap.LiveRecorder(shared_cfg, cfg, directory=_livecap_dir)
+    threading.Thread(target=_livecap.recover_partials, args=(_livecap_dir,),
+                     daemon=True, name="live-capture-recover").start()
+    latest_solution = _livecap.SolutionTap(latest_solution, live_rec)
+
     def _read_current_frame(with_seq=False, after_seq=-1):
         """Copy the most-recent published SHM frame via the FrameSlots
         protocol. Claiming the read slot means the camera cannot rewrite the
@@ -1451,6 +1465,12 @@ def solver_main(slots, latest_solution, shared_cfg,
             if (display_writer.available
                     and t0 < snap.get("display_wanted_until", 0.0)):
                 display_writer.write(frame_buf)
+
+            # Live capture: start/stop from the snapshot (no extra IPC), then
+            # hand this frame over; its solve result follows via SolutionTap.
+            live_rec.sync(snap.get("live_capture"))
+            if live_rec.active:
+                live_rec.offer_frame(frame_buf, frame_seq, snap.get("frame_meta"))
 
             # Exposure/contrast health: flag a crushed/clipped histogram (the
             # detection-throttling condition no extractor can fix). Throttled to

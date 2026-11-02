@@ -97,6 +97,9 @@ distortion: 0.0
 # test_longitude_deg below uses the same East-positive convention.
 latitude_deg: 0.0
 longitude_deg: 0.0
+# Site height above sea level (m). Only recorded into live-capture archives
+# (satellite pass prediction wants it); nothing in solving uses it.
+elevation_m: 0.0
 
 # Test-mode Alt/Az (bench exercise of :GA/:GZ on a static frame). No effect in
 # live mode. In test mode, _report_altaz falls back to these when the real site
@@ -291,6 +294,16 @@ save_solved_frames: false
 save_failed_frames: false
 failed_frames_dir: /var/lib/diofinder/captures
 log_solve_stats_every_n: 50
+
+# ---- Live capture (Home page button; e.g. for satellite identification) ----
+# Records every processed frame (raw PNG) + its UTC exposure time + solved
+# image-centre RA/Dec into live_capture_dir, zipped to
+# livecap_<UTC start>.zip when stopped. A recording stops by itself at
+# live_capture_max_mb, or when free disk drops below live_capture_min_free_mb.
+# Roughly 200 KB per frame: ~0.7 GB per hour at one frame per second.
+live_capture_dir: /var/lib/diofinder/live_captures
+live_capture_max_mb: 4000
+live_capture_min_free_mb: 1000
 
 # ---- Centroid extractor backend ----
 # "sycamore" (default: matched filter + temporal cache + hot-pixel) or

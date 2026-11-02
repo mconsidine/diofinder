@@ -2022,6 +2022,73 @@ def _handle_lx200_command(cmd, latest_solution, align_state, time_state,
     return b"#"
 
 
+def _live_capture_cmd(cmd, ctx):
+    """live_capture_start / _stop / _status. comms only flips the control dict
+    (shared_cfg["live_capture"]); the solver-side recorder does the recording
+    and publishes shared_cfg["live_capture_status"] (diofinder/live_capture.py)."""
+    from diofinder import live_capture as _lc
+    cfg = ctx.cfg
+    directory = getattr(cfg, "live_capture_dir", _lc.DEFAULT_DIR)
+    ctl = ctx.shared_cfg.get("live_capture") or {}
+    warnings = []
+    if cmd == "live_capture_start":
+        st = ctx.shared_cfg.get("live_capture_status") or {}
+        if ctl.get("on"):
+            pass                                  # already on: idempotent
+        elif st.get("state") == "finalizing":
+            return MaintResponse(ok=False, error="the previous capture is "
+                                 "still being saved — try again in a moment")
+        else:
+            # The site as persisted (:St/:Sg and the Config page both write the
+            # conf), so the archive carries the real observer location.
+            try:
+                fresh = cfg_mod.load_config()
+            except Exception:
+                fresh = cfg
+            ctl = {
+                "on": True,
+                "id": _lc.new_session_id(),
+                "site": {
+                    "latitude_deg": float(getattr(fresh, "latitude_deg", 0.0) or 0.0),
+                    "longitude_deg": float(getattr(fresh, "longitude_deg", 0.0) or 0.0),
+                    "elevation_m": float(getattr(fresh, "elevation_m", 0.0) or 0.0),
+                },
+                "test_mode": bool(ctx.shared_cfg.get("test_mode", False)),
+            }
+            ctx.shared_cfg["live_capture"] = ctl
+            log.info("Live capture requested: %s", ctl["id"])
+    elif cmd == "live_capture_stop":
+        if ctl.get("on"):
+            ctl = dict(ctl, on=False)
+            ctx.shared_cfg["live_capture"] = ctl
+            log.info("Live capture stop requested: %s", ctl.get("id"))
+    if not _horizon.clock_is_plausible():
+        warnings.append("The finder's clock looks wrong (no network time yet). "
+                        "Connect SkySafari once to set it, or the recorded "
+                        "times will be wrong.")
+    site = (ctl.get("site") or {}) if ctl else {}
+    if ctl.get("on") and not _horizon.site_is_set(site.get("latitude_deg", 0.0),
+                                                  site.get("longitude_deg", 0.0)):
+        warnings.append("No observer location is set (latitude/longitude are "
+                        "0). Set it on the Config page or via SkySafari.")
+    st = dict(ctx.shared_cfg.get("live_capture_status") or {})
+    recording = bool(ctl.get("on")) and st.get("id") == ctl.get("id") \
+        and st.get("state") == "recording"
+    return MaintResponse(ok=True, result={
+        "on": bool(ctl.get("on")),
+        "id": ctl.get("id"),
+        "recording": recording,
+        # On but the solver hasn't picked it up yet: it starts with the next
+        # processed (non-dark) frame.
+        "waiting": bool(ctl.get("on")) and not recording,
+        "status": st,
+        "archives": _lc.list_archives(directory),
+        "free_mb": _lc.free_mb(directory if os.path.isdir(directory)
+                               else os.path.dirname(directory.rstrip("/")) or "/"),
+        "warnings": warnings,
+    })
+
+
 def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
     """Dispatch one maintenance-socket command and return a MaintResponse."""
     global _dark_capture_active
@@ -2334,6 +2401,10 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             log.info("Auto-exposure -> %s (%s)", enabled, updates)
             return MaintResponse(ok=True, result={
                 **updates, "persisted": persist})
+
+        # ---- Live capture (record frames + UTC + solved centre; solver-side) ----
+        if cmd in ("live_capture_start", "live_capture_stop", "live_capture_status"):
+            return _live_capture_cmd(cmd, ctx)
 
         # ---- Mount link (outbound SYNC; sync-only, never slews) ----
         if cmd == "mount_status":
