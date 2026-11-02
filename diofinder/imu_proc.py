@@ -40,6 +40,7 @@ import logging
 import math
 import threading
 import time
+from collections import deque
 
 from diofinder import imu_persist as _imu_persist
 
@@ -67,6 +68,9 @@ _OPR_IMUPLUS  = 0x08    # accel + gyro fusion; no magnetometer
 _PWR_NORMAL   = 0x00
 
 _POLL_HZ      = 10
+# Sample history published with each reading while imu_report_smoothing is on
+# (the solver interpolates the attitude at a frame's mid-exposure from it).
+_HISTORY_S    = 2.5
 _POLL_INTERVAL = 1.0 / _POLL_HZ
 _PROBE_INTERVAL = 3.0   # seconds between probe attempts when device absent
 
@@ -498,6 +502,9 @@ def _read_imu_settings(shared_cfg):
         "report": snap.get("imu_bno085_report", "game"),
         "poll_hz": min(50.0, max(1.0, hz)),
         "hunt_filter": bool(snap.get("imu_hunt_filter", True)),
+        # Opt-in report smoother: also publish a short sample history so the
+        # solver can take the attitude at each frame's mid-exposure.
+        "history": bool(snap.get("imu_report_smoothing", False)),
     }
 
 
@@ -532,6 +539,7 @@ def imu_thread(shared_cfg, stop_event=None):
     last_q = None
     last_status_pub = 0.0
     hunt_state = {}             # P3: BNO055 fusion-hunt suppression filter state
+    hist = deque()              # (t, q) samples, only while imu_report_smoothing
     settings = None             # TTL-cached live settings (_read_imu_settings)
     settings_t = 0.0
 
@@ -600,7 +608,15 @@ def imu_thread(shared_cfg, stop_event=None):
                                      alpha=hunt_alpha_for(settings["poll_hz"]))
                 else:
                     hunt_state.clear()   # re-enable snaps cleanly next time
-                shared_cfg["imu"] = (q, t0)
+                if settings.get("history"):
+                    # Same single Manager write, a few hundred bytes more.
+                    hist.append((t0, tuple(q)))
+                    while hist and t0 - hist[0][0] > _HISTORY_S:
+                        hist.popleft()
+                    shared_cfg["imu"] = (q, t0, tuple(hist))
+                else:
+                    hist.clear()
+                    shared_cfg["imu"] = (q, t0)
                 # Stillness tracker (for the Unit B save gate).
                 if _quat_angle_deg(q, last_q) < _STILL_THRESH_DEG:
                     still_count += 1

@@ -70,7 +70,7 @@ test-mode location default (15).
 13. ✅ *FOV part done (release-candidate group): recentre on the long-run median of window medians, staying calibrated.* **Watch with field data before changing:** FOV drift recommits after
     refocus (4 in a session, 13.50–13.60°); the default-off features awaiting
     on-sky validation (ROI tracking, bg-cache bin-at-submit, IMU Units B/C).
-14. **Bigger:** the shelved IMU report smoothing (jumpy crosshair while moving;
+14. ✅ *Implemented behind `imu_report_smoothing` (default off); needs the on-sky A/B.* **Bigger:** the shelved IMU report smoothing (jumpy crosshair while moving;
     `docs/decisions/2026-11-01-imu-report-smoothing-shelved.md`).
 15. ✅ *Done:* test mode uses explicit `test_*` values
     when set, otherwise the configured site, otherwise a placeholder — never 0/0.

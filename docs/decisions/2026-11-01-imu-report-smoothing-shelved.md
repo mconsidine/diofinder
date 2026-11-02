@@ -1,8 +1,17 @@
 # Reported-pointing jumpiness — shelved (2026-11-01)
 
-**Status: SHELVED, not abandoned.** The problem is real and still unfixed in
-the 0.11.75 candidate. The quick 0.11.71 deadband patch is rejected; when this
-is picked up again, implement the proper fix below.
+**Status: IMPLEMENTED behind a default-off switch (v0.11.76 candidate,
+2026-11-02)**: `imu_report_smoothing` (Advanced page "Smooth crosshair
+(experimental)"), `diofinder/report_filter.py`. Parts 1 and 2 below, with two
+additions found in simulation: the report is carried forward by the measured
+motion before each re-anchor (else the slew between polls counts as error), and
+a learned drift rate (alpha-beta) cancels a consistent IMU scale error, which a
+pure pull-toward-solve turns into a steady 0.2–0.3° lead. Mid-exposure timing
+is applied to `imu_ref` only (not yet to the Kabsch pairs / solve hint). Next:
+the on-sky A/B in part 3, then decide the default.
+
+Original status: SHELVED, not abandoned. The quick 0.11.71 deadband patch is
+rejected; when this is picked up again, implement the proper fix below.
 
 ## The problem
 

@@ -366,6 +366,14 @@ imu_hunt_filter: true
 # behavior). Flip to false if the LX200 crosshair looks wrong during a slew.
 # Live-mutable via solver_params_set.
 imu_exact_predict: true
+# Smooth the reported pointing (opt-in, pending on-sky A/B): each new solve is
+# blended into the SkySafari crosshair instead of replacing it (the jumpy
+# crosshair while moving), the IMU carries the motion between solves, and each
+# solve is paired with the IMU attitude at mid-exposure. imu_report_gain = the
+# fraction of the gap each solve pulls (0.05-1; 1 = snap). Live-mutable via
+# solver_params_set / the Advanced page.
+imu_report_smoothing: false
+imu_report_gain: 0.3
 
 # ---- Mount link (outbound sync to a GoTo mount; default OFF) ----
 # After a confident solve the finder can SYNC its solved position to a mount

@@ -35,6 +35,7 @@ from diofinder import imu_persist as _imu_persist
 from diofinder import imu_solve_cal as _imu_solve_cal
 from diofinder import precession as _precession
 from diofinder import frame_meta as _frame_meta
+from diofinder import report_filter as _report_filter
 from diofinder import horizon as _horizon
 from diofinder.polar_run import PolarAligner
 from diofinder import frame_health
@@ -1005,8 +1006,25 @@ def _imu_frame_delta_mag(shared_cfg, q_now):
     return math.sqrt(sum(v * v for v in r))
 
 
+def _mid_exposure_imu_q(src, frame_seq):
+    """IMU quaternion at the middle of frame ``frame_seq``'s exposure, from the
+    sample history the IMU thread publishes while imu_report_smoothing is on
+    and the frame's sensor timestamp (frame_meta). None when either is missing
+    (switch off, test mode, no metadata, frame older than the history)."""
+    if frame_seq is None or not src.get("imu_report_smoothing", False):
+        return None
+    v = src.get("imu")
+    hist = v[2] if v is not None and len(v) >= 3 else None
+    meta = _frame_meta.lookup(src.get("frame_meta"), frame_seq)
+    if not hist or not meta:
+        return None
+    boot_minus_mono = time.clock_gettime(time.CLOCK_BOOTTIME) - time.monotonic()
+    t_mid = _report_filter.mid_exposure_monotonic(meta, boot_minus_mono)
+    return None if t_mid is None else _report_filter.interp_quat(hist, t_mid)
+
+
 def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
-                          snap=None, sky_q=None, prev_sky_q=None):
+                          snap=None, sky_q=None, prev_sky_q=None, frame_seq=None):
     """Record current IMU quaternion alongside the just-solved sky position.
     comms_proc uses these pairs to predict pointing between solves.
 
@@ -1022,6 +1040,12 @@ def _imu_update_reference(shared_cfg, new_ra_deg, new_dec_deg, new_roll_deg,
     q_now, imu_t = get_imu_qt(src)
     if q_now is None or time.monotonic() - imu_t > 2.0:
         return
+    # Opt-in (imu_report_smoothing): pair the solve with the attitude at the
+    # middle of ITS exposure, not whenever this frame's snapshot was read
+    # (0.15-0.6 s later; during a slew every re-anchor was off by rate x gap).
+    q_mid = _mid_exposure_imu_q(src, frame_seq)
+    if q_mid is not None:
+        q_now = q_mid
     # Previous reference from the atomic tuple (this function is its only
     # writer, so the loop snapshot is authoritative). The split imu_ref_*
     # keys are no longer published — they cost five extra Manager RPCs per
@@ -2158,7 +2182,7 @@ def solver_main(slots, latest_solution, shared_cfg,
             _imu_update_reference(
                 shared_cfg, ra_out, dec_out, soln.get("Roll", 0.0), snap=snap,
                 sky_q=(tuple(q_solved) if q_solved is not None else None),
-                prev_sky_q=prev_sky_q_for_ref)
+                prev_sky_q=prev_sky_q_for_ref, frame_seq=frame_seq)
             # Unit C (default off): learn the static accel-tilt / gyro-scale
             # calibration from this solve's IMU-vs-truth disagreement. Runs on
             # RAW IMU data (independent of the Mode-1 correction) and requires a

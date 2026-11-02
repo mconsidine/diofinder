@@ -359,6 +359,15 @@ class Config:
     # LX200 crosshair looks wrong during a slew — a field-reversible fallback
     # with no downgrade. Live-mutable via shared_cfg (solver_params_set).
     imu_exact_predict: bool = True
+    # Opt-in (default OFF, pending on-sky A/B) smoothing of the reported
+    # pointing: each new solve is blended into the SkySafari crosshair instead
+    # of replacing it, the IMU carries motion between solves, and solves are
+    # paired with the IMU attitude at mid-exposure. See
+    # diofinder/report_filter.py. imu_report_gain = the fraction of the gap
+    # each new solve pulls (0.05-1; 1 = snap like the shipped path). Both
+    # live-mutable via solver_params_set (Advanced page toggle).
+    imu_report_smoothing: bool = False
+    imu_report_gain: float = 0.3
 
     # Unit B (default OFF, pending field validation): persist the BNO055's own
     # accel/gyro calibration profile across power cycles. The chip has no flash,

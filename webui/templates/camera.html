@@ -508,6 +508,18 @@
       <form method="post" action="{{ url_for('solver_params_set') }}"
             style="margin-top:8px;">
         <input type="hidden" name="next" value="camera_page">
+        <input type="hidden" name="imu_report_smoothing"
+               value="{{ 'false' if solver_params and solver_params.imu_report_smoothing else 'true' }}">
+        <label class="checkbox">
+          <input type="checkbox" onchange="this.form.submit()"
+                 {{ 'checked' if solver_params and solver_params.imu_report_smoothing }}>
+          <strong>Smooth crosshair (experimental)</strong>
+          {{ tip("Off (shipped): every new solve <em>replaces</em> the reported position, so SkySafari's crosshair hops while the scope moves. On: each solve is <em>blended in</em> (a fraction of the gap per solve), the IMU carries the motion between solves and a consistent IMU error is learned and cancelled, and each solve is paired with the IMU attitude at the middle of its exposure. Parked, small solve-to-solve wobble is averaged and it always settles exactly on the solves. Compare both in SkySafari while slewing and at rest. Saved immediately; no restart.") }}
+        </label>
+      </form>
+      <form method="post" action="{{ url_for('solver_params_set') }}"
+            style="margin-top:8px;">
+        <input type="hidden" name="next" value="camera_page">
         <input type="hidden" name="imu_enabled"
                value="{{ 'false' if solver_params and solver_params.imu_enabled else 'true' }}">
         <label class="checkbox">

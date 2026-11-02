@@ -1292,6 +1292,9 @@ def solver_params_set():
     if "imu_predict_enabled" in request.form:
         pargs["imu_predict_enabled"] = request.form.get(
             "imu_predict_enabled", "false").strip().lower() in ("true", "1", "on")
+    if "imu_report_smoothing" in request.form:
+        pargs["imu_report_smoothing"] = request.form.get(
+            "imu_report_smoothing", "false").strip().lower() in ("true", "1", "on")
     if "imu_enabled" in request.form:
         pargs["imu_enabled"] = request.form.get(
             "imu_enabled", "false").strip().lower() in ("true", "1", "on")

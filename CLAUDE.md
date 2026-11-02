@@ -101,6 +101,7 @@ should also TTL-cache their settings reads rather than `.get()` per sample.
 | `imu_enabled` | bool | main (seed from cfg); comms (`solver_params_set` — Camera-page "IMU sensor" toggle) | imu_thread (park switch; false → the reader thread stops sampling/publishing and drops `imu_available`, the same end state as unplugging the BNO055. Reversible; re-enabling re-probes) |
 | `imu_poll_hz` | int (1–50) | main (seed from cfg); comms (`solver_params_set`) | imu_thread (reader poll rate; read live each loop. 10 = shipped since v0.11.76 (was 20); 5–10 cuts per-sample Manager IPC on CPU 0 with no visible pointing change) |
 | `imu_hunt_filter` | bool | main (seed from cfg) | imu_thread (P3 — `_hunt_filter` damps BNO055 fusion hunting in the published quaternion; real motion snaps through. false = raw passthrough) |
+| `imu_report_smoothing`, `imu_report_gain` | bool / float (0.05–1) | comms (seed from cfg; `solver_params_set` — Advanced-page "Smooth crosshair (experimental)" toggle) | comms `_report_radec` (opt-in report smoother, `diofinder/report_filter.py`; off = shipped path byte-for-byte); imu_thread (publishes a 2.5 s `(t, q)` history as the `imu` tuple's 3rd element while on); solver (`_mid_exposure_imu_q` anchors `imu_ref` at the frame's mid-exposure while on) |
 | `imu_exact_predict` | bool | comms (seed from cfg; `solver_params_set`) | comms LX200 pointing (kill switch for the exact quaternion path; false → legacy C-matrix) |
 | `report_epoch` | str (`jnow`/`j2000`) | comms (seed from cfg; `solver_params_set`) | comms LX200 boundary — precesses J2000→JNow for `:GR/:GD` + the status `report_*`, JNow→J2000 for the `:CM#` align target (v0.11.53). `j2000` = raw kill switch |
 | `mount_enabled`, `mount_mode`, `mount_epoch` | bool / str (`manual`/`auto`) / str (`jnow`/`j2000`) | comms (seed from cfg; `mount_set`) | comms `_mount_loop` + `mount_sync`/`mount_status` — outbound SynScan mount sync (the mount's OWN epoch, distinct from `report_epoch`). `mount_auto_*` gates are read live too. Transport keys (`mount_protocol`/`mount_serial_port`/`mount_serial_baud`) are cfg-only (restart) |
@@ -541,13 +542,25 @@ it never re-engages from rest, so the stationary-drift gate is unchanged.
 (2°) snaps through unfiltered so genuine slews and the solve-hint Kabsch fit are
 unbiased. All three are unit-tested (`tests/test_imu_smoothing.py`,
 `tests/test_imu_hunt_filter.py`) with no hardware.
-**Still open (shelved 2026-11-01):** jumpiness *during movement* remains — a new
-solve hard-replaces the reported position (P1 reports the raw solve; the
-alpha-beta filter resets on each `ref_t`). The v0.11.71 position-deadband patch
-was rejected (stuck offset at rest, stepped slews); the planned fix is a
-continuously IMU-propagated, solve-corrected reported attitude plus
-mid-exposure IMU timing — see
-`docs/decisions/2026-11-01-imu-report-smoothing-shelved.md`.
+**Report smoother (v0.11.76, opt-in `imu_report_smoothing`, default OFF
+pending on-sky A/B):** the fix for jumpiness *during movement* (a new solve
+hard-replaced the reported position). `diofinder/report_filter.py`
+`ReportSmoother`: the report = target (IMU prediction without the P1 hold, or
+the solve) + an offset. IMU source: each new solve pulls the report
+`imu_report_gain` (0.3) of the gap (the report carried forward by the measured
+motion, so the slew between polls is not counted as error) and corrects a
+learned drift rate (alpha-beta/PI; cancels a consistent IMU scale error,
+clamped to 0.3× the slew rate, dropped when the scope stops); a gap > 1° snaps.
+Solve source (parked / no IMU): steps ≤ 0.05° are averaged, bigger steps are
+followed at once (no lag on a pan without IMU), and the offset fades (0.7 s) so
+it always settles on the solves. Source switches are continuous. Plus
+mid-exposure timing: while on, the IMU thread publishes its last 2.5 s of
+samples inside the `imu` tuple and the solver anchors `imu_ref` at the frame's
+exposure midpoint (`frame_meta` sensor timestamp; `_mid_exposure_imu_q`). The
+Kabsch fit / solve hint still use the snapshot attitude. Unit tests:
+`tests/test_report_filter.py` (simulated slew with a 10% IMU scale error,
+parked jitter, no-IMU pan, snap, pole, routing, mid-exposure). History and the
+rejected v0.11.71 deadband: `docs/decisions/2026-11-01-imu-report-smoothing-shelved.md`.
 
 Detection is routed through `diofinder/bg_cache.py::BackgroundCache`, not by calling
 `detect_stars` directly. This gives three composable background strategies, all

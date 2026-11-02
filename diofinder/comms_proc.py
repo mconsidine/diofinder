@@ -49,6 +49,7 @@ from diofinder.imu_math import (quat_delta_rotvec, alpha_beta_step,
                                 get_imu_qt)
 from diofinder.imu_frame import apply_rotation as _imu_apply_rotation
 from diofinder import imu_solve_cal as _imu_solve_cal
+from diofinder import report_filter as _report_filter
 from diofinder.maint import MaintRequest, MaintResponse, SOCKET_PATH
 from diofinder.worker_cmds import (
     SolverCmd, CameraCmd,
@@ -1596,8 +1597,11 @@ def _imu_is_moving(scfg):
                                    rate_gate_dps=rate_gate)
 
 
-def _imu_predict(shared_cfg):
-    """Return (ra_deg, dec_deg) predicted from IMU rotation since last solve, or None if unavailable."""
+def _imu_predict(shared_cfg, hold=True):
+    """Return (ra_deg, dec_deg) predicted from IMU rotation since last solve, or None if unavailable.
+
+    ``hold=False`` skips the solve-freshness gate (P1): the opt-in report
+    smoother blends solves in itself, so it wants the prediction always."""
     # Master switch (Camera page "Use IMU between solves"): when off, report
     # plate solves only — never extrapolate from the IMU. Checked first so a
     # disabled IMU path costs nothing per poll (no shared_cfg reads, no math).
@@ -1677,7 +1681,7 @@ def _imu_predict(shared_cfg):
     # motion gate so the gate's sample history and disengage logic are unchanged.
     hold_s = float(shared_cfg.get("imu_predict_hold_solve_s",
                                   _PREDICT_HOLD_SOLVE_S))
-    if hold_s > 0.0 and (time.monotonic() - ref_t) < hold_s:
+    if hold and hold_s > 0.0 and (time.monotonic() - ref_t) < hold_s:
         return None
     r = quat_delta_rotvec(q_now, q_ref)
     if use_frame:
@@ -1841,6 +1845,38 @@ def _poll_snapshots(shared_cfg, latest_solution):
         return _poll_snap["cfg"], _poll_snap["sol"]
 
 
+# Opt-in report smoother (imu_report_smoothing, default OFF): see
+# diofinder/report_filter.py and docs/decisions/2026-11-01-imu-report-smoothing-
+# shelved.md. One shared state for all LX200 clients (they all show the same
+# crosshair); serialized by its own lock.
+_report_smoother = _report_filter.ReportSmoother()
+_report_smoother_lock = threading.Lock()
+
+
+def _smoothed_target(scfg, sol):
+    """(target (ra, dec), source, anchor) for the report smoother: the
+    IMU-propagated pointing (no solve-freshness hold) while it applies, else
+    the latest solve. The anchor changes exactly when a new solve takes over."""
+    pred = _imu_predict(scfg, hold=False)
+    if pred is not None:
+        ref = scfg.get("imu_ref")
+        anchor = ref[4] if ref is not None and len(ref) >= 5 else None
+        return (float(pred[0]), float(pred[1])), "imu", anchor
+    ra, dec = float(sol.get("ra_deg", 0.0)), float(sol.get("dec_deg", 0.0))
+    return (ra, dec), "solve", (round(ra, 9), round(dec, 9))
+
+
+def _smoothed_radec(scfg, sol):
+    tgt, source, anchor = _smoothed_target(scfg, sol)
+    with _report_smoother_lock:
+        try:
+            _report_smoother.gain = min(1.0, max(0.05, float(
+                scfg.get("imu_report_gain", _report_filter.DEFAULT_GAIN))))
+        except (TypeError, ValueError):
+            pass
+        return _report_smoother.update(tgt, source, anchor, time.monotonic())
+
+
 def _report_radec(scfg, sol):
     """(ra_deg, dec_deg) to report to LX200 clients — IMU-predicted between
     solves when available, else the last solved position — converted from the
@@ -1851,7 +1887,16 @@ def _report_radec(scfg, sol):
     `report_epoch=jnow` precesses J2000 -> JNow at this boundary. Precession
     mixes RA and Dec, so the full pair is converted together here and :GR/:GD
     each take their component from the same (TTL-cached) snapshot. Kill switch:
-    `report_epoch=j2000` reports the raw J2000 frame (pre-v0.11.53 behaviour)."""
+    `report_epoch=j2000` reports the raw J2000 frame (pre-v0.11.53 behaviour).
+
+    ``imu_report_smoothing`` (opt-in) replaces the snap-to-each-solve logic
+    with the report smoother (_smoothed_radec); off = byte-for-byte the
+    shipped path."""
+    if scfg.get("imu_report_smoothing", False):
+        ra, dec = _smoothed_radec(scfg, sol)
+        if str(scfg.get("report_epoch", "jnow")).lower() == "jnow":
+            ra, dec = _precession.j2000_to_jnow(ra, dec)
+        return ra, dec
     pred = _imu_predict_smoothed(scfg)
     if pred is not None:
         ra, dec = float(pred[0]), float(pred[1])
@@ -2790,6 +2835,12 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                     "bg_cache_bin_at_submit", ctx.cfg.bg_cache_bin_at_submit),
                 "imu_exact_predict": ctx.shared_cfg.get(
                     "imu_exact_predict", ctx.cfg.imu_exact_predict),
+                "imu_report_smoothing": ctx.shared_cfg.get(
+                    "imu_report_smoothing",
+                    getattr(ctx.cfg, "imu_report_smoothing", False)),
+                "imu_report_gain": ctx.shared_cfg.get(
+                    "imu_report_gain",
+                    getattr(ctx.cfg, "imu_report_gain", _report_filter.DEFAULT_GAIN)),
                 "imu_rate_gate_dps": ctx.shared_cfg.get(
                     "imu_rate_gate_dps",
                     getattr(ctx.cfg, "imu_rate_gate_dps", _IMU_RATE_GATE_DPS)),
@@ -3002,6 +3053,21 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
                 ep = bool(args["imu_exact_predict"])
                 ctx.shared_cfg["imu_exact_predict"] = ep
                 updates["imu_exact_predict"] = ep
+            if "imu_report_smoothing" in args:
+                rs = bool(args["imu_report_smoothing"])
+                ctx.shared_cfg["imu_report_smoothing"] = rs
+                updates["imu_report_smoothing"] = rs
+            if "imu_report_gain" in args:
+                try:
+                    rg = float(args["imu_report_gain"])
+                except (TypeError, ValueError) as e:
+                    return MaintResponse(ok=False,
+                                        error=f"imu_report_gain must be float: {e}")
+                if not (0.05 <= rg <= 1.0):
+                    return MaintResponse(ok=False,
+                                        error="imu_report_gain out of range [0.05, 1.0]")
+                ctx.shared_cfg["imu_report_gain"] = rg
+                updates["imu_report_gain"] = rg
             if "imu_solve_cal_enabled" in args:
                 # Unit C master switch — read live by the solver (estimator) and
                 # comms (_imu_predict correction), so this toggles without a
@@ -3787,6 +3853,14 @@ def comms_main(latest_solution, shared_cfg,
     # shared_cfg, not cfg). setdefault so a live toggle isn't clobbered.
     shared_cfg.setdefault("imu_exact_predict",
                           bool(getattr(cfg, "imu_exact_predict", True)))
+    # Opt-in report smoother (default off) + its per-solve gain. The IMU
+    # thread (launcher) also reads the switch to publish its sample history,
+    # the solver to anchor solves at mid-exposure.
+    shared_cfg.setdefault("imu_report_smoothing",
+                          bool(getattr(cfg, "imu_report_smoothing", False)))
+    shared_cfg.setdefault("imu_report_gain",
+                          float(getattr(cfg, "imu_report_gain",
+                                        _report_filter.DEFAULT_GAIN)))
     # Unit C accel-tilt / gyro-scale calibration + Mode-1 correction (default
     # off). Seeded from the conf; the solver reads the same key to gate the
     # estimator, comms to gate the correction.
