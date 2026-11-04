@@ -1433,6 +1433,9 @@ def _write_outputs(results, refined, out, archive, session, station, status, t_u
                 + f"; SatChecker: {r['satchecker'] or 'no match'}"
                 + f"; position sigma {r['sigma_pos_deg']:.3f} deg")
         lines.append(head)
+        if not r.get("match") and _looks_like_aircraft(r):
+            lines.append("  CHECK: may be an AIRCRAFT (flashing lights, no satellite "
+                         "match); a tumbling unknown satellite can look the same")
         if p.get("mag") is not None:
             lines.append(f"  magnitude {p['mag']:.1f}"
                          + (f" +- {p['mag_err']:.1f}" if p.get("mag_err") else
@@ -1505,6 +1508,9 @@ def _write_outputs(results, refined, out, archive, session, station, status, t_u
         if not r.get("iod"):
             continue
         m = r.get("match")
+        if not m and _looks_like_aircraft(r):
+            post.append(f"*** CHECK track {r['id']}: flashing like an aircraft's lights; "
+                        "delete it if that is what it was ***")
         post += r["iod"]
         if m:
             post.append(f"{m['name']} ({m['norad_str']}), identified against {m['source']}")
@@ -1517,6 +1523,18 @@ def _write_outputs(results, refined, out, archive, session, station, status, t_u
         post.append("")
     with open(os.path.join(out, "seesat_post.txt"), "w") as f:
         f.write("\n".join(post).rstrip() + "\n")
+
+
+def _looks_like_aircraft(r):
+    """Unidentified and flashing: the stack's along-trail flash ratio
+    (satcheck_overlay's aircraft hint), or a flash-like light curve with a
+    period typical of strobes / beacons (0.5-2 s) and a big amplitude."""
+    t = r.get("trail_obj") or {}
+    if t.get("flash_ratio") is not None and t["flash_ratio"] >= so.FLASH_RATIO:
+        return True
+    lc = ((r.get("photometry") or {}).get("light_curve")) or {}
+    return bool(lc.get("flashy") and lc.get("period_s") and 0.5 <= lc["period_s"] <= 2.0
+                and (lc.get("amplitude_mag") or 0) > 2.0)
 
 
 def _site_text(site):

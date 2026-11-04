@@ -1282,7 +1282,11 @@ POST) archives; names must match `livecap_<YYYYMMDDTHHMMSSZ>.zip` exactly.
   against the steady sky; per-track magnitude ± (incl. a 0.15 mag colour
   term), `lightcurve_<id>.csv/.png`, Lomb-Scargle flash period (numpy FAP —
   astropy's needs scipy), IOD behaviour S/F/R/I/X (periodic → F if
-  flash-like, else R; aperiodic → X if flash-like, else I). **Reports**
+  flash-like, else R; aperiodic → X if flash-like, else I; "flash-like" =
+  duty cycle < 0.3 in linear light, so strobes with a ~0 baseline count). An
+  unidentified flashing track (stack flash ratio, or 0.5–2 s flash period with
+  > 2 mag amplitude) gets a "CHECK: may be an AIRCRAFT" note in the report and
+  the post draft. **Reports**
   (checked against G. Lewis' IOD Version 0 description, which the user
   supplied — satobs.org is not reachable from the sandbox): `--points-per-pass`
   (4) IOD lines per track; angle format 2, whose position uncertainty (cols

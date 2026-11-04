@@ -46,6 +46,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_TUNING = os.path.join(os.path.dirname(HERE), "tuning", "imx477_finder.json")
 SATURATED_DN = 250
+FLASH_DUTY_MAX = 0.3        # light above half-range less than this share = flashes
 
 # ---------------------------------------------------------------------------
 # Tone curve
@@ -303,8 +304,8 @@ def light_curve_summary(jd, cflux, noise, min_period_s=0.15, fap_max=0.01):
     """Flash period and behaviour from light-curve samples. ``cflux`` =
     calibrated light (see ``calibrated``; any common scale works), ``noise`` =
     its typical 1-sigma error. Returns dict: n, span_s, period_s, fap,
-    amplitude_mag (5-95 percentile range), flashy (bright excursions much
-    larger than faint ones), behaviour (IOD codes: 'S' steady, 'F' constant
+    amplitude_mag (5-95 percentile range), duty_cycle (share of samples
+    above half-range) and flashy (duty_cycle < FLASH_DUTY_MAX), behaviour (IOD codes: 'S' steady, 'F' constant
     flash period, 'R' regular variations, 'I' irregular, 'X' irregular flash
     period; None when too little data)."""
     jd = np.asarray(jd, float)
@@ -324,14 +325,15 @@ def light_curve_summary(jd, cflux, noise, min_period_s=0.15, fap_max=0.01):
     hi, lo = np.percentile(pos, 95), max(np.percentile(pos, 5), 1e-30)
     amp = 2.5 * math.log10(hi / lo)
     out["amplitude_mag"] = round(amp, 2)
-    # Flashes (glints) are short brightenings above a fainter baseline: on
-    # the magnitude scale the bright excursions are much bigger than the
-    # faint ones. Smooth variations (tumbling, a sinusoid) are not.
-    mags = -2.5 * np.log10(pos)
-    m50 = float(np.median(mags))
-    bright_x = m50 - float(np.percentile(mags, 5))
-    faint_x = float(np.percentile(mags, 95)) - m50
-    flashy = bright_x > 2.0 * max(faint_x, 0.05)
+    # Flashes (glints, strobes) are short: the light spends little of the
+    # time above halfway between its low and high levels (duty cycle). A
+    # smooth variation (tumbling, a sinusoid) spends about half. Measured in
+    # linear light, so a baseline near zero between flashes (which would make
+    # the faint end look deep on the magnitude scale) cannot hide them.
+    c5, c95 = float(np.percentile(c, 5)), float(np.percentile(c, 95))
+    duty = float(np.mean(c > 0.5 * (c5 + c95)))
+    flashy = duty < FLASH_DUTY_MAX
+    out["duty_cycle"] = round(duty, 2)
     out["flashy"] = bool(flashy)
     rel_noise = float(noise) / max(float(np.median(pos)), 1e-30)
     noise_mag = 1.0857 * rel_noise

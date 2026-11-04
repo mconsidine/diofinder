@@ -133,8 +133,12 @@ def test_light_curve_summary_classes():
     glints = ph.light_curve_summary(t, 20 + 400 * np.exp(-ph_ ** 2 / (2 * 0.06 ** 2)), 2.0)
     assert glints["behaviour"] == "F" and glints["period_s"] == pytest.approx(1.7, rel=0.03)
     rng = np.random.default_rng(2)
-    irregular = ph.light_curve_summary(t, 100 * np.exp(rng.normal(0, 1.0, 200)), 2.0)
+    irregular = ph.light_curve_summary(t, rng.uniform(20, 180, 200), 2.0)
     assert irregular["behaviour"] == "I"
+    # Strobes with nothing in between (an aircraft, or a satellite that
+    # vanishes between glints): flash-like even though the baseline is ~0.
+    strobe = np.where((tt % 1.0) < 0.1, 300.0, 0.0) + rng.normal(0, 2, 200)
+    assert ph.light_curve_summary(t, strobe, 2.0)["behaviour"] == "F"
     spikes = np.full(200, 20.0)
     spikes[rng.choice(200, 15, replace=False)] = 400.0         # flashes at random times
     assert ph.light_curve_summary(t, spikes, 2.0)["behaviour"] == "X"
