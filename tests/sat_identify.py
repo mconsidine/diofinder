@@ -306,8 +306,16 @@ def fetch_url(url, cache_dir=None, max_age_h=URL_CACHE_HOURS, log=print):
         return dest
     (log or print)(f"downloading {url}")
     req = urllib.request.Request(url, headers={"User-Agent": "diofinder-sat-tools"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        data = r.read()
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data = r.read()
+    except Exception as e:
+        if os.path.exists(dest):              # offline: an older copy beats nothing
+            age_h = (time.time() - os.path.getmtime(dest)) / 3600.0
+            (log or print)(f"WARNING: download failed ({e}); using the cached copy from "
+                           f"{age_h:.1f} h ago ({dest})")
+            return dest
+        raise SystemExit(f"could not download {url}: {e} (and no cached copy)")
     with open(dest, "wb") as f:
         f.write(data)
     return dest

@@ -121,3 +121,44 @@ def test_element_sources_folders_lists_gz_kvn_newest_wins(tmp_path):
     with pytest.raises(SystemExit):
         si.load_elements([str(tmp_path / "missing.tle")])
     assert json.dumps(si.expand_element_sources([str(tmp_path / "a")]))   # plain paths
+
+
+def test_url_cache_fresh_reuse_and_offline_fallback(tmp_path, monkeypatch):
+    import time
+    import urllib.request
+    calls = []
+
+    class _Resp:
+        def __init__(self, data):
+            self.data = data
+
+        def read(self):
+            return self.data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def online(req, timeout=60):
+        calls.append(req.full_url)
+        return _Resp(tsi.CLASSFD.encode())
+
+    url = "https://example.invalid/gp.php?CATNR=31701&FORMAT=TLE"
+    monkeypatch.setattr(urllib.request, "urlopen", online)
+    p1 = si.fetch_url(url, str(tmp_path), log=lambda *a: None)
+    p2 = si.fetch_url(url, str(tmp_path), log=lambda *a: None)
+    assert p1 == p2 and len(calls) == 1                  # fresh copy reused, no download
+    old = time.time() - 3 * 3600
+    os.utime(p1, (old, old))                             # now older than 2 h
+
+    def offline(req, timeout=60):
+        raise OSError("no network")
+
+    monkeypatch.setattr(urllib.request, "urlopen", offline)
+    msgs = []
+    assert si.fetch_url(url, str(tmp_path), log=msgs.append) == p1   # stale copy used
+    assert any("cached copy" in m for m in msgs)
+    with pytest.raises(SystemExit):
+        si.fetch_url(url + "&x=1", str(tmp_path), log=lambda *a: None)  # nothing cached
