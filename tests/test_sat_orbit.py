@@ -167,3 +167,18 @@ def test_predict_every_object_in_a_file(tmp_path):
              "--min-elevation", "25", "--name", "noss", "--out", str(out)])
     rows = (out / "predictions.csv").read_text().splitlines()
     assert len(rows) == 1 + len(got) and "NOSS" in rows[1]
+
+
+def test_daylight_window_says_so(tmp_path, capsys):
+    p = tmp_path / "classfd.tle"
+    p.write_text(tsi.CLASSFD)
+    # 2026-11-02 15:00-19:00 UTC is daytime at the test site (10:00-14:00 EST).
+    so.main(["predict", str(tmp_path) + os.sep, "--lat", str(SITE["latitude_deg"]),
+             "--lon", str(SITE["longitude_deg"]), "--start", "2026-11-02T15:00:00",
+             "--hours", "4"])
+    out = capsys.readouterr().out
+    assert "NO DARK SKY" in out and "--start" in out
+    assert out.count(": 0 visible pass(es)") == 1 and "\n: 0" not in out   # titled
+    so.main(["predict", str(p), "--lat", str(SITE["latitude_deg"]), "--lon",
+             str(SITE["longitude_deg"]), "--start", "2026-11-02T20:00:00", "--hours", "12"])
+    assert "Dark sky (Sun below -6 deg)" in capsys.readouterr().out

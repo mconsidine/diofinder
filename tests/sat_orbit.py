@@ -638,13 +638,54 @@ def predict(satrec, site, jd_start, hours=24.0, min_elevation=20.0, step_s=10.0,
 MIN_REV_PER_DAY = 2.0     # slower objects (GEO, high orbits) are skipped by default
 
 
+def dark_windows(sky, sun_max_alt=-6.0):
+    """[(jd_start, jd_end)] stretches of the sky grid with the Sun below
+    sun_max_alt at the site."""
+    dark = sky.sun_alt <= sun_max_alt
+    out, i = [], 0
+    while i < len(dark):
+        if dark[i]:
+            j = i
+            while j + 1 < len(dark) and dark[j + 1]:
+                j += 1
+            out.append((float(sky.jd[i]), float(sky.jd[j])))
+            i = j + 1
+        else:
+            i += 1
+    return out
+
+
+def darkness_text(sky, sun_max_alt=-6.0):
+    """One line saying when the site's sky is dark in the window (passes are
+    only listed then)."""
+    w = dark_windows(sky, sun_max_alt)
+    lo, hi = si._utc(sky.jd[0])[:16], si._utc(sky.jd[-1])[:16]
+    if not w:
+        return (f"NO DARK SKY at the site between {lo} and {hi} UTC (Sun above "
+                f"{sun_max_alt:g} deg the whole time), so no pass can be listed. Start the "
+                "window at dusk with --start (UTC), or give more --hours.")
+    parts = [f"{si._utc(a)[5:16]} - {si._utc(b)[11:16]}" for a, b in w]
+    return f"Dark sky (Sun below {sun_max_alt:g} deg) at the site, UTC: " + ", ".join(parts)
+
+
 def predict_all(elems, site, jd_start, hours=24.0, min_elevation=20.0, step_s=10.0,
                 sun_max_alt=-6.0, table_step_s=30.0, min_rev_per_day=MIN_REV_PER_DAY,
-                batch=40, log=None):
+                batch=40, log=None, sky=None):
     """Visible passes of every element set in ``elems``, merged and sorted by
     the time of highest elevation. Each pass also carries name, norad,
     source and the element set's age (days) at the pass."""
-    sky = Sky(site, jd_start, hours, step_s)
+    sky = sky or Sky(site, jd_start, hours, step_s)
+    # Propagate only at dark times (nothing can be seen otherwise): a big
+    # saving for large files and long windows.
+    idx = np.nonzero(sky.sun_alt <= sun_max_alt)[0]
+    if len(idx) == 0:
+        return []
+    if len(idx) < len(sky.jd):
+        dark = Sky.__new__(Sky)
+        dark.geom = sky.geom
+        dark.jd, dark.zen = sky.jd[idx], sky.zen[idx]
+        dark.sun, dark.sun_alt = sky.sun[idx], sky.sun_alt[idx]
+        sky = dark
     keep = [e for e in elems
             if e.satrec.no_kozai * MIN_PER_DAY / TWO_PI >= (min_rev_per_day or 0)]
     if log and len(keep) < len(elems):
@@ -828,18 +869,23 @@ def cmd_predict(a):
         raise SystemExit("give --site-from OBS.json or --lat/--lon (east positive)")
     jd0 = _parse_utc(a.start) if a.start else \
         2440587.5 + dt.datetime.now(dt.timezone.utc).timestamp() / 86400.0
+    sky = Sky(site, jd0, a.hours)
+    dark = darkness_text(sky, a.sun_alt)
     if els is not None and len(els) > 1:
         print(f"{len(els)} element sets; predicting all of them")
-        passes = predict_all(els, site, jd0, a.hours, a.min_elevation, table_step_s=a.step,
+        passes = predict_all(els, site, jd0, a.hours, a.min_elevation,
+                             sun_max_alt=a.sun_alt, table_step_s=a.step,
                              min_rev_per_day=0 if a.all_orbits else MIN_REV_PER_DAY,
-                             log=print)
-        text = format_summary(passes, os.path.basename(a.elements), tables=a.tables)
+                             log=print, sky=sky)
+        title = os.path.basename(os.path.normpath(a.elements.rstrip("\\/"))) or a.elements
+        text = format_summary(passes, title, tables=a.tables)
     else:
         if els is not None:
             satrec, name = els[0].satrec, els[0].name
-        passes = predict(satrec, site, jd0, a.hours, a.min_elevation, fit_result=fit_res,
-                         table_step_s=a.step)
+        passes = predict(satrec, site, jd0, a.hours, a.min_elevation, sun_max_alt=a.sun_alt,
+                         fit_result=fit_res, table_step_s=a.step, sky=sky)
         text = format_passes(passes, name)
+    text = dark + "\n" + text
     print(text)
     if a.out:
         os.makedirs(a.out, exist_ok=True)
@@ -895,6 +941,9 @@ def main(argv=None):
     p.add_argument("--start", help="UTC start, ISO (default now)")
     p.add_argument("--hours", type=float, default=24.0)
     p.add_argument("--min-elevation", type=float, default=20.0)
+    p.add_argument("--sun-alt", type=float, default=-6.0,
+                   help="the sky counts as dark with the Sun below this altitude, deg "
+                        "(-6 civil twilight; -3 allows brighter twilight, -12 darker)")
     p.add_argument("--step", type=float, default=30.0, help="pointing table step, s")
     p.add_argument("--out", help="also write predictions.txt/.json here")
     a = ap.parse_args(argv)
