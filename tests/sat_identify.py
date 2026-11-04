@@ -316,8 +316,31 @@ def fetch_url(url, cache_dir=None, max_age_h=URL_CACHE_HOURS, log=print):
                            f"{age_h:.1f} h ago ({dest})")
             return dest
         raise SystemExit(f"could not download {url}: {e} (and no cached copy)")
-    with open(dest, "wb") as f:
+    # Only cache what really holds element sets: an error page or a
+    # "not updated since your last download" notice must not replace a good
+    # copy (or be read as an empty element file for the next 2 hours).
+    tmp = dest + ".new"
+    with open(tmp, "wb") as f:
         f.write(data)
+    try:
+        n = sum(len(parse_elements_text(t, url)) for _, t in _read_texts(tmp))
+    except Exception:
+        n = 0
+    if n == 0:
+        os.remove(tmp)
+        reply = data[:200].decode("utf-8", "replace").strip().replace("\n", " ") or "(empty)"
+        hint = ""
+        if url.count("?") > 1:
+            hint = (" The URL has a second '?': separate the query parts with '&' and put "
+                    "the whole URL in double quotes (PowerShell treats & specially).")
+        if os.path.exists(dest):
+            age_h = (time.time() - os.path.getmtime(dest)) / 3600.0
+            (log or print)(f"WARNING: {url} returned no element sets ({reply!r}); using the "
+                           f"cached copy from {age_h:.1f} h ago.{hint}")
+            return dest
+        raise SystemExit(f"{url} returned no element sets. The server replied: {reply!r}.{hint}"
+                         " In PowerShell, quote the URL: \"https://...?CATNR=25544&FORMAT=TLE\"")
+    os.replace(tmp, dest)
     return dest
 
 

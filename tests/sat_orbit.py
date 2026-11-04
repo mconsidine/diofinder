@@ -817,7 +817,7 @@ def cmd_predict(a):
     if els is not None:
         els = _select(els, a.norad, a.name)
         if not els:
-            raise SystemExit("no element set" + (" matches the --norad/--name filter"
+            raise SystemExit(f"no element set in {a.elements}" + (" matches the --norad/--name filter"
                                                   if a.norad or a.name else ""))
     if a.site_from:
         with open(a.site_from) as f:

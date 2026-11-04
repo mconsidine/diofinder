@@ -162,3 +162,38 @@ def test_url_cache_fresh_reuse_and_offline_fallback(tmp_path, monkeypatch):
     assert any("cached copy" in m for m in msgs)
     with pytest.raises(SystemExit):
         si.fetch_url(url + "&x=1", str(tmp_path), log=lambda *a: None)  # nothing cached
+
+
+def test_url_reply_without_elements_is_not_cached(tmp_path, monkeypatch):
+    import urllib.request
+
+    class _Resp:
+        def __init__(self, data):
+            self.data = data
+
+        def read(self):
+            return self.data
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    replies = [b"Invalid query: CATNR=25544?FORMAT=TLE", tsi.CLASSFD.encode(),
+               b"GP data has not updated since your last successful download"]
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=60: _Resp(replies.pop(0)))
+    bad = "https://example.invalid/gp.php?CATNR=25544?FORMAT=TLE"
+    with pytest.raises(SystemExit) as e:
+        si.fetch_url(bad, str(tmp_path), log=lambda *a: None)
+    assert "Invalid query" in str(e.value) and "second '?'" in str(e.value)
+    assert not os.listdir(tmp_path)                       # nothing cached
+    good = "https://example.invalid/gp.php?CATNR=31701&FORMAT=TLE"
+    p = si.fetch_url(good, str(tmp_path), log=lambda *a: None)
+    import time
+    old = time.time() - 3 * 3600
+    os.utime(p, (old, old))
+    msgs = []
+    assert si.fetch_url(good, str(tmp_path), log=msgs.append) == p   # notice -> keep good copy
+    assert any("no element sets" in m for m in msgs)
+    assert len(si.load_elements([p])) == 3
