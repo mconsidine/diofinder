@@ -35,31 +35,30 @@ def web(tmp_path, monkeypatch):
     return A.app.test_client(), calls, state
 
 
-def test_sets_an_offset_with_half_the_round_trip_and_records_it(web):
+def test_applies_the_measured_offset_and_records_it(web):
     c, calls, _ = web
-    phone_ms = int((time.time() + 42.7) * 1000)          # phone 42.7 s ahead
-    r = c.post("/time/set", json={"phone_ms": phone_ms, "rtt_ms": 80}).get_json()
+    # The page measured the finder 0.87 s behind (best of several exchanges).
+    r = c.post("/time/set", json={"offset_s": 0.87, "rtt_ms": 40}).get_json()
     assert r["ok"], r
     # One helper call in --offset mode: an absolute time would go stale while
     # sudo + timedatectl start up (the old 0.8-0.9 s lag).
-    assert len(calls) == 1
-    assert calls[0][:3] == ["sudo", "/usr/local/bin/diofinder-set-time", "--offset"]
-    assert len(calls[0]) == 4
-    off = float(calls[0][3])
-    assert off == pytest.approx(42.7 + 0.04, abs=0.1)   # + half the 80 ms round trip
-    assert r["result"]["drift_s"] == pytest.approx(42.74, abs=0.1)
+    assert calls == [["sudo", "/usr/local/bin/diofinder-set-time", "--offset", "+0.870"]]
+    assert r["result"]["drift_s"] == 0.87 and r["result"]["uncertainty_s"] == 0.02
     datetime.strptime(r["result"]["set_utc"], "%Y-%m-%d %H:%M:%S")
     src = c.get("/api/time").get_json()["result"]["clock"]
     assert "phone (web page), set" in src["summary"]
 
 
-def test_round_trip_is_bounded(web):
+def test_legacy_phone_ms_still_works_with_half_the_round_trip(web):
     c, calls, _ = web
+    phone_ms = int((time.time() + 42.7) * 1000)          # phone 42.7 s ahead
+    r = c.post("/time/set", json={"phone_ms": phone_ms, "rtt_ms": 80}).get_json()
+    assert r["ok"], r
+    assert calls[0][:3] == ["sudo", "/usr/local/bin/diofinder-set-time", "--offset"]
+    assert float(calls[0][3]) == pytest.approx(42.74, abs=0.1)
     now_ms = int(time.time() * 1000)
     assert c.post("/time/set", json={"phone_ms": now_ms, "rtt_ms": 1e9}).get_json()["ok"]
-    assert float(calls[-1][3]) == pytest.approx(1.0, abs=0.1)     # capped at 2 s / 2
-    assert c.post("/time/set", json={"phone_ms": now_ms, "rtt_ms": "x"}).get_json()["ok"]
-    assert abs(float(calls[-1][3])) < 0.1
+    assert float(calls[-1][3]) == pytest.approx(1.0, abs=0.1)     # round trip capped
 
 
 def test_rejects_bad_input_without_touching_the_clock(web):
@@ -67,6 +66,9 @@ def test_rejects_bad_input_without_touching_the_clock(web):
     assert c.post("/time/set", json={}).status_code == 400
     assert c.post("/time/set", json={"phone_ms": "soon"}).status_code == 400
     assert c.post("/time/set", json={"phone_ms": 0}).status_code == 400   # 1970
+    assert c.post("/time/set", json={"offset_s": "nan"}).status_code == 400
+    assert c.post("/time/set", json={"offset_s": -4e9}).status_code == 400  # before 2025
+    assert c.post("/time/set", json={"offset_s": 1e12}).status_code == 400
     assert c.get("/time/set").status_code == 405
     assert calls == []
 

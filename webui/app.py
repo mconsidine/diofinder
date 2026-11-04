@@ -796,32 +796,43 @@ def site_set():
 
 @app.route("/time/set", methods=["POST"])
 def time_set():
-    """Set the finder's clock from the phone's (JSON {"phone_ms": epoch ms,
-    "rtt_ms": the page's last measured round trip}).
+    """Set the finder's clock from the phone's.
 
-    The Pi has no real-time clock; away from a network its time comes from
-    SkySafari, which sets whole seconds only. The phone's offset is measured
-    on arrival (plus half the Wi-Fi round trip, the time its timestamp spent
-    in flight) and applied as an OFFSET by the sudo helper, which reads and
-    sets the clock in one process. The old way (wait for a whole second,
-    then pass it as text to sudo + timedatectl) left the finder 0.8-0.9 s
-    behind: the second named had passed by the time the helper ran."""
+    JSON {"offset_s": seconds to add to the finder's clock, "rtt_ms": the
+    round trip of the exchange it was measured on}: the page measures the
+    offset NTP-style (several /api/time exchanges, the shortest round trip
+    kept, error <= half of it), because one request's delay is rarely the
+    same both ways on Wi-Fi. Legacy {"phone_ms", "rtt_ms"} is still taken.
+
+    The offset is applied by the sudo helper's --offset mode, which reads
+    and sets the clock in one process. Passing an absolute time instead
+    went stale while sudo + timedatectl started (0.8-0.9 s on a Pi Zero)."""
     import time as _t
     from diofinder import clock_info as _ci
     data = request.get_json(silent=True) or {}
     try:
-        phone_s = float(data["phone_ms"]) / 1000.0
-    except (KeyError, TypeError, ValueError):
-        return jsonify({"ok": False, "error": "phone_ms (epoch milliseconds) required"}), 400
-    phone_dt = datetime.fromtimestamp(phone_s, tz=timezone.utc)
-    if not 2025 <= phone_dt.year < 2100:
-        return jsonify({"ok": False, "error": f"phone time {phone_dt.isoformat()} "
-                                              "doesn't look right"}), 400
-    try:
         rtt_s = min(max(float(data.get("rtt_ms") or 0.0) / 1000.0, 0.0), 2.0)
     except (TypeError, ValueError):
         rtt_s = 0.0
-    offset = phone_s + rtt_s / 2.0 - _t.time()   # phone minus finder, seconds
+    try:
+        if data.get("offset_s") is not None:
+            offset = float(data["offset_s"])
+            if not math.isfinite(offset):
+                raise ValueError
+        else:
+            phone_s = float(data["phone_ms"]) / 1000.0
+            offset = phone_s + rtt_s / 2.0 - _t.time()     # phone minus finder
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"ok": False, "error": "offset_s (seconds) or phone_ms "
+                                              "(epoch milliseconds) required"}), 400
+    try:
+        new_dt = datetime.fromtimestamp(_t.time() + offset, tz=timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        new_dt = None
+    if new_dt is None or not 2025 <= new_dt.year < 2100:
+        return jsonify({"ok": False, "error": "that would set the clock to "
+                        f"{new_dt.isoformat() if new_dt else 'an impossible time'}, "
+                        "which doesn't look right"}), 400
     try:
         # The web UI never has CAP_SYS_TIME (only the daemon does): helper.
         _ci.set_clock_offset(offset, direct=False)
@@ -831,7 +842,8 @@ def time_set():
     _ci.record_sync("phone", "set", offset, utc_set=time_str)
     _ci.save_last_known()
     return jsonify({"ok": True, "result": {"set_utc": time_str,
-                                           "drift_s": round(offset, 2)}})
+                                           "drift_s": round(offset, 3),
+                                           "uncertainty_s": round(rtt_s / 2.0, 3)}})
 
 
 @app.route("/power/<action>", methods=["POST"])
