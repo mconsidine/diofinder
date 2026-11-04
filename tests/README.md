@@ -13,6 +13,9 @@ No external daemon, gRPC, or server is involved.
 
 ## Quick reference
 
+Satellite tools (`satcheck_*`, `sat_*`, `iss_check`): the user guide
+`docs/satellite-user-guide.md` has complete workflows and every option.
+
 | Script | Purpose |
 |---|---|
 | `diag_services.sh` | System health check — first stop when anything is broken |

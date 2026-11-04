@@ -83,6 +83,9 @@ Tests: `test_satcheck_overlay.py`, `test_sat_identify.py`,
 `test_sat_orbit.py`, `test_iss_check.py`. Full suite at handoff: all pass (676 tests collected).
 
 ### Commands (PowerShell, repo root)
+The user guide `docs/satellite-user-guide.md` (2026-11-04) has complete
+workflows and every option; keep it current when options change.
+
 ```
 python tests\satcheck_overlay.py livecap_X.zip --stack --chart
 python tests\sat_identify.py livecap_X.zip --elements c:\users\matt\Downloads\TLEs\classfd.zip,c:\users\matt\Downloads\TLEs\inttles.zip --station 9999 --status G

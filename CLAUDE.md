@@ -1189,6 +1189,9 @@ hot-pixel rejection during slews, when the temporal cache is offline.
 
 ## Live capture (frames + UTC + pointing, e.g. for satellites)
 
+User-facing guide to the whole satellite workflow (setup, capturing, complete
+workflows, every script and option): **`docs/satellite-user-guide.md`**.
+
 `diofinder/live_capture.py`. The Home page **Start/Stop live capture** button
 (`/livecap/toggle` → maint `live_capture_start`/`_stop`) records every frame the
 solver processes, each paired with **its own** solve result, and on stop closes
