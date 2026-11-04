@@ -463,7 +463,7 @@ Fits an orbit to one or more passes.
 |---|---|---|
 | `--track ID ...` | all | Track ids (`L1`, `S2.1`) or `FILE:ID` when several files |
 | `--start SRC` | | Begin from a known element set (any source; `--norad` picks one) |
-| `--norad N` | | Catalog number (selects in `--start`; written out) |
+| `--norad N` | | Catalog number, one (selects in `--start`; written out; Alpha-5 accepted) |
 | `--name TEXT` | identified, else `unkYYMMDD` | Object name |
 | `--intldesg D` | identified, else 99099A | International designator |
 | `--circular` / `--full` | automatic | Force 4 (circular) or all 6 elements |
@@ -489,7 +489,7 @@ One pass gives a circular fit; two or more passes give all six elements.
 | `--sun-alt DEG` | −6 | The sky is dark with the Sun below this (−12 darker, −3 brighter twilight) |
 | `--sky REGION` | all | `east`, `west`, `north`, `south`, `ne`/`nw`/`se`/`sw`, or a comma list |
 | `--sky-mode whole\|part` | whole | Keep passes wholly in `--sky`, or cut them to it |
-| `--norad LIST` | all | Only these catalog numbers |
+| `--norad LIST` | all | Only these catalog numbers, comma-separated (`51445,53323`; Alpha-5 such as `A0658` = 100658 too) |
 | `--name TEXT` | all | Only names containing this |
 | `--max-age-days D` | 30 | Skip element sets further than D days from the window (0 = keep all; one object: a warning instead) |
 | `--all-orbits` | | Include objects under 2 rev/day (GEO, high orbits) |

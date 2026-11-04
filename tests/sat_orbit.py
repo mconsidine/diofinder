@@ -951,13 +951,13 @@ def cmd_fit(a):
     if a.start:
         els = si.load_elements([a.start])
         if a.norad:
-            els = [e for e in els if e.norad == int(a.norad)]
+            els = [e for e in els if e.norad == si.parse_norad(a.norad)]
         if not els:
             raise SystemExit(f"{a.start}: no element set" + (f" for {a.norad}" if a.norad else ""))
         start = els[0]
     res = fit(passes, start, True if a.circular else (False if a.full else None))
     ident = next((q.identified for q in passes if q.identified), None)
-    norad = int(a.norad) if a.norad else (ident["norad"] if ident else 99999)
+    norad = si.parse_norad(a.norad) if a.norad else (ident["norad"] if ident else 99999)
     name = a.name or (ident["name"] if ident else si.unknown_name(passes[0].jd[0]))
     intl = a.intldesg if a.intldesg is not None else (
         ident.get("intldesg") if ident else "99099A")
@@ -975,7 +975,7 @@ def cmd_fit(a):
 
 def _select(els, norad=None, name=None):
     if norad:
-        want = {int(x) for x in str(norad).replace(" ", "").split(",") if x}
+        want = si.parse_norad_list(norad)
         els = [e for e in els if e.norad in want]
     if name:
         els = [e for e in els if name.lower() in (e.name or "").lower()]
@@ -1195,8 +1195,9 @@ def main(argv=None):
     p.add_argument("--sky-mode", choices=("whole", "part"), default="whole",
                    help="whole (default): only passes entirely in --sky; part: every pass "
                         "cut to the stretch inside --sky")
-    p.add_argument("--norad", help="only these catalog numbers (comma-separated); without "
-                                   "--norad/--name every object in the file is predicted")
+    p.add_argument("--norad", help="only these catalog numbers, comma-separated (51445,53323; "
+                                   "Alpha-5 such as A0658 too); without --norad/--name every "
+                                   "object in the file is predicted")
     p.add_argument("--name", help="only objects whose name contains this (e.g. NOSS, USA)")
     p.add_argument("--max-age-days", type=float, default=30.0,
                    help="with several objects, skip element sets whose epoch is more than "
@@ -1219,7 +1220,8 @@ def main(argv=None):
     p.add_argument("--out", help="also write predictions.txt/.json/.csv here")
     e = sub.add_parser("ephem", help="write a CCSDS OEM ephemeris (state vectors)")
     e.add_argument("elements", help="fit.json or element sources (as predict)")
-    e.add_argument("--norad", help="only these catalog numbers (comma-separated)")
+    e.add_argument("--norad", help="only these catalog numbers, comma-separated "
+                                   "(Alpha-5 such as A0658 too)")
     e.add_argument("--name", help="only objects whose name contains this")
     _window_args(e)
     e.add_argument("--step", type=float, default=60.0, help="seconds between states (60)")

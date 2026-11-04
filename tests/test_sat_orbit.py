@@ -325,3 +325,14 @@ def test_passes_break_across_daylight_gaps():
 
 def TRUTH_EL():
     return {e.norad: e for e in si.parse_elements_text(tsi.CLASSFD, "t")}[31701]
+
+
+def test_norad_lists_and_alpha5():
+    assert si.parse_norad("51445") == 51445
+    assert si.parse_norad(" a0658 ") == 100658             # Alpha-5
+    assert si.parse_norad_list("51445, 53323,A0658") == {51445, 53323, 100658}
+    for bad in ("NOSS", "I0001", "12a45", ""):
+        with pytest.raises(SystemExit):
+            si.parse_norad(bad)
+    els = si.parse_elements_text(tsi.CLASSFD, "t")
+    assert {e.norad for e in so._select(els, "31701, 31708")} == {31701, 31708}

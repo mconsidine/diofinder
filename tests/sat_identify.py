@@ -137,6 +137,24 @@ class ElementSet:
         return self.satrec.satnum_str if self.norad <= 339999 else str(self.norad)
 
 
+def parse_norad(text):
+    """A catalog number from the command line: digits ('51445') or the
+    Alpha-5 form TLEs use above 99999 ('A0658' = 100658)."""
+    t = str(text).strip().upper()
+    if t.isdigit():
+        return int(t)
+    if len(t) == 5 and t[0].isalpha() and t[1:].isdigit() and t[0] not in "IO":
+        from sgp4.alpha5 import from_alpha5
+        return int(from_alpha5(t))
+    raise SystemExit(f"--norad: {text!r} is not a catalog number (e.g. 51445, or "
+                     "A0658 in the Alpha-5 form for 100000 and up)")
+
+
+def parse_norad_list(text):
+    """'51445, 53323,A0658' -> {51445, 53323, 100658}."""
+    return {parse_norad(x) for x in str(text).replace(" ", "").split(",") if x}
+
+
 def _parse_tle_text(text, source):
     from sgp4.api import Satrec
     lines = [ln.rstrip("\r\n") for ln in text.splitlines()]
