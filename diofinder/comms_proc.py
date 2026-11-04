@@ -2188,6 +2188,14 @@ def _live_capture_cmd(cmd, ctx):
     })
 
 
+def _site_result(cfg) -> dict:
+    lat = float(getattr(cfg, "latitude_deg", 0.0) or 0.0)
+    lon = float(getattr(cfg, "longitude_deg", 0.0) or 0.0)
+    return {"latitude_deg": lat, "longitude_deg": lon,
+            "elevation_m": float(getattr(cfg, "elevation_m", 0.0) or 0.0),
+            "set": _horizon.site_is_set(lat, lon)}
+
+
 def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
     """Dispatch one maintenance-socket command and return a MaintResponse."""
     global _dark_capture_active
@@ -2432,6 +2440,40 @@ def _handle_maint_command(req: MaintRequest, ctx) -> MaintResponse:
             if not reply.ok:
                 return MaintResponse(ok=False, error=reply.error)
             return MaintResponse(ok=True, result=reply.result)
+
+        if cmd == "site_get":
+            return MaintResponse(ok=True, result=_site_result(ctx.cfg))
+
+        if cmd == "site_set":
+            # The observer site from the web UI (Utilities -> Site). SkySafari
+            # sends latitude/longitude on connect (:St/:Sg), but LX200 has no
+            # elevation command, so this is the only way to set elevation
+            # without editing the conf. Persisted; the next live capture
+            # records it. The solver loaded its own copy at start: like :St,
+            # only the polar-alignment latitude reaches it now (horizon
+            # reject / IMU solve-cal read the new site after a restart).
+            try:
+                upd = _horizon.parse_site(args or {})
+            except (ValueError, TypeError) as e:
+                return MaintResponse(ok=False, error=str(e))
+            if not upd:
+                return MaintResponse(ok=False, error="give latitude_deg, longitude_deg "
+                                                     "and/or elevation_m")
+            for k, v in upd.items():
+                setattr(ctx.cfg, k, v)
+            try:
+                cfg_mod.save_keys(upd)
+            except Exception as e:
+                return MaintResponse(ok=False, error=f"could not save the site: {e}")
+            if "latitude_deg" in upd:
+                lat = upd["latitude_deg"]
+                _invalidate_solver_cache(SOLVER_OP_POLAR_STATUS)
+                threading.Thread(target=lambda: _call_solver(
+                    SOLVER_OP_POLAR_SET_LATITUDE, {"latitude_deg": lat},
+                    ctx.solver_cmd_q, ctx.solver_cmd_reply_q, timeout_s=10.0),
+                    daemon=True).start()
+            log.info("Site set from the web UI: %s", upd)
+            return MaintResponse(ok=True, result=_site_result(ctx.cfg))
 
         if cmd == "polar_set_latitude":
             try:

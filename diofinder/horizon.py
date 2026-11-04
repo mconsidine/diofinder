@@ -137,6 +137,48 @@ def parse_utc_timestamp(s) -> datetime.datetime | None:
     return dt
 
 
+def _coord(value, pos: str, neg: str) -> float:
+    """A number, or a number with a hemisphere letter ('72.667W' -> -72.667)."""
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    s = str(value).strip().upper().replace("°", "").replace(" ", "")
+    sign = 1.0
+    if s and s[-1] in (pos, neg):
+        sign = 1.0 if s[-1] == pos else -1.0
+        s = s[:-1]
+        if s.startswith("-"):
+            raise ValueError(f"{value!r}: give a sign or a letter, not both")
+    return sign * float(s)
+
+
+ELEVATION_RANGE_M = (-500.0, 9000.0)
+
+
+def parse_site(args: dict) -> dict:
+    """Validated site fields from a dict with any of latitude_deg (+N, or
+    '43.95N'), longitude_deg (East-positive, or '72.667W'; 0..360 accepted and
+    folded to -180..180) and elevation_m. Returns only the fields given;
+    raises ValueError with a readable message."""
+    out = {}
+    if args.get("latitude_deg") not in (None, ""):
+        lat = _coord(args["latitude_deg"], "N", "S")
+        if not -90.0 <= lat <= 90.0:
+            raise ValueError(f"latitude {lat} is outside -90..90")
+        out["latitude_deg"] = lat
+    if args.get("longitude_deg") not in (None, ""):
+        lon = _coord(args["longitude_deg"], "E", "W")
+        if not -180.0 <= lon < 360.0:
+            raise ValueError(f"longitude {lon} is outside -180..360")
+        out["longitude_deg"] = lon - 360.0 if lon > 180.0 else lon
+    if args.get("elevation_m") not in (None, ""):
+        el = float(str(args["elevation_m"]).strip().lower().rstrip("m"))
+        lo, hi = ELEVATION_RANGE_M
+        if not lo <= el <= hi:
+            raise ValueError(f"elevation {el} m is outside {lo:g}..{hi:g} m")
+        out["elevation_m"] = el
+    return out
+
+
 def site_is_set(latitude_deg: float, longitude_deg: float) -> bool:
     """True unless lat/lon are the unconfigured (0, 0) default (null island)."""
     return not (latitude_deg == 0.0 and longitude_deg == 0.0)

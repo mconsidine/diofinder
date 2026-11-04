@@ -776,6 +776,26 @@ def api_time():
                                            "clock": _ci.current()}})
 
 
+@app.route("/api/site")
+def api_site():
+    """The observer site (latitude +N, longitude +E, elevation m)."""
+    r = _safe_call("site_get")
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error})
+
+
+@app.route("/site/set", methods=["POST"])
+def site_set():
+    """Set the observer site (JSON or form: latitude_deg, longitude_deg,
+    elevation_m; any subset). Longitude is East-positive, or give a letter
+    ('72.667W'). Elevation can only be set here: SkySafari's LX200 link has
+    no command for it."""
+    data = request.get_json(silent=True) or request.form.to_dict()
+    args = {k: data[k] for k in ("latitude_deg", "longitude_deg", "elevation_m")
+            if str(data.get(k, "")).strip() != ""}
+    r = _safe_call("site_set", args)
+    return jsonify({"ok": r.ok, "result": r.result, "error": r.error}), (200 if r.ok else 400)
+
+
 @app.route("/time/set", methods=["POST"])
 def time_set():
     """Set the finder's clock from the phone's (JSON {"phone_ms": epoch ms}).
@@ -1808,9 +1828,9 @@ _CONFIG_SECTIONS = [
         ("fov_max_error_deg",            "Uncal. FOV tolerance","FOV search window before calibration."),
     ]),
     ("Observer Location", [
-        ("latitude_deg",  "Latitude (°)",  "Observer latitude (+N)."),
-        ("longitude_deg", "Longitude (°)", "Observer longitude (+E)."),
-        ("elevation_m",   "Elevation (m)", "Height above sea level. Only recorded in live captures (for satellite pass prediction)."),
+        ("latitude_deg",  "Latitude (°)",  "Observer latitude (+N). Set on Utilities → Site, or sent by SkySafari when it connects."),
+        ("longitude_deg", "Longitude (°)", "Observer longitude (+E; west negative). Set on Utilities → Site, or sent by SkySafari when it connects."),
+        ("elevation_m",   "Elevation (m)", "Height above sea level, for live captures and satellite work. Set on Utilities → Site (SkySafari cannot send it)."),
     ]),
     ("Star Detection", [
         ("detect_sigma", "Detection sigma",

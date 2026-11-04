@@ -157,6 +157,31 @@
     </p>
   </div>
 
+  {# ---- Site (observer location) ---- #}
+  <div class="card" id="site-card">
+    <h2>Site</h2>
+    <p class="hint" style="margin:0 0 8px 0;">
+      Where the finder is. Used for Alt/Az, live captures and satellite work.
+      SkySafari sends latitude and longitude when it connects (and overwrites
+      them then); it cannot send elevation, so set that here.
+    </p>
+    <dl class="stats">
+      <dt>Now</dt><dd id="site-now">&mdash;</dd>
+    </dl>
+    <form id="site-form" style="margin-top:8px;">
+      <label>Latitude (&deg;, +N or e.g. 43.95N)
+        <input type="text" inputmode="decimal" name="latitude_deg" id="site-lat" size="12"></label><br>
+      <label>Longitude (&deg;, +E; west negative, or e.g. 72.667W)
+        <input type="text" inputmode="decimal" name="longitude_deg" id="site-lon" size="12"></label><br>
+      <label>Elevation (m above sea level)
+        <input type="text" inputmode="decimal" name="elevation_m" id="site-el" size="8"></label>
+      <p style="margin:8px 0 0 0;">
+        <button type="submit" class="btn">Save site</button>
+        <span id="site-msg" class="hint" style="margin-left:6px;"></span>
+      </p>
+    </form>
+  </div>
+
   {# ---- Network, config & updates ---- #}
   <div class="card">
     <h2>Network, config &amp; updates</h2>
@@ -307,6 +332,43 @@
   });
   poll();
   setInterval(poll, 5000);
+})();
+
+// ---- Site: show and set latitude / longitude / elevation ----
+(function () {
+  function show(s) {
+    if (!s) return;
+    var lon = s.longitude_deg;
+    document.getElementById("site-now").textContent = s.set
+      ? s.latitude_deg.toFixed(4) + "°" + (s.latitude_deg >= 0 ? "N" : "S") + "  " +
+        Math.abs(lon).toFixed(4) + "°" + (lon >= 0 ? "E" : "W") + "  " +
+        Math.round(s.elevation_m) + " m"
+      : "not set (0, 0) — " + Math.round(s.elevation_m) + " m";
+    var f = document.getElementById("site-form");
+    if (document.activeElement && f.contains(document.activeElement)) return;
+    document.getElementById("site-lat").value = s.set ? s.latitude_deg : "";
+    document.getElementById("site-lon").value = s.set ? lon : "";
+    document.getElementById("site-el").value = s.elevation_m;
+  }
+  function load() {
+    fetch("/api/site").then(function (r) { return r.json(); })
+      .then(function (j) { if (j.ok) show(j.result); }).catch(function () {});
+  }
+  document.getElementById("site-form").addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    var msg = document.getElementById("site-msg");
+    var body = {latitude_deg: document.getElementById("site-lat").value,
+                longitude_deg: document.getElementById("site-lon").value,
+                elevation_m: document.getElementById("site-el").value};
+    msg.textContent = "saving…";
+    fetch("/site/set", {method: "POST", headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify(body)})
+      .then(function (r) { return r.json(); }).then(function (j) {
+        msg.textContent = j.ok ? "✓ saved" : "Error: " + (j.error || "failed");
+        if (j.ok) { document.activeElement && document.activeElement.blur(); show(j.result); }
+      }).catch(function (e) { msg.textContent = "Error: " + e; });
+  });
+  load();
 })();
 
 // ---- Live captures list (DOM-built: names are server-validated, but never

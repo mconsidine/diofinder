@@ -181,8 +181,10 @@ as a stale epoch rather than frozen-but-fresh pointing.
 
 The shipped default is **`imx477_finder.json`** (repo `tuning/`, installed to
 `/usr/share/libcamera/ipa/rpi/vc4/` by `install.sh`; `camera_tuning_file` in
-`etc/diofinder.conf.default` points at it). The `config.py` dataclass fallback
-is `imx477_scientific.json`, used only if the conf omits the key. Three profiles
+`etc/diofinder.conf.default` points at it). The `config.py` dataclass default
+is the same file (it was `imx477_scientific.json` until the 2026-11-04
+default audit), so a conf that omits the key runs the camera a fresh image
+runs; a missing file falls back to libcamera's default tuning. Three profiles
 switch live via `tuning_set` (`finder`/`scientific`/`standard`; restart
 required); the Camera/Status pages and `diofinder-ctl` expose them.
 
@@ -684,6 +686,21 @@ directory-ownership class of bug as the v0.11.30 fix, just scoped to these
 two files. Does not touch the star database, the code checkout, or Wi-Fi
 (NetworkManager-managed, not in this file); latitude/longitude ARE in the
 conf and do reset to 0/0.
+
+**Shipped-default report** (`conf_migrate.diff_from_default`, Update page +
+end of `diofinder-update`): keys whose value differs from
+`diofinder.conf.default`. A key the device's conf lacks (added in a later
+release) runs the `Config` dataclass default, so it is listed only when that
+built-in value differs from the shipped one, as `<not set: using X>`.
+`tests/test_conf_migrate.py` pins the built-in and shipped defaults equal
+except `conf_version` and `fov_calibrated` (built-in false: a conf without it
+re-learns the FOV). **Site** (Utilities → Site card, `/api/site`,
+`/site/set` → maint `site_get`/`site_set`, `horizon.parse_site`: numbers or
+N/S/E/W letters, longitude East-positive, 0..360 folded): latitude,
+longitude and **elevation** (LX200 has no elevation command, so SkySafari
+can't send it); persisted, live in comms, latitude pushed to the solver's
+polar module like `:St` (other solver consumers read the site at restart).
+Tests `tests/test_site.py`.
 
 **One-shot conf migrations** (`conf_migrate.MIGRATIONS`, run by the launcher
 at start): a rule rewrites a key only while it still holds the old default,

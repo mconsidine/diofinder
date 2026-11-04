@@ -484,7 +484,7 @@ pend = pending_migrations()
 if pend:
     print("conf migrations pending (applied at next service start):")
     for key, cur, new, reason in pend:
-        print(f"  {key}: {cur if cur is not None else '<absent>'} -> {new}")
+        print(f"  {key}: {cur if cur is not None else '<not set>'} -> {new}")
 diffs = diff_from_default()
 if diffs:
     print(f"settings differing from shipped defaults ({len(diffs)}):")

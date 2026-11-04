@@ -101,10 +101,15 @@ has no line continuation, so each command is one line.
 
 Do these once (site) or before each session (clock).
 
-1. **Site.** Config page → *Observer Location*:
-   - *Latitude* (+N)
-   - *Longitude* (**+E**; west longitudes are negative, e.g. −72.667)
+1. **Site.** Utilities → *Site* → **Save site**:
+   - *Latitude* (+N, or e.g. `43.95N`)
+   - *Longitude* (**+E**; west longitudes are negative, e.g. `-72.667`, or
+     write `72.667W`)
    - *Elevation (m)*
+
+   SkySafari also sends latitude and longitude each time it connects, and
+   overwrites them then. It cannot send elevation (the LX200 protocol has no
+   command for it), so set elevation here.
 
    The site is stored in every capture and every calculation uses it. If it
    is unset (0, 0), the Home page warns when you start a capture.
@@ -609,6 +614,7 @@ wins**. CCSDS OEM files are not element sets; `predict` reads them directly.
 | `NO DARK SKY ... no pass can be listed` | The window is in daylight at the site. Start at dusk (`--start 17:00`) or widen it |
 | `0 visible pass(es)` with `--sky` | Whole passes rarely stay on one side of the meridian; try `--sky-mode part` |
 | An object listed every few minutes at > 2°/s | A very old element set. Fixed: such states are rejected, and old sets are skipped by default. `git pull` |
+| Elevation 0 in captures | Set it on Utilities → Site; SkySafari can't send it |
 | `capture clock: unknown` / "do not post" | The finder's time wasn't set this boot. Use Utilities → Clock before capturing |
 | No tone curve in the archive | Captured before the OTA. Magnitudes assume the shipped curve |
 | `unknown time zone` on Windows | `pip install tzdata`, or use `UTC-5` / `local` |

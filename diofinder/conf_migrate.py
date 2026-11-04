@@ -176,11 +176,32 @@ def _default_conf_path(default_path: Optional[str] = None) -> Optional[str]:
     return None
 
 
+def _show(v) -> str:
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    return repr(v) if v == "" else str(v)
+
+
+def _same_value(text: str, builtin) -> bool:
+    """Does a conf-file string mean the same as a built-in (typed) default?"""
+    s = (text or "").strip()
+    if isinstance(builtin, bool):
+        return (s.lower() in ("true", "1", "yes", "on")) == builtin
+    if isinstance(builtin, (int, float)):
+        try:
+            return abs(float(s) - float(builtin)) <= 1e-9 * max(1.0, abs(float(builtin)))
+        except ValueError:
+            return False
+    return _norm(s) == _norm(str(builtin))
+
+
 def diff_from_default(conf_path: Optional[str] = None,
                       default_path: Optional[str] = None) -> list:
     """[(key, current, shipped_default)] for every key that differs from the
-    shipped conf.default (both directions: changed values and keys the
-    default file has that the conf lacks). Keys only in the live conf
+    shipped conf.default (both directions: changed values, and keys the
+    default file has that the conf lacks AND whose built-in Config default
+    differs from the shipped value; a missing key whose built-in default is
+    the shipped one changes nothing and is not listed). Keys only in the live conf
     (calibration artifacts like conf_version/boresight drift) are reported
     with a '<not in default>' marker only when the default file lacks them
     entirely — they are normal and listed last."""
@@ -190,11 +211,19 @@ def diff_from_default(conf_path: Optional[str] = None,
     if d is None or not os.path.exists(p):
         return []
     conf, dflt = _parse_conf(p), _parse_conf(d)
+    builtin = cfg_mod.Config()
     diffs = []
     for key, dval in dflt.items():
         cval = conf.get(key)
         if cval is None:
-            diffs.append((key, "<absent>", dval))
+            # Not in the device's conf (added in a later release): the device
+            # runs the built-in default. That is only worth listing when it
+            # differs from the shipped value; say what is actually in use.
+            if not hasattr(builtin, key):
+                diffs.append((key, "<not set>", dval))
+            elif not _same_value(dval, getattr(builtin, key)):
+                diffs.append((key, f"<not set: using {_show(getattr(builtin, key))}>",
+                              dval))
         elif _norm(cval) != _norm(dval):
             diffs.append((key, cval, dval))
     extras = [(k, v, "<not in default>")

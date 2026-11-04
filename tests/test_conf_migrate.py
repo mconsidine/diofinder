@@ -101,8 +101,37 @@ class DiffTests(unittest.TestCase):
             keys = {k: (cur, dv) for k, cur, dv in diffs}
             self.assertEqual(keys["a"], ("5", "1"))
             self.assertNotIn("b", keys)              # numerically equal
-            self.assertEqual(keys["c"][0], "<absent>")
+            self.assertEqual(keys["c"][0], "<not set>")   # not a Config field
             self.assertEqual(keys["my_extra"][1], "<not in default>")
+
+    def test_a_missing_key_is_listed_only_when_its_builtin_differs(self):
+        with tempfile.TemporaryDirectory() as d:
+            # imu_poll_hz 10 and exposure_s 0.2 are the built-in defaults too;
+            # gain 7 is not (built-in 5), so a device without it runs 5.
+            dflt = _write(d, "imu_poll_hz: 10\nexposure_s: 0.200000\n"
+                             "watchdog_enabled: true\ngain: 7\n", "default.conf")
+            conf = _write(d, "latitude_deg: 1\n", "live.conf")
+            keys = {k: (cur, dv) for k, cur, dv in
+                    conf_migrate.diff_from_default(conf, dflt)}
+            for k in ("imu_poll_hz", "exposure_s", "watchdog_enabled"):
+                self.assertNotIn(k, keys)
+            self.assertEqual(keys["gain"], ("<not set: using 5.0>", "7"))
+
+    def test_shipped_default_and_builtin_defaults_agree(self):
+        # Every key the shipped conf sets means the same as the built-in
+        # default, except calibration bookkeeping a fresh image ships
+        # pre-stamped. A conf that lacks a key then runs what a fresh image
+        # runs (the camera tuning file and the deep db used to differ).
+        import dataclasses
+        from diofinder import config as cfg_mod
+        here = os.path.dirname(os.path.abspath(__file__))
+        dflt = conf_migrate._parse_conf(os.path.join(here, "..", "etc",
+                                                     "diofinder.conf.default"))
+        base = cfg_mod.Config()
+        fields = {f.name for f in dataclasses.fields(cfg_mod.Config)}
+        differ = sorted(k for k, v in dflt.items() if k in fields
+                        and not conf_migrate._same_value(v, getattr(base, k)))
+        self.assertEqual(differ, ["conf_version", "fov_calibrated"])
 
 
 class FactoryResetTests(unittest.TestCase):

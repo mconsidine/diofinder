@@ -44,11 +44,14 @@ class Config:
     sensor_full_width: int = 2028
     sensor_full_height: int = 1520
 
-    # Path to the libcamera IMX477 scientific tuning profile.  The scientific
-    # profile disables all ISP processing (AGC, AWB, noise reduction, sharpening,
-    # colour correction) that would corrupt photometry.  Change 'vc4' to 'pisp'
-    # if running on a Pi 5.  Set to "" to use the default tuning file.
-    camera_tuning_file: str = "/usr/share/libcamera/ipa/rpi/vc4/imx477_scientific.json"
+    # Path to the libcamera IMX477 tuning profile. The finder profile is the
+    # scientific one (no ISP processing that would corrupt photometry) with
+    # defect correction off and a companding tone curve; it is also what the
+    # shipped diofinder.conf.default sets, so a conf without the key gets the
+    # same camera as a fresh image. A missing file falls back to libcamera's
+    # default tuning (camera_proc). Change 'vc4' to 'pisp' on a Pi 5; "" =
+    # libcamera's default tuning.
+    camera_tuning_file: str = "/usr/share/libcamera/ipa/rpi/vc4/imx477_finder.json"
 
     exposure_s: float = 0.2
     gain: float = 5.0
@@ -238,9 +241,10 @@ class Config:
     # Path to a tetra3 .npz star database compatible with olive-solve.
     solver_db: str = "default_database"
     # Optional deeper-magnitude database used by the "bad" seeing preset
-    # (star_db="deep"). Empty = unset → presets stay on the standard db.
-    # Applied only when this names a file that exists on disk.
-    star_db_deep: str = ""
+    # (star_db="deep"). Applied only when this names a file that exists on
+    # disk (otherwise the presets stay on the standard db); the default is the
+    # path the shipped conf and the db-update script use. "" = never use one.
+    star_db_deep: str = "/var/lib/diofinder/diofinder_13deg_mag85.npz"
     # Remembered standard database. Captured automatically by seeing_set the
     # first time it switches away to the deep db, so the "standard" token never
     # resolves circularly to the (persisted, mutated) solver_db.
