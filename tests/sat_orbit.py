@@ -33,11 +33,19 @@ Two commands:
     pass's timing uncertainty ("02:41:10 +- 85 s"), i.e. how early to be
     pointed and waiting.
 
+    Times: --start/--end are this computer's LOCAL time unless --utc (or
+    --in-tz ZONE), or the time itself carries "Z" or an offset. The printed
+    times and predictions.txt/.csv use --out-tz (UTC by default, ready to
+    share; --out-tz local to read them in local time). predictions.json is
+    always UTC.
+
 Examples:
   python3 tests/sat_orbit.py fit cap1_ident/observations.json --track L1
   python3 tests/sat_orbit.py fit cap1_ident/observations.json cap2_ident/observations.json
   python3 tests/sat_orbit.py predict out/fit.json --site-from cap1_ident/observations.json \\
       --start 2026-11-03T00:00:00 --hours 36 --min-elevation 25
+  python3 tests/sat_orbit.py predict classfd.zip --lat 43.95 --lon -72.667 \\
+      --start 17:00 --end 06:00 --out-tz utc        # tonight, local in, UTC out
 
 Needs numpy, astropy, sgp4 (as sat_identify). No network.
 """
@@ -602,7 +610,7 @@ def _passes_from(sky, err, r, min_elevation=20.0, sun_max_alt=-6.0, fit_result=N
         rate = float(si._ang(u[k], u[kk])) / max((jd[kk] - jd[k]) * 86400.0, 1e-9) \
             if kk != k else None
         p = {"start_utc": si._utc(jd[i]), "max_utc": si._utc(jd[k]), "end_utc": si._utc(jd[j]),
-             "max_jd": float(jd[k]), "max_alt": round(float(alt[k]), 1),
+             "start_jd": float(jd[i]), "max_jd": float(jd[k]), "end_jd": float(jd[j]), "max_alt": round(float(alt[k]), 1),
              "max_az": round(float(az[k]), 1), "ra_at_max": round(float(ra[k - i]), 3),
              "dec_at_max": round(float(dec[k - i]), 3),
              "range_km_at_max": round(float(np.linalg.norm(g[k] - geom.observer(jd[k]))), 0),
@@ -659,13 +667,13 @@ def darkness_text(sky, sun_max_alt=-6.0):
     """One line saying when the site's sky is dark in the window (passes are
     only listed then)."""
     w = dark_windows(sky, sun_max_alt)
-    lo, hi = si._utc(sky.jd[0])[:16], si._utc(sky.jd[-1])[:16]
     if not w:
-        return (f"NO DARK SKY at the site between {lo} and {hi} UTC (Sun above "
-                f"{sun_max_alt:g} deg the whole time), so no pass can be listed. Start the "
-                "window at dusk with --start (UTC), or give more --hours.")
-    parts = [f"{si._utc(a)[5:16]} - {si._utc(b)[11:16]}" for a, b in w]
-    return f"Dark sky (Sun below {sun_max_alt:g} deg) at the site, UTC: " + ", ".join(parts)
+        return (f"NO DARK SKY at the site between {_hm(sky.jd[0], True)} and "
+                f"{_hm(sky.jd[-1], True)} (Sun above {sun_max_alt:g} deg the whole time), so "
+                "no pass can be listed. Start the window at dusk with --start (local time "
+                "unless --utc), or give a later --end / more --hours.")
+    parts = [f"{_hm(a, True, zone=False)} - {_hm(b)}" for a, b in w]
+    return f"Dark sky (Sun below {sun_max_alt:g} deg) at the site: " + ", ".join(parts)
 
 
 def predict_all(elems, site, jd_start, hours=24.0, min_elevation=20.0, step_s=10.0,
@@ -711,20 +719,20 @@ def format_summary(passes, title, tables=False):
     lines = [f"{title}: {len(passes)} visible pass(es)"]
     if not passes:
         lines.append("  none in the window")
-    lines.append("  highest at (UTC)          object                     number  alt  az   "
-                 "RA       Dec     rate    visible (UTC)        elements")
+    lines.append("  highest at                    object                     number  alt  az   "
+                 "RA       Dec     rate    visible              elements")
     for p in passes:
-        t = p["max_utc"].replace(" UTC", "")
         lines.append(
-            f"  {t:<25} {p.get('name', '')[:26]:<26} {p.get('norad_str', ''):>6} "
+            f"  {si.when(p['max_jd'], ms=False):<29} {p.get('name', '')[:26]:<26} "
+            f"{p.get('norad_str', ''):>6} "
             f"{p['max_alt']:4.0f} {p['max_az']:4.0f}  {p['ra_at_max']:7.2f} "
             f"{p['dec_at_max']:+7.2f}  {(p.get('rate_deg_s_at_max') or 0):5.2f}/s  "
-            f"{p['start_utc'][11:19]}-{p['end_utc'][11:19]}  "
+            f"{_clock(_jd(p, 'start'))}-{_clock(_jd(p, 'end'))}  "
             f"{p.get('epoch_age_days', 0):+.1f} d")
         if tables:
             for row in p["table"]:
-                lines.append(f"      {row['utc']}  alt {row['alt']:5.1f}  az {row['az']:5.1f}  "
-                             f"RA {row['ra']:8.3f}  Dec {row['dec']:+7.3f}")
+                lines.append(f"      {si.when(row['jd'], ms=False)}  alt {row['alt']:5.1f}  "
+                             f"az {row['az']:5.1f}  RA {row['ra']:8.3f}  Dec {row['dec']:+7.3f}")
     lines.append("Elements a few days old or more: the path across the sky stays close, but "
                  "the TIME can be off by minutes (classified objects manoeuvre). Be pointed "
                  "early.")
@@ -773,11 +781,29 @@ def load_fit(path):
     return s, doc.get("name", "fit"), res
 
 
-def _parse_utc(text):
-    t = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
-    if t.tzinfo is None:
-        t = t.replace(tzinfo=dt.timezone.utc)
-    return 2440587.5 + t.timestamp() / 86400.0
+def _zoned(jd):
+    return si.to_zone(si.so.jd_to_utc(jd), si.OUT_TZ)
+
+
+def _hm(jd, date=False, zone=True):
+    """'HH:MM' (or 'MM-DD HH:MM') in the output zone, with the zone after it."""
+    t = _zoned(jd)
+    text = t.strftime("%m-%d %H:%M" if date else "%H:%M")
+    return f"{text} {si.zone_label(t)}" if zone else text
+
+
+def _clock(jd):
+    """'HH:MM:SS' in the output zone (no zone: it is in the column heading)."""
+    return _zoned(jd).strftime("%H:%M:%S")
+
+
+def _jd(p, which):
+    """A pass's start/end JD (older predictions.json files only have text)."""
+    v = p.get(f"{which}_jd")
+    if v is not None:
+        return v
+    t = dt.datetime.strptime(p[f"{which}_utc"].replace(" UTC", ""), "%Y-%m-%d %H:%M:%S.%f")
+    return 2440587.5 + t.replace(tzinfo=dt.timezone.utc).timestamp() / 86400.0
 
 
 def format_passes(passes, name):
@@ -792,13 +818,14 @@ def format_passes(passes, name):
         elif p.get("timing_sigma_s") is not None:
             unc = (f"  timing +- {p['timing_sigma_s']:.0f} s (1 sigma), cross-track "
                    f"+- {p.get('cross_sigma_deg')} deg")
-        lines.append(f"  {p['start_utc']} -> {p['end_utc']}: highest {p['max_alt']:.0f} deg "
-                     f"at az {p['max_az']:.0f} ({p['max_utc']}), RA {p['ra_at_max']:.2f} "
+        lines.append(f"  {si.when(_jd(p, 'start'), ms=False)} -> {_clock(_jd(p, 'end'))}: "
+                     f"highest {p['max_alt']:.0f} deg "
+                     f"at az {p['max_az']:.0f} ({_clock(p['max_jd'])}), RA {p['ra_at_max']:.2f} "
                      f"Dec {p['dec_at_max']:+.2f} (J2000), range {p['range_km_at_max']:.0f} km"
                      + unc)
         for t in p["table"]:
-            lines.append(f"      {t['utc']}  alt {t['alt']:5.1f}  az {t['az']:5.1f}  "
-                         f"RA {t['ra']:8.3f}  Dec {t['dec']:+7.3f}")
+            lines.append(f"      {si.when(t['jd'], ms=False)}  alt {t['alt']:5.1f}  "
+                         f"az {t['az']:5.1f}  RA {t['ra']:8.3f}  Dec {t['dec']:+7.3f}")
     return "\n".join(lines)
 
 
@@ -843,6 +870,27 @@ def _select(els, norad=None, name=None):
     return els
 
 
+def window(start, end=None, hours=24.0, tz="local"):
+    """(jd_start, hours) from the command line: start default now; an end
+    replaces hours (a bare time of day before the start = the next day)."""
+    import re
+    jd0 = si.parse_time(start, tz) if start else \
+        2440587.5 + dt.datetime.now(dt.timezone.utc).timestamp() / 86400.0
+    if end:
+        if re.fullmatch(r"\s*\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?\s*", end):
+            # A bare time of day counts from the start's date (in that zone).
+            day = si.to_zone(si.so.jd_to_utc(jd0), tz).date()
+            jd1 = si.parse_time(f"{day.isoformat()}T{end.strip()}", tz)
+            while jd1 <= jd0:
+                jd1 += 1.0
+        else:
+            jd1 = si.parse_time(end, tz)
+        if jd1 <= jd0:
+            raise SystemExit(f"--end {end} is not after --start")
+        hours = (jd1 - jd0) * 24.0
+    return jd0, hours
+
+
 def cmd_predict(a):
     fit_res = None
     els = None
@@ -867,13 +915,13 @@ def cmd_predict(a):
         site = {"latitude_deg": a.lat, "longitude_deg": a.lon, "elevation_m": a.elev}
     else:
         raise SystemExit("give --site-from OBS.json or --lat/--lon (east positive)")
-    jd0 = _parse_utc(a.start) if a.start else \
-        2440587.5 + dt.datetime.now(dt.timezone.utc).timestamp() / 86400.0
-    sky = Sky(site, jd0, a.hours)
-    dark = darkness_text(sky, a.sun_alt)
+    jd0, hours = window(a.start, a.end, a.hours, a.in_tz)
+    sky = Sky(site, jd0, hours)
+    dark = (f"Window: {si.when(jd0, ms=False)} to {si.when(jd0 + hours / 24.0, ms=False)}"
+            f" ({hours:g} h)\n" + darkness_text(sky, a.sun_alt))
     if els is not None and len(els) > 1:
         print(f"{len(els)} element sets; predicting all of them")
-        passes = predict_all(els, site, jd0, a.hours, a.min_elevation,
+        passes = predict_all(els, site, jd0, hours, a.min_elevation,
                              sun_max_alt=a.sun_alt, table_step_s=a.step,
                              min_rev_per_day=0 if a.all_orbits else MIN_REV_PER_DAY,
                              log=print, sky=sky)
@@ -882,7 +930,7 @@ def cmd_predict(a):
     else:
         if els is not None:
             satrec, name = els[0].satrec, els[0].name
-        passes = predict(satrec, site, jd0, a.hours, a.min_elevation, sun_max_alt=a.sun_alt,
+        passes = predict(satrec, site, jd0, hours, a.min_elevation, sun_max_alt=a.sun_alt,
                          fit_result=fit_res, table_step_s=a.step, sky=sky)
         text = format_passes(passes, name)
     text = dark + "\n" + text
@@ -896,11 +944,15 @@ def cmd_predict(a):
         with open(os.path.join(a.out, "predictions.csv"), "w", newline="") as f:
             import csv
             w = csv.writer(f)
-            w.writerow(["max_utc", "name", "norad", "max_alt", "max_az", "ra_at_max",
+            zoned = si.OUT_TZ.lower() != "utc"     # then also the times in --out-tz
+            w.writerow((["max_time", "start_time", "end_time"] if zoned else []) +
+                       ["max_utc", "name", "norad", "max_alt", "max_az", "ra_at_max",
                         "dec_at_max", "rate_deg_s", "start_utc", "end_utc", "range_km",
                         "elements_age_days", "timing_sigma_s"])
             for p in passes:
-                w.writerow([p["max_utc"], p.get("name", ""), p.get("norad_str", ""),
+                w.writerow(([si.when(p["max_jd"], ms=False), si.when(_jd(p, "start"), ms=False),
+                             si.when(_jd(p, "end"), ms=False)] if zoned else []) +
+                           [p["max_utc"], p.get("name", ""), p.get("norad_str", ""),
                             p["max_alt"], p["max_az"], p["ra_at_max"], p["dec_at_max"],
                             p.get("rate_deg_s_at_max"), p["start_utc"], p["end_utc"],
                             p["range_km_at_max"], p.get("epoch_age_days", ""),
@@ -938,8 +990,22 @@ def main(argv=None):
     p.add_argument("--lat", type=float)
     p.add_argument("--lon", type=float, help="east positive")
     p.add_argument("--elev", type=float, default=0.0)
-    p.add_argument("--start", help="UTC start, ISO (default now)")
-    p.add_argument("--hours", type=float, default=24.0)
+    p.add_argument("--start", help="window start (default now): 2026-11-04T18:00, "
+                                   "'2026-11-04 18:00' or 18:00 (today); LOCAL time unless "
+                                   "--utc / --in-tz, or the time carries Z or an offset")
+    p.add_argument("--end", help="window end, same forms as --start (replaces --hours; a "
+                                 "time of day earlier than the start means the next day)")
+    p.add_argument("--hours", type=float, default=24.0, help="window length (24)")
+    p.add_argument("--in-tz", default="local",
+                   help="zone of --start/--end without an offset: local (default, this "
+                        "computer's zone), utc, an offset (UTC-5, UTC+05:30) or a name "
+                        "(America/New_York; Windows: pip install tzdata)")
+    p.add_argument("--utc", dest="in_tz", action="store_const", const="utc",
+                   help="--start/--end are UTC (= --in-tz utc)")
+    p.add_argument("--out-tz", default="utc",
+                   help="zone of the times in the console and predictions.txt/.csv: utc "
+                        "(default, for sharing), local, an offset (UTC-5) or a name. "
+                        "predictions.json is always UTC")
     p.add_argument("--min-elevation", type=float, default=20.0)
     p.add_argument("--sun-alt", type=float, default=-6.0,
                    help="the sky counts as dark with the Sun below this altitude, deg "
@@ -947,6 +1013,7 @@ def main(argv=None):
     p.add_argument("--step", type=float, default=30.0, help="pointing table step, s")
     p.add_argument("--out", help="also write predictions.txt/.json here")
     a = ap.parse_args(argv)
+    si.set_output_tz(getattr(a, "out_tz", "utc"))
     (cmd_fit if a.cmd == "fit" else cmd_predict)(a)
 
 

@@ -1309,7 +1309,98 @@ def rde_report(results, station, t_unc, time_standard="1"):
 # --------------------------------------------------------------------------- #
 
 def _utc(jd):
+    """UTC text for data files (JSON, element-set comments): always UTC."""
     return so.utc_str(jd)
+
+
+# --------------------------------------------------------------------------- #
+# Time zones: input times and human-readable output
+# --------------------------------------------------------------------------- #
+# Machine-readable data (JSON, IOD, R.D.E., OMM/TLE, the SeeSat-L draft) is
+# always UTC. Times typed on the command line are LOCAL by default (the
+# laptop's own zone) unless they carry an offset/"Z" or --in-tz says
+# otherwise; human-readable reports use --out-tz (UTC by default, so they
+# can be shared as they are).
+
+OUT_TZ = "utc"
+
+
+def tz_of(spec):
+    """'utc', 'local', an offset ('-05:00', 'UTC-5', '+0530') or an IANA
+    name ('America/New_York') -> tzinfo, or the string 'local'."""
+    import re
+    text = (spec or "utc").strip()
+    low = text.lower()
+    if low in ("utc", "z", "gmt", "ut"):
+        return dt.timezone.utc
+    if low == "local":
+        return "local"
+    m = re.fullmatch(r"(?:utc|gmt)?\s*([+-])(\d{1,2})(?::?(\d{2}))?", low)
+    if m:
+        mins = int(m.group(2)) * 60 + int(m.group(3) or 0)
+        return dt.timezone((1 if m.group(1) == "+" else -1) * dt.timedelta(minutes=mins))
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo(text)
+    except Exception:
+        raise SystemExit(f"unknown time zone {spec!r}: use utc, local, an offset such as "
+                         "UTC-5, or a name such as America/New_York (on Windows, names "
+                         "need 'pip install tzdata')")
+
+
+def to_zone(t_utc, tz):
+    z = tz_of(tz) if isinstance(tz, str) or tz is None else tz
+    return t_utc.astimezone() if z == "local" else t_utc.astimezone(z)
+
+
+def zone_label(t):
+    """Short zone label for an aware datetime: 'UTC', 'EST', or 'UTC-05:00'
+    (Windows reports long names such as 'Eastern Standard Time')."""
+    off = t.utcoffset() or dt.timedelta(0)
+    name = t.tzname() or ""
+    if off == dt.timedelta(0) and name.upper() in ("UTC", "GMT", "Z", ""):
+        return "UTC"
+    if name and len(name) <= 5 and not name.upper().startswith(("UTC", "GMT", "+", "-")):
+        return name
+    mins = int(off.total_seconds() // 60)
+    sign = "+" if mins >= 0 else "-"
+    return f"UTC{sign}{abs(mins) // 60:02d}:{abs(mins) % 60:02d}"
+
+
+def when(jd, tz=None, ms=True):
+    """A time for human-readable output, in ``tz`` (default OUT_TZ), with
+    its zone written after it."""
+    t = to_zone(so.jd_to_utc(jd), tz if tz is not None else OUT_TZ)
+    text = t.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3] if ms else t.strftime("%Y-%m-%d %H:%M:%S")
+    return f"{text} {zone_label(t)}"
+
+
+def set_output_tz(spec):
+    global OUT_TZ
+    tz_of(spec)                          # validate now, not at the first report
+    OUT_TZ = spec or "utc"
+
+
+def parse_time(text, tz="local"):
+    """A command-line time -> JD. ISO forms ('2026-11-04T22:00', '2026-11-04
+    22:00:00', with seconds or not) or just a time of day ('22:00', today in
+    that zone). An explicit offset or 'Z' wins; otherwise the time is in
+    ``tz`` (local by default)."""
+    import re
+    t = text.strip()
+    z = tz_of(tz)
+    if re.fullmatch(r"\d{1,2}:\d{2}(:\d{2}(\.\d+)?)?", t):
+        today = to_zone(dt.datetime.now(dt.timezone.utc), z).date()
+        t = f"{today.isoformat()}T{t}"
+    if t.endswith(("Z", "z")):
+        t = t[:-1] + "+00:00"
+    try:
+        d = dt.datetime.fromisoformat(t)
+    except ValueError:
+        raise SystemExit(f"cannot read the time {text!r}: use e.g. 2026-11-04T22:00 or 22:00")
+    if d.tzinfo is None:
+        d = d.astimezone() if z == "local" else d.replace(tzinfo=z)
+    return 2440587.5 + d.timestamp() / 86400.0
 
 
 def _cadence_s(res):
@@ -1483,10 +1574,12 @@ def _write_lightcurve(r, out):
     name = f"lightcurve_{r['id']}.csv"
     with open(os.path.join(out, name), "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["kind", "utc", "jd", "seconds", "mag", "mag_err", "frame", "full",
-                    "saturated"])
+        local = (OUT_TZ or "utc").lower() != "utc"
+        w.writerow(["kind", "utc"] + (["time"] if local else []) +
+                   ["jd", "seconds", "mag", "mag_err", "frame", "full", "saturated"])
         for kind, jd, mag, err, fname, full, sat in rows:
-            w.writerow([kind, _utc(jd), f"{jd:.8f}", f"{(jd - t0) * SECONDS_PER_DAY:.3f}",
+            w.writerow([kind, _utc(jd)] + ([when(jd)] if local else []) +
+                       [f"{jd:.8f}", f"{(jd - t0) * SECONDS_PER_DAY:.3f}",
                         f"{mag:.3f}", "" if err is None else f"{err:.3f}", fname or "",
                         "" if full is None else int(bool(full)),
                         "" if sat is None else int(bool(sat))])
@@ -1505,7 +1598,7 @@ def _write_lightcurve(r, out):
                         yerr=[x[3] or 0 for x in fr], fmt="o", ms=4, color="C3",
                         label="per frame")
         ax.invert_yaxis()
-        ax.set_xlabel(f"seconds after {_utc(t0)}")
+        ax.set_xlabel(f"seconds after {when(t0)}")
         ax.set_ylabel("magnitude")
         lc = (r.get("photometry") or {}).get("light_curve") or {}
         ttl = f"{r['id']} {r.get('label') or ''}"
@@ -1570,7 +1663,7 @@ def _write_outputs(results, refined, out, archive, session, station, status, t_u
         p = r.get("photometry") or {}
         lc = p.get("light_curve") or {}
         head = (f"track {r['id']} ({r['kind']}): {len(r['obs'])} frames"
-                + (f", {_utc(r['obs'][0]['jd'])}" if r["obs"] else "")
+                + (f", {when(r['obs'][0]['jd'])}" if r["obs"] else "")
                 + f"; SatChecker: {r['satchecker'] or 'no match'}"
                 + f"; position sigma {r['sigma_pos_deg']:.3f} deg")
         lines.append(head)
@@ -1605,7 +1698,7 @@ def _write_outputs(results, refined, out, archive, session, station, status, t_u
         if r.get("refined"):
             rf = r["refined"]
             lines.append(f"  refined: rms {rf['rms_before_deg']:.3f} -> "
-                         f"{rf['rms_after_deg']:.3f} deg at epoch {_utc(rf['epoch_jd'])}")
+                         f"{rf['rms_after_deg']:.3f} deg at epoch {when(rf['epoch_jd'])}")
         rep.append({"id": r["id"], "group": r["group"], "trail": r["trail"],
                     "label": r["label"], "satchecker": r["satchecker"], "candidates": cands,
                     "photometry": r.get("photometry"),
@@ -1741,6 +1834,10 @@ def main(argv=None):
                          "SeeSat-L sample '99999 99 099A' (99099A; '' = blank)")
     ap.add_argument("--no-iod-mag", action="store_true",
                     help="leave magnitude and flash period out of the IOD lines")
+    ap.add_argument("--out-tz", default="utc",
+                    help="time zone for the human-readable reports (identification.txt, "
+                         "light curves, console): utc (default), local, an offset (UTC-5) or a name. "
+                         "IOD/R.D.E./JSON/element files are always UTC")
     ap.add_argument("--no-photometry", action="store_true",
                     help="skip magnitudes and light curves")
     ap.add_argument("--no-link", action="store_true",
@@ -1748,6 +1845,7 @@ def main(argv=None):
     ap.add_argument("--link-interp", action="store_true",
                     help="frame-by-frame tracks may use unsolved frames' interpolated WCS")
     a = ap.parse_args(argv)
+    set_output_tz(a.out_tz)
     out = a.out or os.path.splitext(a.archive)[0] + "_ident"
     os.makedirs(out, exist_ok=True)
     paths = list(a.elements)

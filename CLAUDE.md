@@ -1312,7 +1312,15 @@ POST) archives; names must match `livecap_<YYYYMMDDTHHMMSSZ>.zip` exactly.
   `classfd.zip`) and no `--norad`/`--name` filter it predicts every object
   (`predict_all`, one shared `Sky` grid; < 2 rev/day skipped unless
   `--all-orbits`) and lists all passes in time order with each element set's
-  age (`--tables` for pointing tables; `predictions.csv`). **Element sources**
+  age (`--tables` for pointing tables; `predictions.csv`). **Times:**
+  `--start`/`--end` (an end replaces `--hours`; a bare `HH:MM` counts from the
+  start's date, and an end before the start means the next day) are LOCAL
+  (this computer's zone) unless `--utc` / `--in-tz ZONE` or the text carries
+  `Z`/an offset; printed reports use `--out-tz` (default `utc`, so they can be
+  shared; `local`, `UTC-5`, IANA names — Windows needs `pip install tzdata`;
+  `sat_identify` and `iss_check` take `--out-tz` too). JSON, IOD, R.D.E.,
+  TLE/OMM and the SeeSat-L draft are always UTC (`sat_identify.parse_time` /
+  `when` / `set_output_tz`). **Element sources**
   (every script: `sat_identify --elements`, `sat_orbit fit --start` /
   `predict`, `iss_check --tle`) go through `sat_identify.load_elements` /
   `expand_element_sources`: files (TLE/2LE/3LE, CCSDS OMM XML/KVN/JSON/CSV —

@@ -89,6 +89,7 @@ python tests\sat_identify.py livecap_X.zip --elements c:\users\matt\Downloads\TL
 python tests\sat_orbit.py fit livecap_X_ident\observations.json
 python tests\sat_orbit.py predict livecap_X_ident\orbit\fit.json --site-from livecap_X_ident\observations.json --hours 24
 python tests\sat_orbit.py predict c:\users\matt\Downloads\TLEs\classfd.zip --lat 43.95 --lon -72.667 --elev 330 --hours 48 --min-elevation 25 --out plan
+python tests\sat_orbit.py predict c:\users\matt\Downloads\TLEs\classfd.zip --lat 43.95 --lon -72.667 --elev 330 --start 17:00 --end 06:00 --min-elevation 25 --out plan
 python tests\iss_check.py livecap_X.zip
 ```
 Useful flags — sat_identify: `--points-per-pass N` (IOD lines per track, 0 =
@@ -97,7 +98,7 @@ all), `--time-unc S`, `--status E/G/F/P/B/T`, `--unknown-desig`,
 `--no-photometry`, `--no-link`, `--link-interp`, `--readout-ms`, `--window`,
 `--max-offset`, `--max-cross`, `--download`, `--responses`/`--satchecker`.
 sat_orbit predict: `--norad a,b`, `--name SUBSTR`, `--tables`,
-`--all-orbits`, `--start ISO`, `--step`. sat_orbit fit: `--track ID`,
+`--all-orbits`, `--start`/`--end` (LOCAL time unless `--utc`/`--in-tz`; `HH:MM` allowed, an end before the start = next day), `--out-tz` (default utc; also on sat_identify and iss_check; JSON/IOD/R.D.E./TLE always UTC), `--step`. sat_orbit fit: `--track ID`,
 `--start ELEMENTS`, `--circular`/`--full`, `--name`, `--norad`, `--intldesg`.
 
 ### Element sources (every script)

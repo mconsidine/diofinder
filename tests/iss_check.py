@@ -139,13 +139,15 @@ def compare_orbit(res, truth, site, jd_end, hours=24.0, min_elevation=20.0):
     for t in true:
         near = min(mine, key=lambda m: abs(m["max_jd"] - t["max_jd"]), default=None)
         if near is not None and abs(near["max_jd"] - t["max_jd"]) * 24 < 1.0:
-            rows.append({"true_max_utc": t["max_utc"], "pred_max_utc": near["max_utc"],
+            rows.append({"true_max_utc": t["max_utc"], "true_max_jd": t["max_jd"],
+                         "pred_max_utc": near["max_utc"],
                          "error_s": (near["max_jd"] - t["max_jd"]) * 86400.0,
                          "sigma_s": near.get("timing_sigma_s"),
                          "timing_unknown": near.get("timing_unknown"),
                          "true_max_alt": t["max_alt"], "pred_max_alt": near["max_alt"]})
         else:
-            rows.append({"true_max_utc": t["max_utc"], "pred_max_utc": None,
+            rows.append({"true_max_utc": t["max_utc"], "true_max_jd": t["max_jd"],
+                         "pred_max_utc": None,
                          "true_max_alt": t["max_alt"]})
     out["next_passes"] = rows
     return out
@@ -167,14 +169,14 @@ def run(archive, tle_sources, out, station="9999", readout_ms=0.0, log=print,
     if not elems:
         raise SystemExit("no ISS (25544) element set in " + ", ".join(map(str, tle_sources)))
     iss = elems[0]
-    log(f"ISS element set: {iss.name} epoch {si._utc(iss.epoch_jd)} ({iss.source})")
+    log(f"ISS element set: {iss.name} epoch {si.when(iss.epoch_jd)} ({iss.source})")
     results = si.run(archive, [iss], out, readout_ms=readout_ms, station=station, log=log)
     hits = [r for r in results if r.get("match") and r["match"]["norad"] == ISS_NORAD]
     report = {"archive": os.path.basename(archive), "tle_epoch_utc": si._utc(iss.epoch_jd),
               "tle_source": iss.source, "tracks_found": len(results),
               "iss_tracks": [r["id"] for r in hits]}
     lines = [f"ISS check of {os.path.basename(archive)}",
-             f"ground truth: {iss.name}, epoch {si._utc(iss.epoch_jd)} ({iss.source})"]
+             f"ground truth: {iss.name}, epoch {si.when(iss.epoch_jd)} ({iss.source})"]
     if not hits:
         lines.append("NO ISS TRAIL FOUND among %d track(s)." % len(results))
         for r in results:
@@ -210,7 +212,7 @@ def run(archive, tle_sources, out, station="9999", readout_ms=0.0, log=print,
                         "finder_clock_error_s": -t_off,
                         "rate_deg_s_median": float(np.median(ac["rate_deg_s"]))}
     lines += ["",
-              f"ISS seen in {len(obs)} frames, {si._utc(jd0)} -> {si._utc(jd1)[11:]}, "
+              f"ISS seen in {len(obs)} frames, {si.when(jd0)} -> {si.when(jd1)[11:]}, "
               f"arc {report['arc_s']:.1f} s, rate {report['timing']['rate_deg_s_median']:.2f} "
               f"deg/s (tracks {', '.join(report['iss_tracks'])})",
               f"element set age at the pass: {age:+.2f} d"
@@ -251,10 +253,11 @@ def run(archive, tle_sources, out, station="9999", readout_ms=0.0, log=print,
             if row.get("pred_max_utc"):
                 unk = "  (fit says: timing unknown)" if row.get("timing_unknown") else (
                     f"  (fit sigma {row['sigma_s']:.0f} s)" if row.get("sigma_s") else "")
-                lines.append(f"   next pass {row['true_max_utc']}: predicted "
+                lines.append(f"   next pass {si.when(row['true_max_jd'], ms=False)}: predicted "
                              f"{row['error_s']:+.0f} s off{unk}")
             else:
-                lines.append(f"   next pass {row['true_max_utc']}: the fit misses it")
+                lines.append(f"   next pass {si.when(row['true_max_jd'], ms=False)}: "
+                             "the fit misses it")
     except SystemExit as e:
         lines.append(f"3. ORBIT FROM THIS PASS ALONE: fit failed ({e})")
     # 4. Photometry.
@@ -307,7 +310,7 @@ def _plots(out, ac, obs):
     a2.plot(t, ac["cross_deg"] * 60.0, "o", ms=4, color="C2")
     a2.axhline(0, color="0.5", lw=0.8)
     a2.set_ylabel("across track (arcmin)")
-    a2.set_xlabel(f"seconds after {si._utc(ac['jd'][0])}")
+    a2.set_xlabel(f"seconds after {si.when(ac['jd'][0])}")
     fig.suptitle("ISS: measured positions vs CelesTrak elements", fontsize=10)
     fig.tight_layout()
     fig.savefig(os.path.join(out, "iss_residuals.png"))
@@ -338,7 +341,11 @@ def main(argv=None):
     ap.add_argument("--hours", type=float, default=24.0,
                     help="how far ahead to compare predicted passes (24)")
     ap.add_argument("--min-elevation", type=float, default=20.0)
+    ap.add_argument("--out-tz", default="utc",
+                    help="zone of the times in iss_report.txt and the console: utc "
+                         "(default), local, an offset (UTC-5) or a name; the JSON/IOD files stay UTC")
     a = ap.parse_args(argv)
+    si.set_output_tz(a.out_tz)
     out = a.out or os.path.splitext(a.archive)[0] + "_iss"
     run(a.archive, a.tle, out, a.station, a.readout_ms, hours=a.hours,
         min_elevation=a.min_elevation)

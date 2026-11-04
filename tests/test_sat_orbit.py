@@ -140,7 +140,7 @@ def test_cli_fit_and_predict_files(obs_files, tmp_path):
     assert _pos_err_km(back.satrec, PASSES[0] + 1.0) < 30
     so.main(["predict", str(out / "fit.json"), "--site-from", obs_files[0],
              "--start", si.so.jd_to_utc(PASSES[1] + 0.05).strftime("%Y-%m-%dT%H:%M:%S"),
-             "--hours", "30", "--min-elevation", "25", "--out", str(out)])
+             "--utc", "--hours", "30", "--min-elevation", "25", "--out", str(out)])
     pj = json.loads((out / "predictions.json").read_text())
     assert pj and pj[0]["timing_sigma_s"] < 10
     assert "Visible passes of TEST OBJ" in (out / "predictions.txt").read_text()
@@ -163,7 +163,7 @@ def test_predict_every_object_in_a_file(tmp_path):
     out = tmp_path / "plan"
     so.main(["predict", str(p), "--lat", str(SITE["latitude_deg"]),
              "--lon", str(SITE["longitude_deg"]), "--start",
-             si.so.jd_to_utc(start).strftime("%Y-%m-%dT%H:%M:%S"), "--hours", "30",
+             si.so.jd_to_utc(start).strftime("%Y-%m-%dT%H:%M:%SZ"), "--hours", "30",
              "--min-elevation", "25", "--name", "noss", "--out", str(out)])
     rows = (out / "predictions.csv").read_text().splitlines()
     assert len(rows) == 1 + len(got) and "NOSS" in rows[1]
@@ -175,10 +175,90 @@ def test_daylight_window_says_so(tmp_path, capsys):
     # 2026-11-02 15:00-19:00 UTC is daytime at the test site (10:00-14:00 EST).
     so.main(["predict", str(tmp_path) + os.sep, "--lat", str(SITE["latitude_deg"]),
              "--lon", str(SITE["longitude_deg"]), "--start", "2026-11-02T15:00:00",
-             "--hours", "4"])
+             "--hours", "4", "--utc"])
     out = capsys.readouterr().out
     assert "NO DARK SKY" in out and "--start" in out
     assert out.count(": 0 visible pass(es)") == 1 and "\n: 0" not in out   # titled
     so.main(["predict", str(p), "--lat", str(SITE["latitude_deg"]), "--lon",
-             str(SITE["longitude_deg"]), "--start", "2026-11-02T20:00:00", "--hours", "12"])
+             str(SITE["longitude_deg"]), "--start", "2026-11-02T20:00:00", "--hours", "12",
+             "--in-tz", "utc"])
     assert "Dark sky (Sun below -6 deg)" in capsys.readouterr().out
+
+
+def _dtz(hours):
+    import datetime as dt
+    return dt.timezone(dt.timedelta(hours=hours))
+
+
+def test_command_line_times_local_by_default_utc_on_request(monkeypatch):
+    import datetime as dt
+    import time
+    if not hasattr(time, "tzset"):
+        pytest.skip("needs time.tzset (not on Windows)")
+    monkeypatch.setenv("TZ", "EST5EDT")
+    time.tzset()
+    try:
+        utc = si.parse_time("2026-11-04T23:00:00Z")
+        assert si.parse_time("2026-11-04T18:00") == pytest.approx(utc, abs=1e-8)  # local EST
+        assert si.parse_time("2026-11-04 23:00", "utc") == pytest.approx(utc, abs=1e-8)
+        assert si.parse_time("2026-11-04T18:00-05:00", "utc") == pytest.approx(utc, abs=1e-8)
+        assert si.parse_time("2026-11-04T19:00", "-04:00") == pytest.approx(utc, abs=1e-8)
+        try:
+            assert si.parse_time("2026-11-04T18:00", "America/New_York") == \
+                pytest.approx(utc, abs=1e-8)
+        except SystemExit:
+            pass                                    # no tz database installed here
+        today = dt.datetime.now().astimezone().date()
+        t = si.so.jd_to_utc(si.parse_time("21:30")).astimezone()
+        assert (t.date(), t.hour, t.minute) == (today, 21, 30)
+        # --end as a bare time earlier than --start: the next morning.
+        _, hours = so.window("2026-11-04T17:00", "06:00", 24.0, "local")
+        assert hours == pytest.approx(13.0, abs=1e-6)
+        assert so.window("2025-06-01T17:00", "07:00")[1] == pytest.approx(14.0)  # not today
+        assert so.window("2025-06-01T01:00", "07:00")[1] == pytest.approx(6.0)
+        assert so.window("2026-11-04T17:00", "2026-11-05T01:30")[1] == pytest.approx(8.5)
+        with pytest.raises(SystemExit):
+            so.window("2026-11-04T17:00", "2026-11-04T16:00")
+        with pytest.raises(SystemExit):
+            si.parse_time("tonight")
+        # Output zones: UTC by default, local / offset on request.
+        assert si.when(utc, "utc", ms=False) == "2026-11-04 23:00:00 UTC"
+        assert si.when(utc, "local", ms=False) == "2026-11-04 18:00:00 EST"
+        assert si.when(utc, "-05:00", ms=False) == "2026-11-04 18:00:00 UTC-05:00"
+        assert si.when(utc, "UTC+5:30", ms=False) == "2026-11-05 04:30:00 UTC+05:30"
+        with pytest.raises(SystemExit):
+            si.set_output_tz("Mars/Olympus")
+    finally:
+        monkeypatch.delenv("TZ")
+        time.tzset()
+        si.set_output_tz("utc")
+
+
+def test_local_input_utc_output_and_json_stays_utc(tmp_path):
+    p = tmp_path / "classfd.tle"
+    p.write_text(tsi.CLASSFD)
+    t0 = si.so.jd_to_utc(PASSES[0] - 0.02)
+    args = ["predict", str(p), "--norad", "31701", "--lat", str(SITE["latitude_deg"]),
+            "--lon", str(SITE["longitude_deg"]), "--hours", "30", "--min-elevation", "25"]
+    local = t0.astimezone(_dtz(-5)).strftime("%Y-%m-%dT%H:%M:%S")
+    try:
+        so.main(args + ["--start", local, "--in-tz", "UTC-5", "--out", str(tmp_path / "u")])
+        txt_u = (tmp_path / "u" / "predictions.txt").read_text()
+        so.main(args + ["--start", t0.strftime("%Y-%m-%dT%H:%M:%S"), "--utc",
+                        "--out-tz=-05:00", "--out", str(tmp_path / "l")])
+        txt_l = (tmp_path / "l" / "predictions.txt").read_text()
+    finally:
+        si.set_output_tz("utc")
+    ju = json.loads((tmp_path / "u" / "predictions.json").read_text())
+    jl = json.loads((tmp_path / "l" / "predictions.json").read_text())
+    assert ju and [q["max_utc"] for q in ju] == [q["max_utc"] for q in jl]   # same window
+    assert all(q["max_utc"].endswith(" UTC") and q["start_jd"] < q["max_jd"] < q["end_jd"]
+               for q in jl)                                            # JSON: always UTC
+    first = si.so.jd_to_utc(ju[0]["max_jd"])
+    assert first.strftime("%H:%M:%S") in txt_u and "UTC-05:00" not in txt_u
+    assert first.astimezone(_dtz(-5)).strftime("%H:%M:%S") in txt_l
+    assert "UTC-05:00" in txt_l and "Window: " in txt_l
+    rows = (tmp_path / "l" / "predictions.csv").read_text().splitlines()
+    assert rows[0].startswith("max_time,start_time,end_time,max_utc")
+    assert "UTC-05:00" in rows[1] and " UTC," in rows[1]
+    assert (tmp_path / "u" / "predictions.csv").read_text().startswith("max_utc,")
