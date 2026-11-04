@@ -85,6 +85,7 @@ import io
 import json
 import math
 import os
+import re
 import sys
 import urllib.request
 import xml.sax.saxutils as _xml
@@ -231,6 +232,8 @@ def parse_elements_text(text, source):
     [ElementSet]."""
     from sgp4 import omm
     t = text.lstrip("\ufeff").lstrip()
+    if "CCSDS_OEM_VERS" in t[:4000] or re.search(r"<oem[\s>]", t[:4000]):
+        return []          # an OEM ephemeris (state vectors), not elements: sat_orbit predict
     if t.startswith("<"):
         return _omm_to_elements(omm.parse_xml(io.StringIO(text)), source)
     if t.startswith("[") or t.startswith("{"):
@@ -244,7 +247,7 @@ def parse_elements_text(text, source):
 
 
 ELEMENT_SUFFIXES = (".tle", ".tles", ".txt", ".3le", ".2le", ".csv", ".xml", ".json",
-                    ".kvn", ".omm", ".zip", ".gz")
+                    ".kvn", ".omm", ".gp", ".zip", ".gz")      # .gp: PreviSat
 
 
 def _read_texts(path):

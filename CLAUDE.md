@@ -1312,7 +1312,20 @@ POST) archives; names must match `livecap_<YYYYMMDDTHHMMSSZ>.zip` exactly.
   `classfd.zip`) and no `--norad`/`--name` filter it predicts every object
   (`predict_all`, one shared `Sky` grid; < 2 rev/day skipped unless
   `--all-orbits`) and lists all passes in time order with each element set's
-  age (`--tables` for pointing tables; `predictions.csv`). **Times:**
+  age (`--tables` for pointing tables; `predictions.csv`). **Sky region**
+  (sites with buildings): `--sky east|west|north|south` (ne/nw/se/sw or a
+  comma list = their intersection; east/west of the meridian, north/south of
+  the east-west line through the zenith) keeps only passes whose whole
+  visible part lies there; `--sky-mode part` cuts each pass to that stretch
+  instead (`parse_sky` / `in_sky`, applied in `_passes_from`). **CCSDS OEM**
+  (`tests/sat_oem.py`): `sat_orbit ephem ELEMENTS|fit.json` writes SGP4 state
+  vectors every `--step` s (KVN `.oem` or `--xml`; frame TEME default,
+  GCRF/EME2000/ICRF via astropy, ITRF; UTC; start snapped to a whole second;
+  no covariance), and `predict` accepts an OEM (KVN/XML, any segments, UTC/
+  TAI/TT/GPS, calendar or day-of-year epochs; Lagrange at the file's degree,
+  only inside its span — `predict_oem`). OEM files are ignored as element
+  sources; PreviSat `.gp` files are read in folder walks. Tests:
+  `tests/test_sat_oem.py`. **Times:**
   `--start`/`--end` (an end replaces `--hours`; a bare `HH:MM` counts from the
   start's date, and an end before the start means the next day) are LOCAL
   (this computer's zone) unless `--utc` / `--in-tz ZONE` or the text carries

@@ -237,10 +237,10 @@ frame at ~1 deg/s. Synthetic test: 0.7 s clock error recovered to 0.001 s.
 ### Element sources (all scripts)
 
 Files (TLE/2LE/3LE, OMM XML/KVN/JSON/CSV), .zip/.gz of them, folders, URLs
-(cached 2 h), comma lists; newest epoch per object wins. Not accepted (not
-needed yet): ephemerides (CCSDS OEM state vectors, e.g. NASA's ISS
-trajectory file, or SP3) — an even better ISS truth than a TLE, worth adding
-if the TLE comparison ever becomes the limit.
+(cached 2 h), comma lists; newest epoch per object wins. CCSDS OEM
+ephemerides (state vectors) ✅ written by `sat_orbit ephem` and read by
+`sat_orbit predict` (`tests/sat_oem.py`); not yet used as the `iss_check`
+truth (NASA's ISS trajectory OEM would beat the TLE) and SP3 is not read.
 
 ### Hand-tracking a satellite for a long arc — implemented, untested on sky
 

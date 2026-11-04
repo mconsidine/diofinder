@@ -101,6 +101,15 @@ sat_orbit predict: `--norad a,b`, `--name SUBSTR`, `--tables`,
 `--all-orbits`, `--start`/`--end` (LOCAL time unless `--utc`/`--in-tz`; `HH:MM` allowed, an end before the start = next day), `--out-tz` (default utc; also on sat_identify and iss_check; JSON/IOD/R.D.E./TLE always UTC), `--step`. sat_orbit fit: `--track ID`,
 `--start ELEMENTS`, `--circular`/`--full`, `--name`, `--norad`, `--intldesg`.
 
+### Sky region and OEM (added 2026-11-04)
+`sat_orbit predict --sky east` (west/north/south, ne/nw/se/sw, comma lists):
+only passes wholly in that part of the sky (meridian / east-west line through
+the zenith); `--sky-mode part` cuts each pass to it. `sat_orbit ephem` writes
+a CCSDS OEM (state vectors; TEME/GCRF/EME2000/ICRF/ITRF; KVN or `--xml`);
+`predict` reads OEMs (`tests/sat_oem.py`). Not done: OEM covariance blocks,
+reading OEM into `sat_identify` (identification needs elements), an
+azimuth-dependent horizon mask.
+
 ### Element sources (every script)
 Files (TLE/2LE/3LE, CCSDS OMM XML/KVN/JSON/CSV), `.zip`/`.gz` of them,
 folders (walked), URLs (cached 2 h in `~\.diofinder_elements`; offline → use
@@ -183,8 +192,8 @@ note). That archive predates the clock and tone recording (warnings expected).
    (two-pass orbit fit). Then share `identification.txt` / `iss_report.txt`.
 2. Confirm on SeeSat-L: the unknown-object convention (`99999 99 099A`) and
    R.D.E. piece numbering (A=01, skipping I and O — assumed).
-3. Possible later: CCSDS OEM ephemeris input (NASA's ISS trajectory) as a
-   better truth than the TLE; expose `near_jd` (closest-epoch) on the CLI;
+3. Possible later: `iss_check` against NASA's ISS OEM trajectory as a
+   better truth than the TLE (OEM reading itself now exists, `sat_oem.py`); expose `near_jd` (closest-epoch) on the CLI;
    photometry calibration rms investigation on real data; ISS standard
    magnitude/phase model if the photometry check matters.
 4. Not built: on-device satellite identification (deliberately off-device).

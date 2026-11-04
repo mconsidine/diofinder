@@ -144,6 +144,19 @@ def test_cli_fit_and_predict_files(obs_files, tmp_path):
     pj = json.loads((out / "predictions.json").read_text())
     assert pj and pj[0]["timing_sigma_s"] < 10
     assert "Visible passes of TEST OBJ" in (out / "predictions.txt").read_text()
+    # The fit as a CCSDS OEM ephemeris (GCRF), and passes predicted from it.
+    import sat_oem
+    so.main(["ephem", str(out / "fit.json"), "--start",
+             si.so.jd_to_utc(PASSES[1] + 0.05).strftime("%Y-%m-%dT%H:%M:%SZ"),
+             "--hours", "30", "--frame", "GCRF", "--out", str(out / "fit.oem")])
+    seg = sat_oem.read_oem(str(out / "fit.oem"))[0]
+    assert seg["name"] == "TEST OBJ" and seg["object_id"] == "1999-099A"
+    assert any("fit 1 sigma" in c for c in seg["comments"])
+    so.main(["predict", str(out / "fit.oem"), "--site-from", obs_files[0],
+             "--start", si.so.jd_to_utc(PASSES[1] + 0.05).strftime("%Y-%m-%dT%H:%M:%SZ"),
+             "--hours", "30", "--min-elevation", "25", "--out", str(out / "p2")])
+    p2 = json.loads((out / "p2" / "predictions.json").read_text())
+    assert [q["max_utc"] for q in p2] == [q["max_utc"] for q in pj]
 
 
 def test_predict_every_object_in_a_file(tmp_path):

@@ -33,6 +33,17 @@ Two commands:
     pass's timing uncertainty ("02:41:10 +- 85 s"), i.e. how early to be
     pointed and waiting.
 
+    --sky east|west|north|south (or ne/nw/se/sw, or a comma list) keeps only
+    passes lying ENTIRELY in that part of the sky (east/west of the meridian,
+    north/south of the east-west line through the zenith), for a site where
+    buildings hide the rest; --sky-mode part instead cuts every pass to the
+    stretch inside it. ELEMENTS may also be a CCSDS OEM ephemeris (state
+    vectors, KVN or XML), predicted only inside the span it covers.
+
+``ephem``  ELEMENTS (as predict, or fit.json) -> a CCSDS OEM ephemeris:
+    SGP4 state vectors every --step s over the window, frame TEME (default),
+    GCRF/EME2000/ICRF or ITRF, KVN (ephemeris.oem) or --xml. See sat_oem.py.
+
     Times: --start/--end are this computer's LOCAL time unless --utc (or
     --in-tz ZONE), or the time itself carries "Z" or an offset. The printed
     times and predictions.txt/.csv use --out-tz (UTC by default, ready to
@@ -46,6 +57,9 @@ Examples:
       --start 2026-11-03T00:00:00 --hours 36 --min-elevation 25
   python3 tests/sat_orbit.py predict classfd.zip --lat 43.95 --lon -72.667 \\
       --start 17:00 --end 06:00 --out-tz utc        # tonight, local in, UTC out
+  python3 tests/sat_orbit.py predict classfd.zip --lat 43.95 --lon -72.667 \
+      --start 17:00 --end 06:00 --sky east           # only the eastern sky is open
+  python3 tests/sat_orbit.py ephem out/fit.json --start 17:00 --hours 12 --frame GCRF
 
 Needs numpy, astropy, sgp4 (as sat_identify). No network.
 """
@@ -568,18 +582,68 @@ class Sky:
         self.sun_alt = np.degrees(np.arcsin(np.clip(np.sum(self.sun * self.zen, -1), -1, 1)))
 
 
+SKY_HALVES = {"east": "east of the meridian", "west": "west of the meridian",
+              "north": "north of the east-west line through the zenith",
+              "south": "south of the east-west line through the zenith"}
+_SKY_ALIASES = {"e": ("east",), "w": ("west",), "n": ("north",), "s": ("south",),
+                "ne": ("north", "east"), "nw": ("north", "west"), "se": ("south", "east"),
+                "sw": ("south", "west")}
+
+
+def parse_sky(text):
+    """'east', 'north,west', 'ne', ... -> a tuple of halves (their
+    intersection is the allowed part of the sky), or None for all of it."""
+    if not text:
+        return None
+    halves = []
+    for part in str(text).lower().replace(" ", "").split(","):
+        if not part or part in ("all", "any"):
+            continue
+        got = _SKY_ALIASES.get(part, (part,))
+        for h in got:
+            if h not in SKY_HALVES:
+                raise SystemExit(f"--sky {text!r}: use east, west, north, south (or ne, nw, "
+                                 "se, sw; comma lists combine, e.g. east,north)")
+            halves.append(h)
+    halves = tuple(dict.fromkeys(halves))
+    if {"east", "west"} <= set(halves) or {"north", "south"} <= set(halves):
+        raise SystemExit(f"--sky {text!r}: opposite halves leave no sky")
+    return halves or None
+
+
+def in_sky(az, halves):
+    """Boolean mask: azimuth (deg, N=0, E=90) inside every half in ``halves``."""
+    az = np.radians(np.asarray(az, float))
+    m = np.ones(az.shape, bool)
+    for h in halves or ():
+        m &= {"east": np.sin(az) > 0, "west": np.sin(az) < 0,
+              "north": np.cos(az) > 0, "south": np.cos(az) < 0}[h]
+    return m
+
+
+def sky_text(halves, whole=True):
+    if not halves:
+        return ""
+    where = " and ".join(SKY_HALVES[h] for h in halves)
+    return (f"Sky: only passes entirely {where}" if whole else
+            f"Sky: only the part of each pass {where}")
+
+
 def _passes_from(sky, err, r, min_elevation=20.0, sun_max_alt=-6.0, fit_result=None,
-                 table_step_s=30.0):
+                 table_step_s=30.0, region=None, region_whole=True):
     """Visible passes of one object from its propagated TEME positions r
-    (N, 3) on the sky grid (err = SGP4 error codes)."""
+    (N, 3) on the sky grid (err = SGP4 error codes). ``region``: halves of
+    the sky (parse_sky); ``region_whole`` keeps only passes whose whole
+    visible part lies there, otherwise each pass is cut to that part."""
     jd, geom = sky.jd, sky.geom
     ok = err == 0
     dark = sky.sun_alt <= sun_max_alt
     if not np.any(ok & dark):
         return []
-    u, _ = geom.topo_unit(r, jd)
-    alt, az = altaz(u, sky.zen)
-    up = ok & dark & (alt >= min_elevation)
+    with np.errstate(invalid="ignore"):
+        u, _ = geom.topo_unit(r, jd)
+        alt, az = altaz(u, sky.zen)
+        up = ok & dark & (alt >= min_elevation)
     if not np.any(up):
         return []
     g = geom.sat_gcrs(r)
@@ -587,6 +651,9 @@ def _passes_from(sky, err, r, min_elevation=20.0, sun_max_alt=-6.0, fit_result=N
     perp = np.linalg.norm(g - along[:, None] * sky.sun, axis=-1)
     lit = ~((along < 0) & (perp < si.EARTH_RADIUS_KM))
     vis = up & lit
+    inside = in_sky(az, region) if region else None
+    if region and not region_whole:
+        vis = vis & inside
     passes = []
     i = 0
     while i < len(jd):
@@ -596,6 +663,9 @@ def _passes_from(sky, err, r, min_elevation=20.0, sun_max_alt=-6.0, fit_result=N
         j = i
         while j + 1 < len(jd) and vis[j + 1]:
             j += 1
+        if region and (not np.all(inside[i:j + 1]) if region_whole else j == i):
+            i = j + 1              # not wholly inside / a one-sample sliver of a pass
+            continue
         k = i + int(np.argmax(alt[i:j + 1]))
         ra, dec = si.vec_to_radec(u[i:j + 1])
         tab = []
@@ -635,12 +705,33 @@ def _passes_from(sky, err, r, min_elevation=20.0, sun_max_alt=-6.0, fit_result=N
 
 
 def predict(satrec, site, jd_start, hours=24.0, min_elevation=20.0, step_s=10.0,
-            sun_max_alt=-6.0, fit_result=None, table_step_s=30.0, sky=None):
+            sun_max_alt=-6.0, fit_result=None, table_step_s=30.0, sky=None, region=None,
+            region_whole=True):
     """Visible passes of one object. Returns a list of dicts (rise/max/set,
     pointing table, timing sigma when a fit's covariance is given)."""
     sky = sky or Sky(site, jd_start, hours, step_s)
     e, r = si.propagate([satrec], sky.jd)
-    return _passes_from(sky, e[0], r[0], min_elevation, sun_max_alt, fit_result, table_step_s)
+    return _passes_from(sky, e[0], r[0], min_elevation, sun_max_alt, fit_result, table_step_s,
+                        region, region_whole)
+
+
+def predict_oem(segments, site, jd_start, hours=24.0, min_elevation=20.0, step_s=10.0,
+                sun_max_alt=-6.0, table_step_s=30.0, sky=None, region=None,
+                region_whole=True):
+    """Visible passes from a CCSDS OEM ephemeris (sat_oem.read_oem segments),
+    every object in it, sorted by time; only inside the span it covers."""
+    import sat_oem
+    sky = sky or Sky(site, jd_start, hours, step_s)
+    out = []
+    for name, oid, segs in sat_oem.by_object(segments):
+        e, r = sat_oem.teme_positions(segs, sky.jd)
+        for p in _passes_from(sky, e, r, min_elevation, sun_max_alt, None, table_step_s,
+                              region, region_whole):
+            p.update(name=name, norad=None, norad_str=str(oid)[:9], source=segs[0].get("source"),
+                     epoch_age_days=None)
+            out.append(p)
+    out.sort(key=lambda p: p["max_jd"])
+    return out
 
 
 MIN_REV_PER_DAY = 2.0     # slower objects (GEO, high orbits) are skipped by default
@@ -678,7 +769,7 @@ def darkness_text(sky, sun_max_alt=-6.0):
 
 def predict_all(elems, site, jd_start, hours=24.0, min_elevation=20.0, step_s=10.0,
                 sun_max_alt=-6.0, table_step_s=30.0, min_rev_per_day=MIN_REV_PER_DAY,
-                batch=40, log=None, sky=None):
+                batch=40, log=None, sky=None, region=None, region_whole=True):
     """Visible passes of every element set in ``elems``, merged and sorted by
     the time of highest elevation. Each pass also carries name, norad,
     source and the element set's age (days) at the pass."""
@@ -705,7 +796,7 @@ def predict_all(elems, site, jd_start, hours=24.0, min_elevation=20.0, step_s=10
         e, r = si.propagate([x.satrec for x in chunk], sky.jd)
         for i, el in enumerate(chunk):
             for p in _passes_from(sky, e[i], r[i], min_elevation, sun_max_alt, None,
-                                  table_step_s):
+                                  table_step_s, region, region_whole):
                 p.update(name=el.name, norad=el.norad, norad_str=el.norad_str,
                          source=el.source,
                          epoch_age_days=round(p["max_jd"] - el.epoch_jd, 1))
@@ -728,14 +819,16 @@ def format_summary(passes, title, tables=False):
             f"{p['max_alt']:4.0f} {p['max_az']:4.0f}  {p['ra_at_max']:7.2f} "
             f"{p['dec_at_max']:+7.2f}  {(p.get('rate_deg_s_at_max') or 0):5.2f}/s  "
             f"{_clock(_jd(p, 'start'))}-{_clock(_jd(p, 'end'))}  "
-            f"{p.get('epoch_age_days', 0):+.1f} d")
+            + (f"{p['epoch_age_days']:+.1f} d" if p.get("epoch_age_days") is not None
+               else "ephemeris"))
         if tables:
             for row in p["table"]:
                 lines.append(f"      {si.when(row['jd'], ms=False)}  alt {row['alt']:5.1f}  "
                              f"az {row['az']:5.1f}  RA {row['ra']:8.3f}  Dec {row['dec']:+7.3f}")
-    lines.append("Elements a few days old or more: the path across the sky stays close, but "
-                 "the TIME can be off by minutes (classified objects manoeuvre). Be pointed "
-                 "early.")
+    if not passes or any(p.get("epoch_age_days") is not None for p in passes):
+        lines.append("Elements a few days old or more: the path across the sky stays close, "
+                     "but the TIME can be off by minutes (classified objects manoeuvre). Be "
+                     "pointed early.")
     return "\n".join(lines)
 
 
@@ -891,49 +984,76 @@ def window(start, end=None, hours=24.0, tz="local"):
     return jd0, hours
 
 
-def cmd_predict(a):
-    fit_res = None
-    els = None
-    if a.elements.lower().endswith(".json") and os.path.isfile(a.elements):
-        with open(a.elements) as f:
+def _load_source(path, norad=None, name=None):
+    """(els, fit) from a fit.json or element sources; one of them is None."""
+    if path.lower().endswith(".json") and os.path.isfile(path):
+        with open(path) as f:
             head = json.load(f)
         if isinstance(head, dict) and head.get("format") == "diofinder-sat-orbit/1":
-            satrec, name, fit_res = load_fit(a.elements)
-        else:
-            els = si.load_elements([a.elements])
-    else:
-        els = si.load_elements([a.elements])
-    if els is not None:
-        els = _select(els, a.norad, a.name)
-        if not els:
-            raise SystemExit(f"no element set in {a.elements}" + (" matches the --norad/--name filter"
-                                                  if a.norad or a.name else ""))
+            satrec, fname, fit_res = load_fit(path)
+            satrec.intldesg = head.get("intldesg") or ""
+            return None, (satrec, fname, head.get("norad") or 99999, fit_res)
+    els = _select(si.load_elements([path]), norad, name)
+    if not els:
+        raise SystemExit(f"no element set in {path}" + (" matches the --norad/--name filter"
+                                                        if norad or name else ""))
+    return els, None
+
+
+def _site(a):
     if a.site_from:
         with open(a.site_from) as f:
-            site = json.load(f)["site"]
-    elif a.lat is not None and a.lon is not None:
-        site = {"latitude_deg": a.lat, "longitude_deg": a.lon, "elevation_m": a.elev}
-    else:
-        raise SystemExit("give --site-from OBS.json or --lat/--lon (east positive)")
+            return json.load(f)["site"]
+    if a.lat is not None and a.lon is not None:
+        return {"latitude_deg": a.lat, "longitude_deg": a.lon, "elevation_m": a.elev}
+    raise SystemExit("give --site-from OBS.json or --lat/--lon (east positive)")
+
+
+def cmd_predict(a):
+    import sat_oem
+    region = parse_sky(a.sky)
+    whole = a.sky_mode == "whole"
+    site = _site(a)
     jd0, hours = window(a.start, a.end, a.hours, a.in_tz)
     sky = Sky(site, jd0, hours)
-    dark = (f"Window: {si.when(jd0, ms=False)} to {si.when(jd0 + hours / 24.0, ms=False)}"
+    head = (f"Window: {si.when(jd0, ms=False)} to {si.when(jd0 + hours / 24.0, ms=False)}"
             f" ({hours:g} h)\n" + darkness_text(sky, a.sun_alt))
-    if els is not None and len(els) > 1:
-        print(f"{len(els)} element sets; predicting all of them")
-        passes = predict_all(els, site, jd0, hours, a.min_elevation,
-                             sun_max_alt=a.sun_alt, table_step_s=a.step,
-                             min_rev_per_day=0 if a.all_orbits else MIN_REV_PER_DAY,
-                             log=print, sky=sky)
-        title = os.path.basename(os.path.normpath(a.elements.rstrip("\\/"))) or a.elements
-        text = format_summary(passes, title, tables=a.tables)
+    if region:
+        head += "\n" + sky_text(region, whole)
+    kw = dict(sun_max_alt=a.sun_alt, table_step_s=a.step, sky=sky, region=region,
+              region_whole=whole)
+    if sat_oem.is_oem(a.elements):
+        segs = sat_oem.read_oem(a.elements)
+        objs = sat_oem.by_object(segs)
+        keep = [x for x in objs if (not a.name or a.name.lower() in x[0].lower())]
+        segs = [sg for x in keep for sg in x[2]]
+        if not segs:
+            raise SystemExit(f"no object in {a.elements} matches --name {a.name}")
+        lo, hi = sat_oem.coverage(segs)
+        head += (f"\nEphemeris (CCSDS OEM, {len(keep)} object(s)) covers "
+                 f"{si.when(lo, ms=False)} to {si.when(hi, ms=False)}")
+        if hi < jd0 or lo > jd0 + hours / 24.0:
+            head += "  -- NOT the window asked for: no pass can be listed"
+        passes = predict_oem(segs, site, jd0, hours, a.min_elevation, **kw)
+        if len(keep) == 1:
+            text = format_passes(passes, keep[0][0])
+        else:
+            text = format_summary(passes, os.path.basename(a.elements), tables=a.tables)
     else:
-        if els is not None:
-            satrec, name = els[0].satrec, els[0].name
-        passes = predict(satrec, site, jd0, hours, a.min_elevation, sun_max_alt=a.sun_alt,
-                         fit_result=fit_res, table_step_s=a.step, sky=sky)
-        text = format_passes(passes, name)
-    text = dark + "\n" + text
+        els, fit_ = _load_source(a.elements, a.norad, a.name)
+        if els is not None and len(els) > 1:
+            print(f"{len(els)} element sets; predicting all of them")
+            passes = predict_all(els, site, jd0, hours, a.min_elevation,
+                                 min_rev_per_day=0 if a.all_orbits else MIN_REV_PER_DAY,
+                                 log=print, **kw)
+            title = os.path.basename(os.path.normpath(a.elements.rstrip("\\/"))) or a.elements
+            text = format_summary(passes, title, tables=a.tables)
+        else:
+            satrec, name, fit_res = (els[0].satrec, els[0].name, None) if els else \
+                (fit_[0], fit_[1], fit_[3])
+            passes = predict(satrec, site, jd0, hours, a.min_elevation, fit_result=fit_res, **kw)
+            text = format_passes(passes, name)
+    text = head + "\n" + text
     print(text)
     if a.out:
         os.makedirs(a.out, exist_ok=True)
@@ -950,13 +1070,75 @@ def cmd_predict(a):
                         "dec_at_max", "rate_deg_s", "start_utc", "end_utc", "range_km",
                         "elements_age_days", "timing_sigma_s"])
             for p in passes:
+                age = p.get("epoch_age_days")
                 w.writerow(([si.when(p["max_jd"], ms=False), si.when(_jd(p, "start"), ms=False),
                              si.when(_jd(p, "end"), ms=False)] if zoned else []) +
                            [p["max_utc"], p.get("name", ""), p.get("norad_str", ""),
                             p["max_alt"], p["max_az"], p["ra_at_max"], p["dec_at_max"],
                             p.get("rate_deg_s_at_max"), p["start_utc"], p["end_utc"],
-                            p["range_km_at_max"], p.get("epoch_age_days", ""),
+                            p["range_km_at_max"], "" if age is None else age,
                             p.get("timing_sigma_s") or ""])
+
+
+MAX_EPHEM_OBJECTS = 100
+
+
+def cmd_ephem(a):
+    """Write a CCSDS OEM (state vectors every --step s) from elements or a fit."""
+    import sat_oem
+    jd0, hours = window(a.start, a.end, a.hours, a.in_tz)
+    jd1 = jd0 + hours / 24.0
+    els, fit_ = _load_source(a.elements, a.norad, a.name)
+    if els is not None:
+        if len(els) > MAX_EPHEM_OBJECTS:
+            raise SystemExit(f"{len(els)} objects: pick some with --norad / --name "
+                             f"(at most {MAX_EPHEM_OBJECTS} in one OEM)")
+        targets = [(e.satrec, e.name or str(e.norad), e.norad,
+                    f"SGP4 samples of the {e.source} element set, epoch {si._utc(e.epoch_jd)}")
+                   for e in els]
+    else:
+        s, name, norad, res = fit_
+        with open(a.elements) as f:
+            sg = json.load(f).get("sigma") or {}
+        targets = [(s, name, norad,
+                    f"SGP4 samples of a diofinder sat_orbit fit, epoch {si._utc(res['epoch_jd'])}"
+                    f"; fit 1 sigma: period {sg.get('period_s', float('nan')):.1f} s, "
+                    f"inclination {sg.get('inclination_deg', float('nan')):.3f} deg")]
+    segs = []
+    for s, name, norad, note in targets:
+        oid = sat_oem._object_id(s, name, norad) or str(norad)
+        segs.append(sat_oem.segment_from_satrec(
+            s, name, oid, jd0, jd1, a.step, a.frame,
+            comments=[note, "SGP4 is a mean-element theory: positions are good to about "
+                      "a km near the epoch, worse by km per day away from it"]))
+    out = a.out or ("ephemeris_oem.xml" if a.xml else "ephemeris.oem")
+    if os.path.isdir(out) or out.endswith(("/", "\\")) or \
+            "." not in os.path.basename(out.rstrip("/\\")):       # no extension: a folder
+        os.makedirs(out, exist_ok=True)
+        out = os.path.join(out, "ephemeris_oem.xml" if a.xml else "ephemeris.oem")
+    (sat_oem.write_xml if a.xml else sat_oem.write_kvn)(segs, out)
+    n = sum(len(sg["jd"]) for sg in segs)
+    print(f"{len(segs)} object(s), {n} state vectors every {a.step:g} s, frame {segs[0]['frame']}, "
+          f"{si.when(jd0, ms=False)} to {si.when(jd1, ms=False)} -> {out}")
+
+
+def _window_args(p):
+    p.add_argument("--start", help="window start (default now): 2026-11-04T18:00, "
+                                   "'2026-11-04 18:00' or 18:00 (today); LOCAL time unless "
+                                   "--utc / --in-tz, or the time carries Z or an offset")
+    p.add_argument("--end", help="window end, same forms as --start (replaces --hours; a "
+                                 "time of day earlier than the start means the next day)")
+    p.add_argument("--hours", type=float, default=24.0, help="window length (24)")
+    p.add_argument("--in-tz", default="local",
+                   help="zone of --start/--end without an offset: local (default, this "
+                        "computer's zone), utc, an offset (UTC-5, UTC+05:30) or a name "
+                        "(America/New_York; Windows: pip install tzdata)")
+    p.add_argument("--utc", dest="in_tz", action="store_const", const="utc",
+                   help="--start/--end are UTC (= --in-tz utc)")
+    p.add_argument("--out-tz", default="utc",
+                   help="zone of the times in the console and predictions.txt/.csv: utc "
+                        "(default, for sharing), local, an offset (UTC-5) or a name. "
+                        "predictions.json and OEM files are always UTC")
 
 
 def main(argv=None):
@@ -976,9 +1158,17 @@ def main(argv=None):
     g.add_argument("--full", action="store_true", help="force all 6 elements")
     f.add_argument("--out", help="output folder (default <first obs folder>/orbit)")
     p = sub.add_parser("predict", help="upcoming visible passes")
-    p.add_argument("elements", help="fit.json, or element sources: TLE/3LE/OMM files, "
+    p.add_argument("elements", help="fit.json, a CCSDS OEM ephemeris (.oem / OEM XML), or "
+                                    "element sources: TLE/3LE/OMM files, "
                                     ".zip/.gz of them, folders, URLs, comma-separated "
                                     "(e.g. classfd.zip,inttles.zip); newest epoch wins")
+    p.add_argument("--sky", help="only this part of the sky (buildings in the way): east, "
+                                 "west (of the meridian), north, south (of the east-west line "
+                                 "through the zenith), or ne/nw/se/sw, or a comma list "
+                                 "(east,north)")
+    p.add_argument("--sky-mode", choices=("whole", "part"), default="whole",
+                   help="whole (default): only passes entirely in --sky; part: every pass "
+                        "cut to the stretch inside --sky")
     p.add_argument("--norad", help="only these catalog numbers (comma-separated); without "
                                    "--norad/--name every object in the file is predicted")
     p.add_argument("--name", help="only objects whose name contains this (e.g. NOSS, USA)")
@@ -990,31 +1180,28 @@ def main(argv=None):
     p.add_argument("--lat", type=float)
     p.add_argument("--lon", type=float, help="east positive")
     p.add_argument("--elev", type=float, default=0.0)
-    p.add_argument("--start", help="window start (default now): 2026-11-04T18:00, "
-                                   "'2026-11-04 18:00' or 18:00 (today); LOCAL time unless "
-                                   "--utc / --in-tz, or the time carries Z or an offset")
-    p.add_argument("--end", help="window end, same forms as --start (replaces --hours; a "
-                                 "time of day earlier than the start means the next day)")
-    p.add_argument("--hours", type=float, default=24.0, help="window length (24)")
-    p.add_argument("--in-tz", default="local",
-                   help="zone of --start/--end without an offset: local (default, this "
-                        "computer's zone), utc, an offset (UTC-5, UTC+05:30) or a name "
-                        "(America/New_York; Windows: pip install tzdata)")
-    p.add_argument("--utc", dest="in_tz", action="store_const", const="utc",
-                   help="--start/--end are UTC (= --in-tz utc)")
-    p.add_argument("--out-tz", default="utc",
-                   help="zone of the times in the console and predictions.txt/.csv: utc "
-                        "(default, for sharing), local, an offset (UTC-5) or a name. "
-                        "predictions.json is always UTC")
+    _window_args(p)
     p.add_argument("--min-elevation", type=float, default=20.0)
     p.add_argument("--sun-alt", type=float, default=-6.0,
                    help="the sky counts as dark with the Sun below this altitude, deg "
                         "(-6 civil twilight; -3 allows brighter twilight, -12 darker)")
     p.add_argument("--step", type=float, default=30.0, help="pointing table step, s")
-    p.add_argument("--out", help="also write predictions.txt/.json here")
+    p.add_argument("--out", help="also write predictions.txt/.json/.csv here")
+    e = sub.add_parser("ephem", help="write a CCSDS OEM ephemeris (state vectors)")
+    e.add_argument("elements", help="fit.json or element sources (as predict)")
+    e.add_argument("--norad", help="only these catalog numbers (comma-separated)")
+    e.add_argument("--name", help="only objects whose name contains this")
+    _window_args(e)
+    e.add_argument("--step", type=float, default=60.0, help="seconds between states (60)")
+    e.add_argument("--frame", default="TEME", type=str.upper,
+                   choices=("TEME", "GCRF", "EME2000", "ICRF", "ITRF"),
+                   help="reference frame (TEME, SGP4's own, default; GCRF/EME2000/ICRF "
+                        "inertial J2000 axes; ITRF Earth-fixed)")
+    e.add_argument("--xml", action="store_true", help="OEM XML instead of KVN text")
+    e.add_argument("--out", help="output file, or a folder (no extension) for ephemeris.oem / ephemeris_oem.xml (default: ephemeris.oem here)")
     a = ap.parse_args(argv)
     si.set_output_tz(getattr(a, "out_tz", "utc"))
-    (cmd_fit if a.cmd == "fit" else cmd_predict)(a)
+    {"fit": cmd_fit, "predict": cmd_predict, "ephem": cmd_ephem}[a.cmd](a)
 
 
 if __name__ == "__main__":
