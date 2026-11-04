@@ -1,4 +1,5 @@
-# Allow the diofinder daemon to update the system clock from SkySafari's
-# LX200 :SL/:SG/:SC time-sync commands (needed in field/AP mode where NTP
-# is not available).  Scoped to just this one helper script.
+# Allow diofinder to set the system clock (needed in field/AP mode where NTP
+# is not available): the web UI's "set from this device" (--offset SECONDS)
+# and SkySafari's :SL/:SG/:SC sync as a fallback (absolute time). Scoped to
+# just this one helper script, which validates its arguments.
 diofinder ALL=(root) NOPASSWD: /usr/local/bin/diofinder-set-time

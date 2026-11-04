@@ -142,7 +142,9 @@
     <h2>Clock</h2>
     <p class="hint" style="margin:0 0 8px 0;">
       The finder has no clock battery: its time comes from network time, or
-      from SkySafari when it connects (which only corrects errors over 10&nbsp;s).
+      from SkySafari when it connects (whole seconds only; it corrects errors of
+      2&nbsp;s or more, 10&nbsp;s once this device has set the clock). Setting
+      it from this device is good to a few hundredths of a second.
       Exposure times in live captures, satellite matching and the Alt/Az
       readout all depend on it.
     </p>
@@ -304,11 +306,13 @@
 // ---- Clock: compare the finder's time with this device's, and set it ----
 (function () {
   var offset = null;   // finder minus this device, seconds (half-RTT corrected)
+  var rtt = 0;         // last round trip to the finder, ms (sent with a set)
   function fmt(ms) { return new Date(ms).toISOString().replace("T", " ").slice(0, 19) + " UTC"; }
   function poll() {
     var t0 = Date.now();
     fetch("/api/time").then(function (r) { return r.json(); }).then(function (j) {
       var t1 = Date.now(), res = j.result || {};
+      rtt = t1 - t0;
       offset = (res.server_ms - (t0 + t1) / 2) / 1000;
       document.getElementById("clk-finder").textContent = fmt(res.server_ms) +
         "  (" + (offset >= 0 ? "+" : "") + offset.toFixed(1) + " s vs this device)";
@@ -322,10 +326,10 @@
                  "if this device's own time is correct (phones normally are).")) return;
     msg.textContent = "setting…";
     fetch("/time/set", {method: "POST", headers: {"Content-Type": "application/json"},
-                        body: JSON.stringify({phone_ms: Date.now()})})
+                        body: JSON.stringify({phone_ms: Date.now(), rtt_ms: rtt})})
       .then(function (r) { return r.json(); }).then(function (j) {
         msg.textContent = j.ok ? "\u2713 set to " + j.result.set_utc +
-          " UTC (was " + Math.abs(j.result.drift_s).toFixed(1) + " s off)"
+          " UTC (was " + Math.abs(j.result.drift_s).toFixed(2) + " s off)"
           : "Error: " + (j.error || "failed");
         poll();
       }).catch(function (e) { msg.textContent = "Error: " + e; });

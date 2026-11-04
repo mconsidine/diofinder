@@ -103,3 +103,23 @@ def test_skysafari_sync_sets_a_clock_3s_off_and_keeps_one_1s_off(monkeypatch):
     cp._sync_clock("21:00:01", "5", "11/01/26")                 # 1 s: as good as it gets
     assert recs[-1][:2] == ("skysafari", "checked") and len(sets) == 1
     assert len(saves) == 2
+
+
+def test_set_clock_offset_uses_the_helpers_offset_mode(monkeypatch):
+    import time as _time
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+    assert ci.set_clock_offset(-0.8514, run=run, direct=False) == "helper"
+    assert calls == [["sudo", ci.SET_TIME_HELPER, "--offset", "-0.851"]]
+
+    def no_cap(*a):
+        raise PermissionError("no CAP_SYS_TIME")
+    monkeypatch.setattr(_time, "clock_settime", no_cap)
+    assert ci.set_clock_offset(42.0, run=run) == "helper"          # falls back
+    assert calls[-1][-1] == "+42.000"
+    with pytest.raises(RuntimeError):
+        ci.set_clock_offset(1.0, direct=False, run=lambda c, **k: types.SimpleNamespace(
+            returncode=1, stdout="", stderr="denied"))

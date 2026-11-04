@@ -161,6 +161,29 @@ def set_clock(utc_epoch_s, run=None):
     return "helper"
 
 
+def set_clock_offset(offset_s, run=None, direct=True):
+    """Move the system clock by ``offset_s`` seconds (fractional), reading
+    and setting it in one step so nothing in between (process start-up on a
+    Pi Zero takes most of a second) adds to the error. Directly with
+    CAP_SYS_TIME (``direct``), else through the sudo helper's --offset mode.
+    Returns "direct" or "helper"; raises RuntimeError on failure."""
+    import time as _time
+    off = float(offset_s)
+    if direct:
+        try:
+            _time.clock_settime(_time.CLOCK_REALTIME, _time.time() + off)
+            return "direct"
+        except (PermissionError, AttributeError, OSError):
+            pass
+    import subprocess
+    run = run or subprocess.run
+    r = run(["sudo", SET_TIME_HELPER, "--offset", f"{off:+.3f}"],
+            capture_output=True, text=True, timeout=15)
+    if r.returncode != 0:
+        raise RuntimeError((r.stderr or r.stdout or f"exit {r.returncode}").strip())
+    return "helper"
+
+
 def save_last_known(path=None, now_s=None):
     """Remember the current (trusted) time. Callers check ``trusted`` first."""
     import time as _time

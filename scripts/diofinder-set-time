@@ -1,10 +1,43 @@
 #!/bin/bash
-# Set system clock from SkySafari's time sync.
-# Called by comms_proc with the UTC time string "YYYY-MM-DD HH:MM:SS".
-# Briefly disables systemd-timesyncd so timedatectl won't refuse the change,
-# then re-enables it (it will quickly confirm the new time via NTP when online,
-# or leave it as-is when offline / in AP mode).
+# Set the system clock (the Pi has no RTC).
+#
+#   diofinder-set-time "YYYY-MM-DD HH:MM:SS"   absolute UTC, whole seconds
+#                                              (SkySafari's :SL/:SC sync)
+#   diofinder-set-time --offset SECONDS        move the clock by SECONDS
+#                                              (fractional, + or -; the web
+#                                              UI's "set from this device")
+#
+# --offset exists because an absolute time goes stale on the way: by the time
+# sudo, bash and timedatectl have started on a Pi Zero (most of a second,
+# measured as a 0.8-0.9 s lag), the second it names has passed. With an
+# offset, the clock is read and set inside ONE process, after the slow
+# set-ntp call, so start-up time doesn't count.
+#
+# systemd-timesyncd is paused so timedatectl won't refuse the change, and
+# re-enabled on every exit path (it re-confirms the time via NTP when online,
+# or leaves it as-is offline / in AP mode). The binaries can be overridden
+# for tests (sudo's env_reset strips these from a real caller).
 set -e
-/usr/bin/timedatectl set-ntp false 2>/dev/null || true
-/usr/bin/timedatectl set-time "$1"
-/usr/bin/timedatectl set-ntp true  2>/dev/null || true
+TIMEDATECTL="${DIOFINDER_SET_TIME_TIMEDATECTL:-/usr/bin/timedatectl}"
+PYTHON="${DIOFINDER_SET_TIME_PYTHON:-/usr/bin/python3}"
+
+if [ "${1:-}" = "--offset" ]; then
+  off="${2:-}"
+  if ! [[ "$off" =~ ^[+-]?[0-9]{1,10}(\.[0-9]{1,9})?$ ]]; then
+    echo "diofinder-set-time: bad offset '$off' (seconds, e.g. -0.85)" >&2
+    exit 2
+  fi
+elif [ $# -ne 1 ] || [ -z "$1" ]; then
+  echo "usage: diofinder-set-time 'YYYY-MM-DD HH:MM:SS' | --offset SECONDS" >&2
+  exit 2
+fi
+
+"$TIMEDATECTL" set-ntp false 2>/dev/null || true
+trap '"$TIMEDATECTL" set-ntp true 2>/dev/null || true' EXIT
+
+if [ "$1" = "--offset" ]; then
+  "$PYTHON" -c 'import sys, time
+time.clock_settime(time.CLOCK_REALTIME, time.time() + float(sys.argv[1]))' "$off"
+else
+  "$TIMEDATECTL" set-time "$1"
+fi
