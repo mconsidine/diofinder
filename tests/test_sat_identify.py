@@ -53,9 +53,10 @@ def elems(tmp_path_factory):
     return si.load_elements([str(p)])
 
 
-def _truth(el, jd, geom):
-    e, r = si.propagate([el.satrec], np.asarray(jd) + OFFSET / 86400.0)
-    u, _ = geom.topo_unit(r[0], np.asarray(jd) + OFFSET / 86400.0)
+def _truth(el, jd, geom, offset=None):
+    off = OFFSET if offset is None else offset
+    e, r = si.propagate([el.satrec], np.asarray(jd) + off / 86400.0)
+    u, _ = geom.topo_unit(r[0], np.asarray(jd) + off / 86400.0)
     return u
 
 
@@ -194,11 +195,12 @@ def test_iod_line_columns():
 W, H = 960, 760
 
 
-def _capture(tmp_path, el, geom, n=12, exp=0.8, cadence=1.2):
+def _capture(tmp_path, el, geom, n=12, exp=0.8, cadence=1.2, jd_pass=None, offset=None):
     """Frames whose stars are fixed on the sky and whose satellite dashes are
     drawn from the element set (OFFSET s ahead), through LiveRecorder."""
-    jd_start = JD_PASS - (n * cadence / 2) / 86400.0
-    mid = _truth(el, np.array([JD_PASS]), geom)[0]
+    jd_pass = JD_PASS if jd_pass is None else jd_pass
+    jd_start = jd_pass - (n * cadence / 2) / 86400.0
+    mid = _truth(el, np.array([jd_pass]), geom, offset)[0]
     ra0, dec0 = si.vec_to_radec(mid)
     w = WCS(naxis=2)
     w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
@@ -224,7 +226,7 @@ def _capture(tmp_path, el, geom, n=12, exp=0.8, cadence=1.2):
             img[int(round(y)) - 1:int(round(y)) + 2, int(round(x)) - 1:int(round(x)) + 2] = 200
         t_start = t0_unix + (k - 1) * cadence
         jd0 = jd_start + (k - 1) * cadence / 86400.0
-        path = _truth(el, jd0 + np.linspace(0, exp, 40) / 86400.0, geom)
+        path = _truth(el, jd0 + np.linspace(0, exp, 40) / 86400.0, geom, offset)
         px, py = w.world_to_pixel_values(*si.vec_to_radec(path))
         xs = np.interp(np.linspace(0, 39, 400), np.arange(40), px)
         ys = np.interp(np.linspace(0, 39, 400), np.arange(40), py)

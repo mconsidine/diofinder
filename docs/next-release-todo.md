@@ -221,6 +221,27 @@ What each piece does and how far to trust it:
   after 1–3 days, timing ±1 s. A known element set (`--start`) with one pass
   fits only node and mean longitude, like `sat_identify`'s refinement.
 
+### Ground truth: an ISS pass (`tests/iss_check.py`)
+
+Capture an ISS pass, then `python tests/iss_check.py livecap_….zip` (online:
+CelesTrak's current ISS elements are the truth). It reports the across-track
+error (astrometry; expect ~1 px), the along-track offset in seconds (your
+clock error; the ISS elements are good to < 0.1 s near their epoch), a
+one-pass orbit fitted WITHOUT the ISS elements against them, and the
+magnitude against a rough prediction (the ISS usually saturates: a bright
+limit). Caveats: use elements fetched within a day or two of the pass (a
+reboost moves the ISS); pick a pass in darkness with the ISS sunlit and at
+least ~30 deg up; short exposures (0.2-0.3 s) keep the dashes inside the
+frame at ~1 deg/s. Synthetic test: 0.7 s clock error recovered to 0.001 s.
+
+### Element sources (all scripts)
+
+Files (TLE/2LE/3LE, OMM XML/KVN/JSON/CSV), .zip/.gz of them, folders, URLs
+(cached 2 h), comma lists; newest epoch per object wins. Not accepted (not
+needed yet): ephemerides (CCSDS OEM state vectors, e.g. NASA's ISS
+trajectory file, or SP3) — an even better ISS truth than a TLE, worth adding
+if the TLE comparison ever becomes the limit.
+
 ### Hand-tracking a satellite for a long arc — implemented, untested on sky
 
 What is in place: `sat_tracks.py` subtracts the steady sky built from

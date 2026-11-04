@@ -1312,7 +1312,23 @@ POST) archives; names must match `livecap_<YYYYMMDDTHHMMSSZ>.zip` exactly.
   `classfd.zip`) and no `--norad`/`--name` filter it predicts every object
   (`predict_all`, one shared `Sky` grid; < 2 rev/day skipped unless
   `--all-orbits`) and lists all passes in time order with each element set's
-  age (`--tables` for pointing tables; `predictions.csv`). Tests: `tests/test_sat_identify.py`
+  age (`--tables` for pointing tables; `predictions.csv`). **Element sources**
+  (every script: `sat_identify --elements`, `sat_orbit fit --start` /
+  `predict`, `iss_check --tle`) go through `sat_identify.load_elements` /
+  `expand_element_sources`: files (TLE/2LE/3LE, CCSDS OMM XML/KVN/JSON/CSV —
+  CelesTrak GP and Space-Track formats), `.zip`/`.gz` of them, folders (walked),
+  URLs (downloaded, cached 2 h as CelesTrak asks), or comma-separated lists of
+  any of these; per catalog number the newest epoch wins (`near_jd=` picks the
+  epoch closest to a time instead). **`tests/iss_check.py ARCHIVE.zip`**
+  (internet; `--tle` to use a saved set) treats CelesTrak's current ISS
+  elements as ground truth for a capture of an ISS pass: across-track rms
+  (astrometry), along-track offset in seconds (= the finder's clock error), a
+  one-pass circular `sat_orbit` fit made without the ISS elements compared
+  with them (period, inclination, node, km at +1 orbit/+6 h/+24 h, next-pass
+  timing), and measured vs rough predicted magnitude; `iss_report.txt/json`,
+  `iss_residuals.png`, `iss_sky.png` plus all sat_identify outputs. Tests:
+  `tests/test_iss_check.py` (synthetic ISS pass with a 0.7 s clock error).
+  Tests: `tests/test_sat_identify.py`
   (end to end on a synthetic capture drawn from a real classfd element set,
   37 s timing error), `tests/test_sat_photometry_tracks.py` (tone round trip,
   calibration, dash flux + flash period, light-curve classes, IOD columns,

@@ -805,7 +805,7 @@ def _select(els, norad=None, name=None):
 def cmd_predict(a):
     fit_res = None
     els = None
-    if a.elements.endswith(".json"):
+    if a.elements.lower().endswith(".json") and os.path.isfile(a.elements):
         with open(a.elements) as f:
             head = json.load(f)
         if isinstance(head, dict) and head.get("format") == "diofinder-sat-orbit/1":
@@ -867,7 +867,8 @@ def main(argv=None):
     f = sub.add_parser("fit", help="fit elements to observations.json track(s)")
     f.add_argument("observations", nargs="+")
     f.add_argument("--track", nargs="*", help="track id (e.g. L1, S2.1) or FILE:ID")
-    f.add_argument("--start", help="start from this element set (TLE/OMM file)")
+    f.add_argument("--start", help="start from a known element set (any element source: "
+                                   "file, .zip, folder, URL, comma list; --norad picks one)")
     f.add_argument("--norad", help="catalog number (selects in --start; written out)")
     f.add_argument("--name", help="object name (default: identified name, else unkYYMMDD)")
     f.add_argument("--intldesg", help="international designator (default identified, "
@@ -877,8 +878,9 @@ def main(argv=None):
     g.add_argument("--full", action="store_true", help="force all 6 elements")
     f.add_argument("--out", help="output folder (default <first obs folder>/orbit)")
     p = sub.add_parser("predict", help="upcoming visible passes")
-    p.add_argument("elements", help="fit.json, or a TLE/3LE/OMM file or .zip of them "
-                                    "(e.g. classfd.zip)")
+    p.add_argument("elements", help="fit.json, or element sources: TLE/3LE/OMM files, "
+                                    ".zip/.gz of them, folders, URLs, comma-separated "
+                                    "(e.g. classfd.zip,inttles.zip); newest epoch wins")
     p.add_argument("--norad", help="only these catalog numbers (comma-separated); without "
                                    "--norad/--name every object in the file is predicted")
     p.add_argument("--name", help="only objects whose name contains this (e.g. NOSS, USA)")

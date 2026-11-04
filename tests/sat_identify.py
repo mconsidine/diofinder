@@ -191,41 +191,151 @@ def _cospar_to_tle(object_id):
     return object_id
 
 
+def _parse_kvn(text):
+    """CCSDS OMM in KVN form ('KEY = VALUE' lines; several messages may
+    follow each other, each starting with CCSDS_OMM_VERS) -> [dict]."""
+    out, cur = [], None
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("COMMENT") or "=" not in line:
+            continue
+        k, v = (x.strip() for x in line.split("=", 1))
+        if k == "CCSDS_OMM_VERS":
+            if cur:
+                out.append(cur)
+            cur = {}
+            continue
+        if cur is None:
+            cur = {}
+        cur[k] = v.split("[")[0].strip()                 # drop "[deg]"-style units
+    if cur:
+        out.append(cur)
+    rows = []
+    for d in out:
+        if "MEAN_MOTION" not in d or "EPOCH" not in d:
+            continue
+        d.setdefault("EPHEMERIS_TYPE", "0")
+        d.setdefault("CLASSIFICATION_TYPE", "U")
+        d.setdefault("ELEMENT_SET_NO", "999")
+        d.setdefault("REV_AT_EPOCH", "0")
+        d.setdefault("BSTAR", "0")
+        d.setdefault("MEAN_MOTION_DOT", "0")
+        d.setdefault("MEAN_MOTION_DDOT", "0")
+        d.setdefault("OBJECT_ID", "")
+        rows.append(d)
+    return rows
+
+
 def parse_elements_text(text, source):
-    """TLE / 3LE text, OMM CSV, OMM XML or OMM/GP JSON -> [ElementSet]."""
+    """TLE / 3LE text, OMM CSV, OMM XML, OMM KVN or OMM/GP JSON ->
+    [ElementSet]."""
     from sgp4 import omm
-    t = text.lstrip()
+    t = text.lstrip("\ufeff").lstrip()
     if t.startswith("<"):
         return _omm_to_elements(omm.parse_xml(io.StringIO(text)), source)
     if t.startswith("[") or t.startswith("{"):
-        data = json.loads(text)
+        data = json.loads(t)
         return _omm_to_elements(data if isinstance(data, list) else [data], source)
     if t.startswith("OBJECT_NAME") or t.startswith('"OBJECT_NAME'):
-        return _omm_to_elements(omm.parse_csv(io.StringIO(text)), source)
+        return _omm_to_elements(omm.parse_csv(io.StringIO(t)), source)
+    if "CCSDS_OMM_VERS" in t[:2000]:
+        return _omm_to_elements(_parse_kvn(t), source)
     return _parse_tle_text(text, source)
 
 
-def load_elements(paths):
-    """Element sets from files (TLE/3LE/OMM; .zip archives are opened and
-    every member read). Per catalog number the NEWEST epoch wins."""
+ELEMENT_SUFFIXES = (".tle", ".tles", ".txt", ".3le", ".2le", ".csv", ".xml", ".json",
+                    ".kvn", ".omm", ".zip", ".gz")
+
+
+def _read_texts(path):
+    """[(source name, text)] from a file: plain, .gz, or a .zip (every member,
+    nested .gz members too)."""
+    import gzip
+    base = os.path.basename(path)
+    if zipfile.is_zipfile(path):
+        out = []
+        with zipfile.ZipFile(path) as zf:
+            for n in zf.namelist():
+                if n.endswith("/"):
+                    continue
+                raw = zf.read(n)
+                if n.lower().endswith(".gz"):
+                    raw = gzip.decompress(raw)
+                out.append((f"{base}:{n}", raw.decode("utf-8", "replace")))
+        return out
+    with open(path, "rb") as f:
+        raw = f.read()
+    if raw[:2] == b"\x1f\x8b":
+        raw = gzip.decompress(raw)
+    return [(base, raw.decode("utf-8", "replace"))]
+
+
+def load_elements(paths, near_jd=None):
+    """Element sets from files (TLE/3LE, OMM XML/KVN/JSON/CSV; .zip and .gz
+    are opened). Per catalog number the NEWEST epoch wins (or, with
+    ``near_jd``, the epoch closest to that time). ``paths`` may also hold
+    folders, comma-separated lists and URLs: see expand_element_sources."""
     best = {}
-    for path in paths:
-        base = os.path.basename(path)
-        texts = []
-        if zipfile.is_zipfile(path):
-            with zipfile.ZipFile(path) as zf:
-                for n in zf.namelist():
-                    if not n.endswith("/"):
-                        texts.append((f"{base}:{n}", zf.read(n).decode("utf-8", "replace")))
-        else:
-            with open(path, encoding="utf-8", errors="replace") as f:
-                texts.append((base, f.read()))
-        for src, text in texts:
+    for path in expand_element_sources(paths):
+        for src, text in _read_texts(path):
             for e in parse_elements_text(text, src):
                 k = e.norad
-                if k not in best or e.epoch_jd > best[k].epoch_jd:
+                if k not in best:
+                    best[k] = e
+                elif near_jd is None:
+                    if e.epoch_jd > best[k].epoch_jd:
+                        best[k] = e
+                elif abs(e.epoch_jd - near_jd) < abs(best[k].epoch_jd - near_jd):
                     best[k] = e
     return list(best.values())
+
+
+URL_CACHE_HOURS = 2.0      # CelesTrak asks clients not to re-fetch more often
+
+
+def fetch_url(url, cache_dir=None, max_age_h=URL_CACHE_HOURS, log=print):
+    """Download an element file (cached for max_age_h: CelesTrak throttles
+    repeated requests for the same data). Returns the local path."""
+    import hashlib
+    import time
+    cache_dir = cache_dir or os.path.join(os.path.expanduser("~"), ".diofinder_elements")
+    os.makedirs(cache_dir, exist_ok=True)
+    tail = os.path.basename(url.split("?")[0]) or "elements"
+    dest = os.path.join(cache_dir, hashlib.sha1(url.encode()).hexdigest()[:10] + "_" + tail)
+    if os.path.exists(dest) and time.time() - os.path.getmtime(dest) < max_age_h * 3600:
+        return dest
+    (log or print)(f"downloading {url}")
+    req = urllib.request.Request(url, headers={"User-Agent": "diofinder-sat-tools"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        data = r.read()
+    with open(dest, "wb") as f:
+        f.write(data)
+    return dest
+
+
+def expand_element_sources(items, cache_dir=None, log=print):
+    """Element-file arguments -> local file paths. Each item may be a file
+    (plain, .gz or .zip), a folder (every element-looking file in it and its
+    subfolders), a URL (downloaded, cached), or several of these joined by
+    commas."""
+    out = []
+    for item in items or []:
+        for part in str(item).split(","):
+            part = part.strip().strip('"')
+            if not part:
+                continue
+            if part.lower().startswith(("http://", "https://")):
+                out.append(fetch_url(part, cache_dir, log=log))
+            elif os.path.isdir(part):
+                for root, _, files in sorted(os.walk(part)):
+                    for fn in sorted(files):
+                        if fn.lower().endswith(ELEMENT_SUFFIXES):
+                            out.append(os.path.join(root, fn))
+            elif os.path.exists(part):
+                out.append(part)
+            else:
+                raise SystemExit(f"element source not found: {part}")
+    return out
 
 
 def download(sources, cache_dir):
@@ -1559,7 +1669,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("archive")
     ap.add_argument("--elements", nargs="*", default=[],
-                    help="element files: TLE/3LE, OMM CSV/XML/JSON, or .zip of them")
+                    help="element sources: files (TLE/3LE, OMM XML/KVN/JSON/CSV, "
+                         ".zip/.gz of them), folders, URLs, or comma-separated lists of "
+                         "these; per object the newest epoch wins")
     ap.add_argument("--download", nargs="*", metavar="NAME_OR_URL",
                     help="download element files first (names: " +
                          ", ".join(DOWNLOAD_SOURCES) + "; default both)")
