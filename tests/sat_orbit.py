@@ -654,6 +654,9 @@ def _passes_from(sky, err, r, min_elevation=20.0, sun_max_alt=-6.0, fit_result=N
     inside = in_sky(az, region) if region else None
     if region and not region_whole:
         vis = vis & inside
+    # A gap in the grid (predict_all keeps only the dark times) ends a pass.
+    dts = np.diff(jd)
+    brk = np.r_[dts > 1.5 * np.min(dts), False] if len(jd) > 1 else np.zeros(len(jd), bool)
     passes = []
     i = 0
     while i < len(jd):
@@ -661,7 +664,7 @@ def _passes_from(sky, err, r, min_elevation=20.0, sun_max_alt=-6.0, fit_result=N
             i += 1
             continue
         j = i
-        while j + 1 < len(jd) and vis[j + 1]:
+        while j + 1 < len(jd) and vis[j + 1] and not brk[j]:
             j += 1
         if region and (not np.all(inside[i:j + 1]) if region_whole else j == i):
             i = j + 1              # not wholly inside / a one-sample sliver of a pass
@@ -769,10 +772,12 @@ def darkness_text(sky, sun_max_alt=-6.0):
 
 def predict_all(elems, site, jd_start, hours=24.0, min_elevation=20.0, step_s=10.0,
                 sun_max_alt=-6.0, table_step_s=30.0, min_rev_per_day=MIN_REV_PER_DAY,
-                batch=40, log=None, sky=None, region=None, region_whole=True):
+                batch=40, log=None, sky=None, region=None, region_whole=True,
+                max_age_days=None):
     """Visible passes of every element set in ``elems``, merged and sorted by
     the time of highest elevation. Each pass also carries name, norad,
-    source and the element set's age (days) at the pass."""
+    source and the element set's age (days) at the pass. ``max_age_days``:
+    skip element sets whose epoch is further than that from the window."""
     sky = sky or Sky(site, jd_start, hours, step_s)
     # Propagate only at dark times (nothing can be seen otherwise): a big
     # saving for large files and long windows.
@@ -790,6 +795,15 @@ def predict_all(elems, site, jd_start, hours=24.0, min_elevation=20.0, step_s=10
     if log and len(keep) < len(elems):
         log(f"{len(elems) - len(keep)} slow object(s) (< {min_rev_per_day:g} rev/day: "
             "geostationary, high orbits) skipped; --all-orbits to include them")
+    if max_age_days:
+        lo, hi = float(sky.jd[0]), float(sky.jd[-1])
+        fresh = [e for e in keep
+                 if max(lo - e.epoch_jd, e.epoch_jd - hi, 0.0) <= max_age_days]
+        if log and len(fresh) < len(keep):
+            log(f"{len(keep) - len(fresh)} element set(s) older than {max_age_days:g} days "
+                "skipped (their timing is no longer useful, and long past a decay SGP4 "
+                "invents positions); --max-age-days 0 to include them")
+        keep = fresh
     out = []
     for b0 in range(0, len(keep), batch):
         chunk = keep[b0:b0 + batch]
@@ -805,6 +819,11 @@ def predict_all(elems, site, jd_start, hours=24.0, min_elevation=20.0, step_s=10
     return out
 
 
+def _rate(r):
+    r = r or 0.0
+    return f"{r:5.3f}" if r < 0.1 else f"{r:5.2f}"
+
+
 def format_summary(passes, title, tables=False):
     """One line per pass (several objects), optional pointing tables."""
     lines = [f"{title}: {len(passes)} visible pass(es)"]
@@ -817,7 +836,7 @@ def format_summary(passes, title, tables=False):
             f"  {si.when(p['max_jd'], ms=False):<29} {p.get('name', '')[:26]:<26} "
             f"{p.get('norad_str', ''):>6} "
             f"{p['max_alt']:4.0f} {p['max_az']:4.0f}  {p['ra_at_max']:7.2f} "
-            f"{p['dec_at_max']:+7.2f}  {(p.get('rate_deg_s_at_max') or 0):5.2f}/s  "
+            f"{p['dec_at_max']:+7.2f}  {_rate(p.get('rate_deg_s_at_max'))}/s  "
             f"{_clock(_jd(p, 'start'))}-{_clock(_jd(p, 'end'))}  "
             + (f"{p['epoch_age_days']:+.1f} d" if p.get("epoch_age_days") is not None
                else "ephemeris"))
@@ -1045,6 +1064,7 @@ def cmd_predict(a):
             print(f"{len(els)} element sets; predicting all of them")
             passes = predict_all(els, site, jd0, hours, a.min_elevation,
                                  min_rev_per_day=0 if a.all_orbits else MIN_REV_PER_DAY,
+                                 max_age_days=a.max_age_days or None,
                                  log=print, **kw)
             title = os.path.basename(os.path.normpath(a.elements.rstrip("\\/"))) or a.elements
             text = format_summary(passes, title, tables=a.tables)
@@ -1052,6 +1072,12 @@ def cmd_predict(a):
             satrec, name, fit_res = (els[0].satrec, els[0].name, None) if els else \
                 (fit_[0], fit_[1], fit_[3])
             passes = predict(satrec, site, jd0, hours, a.min_elevation, fit_result=fit_res, **kw)
+            if els and a.max_age_days:
+                age = max(jd0 - els[0].epoch_jd, els[0].epoch_jd - jd0 - hours / 24.0, 0.0)
+                if age > a.max_age_days:
+                    head += (f"\nWARNING: this element set is {age:.0f} days from the window "
+                             "(more than --max-age-days): pass times may be far off, or the "
+                             "object may have re-entered")
             text = format_passes(passes, name)
     text = head + "\n" + text
     print(text)
@@ -1172,6 +1198,10 @@ def main(argv=None):
     p.add_argument("--norad", help="only these catalog numbers (comma-separated); without "
                                    "--norad/--name every object in the file is predicted")
     p.add_argument("--name", help="only objects whose name contains this (e.g. NOSS, USA)")
+    p.add_argument("--max-age-days", type=float, default=30.0,
+                   help="with several objects, skip element sets whose epoch is more than "
+                        "this many days from the window (30; 0 = keep all). One object is "
+                        "always predicted, with a warning")
     p.add_argument("--all-orbits", action="store_true",
                    help="include slow objects (< 2 rev/day: geostationary, high orbits)")
     p.add_argument("--tables", action="store_true",

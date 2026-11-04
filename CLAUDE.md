@@ -1312,7 +1312,15 @@ POST) archives; names must match `livecap_<YYYYMMDDTHHMMSSZ>.zip` exactly.
   `classfd.zip`) and no `--norad`/`--name` filter it predicts every object
   (`predict_all`, one shared `Sky` grid; < 2 rev/day skipped unless
   `--all-orbits`) and lists all passes in time order with each element set's
-  age (`--tables` for pointing tables; `predictions.csv`). **Sky region**
+  age (`--tables` for pointing tables; `predictions.csv`); element sets more
+  than `--max-age-days` (30; 0 = all) from the window are skipped in such
+  listings (one object: a warning). **SGP4 sanity** (`sat_identify.sane_states`,
+  inside `propagate` and `sat_oem.states`): long past a decay SGP4 returns
+  err 0 with nonsense (inside the Earth at 30 km/s, beyond the Moon), seen as
+  a 3-year-old classfd set "passing" every 2.5 min at 2°/s; states below
+  80 km altitude, unbound, or with an osculating semi-major axis outside
+  ×0.75–1.33 of the elements' get err 7. Passes also break at time gaps in the
+  dark-only grid. **Sky region**
   (sites with buildings): `--sky east|west|north|south` (ne/nw/se/sw or a
   comma list = their intersection; east/west of the meridian, north/south of
   the east-west line through the zenith) keeps only passes whose whole

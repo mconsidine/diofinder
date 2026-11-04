@@ -52,7 +52,7 @@ def states(satrec, jd):
     """SGP4 TEME states: (err (N,), r (N,3) km, v (N,3) km/s)."""
     w, f = si._split_jd(jd)
     e, r, v = satrec.sgp4_array(w, f)
-    return e, r, v
+    return si.sane_states([satrec], e, r, v), r, v
 
 
 def frame_name(name):

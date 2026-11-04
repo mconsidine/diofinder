@@ -275,3 +275,53 @@ def test_local_input_utc_output_and_json_stays_utc(tmp_path):
     assert rows[0].startswith("max_time,start_time,end_time,max_utc")
     assert "UTC-05:00" in rows[1] and " UTC," in rows[1]
     assert (tmp_path / "u" / "predictions.csv").read_text().startswith("max_utc,")
+
+
+def _decayed(epoch_jd):
+    """A low, high-drag orbit: SGP4 decays it within ~100 days and returns
+    nonsense (err 0) much later."""
+    import math as m
+    from sgp4.api import Satrec, WGS72
+    s = Satrec()
+    s.sgp4init(WGS72, "i", 45110, epoch_jd - 2433281.5, 5e-4, 0.0, 0.0, 0.001, 0.0,
+               m.radians(97.5), 0.0, 15.9 * 2 * m.pi / 1440, 0.0)
+    s.intldesg = "20001A"
+    s.classification = "U"
+    return s
+
+
+def test_sgp4_nonsense_long_past_a_decay_is_rejected(tmp_path):
+    from sgp4 import exporter
+    epoch = tsi.JD_PASS - 600
+    s = _decayed(epoch)
+    jd = tsi.JD_PASS + np.arange(0, 6 * 3600, 10) / 86400.0
+    w, f = si._split_jd(jd)
+    raw_e, raw_r, _ = s.sgp4_array(w, f)
+    assert np.all(raw_e == 0)                                # SGP4 itself says "fine"
+    assert np.linalg.norm(raw_r[0]) > 1e5                    # ...far beyond the Moon
+    e, _ = si.propagate([s], jd)
+    assert np.all(e != 0)
+    assert so.predict(s, SITE, tsi.JD_PASS, 6, 0.0) == []
+    # Healthy sets are untouched (normal LEO and the eccentric NOSS).
+    e, _ = si.propagate([TRUTH], jd)
+    assert np.all(e == 0)
+    # A file with a fresh and a 600-day-old set: the old one is skipped.
+    l1, l2 = exporter.export_tle(s)
+    p = tmp_path / "mix.tle"
+    p.write_text(tsi.CLASSFD + f"OLD DECAYED\n{l1}\n{l2}\n")
+    els = si.load_elements([str(p)])
+    msgs = []
+    got = so.predict_all(els, SITE, PASSES[0] - 0.02, 30, 25.0, log=msgs.append,
+                         max_age_days=30)
+    assert got and all(q["norad"] != 45110 for q in got)
+    assert any("older than 30 days" in m for m in msgs)
+
+
+def test_passes_break_across_daylight_gaps():
+    # Over two nights the dark-only grid has a daytime gap; no pass may span it.
+    got = so.predict_all([TRUTH_EL()], SITE, tsi.JD_PASS - 0.5, 48, 0.0)
+    assert got and all((q["end_jd"] - q["start_jd"]) * 24 < 1.0 for q in got)
+
+
+def TRUTH_EL():
+    return {e.norad: e for e in si.parse_elements_text(tsi.CLASSFD, "t")}[31701]

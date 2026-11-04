@@ -110,6 +110,14 @@ a CCSDS OEM (state vectors; TEME/GCRF/EME2000/ICRF/ITRF; KVN or `--xml`);
 reading OEM into `sat_identify` (identification needs elements), an
 azimuth-dependent horizon mask.
 
+### Stale element sets (found 2026-11-04 on classfd.zip)
+A 1172-day-old set (USA 294) "passed" every ~2.5 min at 2.3°/s: SGP4 long
+past a decay returns err 0 with impossible states. Now rejected
+(`sane_states`: < 80 km altitude, unbound, or semi-major axis ×0.75–1.33 off
+the elements'), and `predict` over a file skips sets > `--max-age-days` (30)
+from the window. classfd keeps many old sets (lost/high objects): e.g.
+Trumpet/ISON entries 500–2500 days old; use `--max-age-days 0` to see them.
+
 ### Element sources (every script)
 Files (TLE/2LE/3LE, CCSDS OMM XML/KVN/JSON/CSV), `.zip`/`.gz` of them,
 folders (walked), URLs (cached 2 h in `~\.diofinder_elements`; offline → use

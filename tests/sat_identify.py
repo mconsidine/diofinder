@@ -469,12 +469,45 @@ def _split_jd(jd):
     return whole, jd - whole
 
 
+MU_KM3_S2 = 398600.4418
+DECAY_ALT_KM = 80.0          # below this the object has re-entered
+SGP4_NONSENSE = 7            # our error code for a state SGP4 says is fine but is not
+
+
+def sane_states(satrecs, e, r, v):
+    """Mark physically impossible SGP4 states as errors (code 7).
+
+    Propagated far past its epoch (years, for a low orbit with drag) SGP4
+    first reports "decayed" (code 6) and then, later still, returns code 0
+    again with nonsense: positions inside the Earth at 30 km/s, or far
+    beyond the Moon. Those would show up as fake passes (an object "orbiting"
+    every few minutes). A state is rejected when it is below DECAY_ALT_KM,
+    unbound (escape speed), or its osculating semi-major axis is far (x0.75 /
+    x1.33) from the element set's own."""
+    satrecs = list(satrecs)
+    r = np.asarray(r, float)
+    v = np.asarray(v, float)
+    with np.errstate(invalid="ignore", divide="ignore", over="ignore"):
+        rn = np.linalg.norm(r, axis=-1)
+        energy = 0.5 * np.sum(v * v, axis=-1) - MU_KM3_S2 / rn
+        a = -MU_KM3_S2 / (2.0 * energy)
+        n = np.array([s.no_kozai for s in satrecs], float) / 60.0         # rad/s
+        a0 = (MU_KM3_S2 / n ** 2) ** (1.0 / 3.0)
+        ratio = a / (a0[:, None] if r.ndim == 3 else a0[0])
+        bad = ~np.isfinite(rn) | ~np.isfinite(ratio) | (rn < EARTH_RADIUS_KM + DECAY_ALT_KM) \
+            | (energy >= 0) | (ratio < 0.75) | (ratio > 1.33)
+    return np.where((np.asarray(e) == 0) & bad, SGP4_NONSENSE, e)
+
+
 def propagate(satrecs, jd):
-    """SGP4 for many satellites x many times: (err (S,N), r_teme (S,N,3) km)."""
+    """SGP4 for many satellites x many times: (err (S,N), r_teme (S,N,3) km).
+    err != 0 where SGP4 fails or its state is physically impossible
+    (sane_states)."""
     from sgp4.api import SatrecArray
+    satrecs = list(satrecs)
     whole, frac = _split_jd(jd)
-    e, r, _ = SatrecArray(list(satrecs)).sgp4(whole, frac)
-    return e, r
+    e, r, v = SatrecArray(satrecs).sgp4(whole, frac)
+    return sane_states(satrecs, e, r, v), r
 
 
 def sunlit(r_gcrs_km, jd):
