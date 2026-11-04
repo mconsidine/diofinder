@@ -114,6 +114,12 @@ Do these once (site) or before each session (clock).
    The site is stored in every capture and every calculation uses it. If it
    is unset (0, 0), the Home page warns when you start a capture.
 2. **Clock.** Utilities → *Clock* → **Set finder time from this device**.
+   - When the finder is on a network with internet it keeps network time,
+     which is better than a phone: the card then says "network time", shows
+     the phone's own error, and the Set button is off. In the field (no
+     internet), set it from the phone. The card's ± is the accuracy of the
+     measurement.
+   - Phones can themselves be a second off (check on time.is).
    - The finder has no clock battery.
    - A 1 s clock error moves a low satellite about 0.5° along its track, so
      the clock is the main limit on accuracy along the track.

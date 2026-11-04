@@ -833,6 +833,14 @@ def time_set():
         return jsonify({"ok": False, "error": "that would set the clock to "
                         f"{new_dt.isoformat() if new_dt else 'an impossible time'}, "
                         "which doesn't look right"}), 400
+    if _ci.ntp_synchronized(_ci.NTP_FLAG_PATH):
+        # Network time is better than a phone, and timesyncd (paused and
+        # re-enabled by the helper) would step the clock straight back:
+        # the same rule as SkySafari's sync. Seen 2026-11-04: "moved by
+        # +0.98 s", then -1.00 s again; the phone was the one off.
+        return jsonify({"ok": False, "error": "the finder has network time "
+                        "(synchronized), which is more accurate than this device; "
+                        "the difference shown is this device's error"}), 409
     try:
         # The web UI never has CAP_SYS_TIME (only the daemon does): helper.
         _ci.set_clock_offset(offset, direct=False)

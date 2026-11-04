@@ -158,6 +158,11 @@
       <button type="button" class="btn" id="clk-set">Set finder time from this device</button>
       <span id="clk-msg" class="hint" style="margin-left:6px;"></span>
     </p>
+    <p class="hint" id="clk-ntp" style="margin:6px 0 0 0;display:none;">
+      Not needed now: the finder has network time, which is more accurate than
+      a phone (a setting from this device would be undone at once). The
+      difference shown is this device's own error.
+    </p>
   </div>
 
   {# ---- Site (observer location) ---- #}
@@ -333,10 +338,17 @@
   function sec(x) { return (x >= 0 ? "+" : "−") + Math.abs(x).toFixed(2) + " s"; }
   function show(s) {
     if (!s) return;
+    var ntp = !!(s.res.clock || {}).ntp_synchronized, pm = " ± " + (s.rtt / 2000).toFixed(2) + " s";
+    // With network time the finder is the reference: report THIS DEVICE's error.
     document.getElementById("clk-finder").textContent = fmt(s.res.server_ms) + "  (" +
-      sec(s.off) + " ± " + (s.rtt / 2000).toFixed(2) + " s vs this device)";
-    document.getElementById("clk-phone").textContent = fmt(s.mid);
+      (ntp ? "network time" : sec(s.off) + pm + " vs this device") + ")";
+    document.getElementById("clk-phone").textContent = fmt(s.mid) + (ntp
+      ? "  (" + Math.abs(s.off).toFixed(2) + pm + " " + (s.off <= 0 ? "ahead of" : "behind") +
+        " network time)" : "");
     document.getElementById("clk-src").textContent = (s.res.clock || {}).summary || "—";
+    var btn = document.getElementById("clk-set"), note = document.getElementById("clk-ntp");
+    btn.disabled = ntp;
+    note.style.display = ntp ? "" : "none";
   }
   function poll() { return best(3).then(show).catch(function () {}); }
   document.getElementById("clk-set").addEventListener("click", function () {

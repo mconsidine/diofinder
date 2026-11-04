@@ -129,3 +129,14 @@ def test_helper_refuses_bad_arguments_without_touching_anything(fakes, bad):
     env, log = fakes
     assert _run(env, *bad).returncode == 2
     assert not log.exists()
+
+
+def test_refuses_while_network_time_is_synchronized(web, tmp_path, monkeypatch):
+    from diofinder import clock_info
+    flag = tmp_path / "synchronized"           # what systemd-timesyncd writes
+    flag.write_text("")
+    monkeypatch.setattr(clock_info, "NTP_FLAG_PATH", str(flag))
+    c, calls, _ = web
+    r = c.post("/time/set", json={"offset_s": 0.98, "rtt_ms": 40})
+    assert r.status_code == 409 and "network time" in r.get_json()["error"]
+    assert calls == []                        # the clock was not touched
