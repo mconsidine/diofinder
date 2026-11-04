@@ -228,10 +228,16 @@ def _capture(tmp_path, el, geom, n=12, exp=0.8, cadence=1.2):
         px, py = w.world_to_pixel_values(*si.vec_to_radec(path))
         xs = np.interp(np.linspace(0, 39, 400), np.arange(40), px)
         ys = np.interp(np.linspace(0, 39, 400), np.arange(40), py)
-        for x, y in zip(xs, ys):
+        dash = np.zeros((H, W))
+        ds = float(np.hypot(np.diff(xs), np.diff(ys)).mean())
+        for x, y in zip(xs, ys):                         # PSF-blurred dash
             xi, yi = int(round(x)), int(round(y))
-            if 0 <= xi < W and 0 <= yi < H:
-                img[yi, xi] = 110
+            for dy in (-2, -1, 0, 1, 2):
+                for dx in (-2, -1, 0, 1, 2):
+                    if 0 <= xi + dx < W and 0 <= yi + dy < H:
+                        dash[yi + dy, xi + dx] += 35.0 * ds * math.exp(
+                            -((xi + dx - x) ** 2 + (yi + dy - y) ** 2) / 2.0)
+        img = np.maximum(img, img + dash)
         ring = fm.push(ring, (k, int((t_start + exp) * 1e9), int(exp * 1e6), 4.0, 0))
         rec.offer_frame(img.astype(np.uint8), k, ring)
         rec.note_matches(k, [(y + 0.5, x + 0.5) for x, y in zip(sx, sy)],
@@ -268,6 +274,29 @@ def test_end_to_end_capture_to_identification_and_files(tmp_path, elems, geom):
             "identification.json", "refined.tle", "refined_omm.kvn", "refined_omm.xml",
             "refined_omm.json", "refined_omm.csv"} <= files
     iod = (out / "observations_iod.txt").read_text().splitlines()
-    assert len(iod) == len(r["obs"]) and all(ln.startswith("31701 07 027A") for ln in iod)
+    assert len(iod) == 4                                         # --points-per-pass default
+    assert all(ln.startswith("31701 07 027A") for ln in iod)
+    assert all(ln[65] == "S" and ln[66] == "+" for ln in iod)    # steady, magnitude given
+    assert all(ln[41:43] == "19" for ln in iod)                  # no clock record: 10 s
     txt = (out / "identification.txt").read_text()
-    assert "MATCH NOSS 3-4 (A)" in txt and "s early" in txt
+    assert "MATCH NOSS 3-4 (A)" in txt and "s early" in txt and "magnitude" in txt
+    p = r["photometry"]
+    assert p["n_clean"] >= 10 and p["frame_scatter_mag"] < 0.1
+    assert p["light_curve"]["behaviour"] == "S"
+    assert {"lightcurve_S1.1.csv", "lightcurve_S1.1.png", "seesat_post.txt"} <= files
+    post = (out / "seesat_post.txt").read_text()
+    assert "CLOCK NOT VERIFIED" in post and "NOSS 3-4 (A) (31701)" in post
+    assert post.count("\n1 31701U") == 1 and "\n2 31701 " in post   # refined TLE
+    doc = json.loads((out / "observations.json").read_text())
+    assert doc["format"] == "diofinder-sat-observations/1"
+    assert all(doc["site"][k] == v for k, v in SITE.items())
+    tj = doc["tracks"][0]
+    assert tj["identified"]["norad"] == 31701 and sum(o["reported"] for o in tj["observations"]) == 4
+    assert all(o["sigma_deg"] > 0 for o in tj["observations"])
+    # sat_orbit reads the same file: a one-pass circular orbit from the
+    # observations alone.
+    import sat_orbit
+    passes = sat_orbit.load_passes([str(out / "observations.json")])
+    assert passes[0].identified["norad"] == 31701
+    fit = sat_orbit.fit(passes, log=lambda *a: None)
+    assert fit["circular"] and max(fit["rms_deg"].values()) < 0.05

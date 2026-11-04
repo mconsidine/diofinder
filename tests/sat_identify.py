@@ -22,16 +22,29 @@ anomaly and node are fitted to them, giving an element set that reproduces
 this pass. (A single 10-60 s arc from one site cannot determine an orbit from
 scratch: the direction and rate are well measured, the distance is not.)
 
+Two kinds of track are measured: trails in the stacked frames (finder held
+still; satcheck_overlay) and frame-by-frame tracks (sat_tracks.py: an object
+the scope was hand-guided to follow, or an arc longer than one stack group).
+
 Outputs (in --out, default ``<archive>_ident/``):
-  * ``observations_iod.txt``: every trail's per-frame positions in the IOD
-    format used by the SeeSat-L community and read by Find_Orb, sat_id and
-    satfit. Unidentified trails get object number 99999. Set --station to
-    your station number; the default 9999 is a placeholder.
-  * ``observations.json``: the same with full precision and frame names.
-  * ``identification.txt`` / ``.json``: per trail, the candidates (name,
+  * ``observations_iod.txt``: --points-per-pass (4) positions per track, spread
+    over the arc, in the IOD format used by the SeeSat-L community and read by
+    Find_Orb, sat_id and satfit. Uncertainty codes come from the measurement
+    (arc scatter + frame WCS fit) and from the capture's clock record; set
+    --station (9999 = placeholder) and --status (E/G/F/P). Unidentified objects
+    are written as 99999 99 099A (--unknown-desig). Magnitude, its uncertainty
+    and the flash period go in columns 67-80 (--no-iod-mag to omit).
+  * ``seesat_post.txt``: a draft SeeSat-L message (station, equipment, clock,
+    the IOD lines, the object's name or unkYYMMDD, the refined TLE).
+  * ``observations.json``: every frame's position with sigma, the site and the
+    clock; ``sat_orbit.py fit`` reads it.
+  * ``lightcurve_<track>.csv`` / ``.png``: magnitude per frame and along the
+    dashes; the identification report gives the magnitude, flash period and
+    behaviour (S steady, F constant flash period, X irregular).
+  * ``identification.txt`` / ``.json``: per track, the candidates (name,
     catalog number, source file, element-set age, time offset, rms, cross-
     track offset, rate ratio, direction difference, sunlit or in shadow).
-  * Refined elements for each identified trail, in every current format:
+  * Refined elements for each identified track, in every current format:
     ``refined.tle``  - classic two-line elements (catalog numbers 100000-
                        339999 are written in the Alpha-5 form, e.g. A0001 =
                        100001; numbers beyond that cannot be expressed as a
@@ -54,7 +67,8 @@ Examples:
 
 Accuracy: across the trail ~1 px (51 arcsec); along it the clock decides
 (0.1 s at 0.5 deg/s is 0.05 deg), so set the finder's clock from your phone
-(Utilities -> Clock) before capturing. The camera reads its rows out over
+(Utilities -> Clock) before capturing. Magnitudes: about +-0.2-0.3 mag
+(sat_photometry.py explains the limits). The camera reads its rows out over
 some tens of milliseconds (rolling shutter); --readout-ms adds that per row.
 """
 from __future__ import annotations
@@ -77,6 +91,8 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import satcheck_overlay as so  # noqa: E402
+import sat_photometry as ph  # noqa: E402
+import sat_tracks as tr  # noqa: E402
 
 DOWNLOAD_SOURCES = {
     "classfd": "https://mmccants.org/tles/classfd.zip",
@@ -335,13 +351,14 @@ def trail_observations(trail, st, readout_ms=0.0, height=760):
     w = st["ref"]["wcs"]
     p0 = np.array(trail["p0"], float)
     u_ = np.array(trail["u"], float)
+    files = trail.get("track_files") or [None] * len(trail.get("track_obs") or [])
     out = []
-    for jd, s in trail.get("track_obs") or []:
+    for (jd, s), fname in zip(trail.get("track_obs") or [], files):
         x, y = p0 + u_ * s
         ra, dec = w.pixel_to_world_values(x, y)
         jd_row = jd + (readout_ms / 1000.0) * (y / height) / SECONDS_PER_DAY
         out.append({"jd": float(jd_row), "ra": float(ra), "dec": float(dec),
-                    "x": float(x), "y": float(y)})
+                    "x": float(x), "y": float(y), "file": fname})
     return sorted(out, key=lambda o: o["jd"])
 
 
@@ -675,10 +692,18 @@ def _mx(value, unit_exp_offset=8):
 
 
 def iod_line(ob, norad="99999", intldesg="", station="9999", status="G",
-             time_unc_s=0.1, pos_unc_deg=0.02, behaviour=" "):
+             time_unc_s=0.1, pos_unc_deg=0.02, behaviour=" ", mag=None, mag_unc=None,
+             flash_period_s=None):
     """One observation in IOD format (angle format 2 = RA HHMMmmm, Dec
     +DDMMmm; epoch code 5 = J2000). Columns as in the SeeSat-L IOD spec
-    example '23794 96 010A   2701 G 19990402012334770 17 25 1324520+382450 37 S'."""
+    example '23794 96 010A   2701 G 19990402012334770 17 25 1324520+382450 37 S'.
+    Optional photometry after the behaviour code (col 66): magnitude sign
+    (col 67) and value in tenths (68-70, '+045' = 4.5), its uncertainty in
+    tenths (72-73, '03' = 0.3), and the flash period in seconds (75-80,
+    three integer digits then three decimals with the point implied:
+    '002250' = 2.25 s). These photometry columns follow our reading of the
+    IOD description; check them against satobs.org/position/IODformat.html
+    before posting them."""
     t = dt.datetime(2000, 1, 1, 12, tzinfo=dt.timezone.utc) + \
         dt.timedelta(days=ob["jd"] - 2451545.0)
     ms = int(round(t.microsecond / 1000.0))
@@ -701,8 +726,333 @@ def iod_line(ob, norad="99999", intldesg="", station="9999", status="G",
     if intldesg and len(intldesg) >= 5:
         yy, num, piece = intldesg[:2], intldesg[2:5], intldesg[5:].ljust(3)[:3]
     line = (f"{str(norad)[:5]:>5} {yy} {num}{piece} {station:>4} {status} {stamp} "
-            f"{_mx(time_unc_s)} 25 {angles} {_mx(pos_unc_deg)} {behaviour}")
+            f"{_mx(time_unc_s)} 25 {angles} {_mx(pos_unc_deg)} {behaviour or ' '}")
+    if mag is not None and -9.9 <= mag <= 99.9:
+        tenths = int(math.floor(abs(mag) * 10 + 0.5))
+        line += f"{'-' if mag < 0 else '+'}{min(tenths, 999):03d}"
+        if mag_unc is not None:
+            line += f" {min(int(math.floor(mag_unc * 10 + 0.5)), 99):02d}"
+            if flash_period_s:
+                ms_ = int(math.floor(flash_period_s * 1000 + 0.5))
+                line += f" {min(ms_, 999999):06d}"
     return line.rstrip()
+
+
+# --------------------------------------------------------------------------- #
+# Reporting helpers: clock, uncertainties, point selection
+# --------------------------------------------------------------------------- #
+
+TIME_UNC_NTP_S = 0.05
+TIME_UNC_PHONE_S = 0.2
+TIME_UNC_SKYSAFARI_S = 1.0
+TIME_UNC_UNKNOWN_S = 10.0
+COLOUR_TERM_MAG = 0.15        # sunlit satellite vs catalog-star colours
+
+
+def clock_uncertainty(session):
+    """(time uncertainty s, description, fit to post) from the capture's
+    clock record (session.json ``clock``, from diofinder/clock_info.py)."""
+    clock = (session or {}).get("clock") or {}
+    last = clock.get("last_sync") or {}
+    if clock.get("ntp_synchronized"):
+        return TIME_UNC_NTP_S, "network time (synchronized)", True
+    if clock.get("trusted") and clock.get("this_boot"):
+        src = last.get("source")
+        if src == "phone":
+            return TIME_UNC_PHONE_S, "set from a phone this session", True
+        if src == "skysafari":
+            return TIME_UNC_SKYSAFARI_S, "set by SkySafari this session (whole seconds)", True
+    if clock:
+        return (TIME_UNC_UNKNOWN_S, "NOT SET this session: " + str(clock.get("summary", "")),
+                False)
+    return (TIME_UNC_UNKNOWN_S, "unknown (capture predates clock recording"
+            + ("" if session.get("clock_plausible") else "; clock looked implausible") + ")",
+            False)
+
+
+def arc_residuals(obs, window=8):
+    """Each observation's distance (deg) from a smooth local fit of its
+    neighbours (great circle, smoothly changing rate): the measurement
+    scatter, whatever the arc's length."""
+    if len(obs) < 4:
+        return [0.0] * len(obs)
+    v = radec_to_vec([o["ra"] for o in obs], [o["dec"] for o in obs])
+    t = np.array([o["jd"] for o in obs]) * SECONDS_PER_DAY
+    out = []
+    for j in range(len(obs)):
+        lo, hi = max(0, j - window // 2), min(len(obs), j + window // 2 + 1)
+        idx = [i for i in range(lo, hi) if i != j]
+        if len(idx) < 3:
+            out.append(0.0)
+            continue
+        f, _ = tr.local_model([(v[i], t[i]) for i in idx], t[j])
+        out.append(float(_ang(f(0.0), v[j])))
+    return out
+
+
+def select_points(obs, n):
+    """Indices of up to n observations spread evenly in time, preferring a
+    dash lying wholly inside the frame and, among those, the smallest
+    residual. n <= 0: all."""
+    if n <= 0 or len(obs) <= n:
+        return list(range(len(obs)))
+    jd = np.array([o["jd"] for o in obs])
+    edges = np.linspace(jd[0], jd[-1], n + 1)
+    big = 2 * _med_resid(obs)
+    picks = []
+    for b in range(n):
+        lo, hi = edges[b], edges[b + 1]
+        idx = [i for i in range(len(obs))
+               if (lo <= jd[i] < hi or (b == n - 1 and jd[i] == hi)) and i not in picks]
+        if not idx:
+            continue
+        mid = 0.5 * (lo + hi)
+        idx.sort(key=lambda i: (not obs[i].get("full", True),
+                                abs(obs[i].get("resid_deg") or 0.0) > big,
+                                abs(jd[i] - mid)))
+        picks.append(idx[0])
+    return sorted(picks)
+
+
+def _med_resid(obs):
+    r = [abs(o.get("resid_deg") or 0.0) for o in obs]
+    return float(np.median(r)) if r else 0.0
+
+
+def unknown_name(jd):
+    return "unk" + so.jd_to_utc(jd).strftime("%y%m%d")
+
+
+# --------------------------------------------------------------------------- #
+# Photometry over a capture
+# --------------------------------------------------------------------------- #
+
+class CapturePhotometry:
+    """Linearizer + per-frame zero points from matched stars."""
+
+    def __init__(self, zf, res, log=print):
+        self.width, self.height = res["size"]
+        self.tone, self.tone_source = ph.tone_for_session(res["session"], log)
+        self.lin = ph.Linearizer(self.tone)
+        stars = {}
+        for r in res["results"]:
+            m = r["rec"].get("matched")
+            if not m or r.get("wcs_source") != "fit":
+                continue
+            raw = so._load_frame(zf, r["rec"]["file"])
+            stars[r["rec"]["file"]] = ph.star_measurements(self.lin(raw), raw, m)
+        self.cal = ph.calibrate(stars, self.width, self.height)
+        self.exposure = {r["rec"]["file"]: float(r["rec"].get("exposure_s") or 0.0)
+                         for r in res["results"]}
+
+    def lin_values(self, v8):
+        """Linear light for (possibly fractional) 8-bit values (medians)."""
+        return np.interp(v8, np.arange(256), self.lin.lut)
+
+    def zp(self, fname):
+        return self.cal["zp"].get(fname)
+
+    def mag(self, fname, flux, flux_err, x, y):
+        zp = self.zp(fname)
+        if zp is None or flux is None or flux <= 0:
+            return None, None
+        m = ph.magnitude(zp, self.cal["k"], flux, x, y, self.width, self.height)
+        rms = self.cal["per_frame_rms"].get(fname) or self.cal["rms"] or 0.1
+        return m, math.hypot(1.0857 * flux_err / flux, rms)
+
+    def cflux(self, fname, flux, x, y):
+        zp = self.zp(fname)
+        if zp is None or flux is None:
+            return None
+        return ph.calibrated(flux, zp, self.cal["k"], x, y, self.width, self.height)
+
+
+def _frame_entry(cp, fname, m, exp):
+    """Per-frame photometry record from a measure_trail/segment_flux dict."""
+    mag, err = cp.mag(fname, m["flux"], m["flux_err"], m["x"], m["y"])
+    scale = cp.cflux(fname, 1.0, m["x"], m["y"])
+    e = {"mag": mag, "mag_err": err, "full": bool(m["full"]),
+         "saturated": m["saturated_px"] > 0, "masked_frac": m.get("masked_frac", 0.0),
+         "flux": m["flux"], "cflux": cp.cflux(fname, m["flux"], m["x"], m["y"]),
+         "lc_jd": None, "lc_c": None, "lc_noise": None, "speed_px_s": m.get("speed_px_s")}
+    if scale is not None and len(m.get("lc_jd", [])):
+        e.update(lc_jd=np.asarray(m["lc_jd"]), lc_c=np.asarray(m["lc_rate"]) * exp * scale,
+                 lc_noise=m["noise_rate"] * exp * scale)
+    return e
+
+
+def stack_trail_photometry(zf, st, t, cp):
+    """Per frame of a stack trail: magnitude, full-in-frame, saturation and
+    within-dash light-curve samples. Returns {file: {...}}."""
+    if not t.get("track_obs") or len(t["track_obs"]) < 2:
+        return {}
+    width, height = cp.width, cp.height
+    s0, v, jd0 = ph.fit_motion(t["track_obs"])
+    p0 = np.array(t["p0"], float)
+    u_ = np.array(t["u"], float)
+    med_lin = cp.lin_values(st["median"])
+    by_file = {r["rec"]["file"]: r for r in st["members"]}
+    out = {}
+    for fname in t.get("track_files") or []:
+        r = by_file.get(fname)
+        if r is None:
+            continue
+        raw = so._load_frame(zf, fname)
+        cx, cy = so.ref_to_frame_map(st["ref"]["wcs"], r["wcs"], width, height)
+        ref_end = np.array([p0 + u_ * (s0 + v * (jd - jd0)) for jd in r["jd"]])
+        terms = so._poly_terms(ref_end[:, 0], ref_end[:, 1], width, height)
+        fa, fb = np.column_stack([terms @ cx, terms @ cy])
+        # Star-subtracted residual in a box around the dash (the steady sky
+        # = the stack median, mapped from the reference grid into this frame).
+        ix, iy = so.ref_to_frame_map(r["wcs"], st["ref"]["wcs"], width, height)
+        m_ = 14
+        x0, x1 = int(max(0, min(fa[0], fb[0]) - m_)), int(min(width, max(fa[0], fb[0]) + m_ + 1))
+        y0, y1 = int(max(0, min(fa[1], fb[1]) - m_)), int(min(height, max(fa[1], fb[1]) + m_ + 1))
+        if x1 - x0 < 3 or y1 - y0 < 3:
+            continue
+        yy, xx = np.mgrid[y0:y1, x0:x1]
+        tb = so._poly_terms(xx.ravel().astype(float), yy.ravel().astype(float), width, height)
+        rx = np.rint(tb @ ix).astype(int)
+        ry = np.rint(tb @ iy).astype(int)
+        inside = (rx >= 0) & (rx < width) & (ry >= 0) & (ry < height)
+        sky = np.where(inside, med_lin[np.clip(ry, 0, height - 1), np.clip(rx, 0, width - 1)], 0)
+        resid = np.zeros((height, width))
+        ok = np.zeros((height, width), bool)
+        resid[y0:y1, x0:x1] = cp.lin(raw[y0:y1, x0:x1]) - sky.reshape(yy.shape)
+        ok[y0:y1, x0:x1] = inside.reshape(yy.shape)
+        m = ph.measure_trail(resid, raw, fa, fb, r["jd"][0], r["jd"][1], ok)
+        if m is None:
+            continue
+        exp = cp.exposure.get(fname) or (r["jd"][1] - r["jd"][0]) * SECONDS_PER_DAY
+        out[fname] = _frame_entry(cp, fname, m, exp)
+    return out
+
+
+class LinkedPhotometry:
+    """on_frame hook for sat_tracks.extract: photometry of every residual
+    blob while its frame's residual is at hand."""
+
+    def __init__(self, cp, zf):
+        self.cp, self.zf = cp, zf
+
+    def __call__(self, k, r, resid, med, ok, blobs):
+        if not blobs:
+            return
+        cp = self.cp
+        raw = so._load_frame(self.zf, r["rec"]["file"])
+        lin_res = np.where(ok, cp.lin(raw) - cp.lin_values(med), 0.0)
+        v = lin_res[ok]
+        noise = 1.4826 * float(np.median(np.abs(v - np.median(v)))) if v.size else 1.0
+        noise = noise or 1.0
+        fname = r["rec"]["file"]
+        exp = cp.exposure.get(fname) or (r["jd"][1] - r["jd"][0]) * SECONDS_PER_DAY
+        h, w = raw.shape
+        for b in blobs:
+            th = math.radians(b["angle"])
+            half = max(0.0, (b["length"] - 3.0) / 2.0)        # path, PSF removed
+            a = (b["x"] - half * math.cos(th), b["y"] - half * math.sin(th))
+            c = (b["x"] + half * math.cos(th), b["y"] + half * math.sin(th))
+            f = ph.segment_flux(lin_res, ok, raw, a, c, noise)
+            if f is None:
+                continue
+            f.update(x=b["x"], y=b["y"],
+                     full=(min(a[0], c[0]) >= 6 and min(a[1], c[1]) >= 6
+                           and max(a[0], c[0]) < w - 6 and max(a[1], c[1]) < h - 6))
+            e = _frame_entry(cp, fname, f, exp)
+            if 2 * half >= 10:
+                d = ph.measure_trail(lin_res, raw, a, c, r["jd"][0], r["jd"][1], ok)
+                if d is not None:
+                    de = _frame_entry(cp, fname, d, exp)
+                    e.update(lc_jd=de["lc_jd"], lc_c=de["lc_c"], lc_noise=de["lc_noise"],
+                             speed_px_s=de["speed_px_s"])
+            e["noise"] = noise
+            e["dash_axis"] = (math.cos(th), math.sin(th))
+            e["jd_window"] = tuple(r["jd"])
+            b["phot"] = e
+
+
+def linked_light_curve(track, res):
+    """Within-dash samples of a linked track's long dashes. A dash's
+    direction in time is not known from one frame; the track's motion on the
+    sky (projected into that frame) decides it."""
+    jd, c, nz, sp = [], [], [], []
+    pts = sorted(track["points"], key=lambda b: b["jd"])
+    by_file = {r["rec"]["file"]: r for r in res["results"]}
+    for j, b in enumerate(pts):
+        e, r = b.get("phot"), by_file.get(b["file"])
+        if not e or e.get("lc_jd") is None or r is None or len(pts) < 2:
+            continue
+        a, z = pts[max(0, j - 1)], pts[min(len(pts) - 1, j + 1)]
+        (xa, xz), (ya, yz) = r["wcs"].world_to_pixel_values(
+            np.array([a["ra"], z["ra"]]), np.array([a["dec"], z["dec"]]))
+        ux, uy = e["dash_axis"]
+        lj = np.asarray(e["lc_jd"])
+        if (xz - xa) * ux + (yz - ya) * uy < 0:            # moved the other way
+            j0, j1 = e["jd_window"]
+            lj = (j0 + j1) - lj
+        jd += list(lj)
+        c += list(e["lc_c"])
+        nz.append(e["lc_noise"])
+        if e.get("speed_px_s"):
+            sp.append(e["speed_px_s"])
+    return _lc_tuple(jd, c, nz, sp)
+
+
+def _lc_tuple(jd, c, nz, sp):
+    """(jd, cflux, noise, shortest resolvable period s) of along-dash samples.
+    Flashes shorter than ~4 px of travel along the dash are not resolved
+    (the PSF), and the pixel grid alone can fake a period of 1-2 px."""
+    order = np.argsort(jd) if len(jd) else []
+    jd, c = np.asarray(jd)[order] if len(jd) else np.array([]), \
+        np.asarray(c)[order] if len(c) else np.array([])
+    min_p = max(0.15, 4.0 / float(np.median(sp))) if sp else 0.15
+    return jd, c, (float(np.median(nz)) if nz else None), min_p
+
+
+def summarize_photometry(r, cadence_s):
+    """Track magnitude, light curve and behaviour from the per-observation
+    photometry in r["obs"] (o["phot"]) and r["lc"] (within-dash samples)."""
+    phot = [o.get("phot") for o in r["obs"]]
+    good = [p for p in phot if p and p.get("mag") is not None]
+    clean = [p for p in good if p["full"] and not p["saturated"] and p["masked_frac"] < 0.2]
+    use = clean or [p for p in good if not p["saturated"]]
+    out = {"n_frames": len(good), "n_clean": len(clean), "saturated_frames":
+           sum(1 for p in good if p["saturated"])}
+    if use:
+        mags = np.array([p["mag"] for p in use])
+        med = float(np.median(mags))
+        scat = 1.4826 * float(np.median(np.abs(mags - med))) if len(mags) > 1 else 0.0
+        stat = (scat / math.sqrt(len(mags))) if len(mags) > 1 else float(use[0]["mag_err"])
+        zp_err = float(np.median([p["mag_err"] for p in use]))
+        out.update(mag=round(med, 2), mag_err=round(math.sqrt(stat ** 2 + COLOUR_TERM_MAG ** 2
+                                                                + (zp_err / 2) ** 2), 2),
+                   frame_scatter_mag=round(scat, 2))
+    elif good:
+        out.update(mag=round(float(np.median([p["mag"] for p in good])), 2), mag_err=None,
+                   bright_limit=True)
+    # Light curve: within-dash samples when there are enough, else per frame.
+    lc_jd, lc_c, lc_n, lc_min = r.get("lc") or (np.array([]), np.array([]), None, 0.15)
+    if len(lc_jd) >= 20 and lc_n:
+        lc = ph.light_curve_summary(lc_jd, lc_c, lc_n, min_period_s=lc_min)
+        lc["sampling"] = "along the dashes"
+    else:
+        pts = [(o["jd"], o["phot"]["cflux"], o["phot"]) for o in r["obs"]
+               if o.get("phot") and o["phot"].get("cflux") is not None
+               and not o["phot"]["saturated"]]
+        if pts:
+            cs = np.array([p[1] for p in pts])
+            nz = float(np.median([abs(p[1]) * (p[2]["mag_err"] or 0.1) / 1.0857 for p in pts]))
+            lc = ph.light_curve_summary([p[0] for p in pts], cs, nz,
+                                        min_period_s=max(0.15, 2.0 * cadence_s))
+        else:
+            lc = ph.light_curve_summary([], [], 1.0)
+        lc["sampling"] = "one value per frame"
+    if lc["behaviour"] is None and out.get("frame_scatter_mag") is not None \
+            and out["n_clean"] >= 3:
+        lc["behaviour"] = "S" if out["frame_scatter_mag"] < 0.3 else \
+            ("X" if out["frame_scatter_mag"] > 0.75 else "S")
+    out["light_curve"] = lc
+    return out
 
 
 # --------------------------------------------------------------------------- #
@@ -713,20 +1063,42 @@ def _utc(jd):
     return so.utc_str(jd)
 
 
+def _cadence_s(res):
+    t = sorted(0.5 * (r["jd"][0] + r["jd"][1]) for r in res["results"] if r["jd"][0])
+    return float(np.median(np.diff(t)) * SECONDS_PER_DAY) if len(t) > 2 else 1.0
+
+
 def run(archive, elems, out, window_s=600.0, responses=None, fetch=None,
         max_offset_s=600.0, max_cross_deg=1.0, readout_ms=0.0, station="9999",
-        show_unlit=False, log=print):
-    """Everything; returns the per-trail results (also written to ``out``)."""
+        show_unlit=False, log=print, link=True, link_include=("fit",), status="G",
+        points_per_pass=4, time_unc_s=None, unknown_desig="99099A", photometry=True,
+        iod_photometry=True):
+    """Everything; returns the per-track results (also written to ``out``)."""
     os.makedirs(out, exist_ok=True)
     empty = {"data": {"satellites": {}}}
     res = so.analyse(archive, None, window_s, responses or {},
                      fetch=fetch or (lambda p: empty), sleep_s=0, show_unlit=show_unlit)
-    site = res["session"].get("observer") or {}
-    clock = res["session"].get("clock") or {}
-    time_unc = 0.1 if clock.get("trusted") or clock.get("ntp_synchronized") else 1.0
+    session = res["session"]
+    site = session.get("observer") or {}
+    t_unc, clock_note, postable = clock_uncertainty(session)
+    if time_unc_s is not None:
+        t_unc, clock_note = float(time_unc_s), f"{clock_note}; overridden to {time_unc_s} s"
+    if not postable:
+        log(f"WARNING: clock {clock_note}. Times may be seconds off: do not post these "
+            "observations unless you know the clock offset (--time-unc).")
     width, height = res["size"]
+    cam = session.get("camera") or {}
+    plate_deg = float(cam.get("fov_deg") or 13.54) / width
+    wcs_rms = {r["rec"]["file"]: r.get("wcs_rms_px") for r in res["results"]}
     results = []
     with zipfile.ZipFile(archive) as zf:
+        cp = CapturePhotometry(zf, res, log) if photometry else None
+        if cp is not None:
+            c = cp.cal
+            log(f"photometry: tone curve {cp.tone_source}; {c['n']} star measurements "
+                f"in {len(c['zp'])} frames, rms {c['rms'] if c['rms'] is None else round(c['rms'], 3)}"
+                f" mag, vignetting {c['k']:+.2f} mag at the corners")
+        # Trails in the stacks (finder held still).
         for gi, g in enumerate(res["groups"]):
             st = so.stack_group(zf, g, res)
             if st is None:
@@ -735,13 +1107,71 @@ def run(archive, elems, out, window_s=600.0, responses=None, fetch=None,
             so.match_trails(trails, st, g, res)
             for ti, t in enumerate(trails):
                 obs = trail_observations(t, st, readout_ms, height)
-                results.append({"group": gi + 1, "trail": ti + 1, "trail_obj": t,
-                                "satchecker": t.get("satellite"), "obs": obs,
+                if len(obs) < 3:
+                    continue
+                ph_by = stack_trail_photometry(zf, st, t, cp) if cp is not None else {}
+                for o in obs:
+                    p = ph_by.get(o["file"])
+                    o["phot"] = p
+                    o["full"] = bool(p["full"]) if p else True
+                js, cs, ns, sp = [], [], [], []
+                for p in ph_by.values():
+                    if p.get("lc_c") is not None and not p["saturated"]:
+                        js += list(p["lc_jd"])
+                        cs += list(p["lc_c"])
+                        ns.append(p["lc_noise"])
+                        if p.get("speed_px_s"):
+                            sp.append(p["speed_px_s"])
+                lc = _lc_tuple(js, cs, ns, sp)
+                results.append({"id": f"S{gi + 1}.{ti + 1}", "kind": "stack",
+                                "group": gi + 1, "trail": ti + 1, "trail_obj": t,
+                                "satchecker": t.get("satellite"), "obs": obs, "lc": lc,
                                 "label": so.trail_label(t)})
+        # Frame-by-frame tracks (hand-guided scope, long arcs).
+        if link:
+            log("linking frame-by-frame residuals (hand-tracked or long arcs)...")
+            hook = LinkedPhotometry(cp, zf) if cp is not None else None
+            rs, sources = tr.extract(zf, res, include=link_include, log=log, on_frame=hook)
+            times = [0.5 * (r["jd"][0] + r["jd"][1]) for r in rs]
+            tracks = tr.link(sources, times)
+            n_linked = 0
+            for track in tracks:
+                obs = tr.track_observations(track, readout_ms, height)
+                dup = [r for r in results if r["kind"] == "stack"
+                       and tr.same_object(obs, r["obs"]) >= 0.5]
+                if dup and len(obs) <= sum(len(r["obs"]) for r in dup):
+                    continue                     # the stack trail(s) already have it
+                for r in dup:
+                    results.remove(r)
+                n_linked += 1
+                results.append({"id": f"L{n_linked}", "kind": "linked", "group": None,
+                                "trail": None, "trail_obj": None,
+                                "satchecker": (dup[0]["satchecker"] if dup else None),
+                                "obs": obs, "track": track,
+                                "lc": linked_light_curve(track, res) if cp is not None
+                                else None,
+                                "label": (dup[0]["label"] if dup else "unidentified"),
+                                "replaces": [r["id"] for r in dup]})
+            log(f"  {len(tracks)} linked track(s), {n_linked} new or longer than the "
+                "stack trails")
     jds = [o["jd"] for r in results for o in r["obs"]]
     if not jds:
-        log("no timed trails found (need a trail seen in 3 or more frames)")
+        log("no timed trails or tracks found (need an object seen in 3 or more frames)")
+        _write_outputs(results, [], out, archive, session, station, status, t_unc,
+                       clock_note, postable, points_per_pass, unknown_desig, iod_photometry,
+                       log)
         return results
+    cadence = _cadence_s(res)
+    for r in results:
+        r["obs"].sort(key=lambda o: o["jd"])
+        for o, rr in zip(r["obs"], arc_residuals(r["obs"])):
+            o["resid_deg"] = rr
+        scatter = float(np.sqrt(np.mean([o["resid_deg"] ** 2 for o in r["obs"]])))
+        wr = [wcs_rms.get(o.get("file")) for o in r["obs"]]
+        wr = [x for x in wr if x is not None]
+        w_deg = (float(np.median(wr)) * plate_deg) if wr else plate_deg
+        r["sigma_pos_deg"] = math.hypot(scatter, w_deg)
+        r["photometry"] = summarize_photometry(r, cadence) if photometry else None
     geom = Geometry(site, min(jds) - max_offset_s / SECONDS_PER_DAY - 1e-3,
                     max(jds) + max_offset_s / SECONDS_PER_DAY + 1e-3)
     refined = []
@@ -753,33 +1183,154 @@ def run(archive, elems, out, window_s=600.0, responses=None, fetch=None,
         if r["match"] is not None:
             r["refined"] = refine(r["match"], r["obs"], geom)
             refined.append((r, r["refined"]))
-    _write_outputs(results, refined, out, station, time_unc, log)
+    _write_outputs(results, refined, out, archive, session, station, status, t_unc,
+                   clock_note, postable, points_per_pass, unknown_desig, iod_photometry, log)
     return results
 
 
-def _write_outputs(results, refined, out, station, time_unc, log):
-    # Observations: IOD + JSON.
+def _iod_for(r, station, status, t_unc, points_per_pass, unknown_desig, iod_photometry):
+    """(selected indices, IOD lines) for one track."""
+    m = r.get("match")
+    norad = m["norad_str"] if m else "99999"
+    intl = m["element_set"].intldesg if m else unknown_desig
+    p = r.get("photometry") or {}
+    lc = p.get("light_curve") or {}
+    beh = lc.get("behaviour") or " "
+    period = lc.get("period_s") if beh == "F" else None
+    sel = select_points(r["obs"], points_per_pass)
+    lines = []
+    for i in sel:
+        ob = r["obs"][i]
+        mag = mag_unc = None
+        if iod_photometry and p.get("mag") is not None and not p.get("bright_limit"):
+            fp = ob.get("phot") or {}
+            ok = fp.get("mag") is not None and fp.get("full") and not fp.get("saturated")
+            mag = fp["mag"] if ok else p["mag"]
+            mag_unc = math.hypot(fp["mag_err"], COLOUR_TERM_MAG) if ok else p.get("mag_err")
+        lines.append(iod_line(ob, norad, intl, station, status, t_unc,
+                              max(r["sigma_pos_deg"], 0.001), beh, mag, mag_unc, period))
+    return sel, lines
+
+
+def _write_lightcurve(r, out):
+    """lightcurve_<id>.csv and .png for one track; returns the csv name."""
+    rows = []
+    t0 = r["obs"][0]["jd"]
+    for o in r["obs"]:
+        p = o.get("phot") or {}
+        if p.get("mag") is not None:
+            rows.append(("frame", o["jd"], p["mag"], p["mag_err"], o.get("file"),
+                         p.get("full"), p.get("saturated")))
+    lc_jd, lc_c = (r.get("lc") or (np.array([]), np.array([])))[:2]
+    for j, c in zip(lc_jd, lc_c):
+        if c is not None and c > 0:
+            rows.append(("dash", float(j), -2.5 * math.log10(c), None, None, None, None))
+    if not rows:
+        return None
+    rows.sort(key=lambda x: x[1])
+    name = f"lightcurve_{r['id']}.csv"
+    with open(os.path.join(out, name), "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["kind", "utc", "jd", "seconds", "mag", "mag_err", "frame", "full",
+                    "saturated"])
+        for kind, jd, mag, err, fname, full, sat in rows:
+            w.writerow([kind, _utc(jd), f"{jd:.8f}", f"{(jd - t0) * SECONDS_PER_DAY:.3f}",
+                        f"{mag:.3f}", "" if err is None else f"{err:.3f}", fname or "",
+                        "" if full is None else int(bool(full)),
+                        "" if sat is None else int(bool(sat))])
+    try:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(figsize=(8, 3.2), dpi=100)
+        d = [x for x in rows if x[0] == "dash"]
+        if d:
+            ax.plot([(x[1] - t0) * SECONDS_PER_DAY for x in d], [x[2] for x in d], ".",
+                    ms=2, color="0.6", label="along the dashes")
+        fr = [x for x in rows if x[0] == "frame"]
+        if fr:
+            ax.errorbar([(x[1] - t0) * SECONDS_PER_DAY for x in fr], [x[2] for x in fr],
+                        yerr=[x[3] or 0 for x in fr], fmt="o", ms=4, color="C3",
+                        label="per frame")
+        ax.invert_yaxis()
+        ax.set_xlabel(f"seconds after {_utc(t0)}")
+        ax.set_ylabel("magnitude")
+        lc = (r.get("photometry") or {}).get("light_curve") or {}
+        ttl = f"{r['id']} {r.get('label') or ''}"
+        if lc.get("period_s"):
+            ttl += f"  flash period {lc['period_s']:.2f} s"
+        elif lc.get("behaviour"):
+            ttl += f"  behaviour {lc['behaviour']}"
+        ax.set_title(ttl, fontsize=9)
+        ax.legend(fontsize=7)
+        fig.tight_layout()
+        fig.savefig(os.path.join(out, name.replace(".csv", ".png")))
+        plt.close(fig)
+    except Exception:                       # plotting is a convenience
+        pass
+    return name
+
+
+def _write_outputs(results, refined, out, archive, session, station, status, t_unc,
+                   clock_note, postable, points_per_pass, unknown_desig, iod_photometry,
+                   log):
+    site = session.get("observer") or {}
+    all_iod, post = [], []
+    tracks_json = []
+    for r in results:
+        sel, lines = _iod_for(r, station, status, t_unc, points_per_pass, unknown_desig,
+                              iod_photometry)
+        r["iod"] = lines
+        all_iod += lines
+        lc_file = _write_lightcurve(r, out) if r.get("photometry") else None
+        m = r.get("match")
+        tracks_json.append({
+            "id": r["id"], "kind": r["kind"], "label": r["label"],
+            "satchecker": r["satchecker"], "replaces": r.get("replaces"),
+            "identified": ({"norad": m["norad"], "name": m["name"],
+                            "intldesg": m["element_set"].intldesg, "source": m["source"]}
+                           if m else None),
+            "sigma_pos_deg": r["sigma_pos_deg"],
+            "photometry": r.get("photometry"), "light_curve_file": lc_file,
+            "observations": [
+                {"jd": o["jd"], "utc": _utc(o["jd"]), "ra": o["ra"], "dec": o["dec"],
+                 "x": o.get("x"), "y": o.get("y"), "file": o.get("file"),
+                 "resid_deg": o.get("resid_deg"), "sigma_deg": r["sigma_pos_deg"],
+                 "full": o.get("full"), "reported": i in sel,
+                 "mag": (o.get("phot") or {}).get("mag"),
+                 "mag_err": (o.get("phot") or {}).get("mag_err")}
+                for i, o in enumerate(r["obs"])]})
     with open(os.path.join(out, "observations_iod.txt"), "w") as f:
-        for r in results:
-            m = r.get("match")
-            norad = m["norad_str"] if m else "99999"
-            intl = m["element_set"].intldesg if m else ""
-            fr = r["trail_obj"].get("flash_ratio")
-            beh = "F" if fr is not None and fr >= so.FLASH_RATIO else "S"
-            for ob in r["obs"]:
-                f.write(iod_line(ob, norad, intl, station, "G", time_unc, 0.02, beh) + "\n")
+        f.write("".join(ln + "\n" for ln in all_iod))
     with open(os.path.join(out, "observations.json"), "w") as f:
-        json.dump([{"group": r["group"], "trail": r["trail"], "satchecker": r["satchecker"],
-                    "label": r["label"],
-                    "observations": [dict(o, utc=_utc(o["jd"])) for o in r["obs"]]}
-                   for r in results], f, indent=1)
+        json.dump({"format": "diofinder-sat-observations/1",
+                   "capture": os.path.basename(archive), "site": site,
+                   "station": station, "status": status,
+                   "clock": {"time_unc_s": t_unc, "note": clock_note, "postable": postable},
+                   "tracks": tracks_json}, f, indent=1, default=_json_default)
     # Identification report.
     rep, lines = [], []
     for r in results:
-        head = (f"trail {r['group']}.{r['trail']}: {len(r['obs'])} frames"
+        p = r.get("photometry") or {}
+        lc = p.get("light_curve") or {}
+        head = (f"track {r['id']} ({r['kind']}): {len(r['obs'])} frames"
                 + (f", {_utc(r['obs'][0]['jd'])}" if r["obs"] else "")
-                + f"; SatChecker: {r['satchecker'] or 'no match'}")
+                + f"; SatChecker: {r['satchecker'] or 'no match'}"
+                + f"; position sigma {r['sigma_pos_deg']:.3f} deg")
         lines.append(head)
+        if p.get("mag") is not None:
+            lines.append(f"  magnitude {p['mag']:.1f}"
+                         + (f" +- {p['mag_err']:.1f}" if p.get("mag_err") else
+                            " (saturated: brighter than this)")
+                         + f" ({p['n_clean']} clean frames"
+                         + (f", frame-to-frame scatter {p['frame_scatter_mag']:.2f}"
+                            if p.get("frame_scatter_mag") is not None else "") + ")"
+                         + (f"; light curve {lc.get('sampling')}: behaviour "
+                            f"{lc.get('behaviour') or '?'}"
+                            + (f", flash period {lc['period_s']:.2f} s" if lc.get("period_s")
+                               else "")
+                            + (f", amplitude {lc['amplitude_mag']:.1f} mag"
+                               if lc.get("amplitude_mag") is not None else "")))
         cands = []
         for c in r.get("candidates", []):
             ok = "MATCH" if c is r.get("match") else "     "
@@ -796,32 +1347,76 @@ def _write_outputs(results, refined, out, station, time_unc, log):
             rf = r["refined"]
             lines.append(f"  refined: rms {rf['rms_before_deg']:.3f} -> "
                          f"{rf['rms_after_deg']:.3f} deg at epoch {_utc(rf['epoch_jd'])}")
-        rep.append({"group": r["group"], "trail": r["trail"], "label": r["label"],
-                    "satchecker": r["satchecker"], "candidates": cands,
+        rep.append({"id": r["id"], "group": r["group"], "trail": r["trail"],
+                    "label": r["label"], "satchecker": r["satchecker"], "candidates": cands,
+                    "photometry": r.get("photometry"),
                     "refined": ({k: v for k, v in r["refined"].items() if k != "satrec"}
                                 if r.get("refined") else None)})
     with open(os.path.join(out, "identification.txt"), "w") as f:
         f.write("\n".join(lines) + "\n")
     with open(os.path.join(out, "identification.json"), "w") as f:
-        json.dump(rep, f, indent=1, default=str)
+        json.dump(rep, f, indent=1, default=_json_default)
     for ln in lines:
         log(ln)
     # Refined element sets, every format.
+    tle_recs, omm_recs = [], []
+    for r, rf in refined:
+        m = r["match"]
+        note = (f"diofinder fit of {m['source']} element set to track "
+                f"{r['id']} ({len(r['obs'])} frames, rms "
+                f"{rf['rms_after_deg']:.3f} deg); valid near {_utc(rf['epoch_jd'])}")
+        tle_recs.append(((rf["satrec"], m["name"], m["norad"]), note))
+        omm_recs.append((omm_record(rf["satrec"], m["name"], m["norad"]), note))
     if refined:
-        tle_recs, omm_recs = [], []
-        for r, rf in refined:
-            m = r["match"]
-            note = (f"diofinder fit of {m['source']} element set to trail "
-                    f"{r['group']}.{r['trail']} ({len(r['obs'])} frames, rms "
-                    f"{rf['rms_after_deg']:.3f} deg); valid near {_utc(rf['epoch_jd'])}")
-            tle_recs.append(((rf["satrec"], m["name"], m["norad"]), note))
-            omm_recs.append((omm_record(rf["satrec"], m["name"], m["norad"]), note))
         write_tle(tle_recs, os.path.join(out, "refined.tle"))
         write_omm_kvn(omm_recs, os.path.join(out, "refined_omm.kvn"))
         write_omm_xml(omm_recs, os.path.join(out, "refined_omm.xml"))
         write_omm_json(omm_recs, os.path.join(out, "refined_omm.json"))
         write_omm_csv(omm_recs, os.path.join(out, "refined_omm.csv"))
-        log(f"wrote refined elements for {len(refined)} trail(s) (TLE, OMM KVN/XML/JSON/CSV)")
+        log(f"wrote refined elements for {len(refined)} track(s) (TLE, OMM KVN/XML/JSON/CSV)")
+    # A SeeSat-L style message draft.
+    post.append(f"Station {station}: {_site_text(site)}")
+    post.append("Equipment: diofinder plate-solving finder (Raspberry Pi HQ camera IMX477, "
+                f"~{(session.get('camera') or {}).get('fov_deg') or 13.5:.1f} deg field), "
+                "positions from per-frame plate solutions (J2000)")
+    post.append(f"Times: {clock_note}; time uncertainty {t_unc:g} s")
+    if not postable:
+        post.append("*** CLOCK NOT VERIFIED: check the times before posting ***")
+    post.append("")
+    for r in results:
+        if not r.get("iod"):
+            continue
+        m = r.get("match")
+        post += r["iod"]
+        if m:
+            post.append(f"{m['name']} ({m['norad_str']}), identified against {m['source']}")
+        else:
+            post.append(f"{unknown_name(r['obs'][0]['jd'])} (unidentified)")
+        if r.get("refined"):
+            l12 = tle_lines(r["refined"]["satrec"], m["norad"])
+            if l12:
+                post += list(l12)
+        post.append("")
+    with open(os.path.join(out, "seesat_post.txt"), "w") as f:
+        f.write("\n".join(post).rstrip() + "\n")
+
+
+def _site_text(site):
+    lat, lon = site.get("latitude_deg"), site.get("longitude_deg")
+    if lat is None or lon is None:
+        return "site not recorded"
+    return (f"{abs(lat):.4f} {'N' if lat >= 0 else 'S'}, {abs(lon):.4f} "
+            f"{'E' if lon >= 0 else 'W'}, {site.get('elevation_m') or 0:.0f} m")
+
+
+def _json_default(o):
+    if isinstance(o, np.ndarray):
+        return o.tolist()
+    if isinstance(o, (np.floating, np.integer)):
+        return o.item()
+    if isinstance(o, np.bool_):
+        return bool(o)
+    return str(o)
 
 
 def main(argv=None):
@@ -848,6 +1443,23 @@ def main(argv=None):
                     help="rolling-shutter readout time of a whole frame, ms (0)")
     ap.add_argument("--station", default="9999",
                     help="your IOD station number (9999 = placeholder)")
+    ap.add_argument("--status", default="G", choices=list("EGFP"),
+                    help="IOD station status: E excellent, G good, F fair, P poor (G)")
+    ap.add_argument("--points-per-pass", type=int, default=4,
+                    help="IOD lines per track (spread over the arc; 0 = every frame) (4)")
+    ap.add_argument("--time-unc", type=float,
+                    help="time uncertainty, s (default: from the capture's clock record)")
+    ap.add_argument("--unknown-desig", default="99099A",
+                    help="international designator for unidentified objects, as in the "
+                         "SeeSat-L sample '99999 99 099A' (99099A; '' = blank)")
+    ap.add_argument("--no-iod-mag", action="store_true",
+                    help="leave magnitude and flash period out of the IOD lines")
+    ap.add_argument("--no-photometry", action="store_true",
+                    help="skip magnitudes and light curves")
+    ap.add_argument("--no-link", action="store_true",
+                    help="stack trails only (skip frame-by-frame tracks)")
+    ap.add_argument("--link-interp", action="store_true",
+                    help="frame-by-frame tracks may use unsolved frames' interpolated WCS")
     a = ap.parse_args(argv)
     out = a.out or os.path.splitext(a.archive)[0] + "_ident"
     os.makedirs(out, exist_ok=True)
@@ -866,7 +1478,11 @@ def main(argv=None):
         import satcheck_archive as sa
         fetch = lambda p: sa.query(sa.DEFAULT_BASE, p)[1]   # noqa: E731
     run(a.archive, elems, out, a.window, cache, fetch, a.max_offset, a.max_cross,
-        a.readout_ms, a.station)
+        a.readout_ms, a.station, link=not a.no_link,
+        link_include=("fit", "interp") if a.link_interp else ("fit",),
+        status=a.status, points_per_pass=a.points_per_pass, time_unc_s=a.time_unc,
+        unknown_desig=a.unknown_desig, photometry=not a.no_photometry,
+        iod_photometry=not a.no_iod_mag)
     print(f"results in {out}")
 
 

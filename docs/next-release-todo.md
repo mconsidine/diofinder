@@ -165,57 +165,93 @@ cores: the reason to test bin-at-submit), and small background loops.
 - ✅ *Done:* OTA cards move `imu_poll_hz` 20 → 10 once (conf migration v2,
   per-rule versions); on-screen-only polling.
 
-## Satellite identification and element refinement — steps 1–3 done (`tests/sat_identify.py`)
+## Satellite identification, photometry, IOD reports and orbits — done, awaiting a real capture
 
-Goal: an off-device script that takes a live capture, finds the satellite
-trails in its stacked frames, and identifies them, including against
-classified-object element sets when SatChecker has no match.
+Off-device scripts (all in `tests/`, run on a laptop; need numpy, astropy,
+matplotlib, Pillow, `sgp4`; no scipy):
 
-Assessment:
+- `sat_identify.py ARCHIVE.zip --elements classfd.zip inttles.zip` finds trails
+  (stacks) and frame-by-frame tracks (`sat_tracks.py`), identifies them against
+  element files with a free time offset, refines the match, measures
+  magnitudes and light curves (`sat_photometry.py`), and writes IOD lines, a
+  SeeSat-L message draft, refined elements (TLE incl. Alpha-5, OMM
+  KVN/XML/JSON/CSV) and `observations.json`.
+- `sat_orbit.py fit observations.json [more.json]` fits elements to one or
+  more passes; `sat_orbit.py predict fit.json --site-from observations.json`
+  lists the next visible passes with pointing tables and timing uncertainty.
 
-- **Identify first, derive second.** A finder trail spans 10–60 s from one
-  site. Deriving a usable TLE from scratch from such a short single arc is
-  ill-conditioned: the direction and rate are well measured, the range (so the
-  altitude and the orbit) is not. With an assumed circular orbit you get a
-  coarse orbit, good as a search key, not as a TLE to publish.
-- **Old element sets are not a blocker.** SGP4 propagates either way in time;
-  a weeks-old element set keeps its orbital plane far longer than its timing.
-  So match on the plane (cross-track position, direction, rate) and let the
-  along-track time float (a fitted "N seconds early/late"). The best match's
-  elements can then be refined to the observation (mean anomaly and mean
-  motion), which is the honest form of "an estimated TLE".
-- **Element sources:** CelesTrak GP (public catalog), CelesTrak supplemental GP
-  (operator data, e.g. Starlink, more accurate), Mike McCants' classified file
-  (`classfd.tle`; amateur-tracked classified objects). Space-Track needs an
-  account. SatChecker covers the public catalog only, so the classified file is
-  where the extra matches would come from. URLs to confirm on your laptop (this
-  sandbox cannot reach them).
-- **Output observations in the standard IOD format** too, so existing tools can
-  take over: Bill Gray's Find_Orb (fits element sets, including TLEs, to
-  satellite astrometry) and sat_id, Scott Campbell's satfit (the Python port
-  from the TruSat project), and the SeeSat-L community.
-- **Accuracy budget:** ~1 px (51″) across-track; along-track is set by the
-  clock: 0.1 s at 0.5°/s is ~3.5 px, so set the clock from the phone first.
-  Exposure start/end times come from the sensor timestamps already recorded.
+What each piece does and how far to trust it:
 
-Status (2026-11-02): steps 1–3 below are implemented in `tests/sat_identify.py`
-(per-frame observations as IOD + JSON; identification against McCants/CelesTrak
-files with a free time offset; refinement; output as classic TLE incl. Alpha-5,
-CCSDS OMM KVN/XML and OMM JSON/CSV). Verified end to end on a synthetic capture
-drawn from a real classfd element set (found among 436, timing error recovered to
-<1 s, refined elements reproduce the pass). On the 2026-11-02 capture the
-aircraft trail is correctly unmatched. Still needed: a capture with real sunlit
-satellite trails; step 4 is not started.
+- **Identification** (unchanged): plane matched, along-track time free;
+  verified on synthetic captures drawn from a real classfd element set.
+- **Photometry**: the saved 8-bit frames are inverted through the tone curve
+  (`rpi.contrast` gamma curve, recorded in `session.json` `tone` from this
+  release; older captures assume the shipped finder curve), calibrated per frame
+  against the solver's matched stars (zero point + a shared vignetting term),
+  and the dash's light is measured in the frame minus the steady sky (stars
+  under the trail removed). Expected ±0.2–0.3 mag for magnitude 3–6; a colour
+  term of 0.15 mag is included in the reported uncertainty. Saturated dashes
+  are reported as a bright limit and their magnitude is left out of the IOD
+  lines. A crushed sky (most pixels 0) biases faint trails slightly faint.
+- **Light curves**: one sample per 3 px along each dash (time from the
+  exposure window), or one value per frame for dots (hand-tracked). Lomb-
+  Scargle (astropy power, numpy false-alarm estimate) gives a flash period;
+  behaviour code S / F / X. Periods shorter than ~4 px of travel along the dash
+  are not claimed (the PSF and the pixel grid fake them).
+- **IOD reports**: `--points-per-pass` (default 4) lines spread over the arc,
+  preferring dashes wholly inside the frame; position uncertainty = the arc's
+  own scatter combined with the frame WCS fit; time uncertainty from the
+  capture's clock record (network time 0.05 s, phone 0.2 s, SkySafari 1 s,
+  otherwise 10 s with a "do not post" warning; `--time-unc` overrides);
+  `--status E/G/F/P`; unidentified objects as `99999 99 099A` (the SeeSat-L
+  sample's convention; `--unknown-desig`), named `unkYYMMDD`. Magnitude,
+  magnitude uncertainty and flash period follow our reading of the IOD
+  description (cols 67–70, 72–73, 75–80); **check those columns against
+  satobs.org/position/IODformat.html** (not reachable from the build sandbox)
+  and confirm the unknown-object convention on the list before posting.
+- **Orbits** (`sat_orbit.py`): one pass → a circular orbit (4 elements)
+  with an explicit 4.5 % mean-motion model error (simulated: a circular fit
+  to an e = 0.046 pass is 6 % off), so the next pass's timing is minutes
+  uncertain and later passes are flagged "timing UNKNOWN". Two passes hours
+  apart → all 6 elements with the revolution count resolved by a mean-motion
+  scan and the eccentricity by multi-start; simulated position error ~1–2 km
+  after 1–3 days, timing ±1 s. A known element set (`--start`) with one pass
+  fits only node and mean longitude, like `sat_identify`'s refinement.
 
-Plan (each step useful on its own):
-1. Per-trail observations: from the frame-by-frame timing `satcheck_overlay`
-   already does, RA/Dec at exposure start/mid/end per frame; write IOD + JSON.
-2. Identify: local SGP4 (`sgp4` package) against downloaded element files;
-   score cross-track distance, direction and rate with a free time offset;
-   report candidates with their offset; shadow test as now.
-3. Refine the best candidate's elements to the observations (2 parameters).
-4. Optional, research-grade: circular-orbit fit from the arc alone, flagged as
-   such; validate on a capture with a known Starlink pass.
+### Hand-tracking a satellite for a long arc — implemented, untested on sky
 
-Needs: a capture with real sunlit satellite trails (dusk, 1–2 h after sunset)
-for validation; the 2026-11-02 capture's only trail was an aircraft.
+What is in place: `sat_tracks.py` subtracts the steady sky built from
+neighbouring frames (aligned on their own WCS) from each frame, so an object
+that the scope follows (a dot near the centre while the stars stream through)
+is found; residual blobs are linked frame to frame along a smooth sky path
+(missed frames allowed), hot pixels / fixed-pattern defects (same pixel in
+many frames) and stationary objects are dropped, and a linked track that
+continues a stack trail replaces it. Tested on a synthetic 24-frame tracked
+pass (~10° arc across many fields; identified, 0.002° rms).
+
+Flags for trying it:
+
+- Keep trail rejection off on the finder (`detect_max_axis_ratio` 0, the
+  default): while panning the stars are short trails and must still be used.
+- Use short exposures (0.1–0.3 s) and keep the push steady; a frame that does
+  not plate-solve has no WCS and is left out of the track (interpolated WCS is
+  off by default: `--link-interp`).
+- Plate solving while panning by hand has **not** been tested on sky. If it
+  fails, the fallback would be solving with the IMU hint on, or pausing briefly
+  every few seconds.
+- The linker costs ~0.4 s per frame on a laptop (a 10-minute capture at 1 fps
+  is ~4 minutes).
+
+### Raw (12-bit) frames — not needed
+
+The cost of saving the sensor's raw frames was storage and Wi-Fi transfer, not
+CPU: at full resolution a raw frame is ~18.5 MB (2028×1520 binned: ~6 MB)
+against ~0.2 MB for the 8-bit PNG, so a 10-minute capture would be several GB.
+Writing them is cheap on the CPU (no PNG compression). Photometry does not
+need them: the tone curve is invertible to ±0.2–0.3 mag. If finer photometry
+is ever wanted, a middle option is a 2×2-binned 16-bit raw (~1014×760, ~1.5 MB
+per frame) saved alongside the PNGs.
+
+Still needed: a capture with real sunlit satellite trails (dusk, 1–2 h after
+sunset), ideally one fixed-field and one hand-tracked pass, and a second pass
+of the same object to try the two-pass orbit fit.

@@ -889,10 +889,11 @@ def _bg_noise(img):
     return med, 1.4826 * float(np.median(np.abs(v - med))) or 1.0
 
 
-def _blobs(img, sigma=TRAIL_SIGMA, min_px=3):
+def _blobs(img, sigma=TRAIL_SIGMA, min_px=3, stats=None):
     """Bright blobs in the moving image with their shape: centroid, length
-    along the major axis, elongation, orientation (deg, 0..180), flux."""
-    med, noise = _bg_noise(img)
+    along the major axis, elongation, orientation (deg, 0..180), flux.
+    ``stats`` = (background, noise) overrides the image's own estimate."""
+    med, noise = stats if stats is not None else _bg_noise(img)
     if med is None:
         return []
     blobs = []
@@ -1040,12 +1041,15 @@ def trail_kinematics(zf, st, res, trails, sigma=TRAIL_SIGMA, half_width=4):
             if hit.sum() >= 3:
                 wgt = prof[hit]
                 obs.append(((r["jd"][0] + r["jd"][1]) / 2,
-                            float(np.average(ss[hit], weights=wgt))))
+                            float(np.average(ss[hit], weights=wgt)), r["rec"]["file"]))
     for t, (_, _, _, _, obs) in zip(trails, lines):
         t["n_seen"] = len(obs)
         # (exposure-mid JD, position along p0->p1 in reference pixels) per
-        # frame: the raw observations sat_identify turns into RA/Dec.
-        t["track_obs"] = sorted(obs)
+        # frame: the raw observations sat_identify turns into RA/Dec; and the
+        # frame each came from (same order).
+        obs = sorted(obs)
+        t["track_obs"] = [(o[0], o[1]) for o in obs]
+        t["track_files"] = [o[2] for o in obs]
         t["px_per_s"] = None
         if len(obs) >= 3:
             jd = np.array([o[0] for o in obs])

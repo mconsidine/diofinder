@@ -1268,10 +1268,43 @@ POST) archives; names must match `livecap_<YYYYMMDDTHHMMSSZ>.zip` exactly.
   `identification.txt/json`, and the refined elements as classic TLE
   (Alpha-5 for 100000–339999), CCSDS OMM KVN and XML, and CelesTrak-style
   OMM JSON/CSV (9-digit catalog numbers: OMM only; SGP4's Satrec can't hold
-  them, so they ride in `ElementSet.extra`). A single arc can't determine an
-  orbit from scratch; refinement of a known element set is the honest
-  output. Tests: `tests/test_sat_identify.py` (end to end on a synthetic
-  capture drawn from a real classfd element set, 37 s timing error).
+  them, so they ride in `ElementSet.extra`). Besides the stack trails,
+  `tests/sat_tracks.py` finds **frame-by-frame tracks** (each frame minus the
+  steady sky of its neighbours, aligned on their own WCS; residual blobs
+  linked along a smooth sky path; fixed-pattern pixels dropped): a
+  **hand-tracked** satellite (a dot near the centre while the field sweeps)
+  and arcs longer than one stack group; a longer linked track replaces the
+  stack trails it continues (`--no-link`, `--link-interp`). **Photometry**
+  (`tests/sat_photometry.py`): frames linearized through the tone curve
+  (recorded in `session.json` `tone` by `live_capture.tone_info` since
+  v0.11.76; older captures assume `tuning/imx477_finder.json`), per-frame zero
+  point + shared vignetting from the matched stars, dash light measured
+  against the steady sky; per-track magnitude ± (incl. a 0.15 mag colour
+  term), `lightcurve_<id>.csv/.png`, Lomb-Scargle flash period (numpy FAP —
+  astropy's needs scipy), behaviour S/F/X. **Reports**: `--points-per-pass`
+  (4) IOD lines per track, uncertainty codes from the arc scatter + WCS fit
+  and from the capture's clock record (`clock_uncertainty`: NTP 0.05 s,
+  phone 0.2 s, SkySafari 1 s, else 10 s + a do-not-post warning;
+  `--time-unc`), `--status E/G/F/P`, magnitude/uncertainty/flash period in
+  IOD cols 67–80 (our reading of the spec — verify on satobs.org;
+  `--no-iod-mag`), unknown objects `99999 99 099A` (`--unknown-desig`) named
+  `unkYYMMDD`, and `seesat_post.txt` (station/equipment/clock header + IOD +
+  name + refined TLE). `observations.json` (format
+  `diofinder-sat-observations/1`: site, clock, tracks with per-point sigma) feeds
+  **`tests/sat_orbit.py`**: `fit` (one pass → circular 4-element orbit with a
+  4.5 % mean-motion model error, so timing is honest; two+ passes → all 6
+  elements, revolution count by a mean-motion scan, eccentricity by multi-start;
+  `--start` = refine a known element set) → `fit.json` (with covariance),
+  `fit.tle`, `fit_omm.*`; `predict` → visible passes (sunlit, dark sky,
+  `--min-elevation`) with alt/az/RA/Dec pointing tables and timing ± (flagged
+  "timing UNKNOWN" past 1/6 revolution). Tests: `tests/test_sat_identify.py`
+  (end to end on a synthetic capture drawn from a real classfd element set,
+  37 s timing error), `tests/test_sat_photometry_tracks.py` (tone round trip,
+  calibration, dash flux + flash period, light-curve classes, IOD columns,
+  clock codes, linking, an end-to-end hand-tracked pass), `tests/test_sat_orbit.py`
+  (one-pass circular with honest period error, two-pass recovery ~km after 3 d,
+  prediction vs truth, CLI). Hand-tracking flags and the raw-frame decision:
+  `docs/next-release-todo.md`.
 * Tests: `tests/test_live_capture.py` (recorder end-to-end on a temp dir,
   writer-side stop, drop-not-block, recovery, comms commands, web routes, the
   SatChecker query builder).

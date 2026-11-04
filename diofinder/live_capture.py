@@ -243,6 +243,34 @@ def prune_archives(directory=DEFAULT_DIR, keep_mb=8000.0, protect=None):
     return gone
 
 
+def tone_info(tuning_path):
+    """The camera's brightness transform, copied from the libcamera tuning
+    file the camera loaded, so offline photometry can undo it exactly
+    (``tests/sat_photometry.py``): the contrast (gamma) curve as flat
+    [in, out, in, out, ...] 16-bit points, whether adaptive contrast is on,
+    and the black level. None if the file can't be read."""
+    try:
+        with open(tuning_path) as f:
+            t = json.load(f)
+    except (OSError, ValueError, TypeError):
+        return None
+    algos = t.get("algorithms", []) if isinstance(t, dict) else []
+    out = {"tuning_file": tuning_path}
+    for a in algos:
+        if not isinstance(a, dict) or len(a) != 1:
+            continue
+        (k, v), = a.items()
+        if k == "rpi.contrast" and isinstance(v, dict):
+            out["gamma_curve"] = v.get("gamma_curve")
+            out["contrast_enhance"] = bool(v.get("ce_enable", 1))
+        elif k == "rpi.black_level" and isinstance(v, dict):
+            out["black_level"] = v.get("black_level")
+        elif k == "rpi.alsc":
+            out["lens_shading_correction"] = True
+    out.setdefault("lens_shading_correction", False)
+    return out if out.get("gamma_curve") else None
+
+
 def free_mb(directory):
     try:
         st = os.statvfs(directory)
@@ -564,6 +592,8 @@ class LiveRecorder:
             # Where the time came from when recording started (network time or
             # SkySafari's sync, which sets whole seconds only).
             "clock": ctl.get("clock"),
+            # The brightness transform (tone curve) in force, for photometry.
+            "tone": tone_info(getattr(self._cfg, "camera_tuning_file", "") or ""),
             "test_mode": bool(ctl.get("test_mode", False)),
             "version": getattr(self._cfg, "version", None),
         }
