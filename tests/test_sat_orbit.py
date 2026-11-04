@@ -144,3 +144,26 @@ def test_cli_fit_and_predict_files(obs_files, tmp_path):
     pj = json.loads((out / "predictions.json").read_text())
     assert pj and pj[0]["timing_sigma_s"] < 10
     assert "Visible passes of TEST OBJ" in (out / "predictions.txt").read_text()
+
+
+def test_predict_every_object_in_a_file(tmp_path):
+    p = tmp_path / "classfd.tle"
+    p.write_text(tsi.CLASSFD)
+    els = si.load_elements([str(p)])                      # 2 NOSS + 1 geostationary
+    start = PASSES[0] - 0.02
+    got = so.predict_all(els, SITE, start, hours=30, min_elevation=25)
+    assert got and all(a["max_jd"] <= b["max_jd"] for a, b in zip(got, got[1:]))
+    assert {p["norad"] for p in got} <= {31701, 31708}      # GEO skipped by default
+    one = so.predict(TRUTH, SITE, start, hours=30, min_elevation=25)
+    mine = [p for p in got if p["norad"] == 31701]
+    assert [p["max_utc"] for p in mine] == [p["max_utc"] for p in one]
+    assert all(p["epoch_age_days"] is not None and p["rate_deg_s_at_max"] > 0.1 for p in mine)
+    txt = so.format_summary(got, "classfd")
+    assert "NOSS 3-4 (A)" in txt and "31701" in txt
+    out = tmp_path / "plan"
+    so.main(["predict", str(p), "--lat", str(SITE["latitude_deg"]),
+             "--lon", str(SITE["longitude_deg"]), "--start",
+             si.so.jd_to_utc(start).strftime("%Y-%m-%dT%H:%M:%S"), "--hours", "30",
+             "--min-elevation", "25", "--name", "noss", "--out", str(out)])
+    rows = (out / "predictions.csv").read_text().splitlines()
+    assert len(rows) == 1 + len(got) and "NOSS" in rows[1]

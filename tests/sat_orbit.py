@@ -23,8 +23,10 @@ Two commands:
     Writes ``fit.json`` (elements, covariance, residuals), ``fit.tle``
     (classic TLE; Alpha-5 for 100000-339999) and ``fit_omm.{json,xml,kvn}``.
 
-``predict``  ELEMENTS (fit.json, TLE/3LE or OMM)
-    Upcoming visible passes (satellite sunlit, observer in darkness, above
+``predict``  ELEMENTS (fit.json, TLE/3LE or OMM file, or a .zip such as classfd.zip)
+    With a file of many objects (and no --norad / --name filter) every object
+    is predicted and the passes are listed together in time order, one line
+    each (--tables adds the pointing tables). Upcoming visible passes (satellite sunlit, observer in darkness, above
     --min-elevation) for a site, with rise / highest / set times, alt/az and
     RA/Dec (J2000, what the finder and SkySafari charts show), and a pointing
     table every --step seconds. From a fit.json the covariance gives each
@@ -545,25 +547,38 @@ def altaz(u, zen):
     return alt, az
 
 
-def predict(satrec, site, jd_start, hours=24.0, min_elevation=20.0, step_s=10.0,
-            sun_max_alt=-6.0, fit_result=None, table_step_s=30.0):
-    """Visible passes. Returns a list of dicts (rise/max/set, pointing table,
-    timing sigma when a fit's covariance is given)."""
-    jd = jd_start + np.arange(0, hours * 3600.0 + step_s, step_s) / 86400.0
-    geom = si.Geometry(site, jd[0], jd[-1])
-    e, r = si.propagate([satrec], jd)
-    ok = e[0] == 0
-    u, sin_el = geom.topo_unit(r[0], jd)
-    zen = geom.zenith(jd)
-    alt, az = altaz(u, zen)
-    sun = _sun_dirs(jd[::6])
-    sun = np.repeat(sun, 6, axis=0)[:len(jd)]
-    sun_alt = np.degrees(np.arcsin(np.clip(np.sum(sun * zen, -1), -1, 1)))
-    g = geom.sat_gcrs(r[0])
-    along = np.sum(g * sun, -1)
-    perp = np.linalg.norm(g - along[:, None] * sun, axis=-1)
+class Sky:
+    """The time grid, observer, zenith and Sun for a prediction window,
+    computed once and shared by every object predicted over it."""
+
+    def __init__(self, site, jd_start, hours=24.0, step_s=10.0):
+        self.jd = jd_start + np.arange(0, hours * 3600.0 + step_s, step_s) / 86400.0
+        self.geom = si.Geometry(site, self.jd[0], self.jd[-1])
+        self.zen = self.geom.zenith(self.jd)
+        sun = _sun_dirs(self.jd[::6])
+        self.sun = np.repeat(sun, 6, axis=0)[:len(self.jd)]
+        self.sun_alt = np.degrees(np.arcsin(np.clip(np.sum(self.sun * self.zen, -1), -1, 1)))
+
+
+def _passes_from(sky, err, r, min_elevation=20.0, sun_max_alt=-6.0, fit_result=None,
+                 table_step_s=30.0):
+    """Visible passes of one object from its propagated TEME positions r
+    (N, 3) on the sky grid (err = SGP4 error codes)."""
+    jd, geom = sky.jd, sky.geom
+    ok = err == 0
+    dark = sky.sun_alt <= sun_max_alt
+    if not np.any(ok & dark):
+        return []
+    u, _ = geom.topo_unit(r, jd)
+    alt, az = altaz(u, sky.zen)
+    up = ok & dark & (alt >= min_elevation)
+    if not np.any(up):
+        return []
+    g = geom.sat_gcrs(r)
+    along = np.sum(g * sky.sun, -1)
+    perp = np.linalg.norm(g - along[:, None] * sky.sun, axis=-1)
     lit = ~((along < 0) & (perp < si.EARTH_RADIUS_KM))
-    vis = ok & (alt >= min_elevation) & (sun_alt <= sun_max_alt) & lit
+    vis = up & lit
     passes = []
     i = 0
     while i < len(jd):
@@ -583,11 +598,15 @@ def predict(satrec, site, jd_start, hours=24.0, min_elevation=20.0, step_s=10.0,
                             "alt": round(float(alt[m]), 1), "az": round(float(az[m]), 1),
                             "ra": round(float(ra[m - i]), 3), "dec": round(float(dec[m - i]), 3)})
                 last = jd[m]
+        kk = min(k + 1, len(jd) - 1)
+        rate = float(si._ang(u[k], u[kk])) / max((jd[kk] - jd[k]) * 86400.0, 1e-9) \
+            if kk != k else None
         p = {"start_utc": si._utc(jd[i]), "max_utc": si._utc(jd[k]), "end_utc": si._utc(jd[j]),
              "max_jd": float(jd[k]), "max_alt": round(float(alt[k]), 1),
              "max_az": round(float(az[k]), 1), "ra_at_max": round(float(ra[k - i]), 3),
              "dec_at_max": round(float(dec[k - i]), 3),
              "range_km_at_max": round(float(np.linalg.norm(g[k] - geom.observer(jd[k]))), 0),
+             "rate_deg_s_at_max": round(rate, 3) if rate is not None else None,
              "table": tab, "timing_sigma_s": None, "cross_sigma_km": None}
         if fit_result is not None:
             ts, cs = timing_sigma(fit_result["p"], fit_result["cov"], fit_result["epoch_jd"],
@@ -605,6 +624,70 @@ def predict(satrec, site, jd_start, hours=24.0, min_elevation=20.0, step_s=10.0,
         passes.append(p)
         i = j + 1
     return passes
+
+
+def predict(satrec, site, jd_start, hours=24.0, min_elevation=20.0, step_s=10.0,
+            sun_max_alt=-6.0, fit_result=None, table_step_s=30.0, sky=None):
+    """Visible passes of one object. Returns a list of dicts (rise/max/set,
+    pointing table, timing sigma when a fit's covariance is given)."""
+    sky = sky or Sky(site, jd_start, hours, step_s)
+    e, r = si.propagate([satrec], sky.jd)
+    return _passes_from(sky, e[0], r[0], min_elevation, sun_max_alt, fit_result, table_step_s)
+
+
+MIN_REV_PER_DAY = 2.0     # slower objects (GEO, high orbits) are skipped by default
+
+
+def predict_all(elems, site, jd_start, hours=24.0, min_elevation=20.0, step_s=10.0,
+                sun_max_alt=-6.0, table_step_s=30.0, min_rev_per_day=MIN_REV_PER_DAY,
+                batch=40, log=None):
+    """Visible passes of every element set in ``elems``, merged and sorted by
+    the time of highest elevation. Each pass also carries name, norad,
+    source and the element set's age (days) at the pass."""
+    sky = Sky(site, jd_start, hours, step_s)
+    keep = [e for e in elems
+            if e.satrec.no_kozai * MIN_PER_DAY / TWO_PI >= (min_rev_per_day or 0)]
+    if log and len(keep) < len(elems):
+        log(f"{len(elems) - len(keep)} slow object(s) (< {min_rev_per_day:g} rev/day: "
+            "geostationary, high orbits) skipped; --all-orbits to include them")
+    out = []
+    for b0 in range(0, len(keep), batch):
+        chunk = keep[b0:b0 + batch]
+        e, r = si.propagate([x.satrec for x in chunk], sky.jd)
+        for i, el in enumerate(chunk):
+            for p in _passes_from(sky, e[i], r[i], min_elevation, sun_max_alt, None,
+                                  table_step_s):
+                p.update(name=el.name, norad=el.norad, norad_str=el.norad_str,
+                         source=el.source,
+                         epoch_age_days=round(p["max_jd"] - el.epoch_jd, 1))
+                out.append(p)
+    out.sort(key=lambda p: p["max_jd"])
+    return out
+
+
+def format_summary(passes, title, tables=False):
+    """One line per pass (several objects), optional pointing tables."""
+    lines = [f"{title}: {len(passes)} visible pass(es)"]
+    if not passes:
+        lines.append("  none in the window")
+    lines.append("  highest at (UTC)          object                     number  alt  az   "
+                 "RA       Dec     rate    visible (UTC)        elements")
+    for p in passes:
+        t = p["max_utc"].replace(" UTC", "")
+        lines.append(
+            f"  {t:<25} {p.get('name', '')[:26]:<26} {p.get('norad_str', ''):>6} "
+            f"{p['max_alt']:4.0f} {p['max_az']:4.0f}  {p['ra_at_max']:7.2f} "
+            f"{p['dec_at_max']:+7.2f}  {(p.get('rate_deg_s_at_max') or 0):5.2f}/s  "
+            f"{p['start_utc'][11:19]}-{p['end_utc'][11:19]}  "
+            f"{p.get('epoch_age_days', 0):+.1f} d")
+        if tables:
+            for row in p["table"]:
+                lines.append(f"      {row['utc']}  alt {row['alt']:5.1f}  az {row['az']:5.1f}  "
+                             f"RA {row['ra']:8.3f}  Dec {row['dec']:+7.3f}")
+    lines.append("Elements a few days old or more: the path across the sky stays close, but "
+                 "the TIME can be off by minutes (classified objects manoeuvre). Be pointed "
+                 "early.")
+    return "\n".join(lines)
 
 
 # --------------------------------------------------------------------------- #
@@ -710,23 +793,32 @@ def cmd_fit(a):
     print(f"written to {out}")
 
 
+def _select(els, norad=None, name=None):
+    if norad:
+        want = {int(x) for x in str(norad).replace(" ", "").split(",") if x}
+        els = [e for e in els if e.norad in want]
+    if name:
+        els = [e for e in els if name.lower() in (e.name or "").lower()]
+    return els
+
+
 def cmd_predict(a):
     fit_res = None
+    els = None
     if a.elements.endswith(".json"):
         with open(a.elements) as f:
             head = json.load(f)
         if isinstance(head, dict) and head.get("format") == "diofinder-sat-orbit/1":
             satrec, name, fit_res = load_fit(a.elements)
         else:
-            e = si.load_elements([a.elements])[0]
-            satrec, name = e.satrec, e.name
+            els = si.load_elements([a.elements])
     else:
         els = si.load_elements([a.elements])
-        if a.norad:
-            els = [e for e in els if e.norad == int(a.norad)]
+    if els is not None:
+        els = _select(els, a.norad, a.name)
         if not els:
-            raise SystemExit("no element set")
-        satrec, name = els[0].satrec, els[0].name
+            raise SystemExit("no element set" + (" matches the --norad/--name filter"
+                                                  if a.norad or a.name else ""))
     if a.site_from:
         with open(a.site_from) as f:
             site = json.load(f)["site"]
@@ -736,9 +828,18 @@ def cmd_predict(a):
         raise SystemExit("give --site-from OBS.json or --lat/--lon (east positive)")
     jd0 = _parse_utc(a.start) if a.start else \
         2440587.5 + dt.datetime.now(dt.timezone.utc).timestamp() / 86400.0
-    passes = predict(satrec, site, jd0, a.hours, a.min_elevation, fit_result=fit_res,
-                     table_step_s=a.step)
-    text = format_passes(passes, name)
+    if els is not None and len(els) > 1:
+        print(f"{len(els)} element sets; predicting all of them")
+        passes = predict_all(els, site, jd0, a.hours, a.min_elevation, table_step_s=a.step,
+                             min_rev_per_day=0 if a.all_orbits else MIN_REV_PER_DAY,
+                             log=print)
+        text = format_summary(passes, os.path.basename(a.elements), tables=a.tables)
+    else:
+        if els is not None:
+            satrec, name = els[0].satrec, els[0].name
+        passes = predict(satrec, site, jd0, a.hours, a.min_elevation, fit_result=fit_res,
+                         table_step_s=a.step)
+        text = format_passes(passes, name)
     print(text)
     if a.out:
         os.makedirs(a.out, exist_ok=True)
@@ -746,6 +847,18 @@ def cmd_predict(a):
             f.write(text + "\n")
         with open(os.path.join(a.out, "predictions.json"), "w") as f:
             json.dump(passes, f, indent=1)
+        with open(os.path.join(a.out, "predictions.csv"), "w", newline="") as f:
+            import csv
+            w = csv.writer(f)
+            w.writerow(["max_utc", "name", "norad", "max_alt", "max_az", "ra_at_max",
+                        "dec_at_max", "rate_deg_s", "start_utc", "end_utc", "range_km",
+                        "elements_age_days", "timing_sigma_s"])
+            for p in passes:
+                w.writerow([p["max_utc"], p.get("name", ""), p.get("norad_str", ""),
+                            p["max_alt"], p["max_az"], p["ra_at_max"], p["dec_at_max"],
+                            p.get("rate_deg_s_at_max"), p["start_utc"], p["end_utc"],
+                            p["range_km_at_max"], p.get("epoch_age_days", ""),
+                            p.get("timing_sigma_s") or ""])
 
 
 def main(argv=None):
@@ -764,8 +877,15 @@ def main(argv=None):
     g.add_argument("--full", action="store_true", help="force all 6 elements")
     f.add_argument("--out", help="output folder (default <first obs folder>/orbit)")
     p = sub.add_parser("predict", help="upcoming visible passes")
-    p.add_argument("elements", help="fit.json, TLE/3LE or OMM file")
-    p.add_argument("--norad", help="select this object from a multi-object file")
+    p.add_argument("elements", help="fit.json, or a TLE/3LE/OMM file or .zip of them "
+                                    "(e.g. classfd.zip)")
+    p.add_argument("--norad", help="only these catalog numbers (comma-separated); without "
+                                   "--norad/--name every object in the file is predicted")
+    p.add_argument("--name", help="only objects whose name contains this (e.g. NOSS, USA)")
+    p.add_argument("--all-orbits", action="store_true",
+                   help="include slow objects (< 2 rev/day: geostationary, high orbits)")
+    p.add_argument("--tables", action="store_true",
+                   help="with several objects: also print each pass's pointing table")
     p.add_argument("--site-from", help="observations.json whose site to use")
     p.add_argument("--lat", type=float)
     p.add_argument("--lon", type=float, help="east positive")

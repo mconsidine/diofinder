@@ -1308,7 +1308,11 @@ POST) archives; names must match `livecap_<YYYYMMDDTHHMMSSZ>.zip` exactly.
   `--start` = refine a known element set) → `fit.json` (with covariance),
   `fit.tle`, `fit_omm.*`; `predict` → visible passes (sunlit, dark sky,
   `--min-elevation`) with alt/az/RA/Dec pointing tables and timing ± (flagged
-  "timing UNKNOWN" past 1/6 revolution). Tests: `tests/test_sat_identify.py`
+  "timing UNKNOWN" past 1/6 revolution). Given a multi-object file (e.g.
+  `classfd.zip`) and no `--norad`/`--name` filter it predicts every object
+  (`predict_all`, one shared `Sky` grid; < 2 rev/day skipped unless
+  `--all-orbits`) and lists all passes in time order with each element set's
+  age (`--tables` for pointing tables; `predictions.csv`). Tests: `tests/test_sat_identify.py`
   (end to end on a synthetic capture drawn from a real classfd element set,
   37 s timing error), `tests/test_sat_photometry_tracks.py` (tone round trip,
   calibration, dash flux + flash period, light-curve classes, IOD columns,
