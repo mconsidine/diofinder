@@ -1281,15 +1281,22 @@ POST) archives; names must match `livecap_<YYYYMMDDTHHMMSSZ>.zip` exactly.
   point + shared vignetting from the matched stars, dash light measured
   against the steady sky; per-track magnitude ± (incl. a 0.15 mag colour
   term), `lightcurve_<id>.csv/.png`, Lomb-Scargle flash period (numpy FAP —
-  astropy's needs scipy), behaviour S/F/X. **Reports**: `--points-per-pass`
-  (4) IOD lines per track, uncertainty codes from the arc scatter + WCS fit
+  astropy's needs scipy), IOD behaviour S/F/R/I/X (periodic → F if
+  flash-like, else R; aperiodic → X if flash-like, else I). **Reports**
+  (checked against G. Lewis' IOD Version 0 description, which the user
+  supplied — satobs.org is not reachable from the sandbox): `--points-per-pass`
+  (4) IOD lines per track; angle format 2, whose position uncertainty (cols
+  63–64) is in ARCMINUTES (`iod_line` converts from degrees; MX rounded up),
+  uncertainty codes from the arc scatter + WCS fit
   and from the capture's clock record (`clock_uncertainty`: NTP 0.05 s,
   phone 0.2 s, SkySafari 1 s, else 10 s + a do-not-post warning;
-  `--time-unc`), `--status E/G/F/P`, magnitude/uncertainty/flash period in
-  IOD cols 67–80 (our reading of the spec — verify on satobs.org;
-  `--no-iod-mag`), unknown objects `99999 99 099A` (`--unknown-desig`) named
-  `unkYYMMDD`, and `seesat_post.txt` (station/equipment/clock header + IOD +
-  name + refined TLE). `observations.json` (format
+  `--time-unc`), `--status` sky code E/G/F/P/B/T, magnitude (67–70) /
+  uncertainty (72–73) / flash period (75–80) per the spec (`--no-iod-mag`),
+  unknown objects `99999 99 099A` (`--unknown-desig`) named `unkYYMMDD`;
+  the same points in R.D.E. format (`observations_rde.txt`: unknown =
+  `9900000`, pieces A=01 skipping I/O, `--time-standard`); and
+  `seesat_post.txt` (station/equipment/conditions/clock header + IOD + name +
+  refined TLE; `--conditions`, `--equipment`). `observations.json` (format
   `diofinder-sat-observations/1`: site, clock, tracks with per-point sigma) feeds
   **`tests/sat_orbit.py`**: `fit` (one pass → circular 4-element orbit with a
   4.5 % mean-motion model error, so timing is honest; two+ passes → all 6

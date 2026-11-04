@@ -31,16 +31,21 @@ Outputs (in --out, default ``<archive>_ident/``):
     over the arc, in the IOD format used by the SeeSat-L community and read by
     Find_Orb, sat_id and satfit. Uncertainty codes come from the measurement
     (arc scatter + frame WCS fit) and from the capture's clock record; set
-    --station (9999 = placeholder) and --status (E/G/F/P). Unidentified objects
-    are written as 99999 99 099A (--unknown-desig). Magnitude, its uncertainty
-    and the flash period go in columns 67-80 (--no-iod-mag to omit).
+    --station (9999 = placeholder) and --status (sky: E/G/F/P/B/T).
+    Unidentified objects are written as 99999 99 099A (--unknown-desig).
+    Behaviour (S/F/R/I/X), magnitude, its uncertainty and the flash period go
+    in columns 66-80 (--no-iod-mag to omit the photometry).
+  * ``observations_rde.txt``: the same points in Russell Eberst's R.D.E.
+    format (header line, day lines, brightest/faintest magnitude, flash
+    period, remark code; unknown objects 9900000; --time-standard).
   * ``seesat_post.txt``: a draft SeeSat-L message (station, equipment, clock,
-    the IOD lines, the object's name or unkYYMMDD, the refined TLE).
+    conditions (--status sky code + --conditions), the IOD lines, the object's
+    name or unkYYMMDD, the refined TLE).
   * ``observations.json``: every frame's position with sigma, the site and the
     clock; ``sat_orbit.py fit`` reads it.
   * ``lightcurve_<track>.csv`` / ``.png``: magnitude per frame and along the
     dashes; the identification report gives the magnitude, flash period and
-    behaviour (S steady, F constant flash period, X irregular).
+    behaviour (S steady, F constant flash period, I irregular).
   * ``identification.txt`` / ``.json``: per track, the candidates (name,
     catalog number, source file, element-set age, time offset, rms, cross-
     track offset, rate ratio, direction difference, sunlit or in shadow).
@@ -681,29 +686,32 @@ def write_tle(records, path):
 # --------------------------------------------------------------------------- #
 
 def _mx(value, unit_exp_offset=8):
-    """IOD 'MX' uncertainty: value = M * 10**(X - 8), M and X single digits."""
+    """IOD 'MX' uncertainty: value = M * 10**(X - 8), M and X single digits.
+    Rounded UP (an uncertainty is never understated): 1.2 -> 2 x 10**0."""
     if not value or value <= 0:
         return "  "
-    x = int(math.floor(math.log10(value))) + unit_exp_offset
-    m = int(round(value / 10 ** (x - unit_exp_offset)))
+    x = int(math.floor(math.log10(value) + 1e-9)) + unit_exp_offset
+    m = int(math.ceil(value / 10 ** (x - unit_exp_offset) - 1e-6))
     if m >= 10:
         m, x = 1, x + 1
-    return f"{min(max(m, 1), 9)}{min(max(x, 0), 9)}"
+    if x > 9:
+        return "99"                                    # the largest code
+    return f"{min(max(m, 1), 9)}{max(x, 0)}"
 
 
 def iod_line(ob, norad="99999", intldesg="", station="9999", status="G",
              time_unc_s=0.1, pos_unc_deg=0.02, behaviour=" ", mag=None, mag_unc=None,
              flash_period_s=None):
-    """One observation in IOD format (angle format 2 = RA HHMMmmm, Dec
-    +DDMMmm; epoch code 5 = J2000). Columns as in the SeeSat-L IOD spec
-    example '23794 96 010A   2701 G 19990402012334770 17 25 1324520+382450 37 S'.
-    Optional photometry after the behaviour code (col 66): magnitude sign
-    (col 67) and value in tenths (68-70, '+045' = 4.5), its uncertainty in
-    tenths (72-73, '03' = 0.3), and the flash period in seconds (75-80,
-    three integer digits then three decimals with the point implied:
-    '002250' = 2.25 s). These photometry columns follow our reading of the
-    IOD description; check them against satobs.org/position/IODformat.html
-    before posting them."""
+    """One observation in IOD format (G. Lewis, IOD Version 0, clarified
+    2002; satobs.org/position/IODformat.html): angle format 2 = RA HHMMmmm,
+    Dec +DDMMmm, whose positional uncertainty (cols 63-64) is in MINUTES of
+    arc (``pos_unc_deg`` is converted); epoch code 5 = J2000; time
+    uncertainty (42-43) in seconds. Both MX = M * 10**(X - 8). Photometry
+    after the behaviour code (col 66): magnitude sign (col 67) and value
+    (68-70, point implied between 69 and 70: '+045' = 4.5), its uncertainty
+    (72-73, point between 72 and 73: '03' = 0.3), and the flash period in
+    seconds (75-80, point between 77 and 78: '002250' = 2.25 s). Example
+    '23794 96 010A   2701 G 19990402012334770 17 25 1324520+382450 37 S'."""
     t = dt.datetime(2000, 1, 1, 12, tzinfo=dt.timezone.utc) + \
         dt.timedelta(days=ob["jd"] - 2451545.0)
     ms = int(round(t.microsecond / 1000.0))
@@ -726,7 +734,7 @@ def iod_line(ob, norad="99999", intldesg="", station="9999", status="G",
     if intldesg and len(intldesg) >= 5:
         yy, num, piece = intldesg[:2], intldesg[2:5], intldesg[5:].ljust(3)[:3]
     line = (f"{str(norad)[:5]:>5} {yy} {num}{piece} {station:>4} {status} {stamp} "
-            f"{_mx(time_unc_s)} 25 {angles} {_mx(pos_unc_deg)} {behaviour or ' '}")
+            f"{_mx(time_unc_s)} 25 {angles} {_mx(pos_unc_deg * 60.0)} {behaviour or ' '}")
     if mag is not None and -9.9 <= mag <= 99.9:
         tenths = int(math.floor(abs(mag) * 10 + 0.5))
         line += f"{'-' if mag < 0 else '+'}{min(tenths, 999):03d}"
@@ -741,6 +749,10 @@ def iod_line(ob, norad="99999", intldesg="", station="9999", status="G",
 # --------------------------------------------------------------------------- #
 # Reporting helpers: clock, uncertainties, point selection
 # --------------------------------------------------------------------------- #
+
+# IOD col 22 sky condition codes (G. Lewis, IOD Version 0).
+SKY_CODES = {"E": "excellent", "G": "good", "F": "fair", "P": "poor", "B": "bad",
+             "T": "terrible"}
 
 TIME_UNC_NTP_S = 0.05
 TIME_UNC_PHONE_S = 0.2
@@ -1050,9 +1062,105 @@ def summarize_photometry(r, cadence_s):
     if lc["behaviour"] is None and out.get("frame_scatter_mag") is not None \
             and out["n_clean"] >= 3:
         lc["behaviour"] = "S" if out["frame_scatter_mag"] < 0.3 else \
-            ("X" if out["frame_scatter_mag"] > 0.75 else "S")
+            ("I" if out["frame_scatter_mag"] > 0.75 else "S")
     out["light_curve"] = lc
     return out
+
+
+# --------------------------------------------------------------------------- #
+# R.D.E. format (Russell D. Eberst; satobs.org/position/RDEformat.html)
+# --------------------------------------------------------------------------- #
+
+# COSPAR piece letters skip I and O; R.D.E. numbers them A = 01, B = 02, ...
+_PIECE_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ"
+
+
+def rde_desig(intldesg):
+    """'04012C' -> '0401203'; unknown or unrepresentable -> '9900000'."""
+    if not intldesg or len(intldesg) < 6 or not intldesg[:5].isdigit():
+        return "9900000"
+    piece = intldesg[5:].strip().upper()
+    n = 0
+    for ch in piece:
+        if ch not in _PIECE_LETTERS:
+            return "9900000"
+        n = n * len(_PIECE_LETTERS) + _PIECE_LETTERS.index(ch) + 1
+    return intldesg[:5] + f"{n:02d}" if 1 <= n <= 99 else "9900000"
+
+
+def _rde_mag(m):
+    if m is None:
+        return "    "
+    m = max(-9.9, min(99.9, m))
+    return f"{m:4.1f}" if m < 0 or m >= 10 else f" {m:3.1f}"
+
+
+def _rde_period(p):
+    """SSS.sss: leading zero below 1, no trailing zeros, no point for whole
+    numbers; '0' when there is no flash period."""
+    if not p:
+        return "0"
+    s = f"{p:.3f}".rstrip("0").rstrip(".")
+    return s
+
+
+def rde_line(ob, intldesg, mag_bright=None, mag_faint=None, period_s=None, remark="S"):
+    t = so.jd_to_utc(ob["jd"])
+    cs = int(round(t.microsecond / 1e4))
+    if cs == 100:
+        t, cs = t + dt.timedelta(seconds=1), 0
+    ra_s = int(round((ob["ra"] % 360.0) / 15.0 * 3600.0)) % 86400
+    dec_s = int(round(abs(ob["dec"]) * 3600.0))
+    sign = "-" if ob["dec"] < 0 else "+"
+    radec = (f"{ra_s // 3600:02d}{ra_s // 60 % 60:02d}{ra_s % 60:02d}"
+             f"{sign}{dec_s // 3600:02d}{dec_s // 60 % 60:02d}{dec_s % 60:02d}")
+    if mag_faint is None:
+        mag_faint = mag_bright
+    return (f"{rde_desig(intldesg)} {t.strftime('%H%M%S')}.{cs:02d} {radec}"
+            f"{_rde_mag(mag_bright)}{_rde_mag(mag_faint)} {_rde_period(period_s)} "
+            f"{remark or ' '}").rstrip()
+
+
+def rde_report(results, station, t_unc, time_standard="1"):
+    """Header line (site, YYMM, time accuracy, time standard, position format
+    1, position accuracy in arcsec, epoch 5 = 2000), a day line whenever the
+    day changes, then one line per reported observation."""
+    rows = []
+    for r in results:
+        m = r.get("match")
+        intl = m["element_set"].intldesg if m else ""
+        p = r.get("photometry") or {}
+        lc = p.get("light_curve") or {}
+        beh = lc.get("behaviour") or "S"
+        bright = faint = None
+        if p.get("mag") is not None and not p.get("bright_limit"):
+            amp = 0.0 if beh == "S" else (lc.get("amplitude_mag") or 0.0)
+            bright, faint = p["mag"] - amp / 2, p["mag"] + amp / 2
+        period = lc.get("period_s") if beh in ("F", "R") else None
+        pos_as = max(1, int(math.ceil(r["sigma_pos_deg"] * 3600.0)))
+        for i in r.get("selected") or []:
+            ob = r["obs"][i]
+            rows.append((ob["jd"], pos_as, rde_line(ob, intl, bright, faint, period, beh)))
+    if not rows:
+        return ""
+    rows.sort()
+    out, cur_month, cur_day = [], None, None
+    for jd, pos_as, line in rows:
+        t = so.jd_to_utc(jd)
+        if t.strftime("%y%m") != cur_month:
+            cur_month, cur_day = t.strftime("%y%m"), None
+            acc = max(pos_as for _, pos_as, _ in rows)
+            if out:
+                out.append("999")
+            out.append(f"{str(station)[:4]:>4} {cur_month} "
+                       f"{min(max(t_unc, 0.1), 9.9):3.1f}{str(time_standard)[:1]}1 "
+                       f"{min(acc, 999):03d}5")
+        if t.strftime("%d") != cur_day:
+            cur_day = t.strftime("%d")
+            out.append(cur_day)
+        out.append(line)
+    out.append("999")
+    return "\n".join(out) + "\n"
 
 
 # --------------------------------------------------------------------------- #
@@ -1072,8 +1180,10 @@ def run(archive, elems, out, window_s=600.0, responses=None, fetch=None,
         max_offset_s=600.0, max_cross_deg=1.0, readout_ms=0.0, station="9999",
         show_unlit=False, log=print, link=True, link_include=("fit",), status="G",
         points_per_pass=4, time_unc_s=None, unknown_desig="99099A", photometry=True,
-        iod_photometry=True):
-    """Everything; returns the per-track results (also written to ``out``)."""
+        iod_photometry=True, report=None):
+    """Everything; returns the per-track results (also written to ``out``).
+    ``report``: optional {"conditions", "equipment", "time_standard"} for the
+    message draft and the R.D.E. header."""
     os.makedirs(out, exist_ok=True)
     empty = {"data": {"satellites": {}}}
     res = so.analyse(archive, None, window_s, responses or {},
@@ -1159,7 +1269,7 @@ def run(archive, elems, out, window_s=600.0, responses=None, fetch=None,
         log("no timed trails or tracks found (need an object seen in 3 or more frames)")
         _write_outputs(results, [], out, archive, session, station, status, t_unc,
                        clock_note, postable, points_per_pass, unknown_desig, iod_photometry,
-                       log)
+                       log, report)
         return results
     cadence = _cadence_s(res)
     for r in results:
@@ -1184,7 +1294,8 @@ def run(archive, elems, out, window_s=600.0, responses=None, fetch=None,
             r["refined"] = refine(r["match"], r["obs"], geom)
             refined.append((r, r["refined"]))
     _write_outputs(results, refined, out, archive, session, station, status, t_unc,
-                   clock_note, postable, points_per_pass, unknown_desig, iod_photometry, log)
+                   clock_note, postable, points_per_pass, unknown_desig, iod_photometry, log,
+                   report)
     return results
 
 
@@ -1196,7 +1307,7 @@ def _iod_for(r, station, status, t_unc, points_per_pass, unknown_desig, iod_phot
     p = r.get("photometry") or {}
     lc = p.get("light_curve") or {}
     beh = lc.get("behaviour") or " "
-    period = lc.get("period_s") if beh == "F" else None
+    period = lc.get("period_s") if beh in ("F", "R") else None
     sel = select_points(r["obs"], points_per_pass)
     lines = []
     for i in sel:
@@ -1273,7 +1384,8 @@ def _write_lightcurve(r, out):
 
 def _write_outputs(results, refined, out, archive, session, station, status, t_unc,
                    clock_note, postable, points_per_pass, unknown_desig, iod_photometry,
-                   log):
+                   log, report=None):
+    report = report or {}
     site = session.get("observer") or {}
     all_iod, post = [], []
     tracks_json = []
@@ -1281,6 +1393,7 @@ def _write_outputs(results, refined, out, archive, session, station, status, t_u
         sel, lines = _iod_for(r, station, status, t_unc, points_per_pass, unknown_desig,
                               iod_photometry)
         r["iod"] = lines
+        r["selected"] = sel
         all_iod += lines
         lc_file = _write_lightcurve(r, out) if r.get("photometry") else None
         m = r.get("match")
@@ -1302,6 +1415,8 @@ def _write_outputs(results, refined, out, archive, session, station, status, t_u
                 for i, o in enumerate(r["obs"])]})
     with open(os.path.join(out, "observations_iod.txt"), "w") as f:
         f.write("".join(ln + "\n" for ln in all_iod))
+    with open(os.path.join(out, "observations_rde.txt"), "w") as f:
+        f.write(rde_report(results, station, t_unc, report.get("time_standard", "1")))
     with open(os.path.join(out, "observations.json"), "w") as f:
         json.dump({"format": "diofinder-sat-observations/1",
                    "capture": os.path.basename(archive), "site": site,
@@ -1376,9 +1491,12 @@ def _write_outputs(results, refined, out, archive, session, station, status, t_u
         log(f"wrote refined elements for {len(refined)} track(s) (TLE, OMM KVN/XML/JSON/CSV)")
     # A SeeSat-L style message draft.
     post.append(f"Station {station}: {_site_text(site)}")
-    post.append("Equipment: diofinder plate-solving finder (Raspberry Pi HQ camera IMX477, "
-                f"~{(session.get('camera') or {}).get('fov_deg') or 13.5:.1f} deg field), "
-                "positions from per-frame plate solutions (J2000)")
+    post.append("Equipment: " + (report.get("equipment") or (
+        "diofinder plate-solving finder (Raspberry Pi HQ camera IMX477, "
+        f"~{(session.get('camera') or {}).get('fov_deg') or 13.5:.1f} deg field), "
+        "positions from per-frame plate solutions (J2000)")))
+    post.append(f"Conditions: {status} ({SKY_CODES.get(status, '?')})"
+                + (f"; {report['conditions']}" if report.get("conditions") else ""))
     post.append(f"Times: {clock_note}; time uncertainty {t_unc:g} s")
     if not postable:
         post.append("*** CLOCK NOT VERIFIED: check the times before posting ***")
@@ -1443,8 +1561,16 @@ def main(argv=None):
                     help="rolling-shutter readout time of a whole frame, ms (0)")
     ap.add_argument("--station", default="9999",
                     help="your IOD station number (9999 = placeholder)")
-    ap.add_argument("--status", default="G", choices=list("EGFP"),
-                    help="IOD station status: E excellent, G good, F fair, P poor (G)")
+    ap.add_argument("--status", default="G", choices=list(SKY_CODES),
+                    help="IOD sky condition: " + "; ".join(
+                        f"{k} {v}" for k, v in SKY_CODES.items()) + " (G)")
+    ap.add_argument("--conditions", default="",
+                    help="free-text observing conditions for seesat_post.txt "
+                         "(e.g. 'limiting mag 5, light haze')")
+    ap.add_argument("--equipment", help="equipment line for seesat_post.txt")
+    ap.add_argument("--time-standard", default="1",
+                    help="R.D.E. time standard code (1 = radio time signal; also used "
+                         "here for network/phone time) (1)")
     ap.add_argument("--points-per-pass", type=int, default=4,
                     help="IOD lines per track (spread over the arc; 0 = every frame) (4)")
     ap.add_argument("--time-unc", type=float,
@@ -1482,7 +1608,9 @@ def main(argv=None):
         link_include=("fit", "interp") if a.link_interp else ("fit",),
         status=a.status, points_per_pass=a.points_per_pass, time_unc_s=a.time_unc,
         unknown_desig=a.unknown_desig, photometry=not a.no_photometry,
-        iod_photometry=not a.no_iod_mag)
+        iod_photometry=not a.no_iod_mag,
+        report={"conditions": a.conditions, "equipment": a.equipment,
+                "time_standard": a.time_standard})
     print(f"results in {out}")
 
 

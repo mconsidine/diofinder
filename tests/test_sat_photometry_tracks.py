@@ -82,7 +82,7 @@ def test_calibration_recovers_zero_point_and_vignetting():
     assert cal["k"] == pytest.approx(-0.3, abs=0.1)
 
 
-def _dash_frame(rng, a, b, flux, flash_period_px=None, bg=400.0):
+def _dash_frame(rng, a, b, flux, flash_period_px=None, bg=400.0, glint=False):
     """Linear frame (sky already subtracted afterwards) with a dash from a to b."""
     lin = np.full((H, W), bg) + rng.normal(0, 20, (H, W))
     a, b = np.asarray(a, float), np.asarray(b, float)
@@ -91,7 +91,10 @@ def _dash_frame(rng, a, b, flux, flash_period_px=None, bg=400.0):
     for s in np.linspace(0, L, int(L * 4)):
         p = a + (b - a) * s / L
         f = flux / (L * 4)
-        if flash_period_px:
+        if flash_period_px and glint:                   # short flashes, faint between
+            ph_ = (s % flash_period_px) - flash_period_px / 2
+            f *= 0.2 + 4.0 * math.exp(-ph_ * ph_ / (2 * 3.0 ** 2))
+        elif flash_period_px:                            # smooth variation
             f *= 1.0 + 0.9 * math.sin(2 * math.pi * s / flash_period_px)
         sl = (slice(int(p[1]) - 5, int(p[1]) + 6), slice(int(p[0]) - 5, int(p[0]) + 6))
         lin[sl] += f / (2 * math.pi) * np.exp(-((xx[sl] - p[0]) ** 2 + (yy[sl] - p[1]) ** 2) / 2)
@@ -102,17 +105,19 @@ def test_measure_trail_flux_and_flash_period():
     rng = np.random.default_rng(5)
     a, b = (300.0, 200.0), (520.0, 330.0)                       # slanted, 255 px
     jd0, exp = 2461346.5, 1.0
-    for period_px, want in ((None, "S"), (40.0, "F")):
-        lin = _dash_frame(rng, a, b, 3.0e5, period_px)
+    for period_px, glint, want in ((None, False, "S"), (40.0, False, "R"),
+                                   (40.0, True, "F")):
+        lin = _dash_frame(rng, a, b, 3.0e5, period_px, glint=glint)
         raw = to_8bit(lin)
         resid = LIN(raw) - 400.0
         m = ph.measure_trail(resid, raw, a, b, jd0, jd0 + exp / 86400.0)
         assert m["full"] and m["saturated_px"] == 0
-        assert m["flux"] == pytest.approx(3.0e5, rel=0.1)
+        if not glint:
+            assert m["flux"] == pytest.approx(3.0e5, rel=0.1)
         s = ph.light_curve_summary(m["lc_jd"], m["lc_rate"], m["noise_rate"],
                                    min_period_s=4.0 / m["speed_px_s"])
         assert s["behaviour"] == want, s
-        if want == "F":
+        if want in ("F", "R"):
             # 40 px at 255 px/s
             assert s["period_s"] == pytest.approx(40.0 / 255.0, rel=0.05)
 
@@ -121,11 +126,18 @@ def test_light_curve_summary_classes():
     t = 2461346.5 + np.arange(200) * 0.05 / 86400.0
     steady = ph.light_curve_summary(t, np.full(200, 100.0) + np.random.default_rng(1).normal(0, 2, 200), 2.0)
     assert steady["behaviour"] == "S" and steady["period_s"] is None
-    flash = ph.light_curve_summary(t, 100 + 90 * np.sin(2 * np.pi * np.arange(200) * 0.05 / 1.7), 2.0)
-    assert flash["behaviour"] == "F" and flash["period_s"] == pytest.approx(1.7, rel=0.03)
+    tt = np.arange(200) * 0.05
+    smooth = ph.light_curve_summary(t, 100 + 90 * np.sin(2 * np.pi * tt / 1.7), 2.0)
+    assert smooth["behaviour"] == "R" and smooth["period_s"] == pytest.approx(1.7, rel=0.03)
+    ph_ = (tt % 1.7) - 0.85
+    glints = ph.light_curve_summary(t, 20 + 400 * np.exp(-ph_ ** 2 / (2 * 0.06 ** 2)), 2.0)
+    assert glints["behaviour"] == "F" and glints["period_s"] == pytest.approx(1.7, rel=0.03)
     rng = np.random.default_rng(2)
     irregular = ph.light_curve_summary(t, 100 * np.exp(rng.normal(0, 1.0, 200)), 2.0)
-    assert irregular["behaviour"] == "X"
+    assert irregular["behaviour"] == "I"
+    spikes = np.full(200, 20.0)
+    spikes[rng.choice(200, 15, replace=False)] = 400.0         # flashes at random times
+    assert ph.light_curve_summary(t, spikes, 2.0)["behaviour"] == "X"
     assert ph.light_curve_summary(t[:2], [1, 2], 1)["behaviour"] is None
 
 
@@ -134,11 +146,23 @@ def test_iod_photometry_columns_and_reporting_helpers():
     line = si.iod_line(ob, "99999", "99099A", "1775", "E", 0.2, 0.01, "F", 4.53, 0.25, 2.25)
     assert line[:13] == "99999 99 099A" and line[16:20] == "1775" and line[21] == "E"
     assert line[41:43] == "27"                                   # 0.2 s
-    assert line[62:64] == "16"                                   # 0.01 deg
+    assert line[62:64] == "67"                    # 0.01 deg = 0.6 arcmin (format 2)
     assert line[65] == "F" and line[66:70] == "+045" and line[71:73] == "03"
     assert line[74:80] == "002250"                               # 2.25 s, point implied
     assert si.iod_line(ob, behaviour="S", mag=-1.2, mag_unc=0.3)[66:70] == "-012"
     assert len(si.iod_line(ob, behaviour="S")) == 66             # no photometry
+    assert si._mx(1.2) == "28" and si._mx(0.05) == "56" and si._mx(500) == "99"
+    # R.D.E.: the example line of the format description.
+    import datetime as dt
+    t = dt.datetime(2004, 5, 5, 20, 57, 44, 760000, tzinfo=dt.timezone.utc)
+    ob = {"jd": 2440587.5 + t.timestamp() / 86400.0,
+          "ra": (18 + 55 / 60 + 44 / 3600) * 15, "dec": 32 + 46 / 60 + 6 / 3600}
+    assert si.rde_line(ob, "04012C", 4.0, 5.8, 3.0, "R") == \
+        "0401203 205744.76 185544+324606 4.0 5.8 3 R"
+    assert si.rde_line(ob, "", 4.4, None, None, "S").endswith(" 4.4 4.4 0 S")
+    assert si.rde_desig("04012J") == "0401209"                   # I is skipped
+    assert si.rde_desig("") == si.rde_desig("99099A?") == "9900000"
+    assert si._rde_period(0.5) == "0.5" and si._rde_period(12.25) == "12.25"
     # Clock record -> time uncertainty.
     phone = {"clock": {"trusted": True, "this_boot": True, "ntp_synchronized": False,
                        "last_sync": {"source": "phone", "action": "set"}}}

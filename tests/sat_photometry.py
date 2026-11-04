@@ -23,7 +23,9 @@ the finder tuning has no lens-shading stage. So:
    samples (position along the dash -> time, from the object's motion).
 4. ``light_curve_summary``: magnitude statistics, flash period (Lomb-Scargle)
    and an IOD optical-behaviour code: S steady, F constant flash period,
-   X irregular flashing.
+   R regular variations, I irregular, X irregular flash period (the IOD /
+   R.D.E. codes): periodic -> F if the light comes in short flashes above a
+   fainter baseline, else R; not periodic but varying -> X for flashes, else I.
 
 Limits worth knowing: 8-bit steps are coarse at the bright end and anything
 at 255 is clipped (the magnitude is then only an upper bound on faintness:
@@ -301,14 +303,16 @@ def light_curve_summary(jd, cflux, noise, min_period_s=0.15, fap_max=0.01):
     """Flash period and behaviour from light-curve samples. ``cflux`` =
     calibrated light (see ``calibrated``; any common scale works), ``noise`` =
     its typical 1-sigma error. Returns dict: n, span_s, period_s, fap,
-    amplitude_mag (5-95 percentile range), behaviour ('S' steady, 'F' constant
-    flash period, 'X' irregular flashing, None when too little data)."""
+    amplitude_mag (5-95 percentile range), flashy (bright excursions much
+    larger than faint ones), behaviour (IOD codes: 'S' steady, 'F' constant
+    flash period, 'R' regular variations, 'I' irregular, 'X' irregular flash
+    period; None when too little data)."""
     jd = np.asarray(jd, float)
     c = np.asarray(cflux, float)
     ok = np.isfinite(c) & np.isfinite(jd)
     jd, c = jd[ok], c[ok]
     out = {"n": int(len(jd)), "span_s": None, "period_s": None, "fap": None,
-           "amplitude_mag": None, "behaviour": None}
+           "amplitude_mag": None, "flashy": None, "behaviour": None}
     if len(jd) < 3:
         return out
     t = (jd - jd.min()) * 86400.0
@@ -320,6 +324,15 @@ def light_curve_summary(jd, cflux, noise, min_period_s=0.15, fap_max=0.01):
     hi, lo = np.percentile(pos, 95), max(np.percentile(pos, 5), 1e-30)
     amp = 2.5 * math.log10(hi / lo)
     out["amplitude_mag"] = round(amp, 2)
+    # Flashes (glints) are short brightenings above a fainter baseline: on
+    # the magnitude scale the bright excursions are much bigger than the
+    # faint ones. Smooth variations (tumbling, a sinusoid) are not.
+    mags = -2.5 * np.log10(pos)
+    m50 = float(np.median(mags))
+    bright_x = m50 - float(np.percentile(mags, 5))
+    faint_x = float(np.percentile(mags, 95)) - m50
+    flashy = bright_x > 2.0 * max(faint_x, 0.05)
+    out["flashy"] = bool(flashy)
     rel_noise = float(noise) / max(float(np.median(pos)), 1e-30)
     noise_mag = 1.0857 * rel_noise
     if len(jd) >= 20 and span > 3 * min_period_s:
@@ -336,9 +349,9 @@ def light_curve_summary(jd, cflux, noise, min_period_s=0.15, fap_max=0.01):
                 if fap < fap_max and amp > max(0.5, 3 * noise_mag):
                     out["period_s"] = round(1.0 / float(freq[i]), 3)
     if out["period_s"] is not None:
-        out["behaviour"] = "F"
+        out["behaviour"] = "F" if flashy else "R"
     elif amp > max(0.75, 4 * noise_mag):
-        out["behaviour"] = "X"
+        out["behaviour"] = "X" if flashy else "I"
     else:
         out["behaviour"] = "S"
     return out

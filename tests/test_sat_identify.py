@@ -182,10 +182,10 @@ def test_iod_line_columns():
     t = dt.datetime(1999, 4, 2, 1, 23, 34, 770000, tzinfo=dt.timezone.utc)
     jd = 2440587.5 + t.timestamp() / 86400.0                     # 1999-04-02 01:23:34.770
     ob = {"jd": jd, "ra": (13 + 24.520 / 60) * 15.0, "dec": 38 + 24.50 / 60}
-    line = si.iod_line(ob, "23794", "96010A", "2701", "G", 0.1, 0.3, "S")
+    line = si.iod_line(ob, "23794", "96010A", "2701", "G", 0.1, 0.005, "S")   # 0.3 arcmin
     assert line == "23794 96 010A   2701 G 19990402012334770 17 25 1324520+382450 37 S"
     neg = si.iod_line(dict(ob, dec=-(12 + 20.0 / 60)), station="9999", pos_unc_deg=0.02)
-    assert neg[47:61].endswith("-122000") and neg[62:64] == "26"
+    assert neg[47:61].endswith("-122000") and neg[62:64] == "28"   # 1.2 arcmin, rounded up
     assert neg.startswith("99999")
 
 
@@ -283,7 +283,12 @@ def test_end_to_end_capture_to_identification_and_files(tmp_path, elems, geom):
     p = r["photometry"]
     assert p["n_clean"] >= 10 and p["frame_scatter_mag"] < 0.1
     assert p["light_curve"]["behaviour"] == "S"
-    assert {"lightcurve_S1.1.csv", "lightcurve_S1.1.png", "seesat_post.txt"} <= files
+    assert {"lightcurve_S1.1.csv", "lightcurve_S1.1.png", "seesat_post.txt",
+            "observations_rde.txt"} <= files
+    rde = (out / "observations_rde.txt").read_text().splitlines()
+    assert rde[0].startswith("9999 2611 9.911 ") and rde[0][19] == "5"   # header
+    assert rde[1] == "02" and rde[-1] == "999" and len(rde) == 4 + 3
+    assert all(ln.startswith("0702701 ") and ln.endswith(" S") for ln in rde[2:6])
     post = (out / "seesat_post.txt").read_text()
     assert "CLOCK NOT VERIFIED" in post and "NOSS 3-4 (A) (31701)" in post
     assert post.count("\n1 31701U") == 1 and "\n2 31701 " in post   # refined TLE

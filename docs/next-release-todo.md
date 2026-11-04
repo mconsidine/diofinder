@@ -196,19 +196,22 @@ What each piece does and how far to trust it:
 - **Light curves**: one sample per 3 px along each dash (time from the
   exposure window), or one value per frame for dots (hand-tracked). Lomb-
   Scargle (astropy power, numpy false-alarm estimate) gives a flash period;
-  behaviour code S / F / X. Periods shorter than ~4 px of travel along the dash
+  behaviour code S / F / R / I / X. Periods shorter than ~4 px of travel along the dash
   are not claimed (the PSF and the pixel grid fake them).
 - **IOD reports**: `--points-per-pass` (default 4) lines spread over the arc,
   preferring dashes wholly inside the frame; position uncertainty = the arc's
   own scatter combined with the frame WCS fit; time uncertainty from the
   capture's clock record (network time 0.05 s, phone 0.2 s, SkySafari 1 s,
   otherwise 10 s with a "do not post" warning; `--time-unc` overrides);
-  `--status E/G/F/P`; unidentified objects as `99999 99 099A` (the SeeSat-L
-  sample's convention; `--unknown-desig`), named `unkYYMMDD`. Magnitude,
-  magnitude uncertainty and flash period follow our reading of the IOD
-  description (cols 67–70, 72–73, 75–80); **check those columns against
-  satobs.org/position/IODformat.html** (not reachable from the build sandbox)
-  and confirm the unknown-object convention on the list before posting.
+  `--status` sky code E/G/F/P/B/T; unidentified objects as `99999 99 099A`
+  (the SeeSat-L sample's convention; `--unknown-desig`), named `unkYYMMDD`.
+  Checked against G. Lewis' IOD Version 0 description (2002 clarification):
+  angle format 2 gives its position uncertainty in arcminutes (fixed: it was
+  written in degrees, 60x too pessimistic); behaviour S/F/R/I/X; magnitude
+  cols 67–70, uncertainty 72–73, flash period 75–80 as implemented. The same
+  points also go out in R.D.E. format (`observations_rde.txt`). Still to
+  confirm on the list: the unknown-object convention, and whether the R.D.E.
+  piece numbering skips I and O (assumed, as COSPAR letters do).
 - **Orbits** (`sat_orbit.py`): one pass → a circular orbit (4 elements)
   with an explicit 4.5 % mean-motion model error (simulated: a circular fit
   to an e = 0.046 pass is 6 % off), so the next pass's timing is minutes
