@@ -16,11 +16,14 @@ The manuals and the AUX port's function are not known yet; §6 lists the
 documents needed.
 
 **Sources read for this document:**
-- INDI's `skywatcherAPI.cpp`/`.h` (GPL; read for behaviour only, nothing
-  copied).
-- NexPlane (`nforrester/NexPlane`, GPL-3; read for behaviour only). It is an
-  open-source program that tracks aircraft and satellites with Celestron and
-  Sky-Watcher mounts, and its Sky-Watcher driver bypasses the hand controller.
+- INDI's `skywatcherAPI.cpp`/`.h` (GPL).
+- NexPlane (`nforrester/NexPlane`, GPL-3). It is an open-source program that
+  tracks aircraft and satellites with Celestron and Sky-Watcher mounts, and its
+  Sky-Watcher driver bypasses the hand controller.
+- The NexPlane Extended fork (§8).
+
+Nothing was copied. diofinder is itself GPL-3, so reusing GPL-3 code (with its
+notices) would be licence-compatible if that is ever wanted.
 
 ---
 
@@ -192,3 +195,62 @@ other sites below failed. Please upload what you can, or the photos.
    power switch.
 4. If older and not updatable: path B for GoTos and leapfrog tracking. Real
    smooth tracking then needs different hardware (OnStepX), not path A.
+
+---
+
+## 8. NexPlane Extended (`fotomensch/NexPlane`, branch `extended`)
+
+**What it is.** A fork of NexPlane with 29 features on top of upstream
+`f0fe174`, also GPL-3. They grew out of tracking aircraft with a Sky-Watcher
+**EQ5 in equatorial mode**.
+
+**Does it change the answer above? No.**
+
+- **The Sky-Watcher motor driver (`skywatcher.py`) is unchanged** from
+  upstream. It uses the same approach: always high-speed mode, the step
+  period changed while moving, a stop only on a direction change. The
+  firmware ≥ 3.39 requirement and the AZ SynScan caveat stand.
+- **The fork's other Sky-Watcher branch** (`skywatcher-eqdirect`) is upstream's
+  own development branch for that driver, not new work.
+
+**New data point (real hardware).** EQ5, motor firmware **3.47.49**, USB at
+**115200 baud**, 9,011,200 steps per revolution: it works on the field.
+Newer Sky-Watcher boards are well above 3.39. The TeleTrack's board is the
+unknown.
+
+**Loop timing evidence (simulator only).**
+- The tracking cycle was ~0.7 s, cut to ~0.4 s by reading the position once
+  per cycle instead of three times (feature 21). Each position read is two
+  serial commands; the simulator charges ~90 ms per command.
+- Real-hardware cycle time is "not measured yet".
+- This supports the design point here: the number of round trips per cycle,
+  not computation, sets the loop rate. Read positions sparingly.
+
+**Control law.**
+- Upstream's tracker is a **position-only PID per axis** (the integral term
+  learns the rate), with wall-clock `time.time()` for dt.
+- For satellites, whose rate is known in advance from SGP4, **feed-forward of
+  the predicted rate plus a small position correction** (common §3.4) should
+  lag less, especially at the start of a pass and around culmination. Use the
+  monotonic clock for dt.
+
+**Worth borrowing as design (relevant to direct drive, where the hand
+controller's safety is gone):**
+
+| Fork feature | Relevance to the TeleTrack |
+|---|---|
+| 1 **Axis soft limits**: a taught polygon in *raw axis* space, relative to the power-on (home) position, with a margin; a 1 s look-ahead scales both rates so the margin is never crossed; an emergency stop if an axis moves the wrong way by > 0.5°; optional "started at home" check. Field-tested | High. This is exactly the safety layer path B needs, and it doesn't depend on alignment. The wrong-way trip also catches a stalled or slipping axis |
+| 2 Exclusion zones (holes in the polygon) and profiles per setup | Medium: e.g. a table edge, or a different tube |
+| 3 "Limits off" switch with confirmation and banner | Low–medium |
+| 23/29 Refine limits from the browser; dry runs in the simulator with the real limits | Medium. Same idea as the mount simulator in common §3.8 |
+| 22 Tracking and sync CSV logs | Medium. Matches "log every motion command" in common §3.6 |
+| 10–14 Pointing model from sync points (EQ: polar tilt + cone) | Low as code (equatorial only; the TeleTrack is alt-az). diofinder gets sync points automatically from plate solves, and the levelling sweep (common §5.2) is the alt-az counterpart |
+| 4/5/21 Meridian flip, blind-area map, EQ position caching | Not applicable (alt-az), except the "read once per cycle" lesson |
+| 6–9, 15–20, 24–28 Browser GUI, gamepad, places/GPS/elevation, start script | Not needed: diofinder already has a web UI, site and clock |
+
+**What it doesn't help with:**
+- the TeleTrack's own unknowns: model, AUX port, motor firmware version,
+  bus voltage;
+- alt-az specifics (zenith keyhole, the altitude reversal at culmination).
+  Neither the fork nor upstream addresses the keyhole beyond its rate cap
+  (4°/s resets in `tracker.py`).
