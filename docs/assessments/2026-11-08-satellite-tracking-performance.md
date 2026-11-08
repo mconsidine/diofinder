@@ -66,7 +66,8 @@ At the default 0.2 s exposure the solver is idle most of the time.
 
 ### 2.3 What a tracking loop would add (estimate)
 
-- **SGP4:** tens of µs per call with the C-accelerated `sgp4` wheel; a few
+- **SGP4:** ~0.7 µs per call on x86-64 with the C-accelerated `sgp4` wheel
+  (measured; expect ~5–20× slower on the A53, still µs); a few
   hundred µs if only pure Python is available (possible on a 32-bit armhf
   image; to check). Even pure Python at 10 Hz is < 1 % of a core.
 - **The rest:** TEME → horizon → axis angles is a few small matrix products.
@@ -188,10 +189,16 @@ What keeps it small:
   near those.
 - **Run it as a background job** on solver cores 1–2 while no pass is active,
   with results cached under `/var/lib/diofinder/sat/`. Never run it in comms.
-- **Memory:** 512 MB total, with the star DB in the solver. Satrec objects are
-  roughly 1–2 KB each (estimate), so a full public catalog (~30 k) held in
-  memory is tens of MB. Load the selected objects only, and parse the file as
-  a stream.
+- **Memory:** not a concern. Measured on x86-64 with the C-accelerated
+  `sgp4` 2.x (the Pi should be the same order or smaller):
+  - importing `sgp4` on top of numpy adds ~0.1 MB (comms already imports
+    numpy);
+  - each `Satrec` is ~1 KB;
+  - one propagation takes ~0.7 µs.
+
+  A schedule of visible satellites (tens to a few hundred objects) is well
+  under 1 MB. Even a full public catalog (~30 k) would be ~30 MB, so parse
+  large files as a stream and keep only the selected objects.
 - **Simplest option:** plan on the laptop and upload the pass list. The
   laptop tools already do this; the Pi then only follows a short list.
 
