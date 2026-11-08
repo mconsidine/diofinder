@@ -1208,6 +1208,11 @@ hot-pixel rejection during slews, when the temporal cache is offline.
 
 User-facing guide to the whole satellite workflow (setup, capturing, complete
 workflows, every script and option): **`docs/satellite-user-guide.md`**.
+Picking up the satellite work in a new chat: start from the latest handoff,
+**`docs/decisions/2026-11-08-satellite-tools-handoff.md`**. Driving a mount
+through a pass (assessment only, nothing built):
+`docs/assessments/2026-11-08-satellite-tracking-common.md` and the per-mount
+documents beside it.
 
 `diofinder/live_capture.py`. The Home page **Start/Stop live capture** button
 (`/livecap/toggle` → maint `live_capture_start`/`_stop`) records every frame the
