@@ -1,140 +1,207 @@
-# Orion TeleTrack: bring-up checklist for a direct link (2026-11-08)
+# Orion TeleTrack: bring-up checklist for a direct link (2026-11-08, rev. 2)
 
 **Status: plan and read-only probe only.** Nothing here moves the mount, and
 nothing in diofinder's code changes.
 
-**Assumptions for this plan:**
-- The TeleTrack's motor board speaks Sky-Watcher's motor-controller protocol.
-- Its firmware is **3.39** (to be confirmed by step 6).
+**Assumption for this plan:** motor firmware **3.39**. The probe confirms or
+refutes it.
 
-Read with `2026-11-08-teletrack-hand-controller-vs-direct.md`.
+Rev. 2 uses three uploaded documents:
+- Orion **#9441** TeleTrack manual (IN 295 Rev. C);
+- Orion **#9481** TeleTrack AZ-G GoTo manual (IN 348 Rev. A, 2008);
+- Sky-Watcher **Motor Controller Command Set**.
 
-**Why the cautious order.** The hand-controller (HC) port on Synta mounts
-carries **12 V** as well as the data lines. The Pi's GPIO pins take
-**3.3 V only**. So the order is:
-1. measure;
-2. listen only;
-3. then talk with inquiries only.
+**Rev. 2 changes the wiring** (§3): on alt-az mounts the motor bus is a single
+shared data line plus a "Drop" line.
 
-## 1. Documents to fetch (and upload, if you can't reach them from here)
+## 1. What the documents settle
 
-| # | What | URL / how to find it |
+### Both TeleTrack models
+
+- **Mount panel:** `HC` jack, `AUX` jack ("not used for normal operation"),
+  `12V DC IN`, `12V DC OUT`, power switch. The 9441 also has a camera
+  "Cable"/snap jack.
+- **Power:** 12 V nominal (8–16 V), tip positive; or 8 × AA inside.
+
+### 9481 TeleTrack AZ-G (GoTo)
+
+- **HC cable:** RJ-45 at the mount's `HC` jack.
+- **Computer port on the hand controller:** a separate **RJ-12 RS-232 port**
+  (9600 8N1), Celestron NexStar 5i/8i–compatible commands. Pinout (manual,
+  Appendix B), named from the PC's side:
+
+  | RJ-12 pin | Signal |
+  |---|---|
+  | 1, 4, 6 | NC |
+  | 2 | RD: the hand controller *transmits* here |
+  | 3 | GND |
+  | 5 | TD: the hand controller *receives* here |
+
+- **Variable-rate command** (path A): 8 bytes `80, 3, 16|17, 6|7, hi, lo, 0, 0`
+  (axis 16 = azimuth, 17 = altitude; 6 = positive, 7 = negative). The rate is
+  in **¼″/s** units, 16-bit (up to ~4.5°/s); the reply is `#` (35).
+- **Other commands:** 24-bit "slow GoTo" and "set position" commands.
+- **Utility → PC Direct:** the hand controller passes the computer's bytes
+  straight to the motor board. It is used for "motor control board firmware
+  upgrades (v. 2.0 or later)", so the board's firmware can be upgraded through
+  the hand controller.
+- **Motors:** DC servo with optical encoders, **1,452,425 counts/rev**
+  (0.89″/count). Top slew rate 1000× sidereal (~4.2°/s).
+- **Hand controller's default altitude slew limit: +60° to −15°**, adjustable
+  under "Set Slew Limits". Matters for path A: passes above 60° need it
+  raised.
+
+### 9441 TeleTrack (not GoTo)
+
+- **Hand controller:** GUIDE/SLOW/FAST (32×, 64×, 800× sidereal) and "cruise"
+  presets. **No computer port.**
+- **So on a 9441 the only computer route is direct to the motor bus** (`HC` or
+  `AUX` jack), assuming it is the same Synta board family.
+
+### Sky-Watcher command set, §6 "Hardware"
+
+- UART 9600, 8 data bits, 1 stop, no parity.
+- **Signal level 5 V or 3.3 V.**
+- *"On most of the Alt/Az mount, TX and RX lines are connected together, and
+  there is another line (Drop) to indicate that the TX/RX bus is busy. The Drop
+  line is controlled by the master only … pull the Drop line to low level when
+  it starts to send a command and keep pulling it low until it receives the full
+  response … or a time-out occurs … release the TX/RX bus as soon as possible
+  after the last bit of the command is shifted out."*
+- *"The motor controller pulls its TX line to high level with a 5.1K to 10K
+  resistor … other devices can pull the TX line to low level without
+  problem."* So the host must drive the bus **open-drain**: pull low, never
+  drive high.
+- **Firmware note:** 2.xx boards move "up to 32 steps per interrupt" at high
+  speed; 3.xx always 1. The command table marks `:I` (step period) as "not
+  supported … when motor is slewing in high speed mode". NexPlane reports
+  on-the-fly changes working on ≥ 3.39. Confirm on this board before relying on
+  it.
+- **Error codes:** 0 unknown command, 1 length, 2 motor not stopped, 3 invalid
+  character, 4 not initialised, 5 driver sleeping.
+
+**Open:** the RJ-45 `HC` jack's pinout (which pins carry 12 V, GND, data and
+Drop) is in none of the documents. It has to be measured (§4 step 3). The
+`AUX` jack is probably a second tap of the same bus (it exists on the non-GoTo
+9441 too), but that is unconfirmed.
+
+## 2. Which model do you have?
+
+| Model | First connection (no new hardware) | Direct link |
 |---|---|---|
-| 1 | TeleTrack manual for your model number (9481 GoTo has an RS-232 appendix) | https://www.manualsdir.com/manuals/204941/orion-9481.html?page=13 · https://www.manualslib.com/manual/1266647/Orion-Teletrack-9441.html · Orion support site https://www.telescope.com/ (search the model number) |
-| 2 | Sky-Watcher **Motor Controller Command Set** (the `:` protocol) | Search the title on https://www.skywatcher.com/ ; a possible direct path (unverified): https://inter-static.skywatcher.com/downloads/skywatcher_motor_controller_command_set.pdf |
-| 3 | Sky-Watcher **SynScan Serial Communication Protocol** (HC commands; comparison only) | Search the title on https://www.skywatcher.com/ |
-| 4 | Reference implementations (readable from here, no upload needed) | INDI: https://github.com/indilib/indi/blob/master/drivers/telescope/skywatcherAPI.cpp · NexPlane: https://github.com/nforrester/NexPlane/blob/master/skywatcher.py |
-| 5 | Photos | The mount's ports (HC, AUX, power) with any labels; the label with the model number; the connector type (6-pin RJ12 or 8-pin RJ45 plug) |
+| **9481** | Today's MAX3232 cable to the hand controller's **RJ-12** port, hand controller in **PC Direct** mode. The probe script talks to the motor board *through* the hand controller and reads the firmware version with zero risk to the 12 V bus | §3 wiring on the mount's `HC` (or `AUX`) jack |
+| **9441** | None: no computer port | §3 wiring is the only route |
 
-## 2. Pi Zero 2W pins
+## 3. Wiring for the direct link (single-wire bus + Drop)
 
-On the 40-pin header, pin 1 is the corner pin with the square pad, next to the
-SD card end. These are physical pin numbers.
+### Pi Zero 2W pins (physical numbers; pin 1 is the square pad)
 
-| Pi pin | Signal | Use here |
+| Pi pin | Signal | Use |
 |---|---|---|
-| 1 | 3.3 V | Low-voltage reference for a level shifter (only if the bus is 5 V) |
-| 2 or 4 | 5 V | High-voltage reference for a level shifter (only if the bus is 5 V) |
-| 3, 5 | GPIO2/3 (I2C) | **Already used by the BNO055**; leave alone |
-| 6 (or 9, 14) | GND | To the mount's GND pin |
-| 8 | GPIO14 TXD (`/dev/serial0` out) | To the mount's data-in line (step 5) |
-| 10 | GPIO15 RXD (`/dev/serial0` in) | From the mount's data-out line |
+| 1 | 3.3 V | **Already used by the BNO055** |
+| 3, 5 | I2C | **Already used by the BNO055** |
+| 6 | GND | **Already used by the BNO055** |
+| 8 | GPIO14 TXD | Bus data out (through the open-drain buffer) |
+| 9 or 14 | GND | Mount GND and buffer GND |
+| 10 | GPIO15 RXD | Bus data in |
+| 11 | GPIO17 | Drop line (through the open-drain buffer) |
+| 17 | 3.3 V | Buffer supply |
 
-Notes:
-- **Disconnect the Virtuoso's MAX3232 from pins 8/10 first.** The Zero 2W has
-  only this one free UART, so only one mount can be wired at a time.
-- **Never connect the mount's 12 V pin to anything on the Pi.** The Pi keeps its
-  own power supply. Only GND is shared.
+### Open-drain interface (works for a 3.3 V or a 5 V bus)
 
-### The three possible wirings, chosen by the measurement in step 3
+Use one **SN74LVC2G07** (dual open-drain buffer, 5 V-tolerant outputs,
+powered at 3.3 V; a breakout board is easiest). A **SN74LVC07A** (six
+buffers) also works.
 
-**A. Separate TX and RX lines, bus at 3.3 V**
-- Pi pin 8 → 1 kΩ → mount RX.
-- Mount TX → 1 kΩ → Pi pin 10.
-- Pi pin 6 → mount GND.
-- The resistors only limit current if something is wired wrongly.
-
-**B. Separate TX and RX lines, bus at 5 V**
-- Use a 2-channel BSS138 bidirectional level-shifter board:
-  - LV = Pi pin 1, HV = Pi pin 2, GND to both;
-  - Pi pin 8 ↔ LV1, HV1 ↔ mount RX;
-  - Pi pin 10 ↔ LV2, HV2 ↔ mount TX.
-- Without a shifter, at minimum a divider on the mount-TX → Pi-RX line
-  (2.2 kΩ from mount TX to Pi pin 10, 3.3 kΩ from Pi pin 10 to GND, giving
-  ≈3.0 V). Pi TX at 3.3 V may not register as "high" on a 5 V CMOS input,
-  which is why the shifter is preferred.
-
-**C. One shared data line (half-duplex)**
-- INDI's driver checks for this on DC-motor Sky-Watcher boards (the AZ GoTo
-  family): the board **echoes every byte sent**. That suggests TX and RX share
-  one wire.
-- Wiring:
-  - Pi pin 10 straight to the data line (through the shifter if 5 V);
-  - Pi pin 8 to the data line through a Schottky diode (BAT43/1N5819),
-    **cathode (band) toward Pi pin 8**;
-  - the mount's pull-up holds the line high.
-- The probe script below discards the echo.
-
-## 3. Task list
-
-1. **Identify the port.** Model number, manual, photos (§1). Decide whether the
-   Pi goes on the HC port (HC unplugged) or the AUX port:
-   - If AUX is a second connection on the motor bus, that's ideal: the HC can
-     stay plugged in for listening.
-   - If AUX is an ST-4 autoguider port, it's useless at satellite rates.
-   - If AUX is a power outlet, it's useless for this.
-2. **Get a breakout.** An RJ12 or RJ45 "pass-through" breakout with screw
-   terminals, so the HC can stay connected while you measure and listen.
-   Optional but very helpful: a ~$10 USB logic analyser (sigrok/PulseView)
-   to see which pin each side transmits on.
-3. **Measure (Pi not connected).**
-   - With the mount **off**: find GND by continuity to the power-jack sleeve.
-   - With the mount **on**, HC plugged in through the breakout, measure each
-     pin against GND:
-     - ~12 V → the supply pin: **tape it off**;
-     - 0 V → GND;
-     - a steady ~3.3 V or ~5 V → an idle UART line (UART idles high);
-     - a line that flickers or dips while you press HC keys → data.
-   - Record the pin numbers and the voltage. This picks wiring A, B or C (§2).
-4. **Prepare the Pi (over ssh).** Commands in §4.1:
-   - check `/dev/serial0`;
-   - make sure nothing holds it (diofinder's mount link stays disabled);
-   - do a loopback test with a jumper between pins 8 and 10.
-5. **Listen only.** Wire **only** GND and mount data → Pi pin 10. Leave Pi pin 8
-   disconnected. Run `swsniff.py` (§4.2) while the HC powers up and you press
-   keys:
-   - lines like `:e1\r`, `=032781\r`, `:j1\r` confirm the protocol, the baud
-     rate (try 9600, then 115200) and the levels;
-   - the `:e1` reply already shows the firmware version and the mount code.
-6. **Talk, inquiries only.** Unplug the HC (one master on the bus) and connect
-   Pi pin 8 as in §2. Power-cycle the mount. Run `swprobe.py` (§4.3): firmware
-   and mount code, counts per revolution, high-speed ratio, timer frequency,
-   status, position, and the `:j1` round-trip time over 200 reads.
-7. **Record the results** in the TeleTrack assessment:
-   - firmware version;
-   - echo yes/no;
-   - counts/rev;
-   - high-speed ratio;
-   - timer frequency;
-   - round-trip times;
-   - pinout and voltage.
-
-   These set the control-loop design (rate resolution, loop rate) before any
-   motion code is written.
-8. **Not in this checklist** (needs the safety layer first): `:F` (init done),
-   `:G` mode, `:I` period, `:J` start, `:K`/`:L` stop, `:S`/`:H` GoTo.
-
-## 4. Commands (ssh session on the finder)
-
-### 4.1 Prepare and loopback-test the UART
-
-```bash
-ls -l /dev/serial0
+```
+Pi pin 17 (3.3V) ── VCC   SN74LVC2G07   GND ── Pi pin 9
+Pi pin 8  (TXD)  ── A1        Y1 ──────────┬──────── mount DATA (TX/RX bus)
+                                           │
+Pi pin 10 (RXD)  ───────── 10k ────────────┤  (see RX note below)
+Pi pin 11 (GPIO17) ── A2      Y2 ──────────────────── mount DROP
+Pi pin 9 (GND) ──────────────────────────────────────── mount GND
+mount +12V ── NOT CONNECTED (tape it off)
 ```
 
-```bash
-id -nG | tr ' ' '\n' | grep -x dialout || echo "not in dialout: use sudo below"
-```
+How it behaves:
+- **TX:** Pi TX low → Y1 pulls the bus low. Pi TX high → Y1 lets go, and the
+  mount's own 5.1–10 kΩ pull-up raises the bus. The Pi never drives the bus
+  high, as the command set requires. The board echoes nothing; you simply read
+  your own bytes back, because RX listens on the same wire. The probe discards
+  them.
+- **Drop:** GPIO17 low → Y2 pulls Drop low (asserted). GPIO17 high → released.
+  This is the probe's default polarity.
+- **RX:**
+  - **Bus at 3.3 V:** the 10 kΩ series resistor alone is enough.
+  - **Bus at 5 V:** replace it with a divider: 10 kΩ from the bus to pin 10,
+    and 20 kΩ from pin 10 to GND (gives 3.3 V). Or use a **74LVC1G125** buffer
+    powered at 3.3 V (its input tolerates 5 V).
+  - **Never connect a 5 V bus straight to pin 10.**
+- **If the Drop line turns out to need driving high** (it idles low with no
+  pull-up), stop: re-measure before adapting anything.
+
+If step 3 instead finds **separate TX and RX lines** (an "EQ-style" bus), use
+the buffer only on TX, wire RX as above, and leave Drop unused (`--drop`
+omitted).
+
+### For the 9481 hand-controller route (§2)
+
+Today's MAX3232 wiring is unchanged:
+- MAX3232 RS-232 output → RJ-12 **pin 5**;
+- RJ-12 **pin 2** → MAX3232 RS-232 input;
+- RJ-12 **pin 3** → GND.
+
+Leave pins 1, 4 and 6 unconnected.
+
+## 4. Task list
+
+1. **Model.** Read the label: 9441 or 9481. On a 9481, note the hand
+   controller's firmware: Utility → Show Information → Version. It also shows
+   the **motor controller version** while the hand controller is connected to
+   the mount, which answers the 3.39 question with no wiring at all.
+2. **9481 only: read the motor board through the hand controller.**
+   - Connect today's MAX3232 cable to the hand controller's RJ-12 port.
+   - Select Utility → PC Direct.
+   - Run the probe with no `--drop` (§5.3).
+   - Press ESC on the hand controller to leave PC Direct afterwards.
+3. **Measure the mount's `HC` and `AUX` jacks** through an RJ-45 pass-through
+   breakout with screw terminals (Pi not connected):
+   - **Mount off:** find GND by continuity to the power-jack sleeve (the
+     outside, since the tip is positive).
+   - **Mount on, hand controller plugged in through the breakout:** measure
+     every pin against GND:
+     - ~12 V (or the battery voltage) is the supply: **tape it off**;
+     - a pin idling at 3.3 V or 5 V that flickers when keys are pressed is the
+       data bus;
+     - a pin that dips low in step with that traffic is Drop.
+
+     A cheap USB logic analyser (sigrok/PulseView) makes this certain.
+   - Repeat on `AUX` and note whether it mirrors `HC`.
+4. **Build the interface** (§3), matching the measured voltage.
+5. **Prepare the Pi** (§5.1):
+   - nothing holding `/dev/serial0`;
+   - diofinder's mount link disabled;
+   - a loopback test with the buffer disconnected;
+   - libgpiod present.
+6. **Listen** (§5.2):
+   - Connect **only** GND and the data line (through the RX resistor or
+     divider) to pin 10, with the hand controller plugged in.
+   - Run the sniffer while the hand controller boots and you press keys. You
+     should see `:e1`, `=…`, `:j1`… at 9600 baud.
+   - This confirms the bus and the levels, and shows the firmware reply.
+7. **Talk, inquiries only** (§5.3):
+   - Unplug the hand controller (one master) and connect the full interface.
+   - Power-cycle the mount, then run the probe with `--drop 17`.
+   - The probe prints: firmware, mount code, counts/rev, high-speed ratio,
+     timer frequency, status, position, the speed step at 0.25–2°/s in both
+     speed modes, and the round-trip time.
+8. **Record the results** in the TeleTrack assessment.
+9. **Not in this checklist:** anything that moves the mount (`:F :G :I :J :K
+   :L :S :H`); it needs the safety layer first.
+
+## 5. Commands (ssh session on the finder)
+
+### 5.1 Prepare
 
 ```bash
 diofinder-ctl raw '{"cmd":"mount_status"}'
@@ -144,16 +211,23 @@ diofinder-ctl raw '{"cmd":"mount_status"}'
 ```bash
 sudo fuser -v /dev/serial0
 ```
-(prints nothing when the port is free)
 
-Loopback test: put a jumper wire between pins 8 and 10, nothing else connected.
+```bash
+sudo apt install -y python3-libgpiod gpiod
+```
+
+```bash
+gpioinfo gpiochip0 | grep -E "line +17:"
+```
+(should show GPIO17 unused)
+
+Loopback: jumper between Pi pins 8 and 10 only.
 
 ```bash
 sudo /opt/diofinder/venv/bin/python -c "import serial;s=serial.Serial('/dev/serial0',9600,timeout=1);s.write(b'loopback-ok\r');print(s.read(12))"
 ```
-Expect `b'loopback-ok\r'`; remove the jumper afterwards.
 
-### 4.2 Listen-only script
+### 5.2 Listen-only script
 
 ```bash
 cat > ~/swsniff.py <<'EOF2'
@@ -178,47 +252,77 @@ EOF2
 sudo /opt/diofinder/venv/bin/python ~/swsniff.py /dev/serial0 9600 30
 ```
 
-### 4.3 Read-only probe script
+### 5.3 Read-only probe script
 
 ```bash
 cat > ~/swprobe.py <<'EOF2'
 #!/usr/bin/env python3
 """Read-only probe of a Sky-Watcher/Synta motor board (":" protocol).
-Sends only inquiry commands; never moves the mount. Usage:
-  swprobe.py [PORT] [BAUD]      default /dev/serial0 9600"""
-import sys, time, serial
-port = sys.argv[1] if len(sys.argv) > 1 else "/dev/serial0"
-baud = int(sys.argv[2]) if len(sys.argv) > 2 else 9600
-s = serial.Serial(port, baud, bytesize=8, parity="N", stopbits=1, timeout=0.3)
+Sends only inquiry commands (e a g f j b); never moves the mount.
+
+  swprobe.py [--port /dev/serial0] [--baud 9600] [--drop GPIO] [--reads 200]
+
+--drop GPIO: BCM number of the Pi pin wired (through an open-drain buffer)
+to the bus "Drop" line. The line is asserted for each command+reply, as the
+Sky-Watcher command set requires on single-wire alt-az buses. Omit it on a
+board with separate TX/RX lines."""
+import argparse, sys, time, serial
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--port", default="/dev/serial0")
+ap.add_argument("--baud", type=int, default=9600)
+ap.add_argument("--drop", type=int, default=None)
+ap.add_argument("--drop-active-high", action="store_true",
+                help="Pi pin HIGH asserts Drop (wiring through an inverting transistor)")
+ap.add_argument("--reads", type=int, default=200)
+a = ap.parse_args()
+s = serial.Serial(a.port, a.baud, bytesize=8, parity="N", stopbits=1, timeout=0.3)
+
+drop = None
+if a.drop is not None:
+    import gpiod                                   # python3-libgpiod (v2 API)
+    from gpiod.line import Direction, Value
+    on, off = ((Value.ACTIVE, Value.INACTIVE) if a.drop_active_high
+               else (Value.INACTIVE, Value.ACTIVE))
+    drop = gpiod.request_lines("/dev/gpiochip0", consumer="swprobe", config={
+        a.drop: gpiod.LineSettings(direction=Direction.OUTPUT, output_value=off)})
+    def assert_drop(x): drop.set_value(a.drop, on if x else off)
+else:
+    def assert_drop(x): pass
 
 def ask(cmd):
-    """Send ':<cmd>\\r', return (reply_without_= , round_trip_ms, echoed)."""
+    """Send ':<cmd>\\r'; return (data, round_trip_ms, echoed)."""
     s.reset_input_buffer()
     out = (":" + cmd + "\r").encode()
-    t0 = time.monotonic(); s.write(out); s.flush()
     buf = b""; echoed = False
-    while True:
-        c = s.read(1)
-        if not c:
-            raise TimeoutError(f"{cmd}: no reply (got {buf!r})")
-        buf += c
-        if c == b"\r":
-            if buf == out:          # DC-motor boards echo the command first
-                buf = b""; echoed = True; continue
-            break
-    ms = (time.monotonic() - t0) * 1000
+    assert_drop(True)
+    try:
+        t0 = time.monotonic(); s.write(out); s.flush()
+        while True:
+            c = s.read(1)
+            if not c:
+                raise TimeoutError(f"{cmd}: no reply (got {buf!r})")
+            buf += c
+            if c == b"\r":
+                if buf == out:        # single-wire bus: our own bytes come back first
+                    buf = b""; echoed = True; continue
+                break
+        ms = (time.monotonic() - t0) * 1000
+    finally:
+        assert_drop(False)
     if buf.startswith(b"!"):
-        raise RuntimeError(f"{cmd}: error reply {buf!r}")
+        raise RuntimeError(f"{cmd}: error reply {buf!r} (0 unknown cmd, 1 length, "
+                           "2 not stopped, 3 bad char, 4 not initialised, 5 sleeping)")
     if not buf.startswith(b"="):
         raise RuntimeError(f"{cmd}: unexpected {buf!r}")
     return buf[1:-1].decode(), ms, echoed
 
-def le24(h):  # 6 hex digits, bytes reversed
+def le24(h):  # 24-bit value sent low byte first: 0x123456 -> "563412"
     return int(h[4:6] + h[2:4] + h[0:2], 16)
 
 r, ms, echo = ask("e1")
 print(f"motor firmware : {int(r[0:2],16)}.{int(r[2:4],16):02d}  mount code 0x{r[4:6]}"
-      f"   (raw {r}, {ms:.0f} ms, echo={'yes' if echo else 'no'})")
+      f"   (raw {r}, {ms:.0f} ms, echo={'yes: single-wire bus' if echo else 'no'})")
 for ax in (1, 2):
     cpr = le24(ask(f"a{ax}")[0]); hsr = int(ask(f"g{ax}")[0], 16)
     st = int(ask(f"f{ax}")[0], 16); pos = le24(ask(f"j{ax}")[0]) - 0x800000
@@ -226,40 +330,52 @@ for ax in (1, 2):
           f"position {pos} counts ({pos*360/cpr:+.3f} deg)  status 0x{st:03X} "
           f"[running={bool(st&0x10)} blocked={bool(st&0x20)} init_done={bool(st&0x01)}]")
 tf = le24(ask("b1")[0]); print(f"timer frequency: {tf} Hz")
-times = []
-for _ in range(int(sys.argv[3]) if len(sys.argv) > 3 else 200):
-    times.append(ask("j1")[1])
-times.sort()
+cpr1 = le24(ask("a1")[0])
+for dps in (0.25, 0.5, 1.0, 2.0):
+    lo = tf * 360 / dps / cpr1
+    print(f"  {dps:4.2f} deg/s: T1 preset {lo:8.1f} (1 count = {100/max(lo,1):.2f}% speed step)"
+          f"  high-speed: {lo*hsr:9.1f} ({100/max(lo*hsr,1):.3f}%)")
+times = sorted(ask("j1")[1] for _ in range(a.reads))
 print(f":j1 round trip over {len(times)} reads: min {times[0]:.1f}  median "
       f"{times[len(times)//2]:.1f}  95% {times[int(len(times)*.95)]:.1f}  max {times[-1]:.1f} ms")
 EOF2
 ```
 
+9481 through the hand controller in PC Direct (MAX3232 cable, no Drop):
+
 ```bash
-sudo /opt/diofinder/venv/bin/python ~/swprobe.py /dev/serial0 9600 200
+sudo /opt/diofinder/venv/bin/python ~/swprobe.py --port /dev/serial0
 ```
 
-How to read the output:
-- `motor firmware : 3.39  mount code 0x81` means version 3.39 (the two
-  version bytes are hex: `27` = 39).
+Direct on the mount's bus (§3 interface, Drop on GPIO17):
+
+```bash
+sudo /opt/diofinder/venv/bin/python ~/swprobe.py --port /dev/serial0 --drop 17
+```
+
+Reading the output:
+- `motor firmware : 3.39 mount code 0x81`: the two version bytes are hex
+  (`27` = 39).
 - The mount code identifies the board family:
-  - `0x80`–`0x82` are the GT/MF/114GT DC-motor alt-az boards;
+  - `0x80`–`0x82` are the GT/MF/114GT DC-servo alt-az family;
   - `0x90` is the Dob;
   - `0xA5` is the AZ-GTi.
-- `echo=yes` means a shared data line (wiring C).
-- Counts/rev and the timer frequency set the step-period resolution at
-  satellite rates.
+- `echo=yes` confirms the single-wire bus.
+- The speed-step lines show how finely each speed mode can set a satellite
+  rate. For the 9481's 1,452,425 counts/rev, high-speed mode gives sub-0.5 %
+  steps at 0.25–2°/s. Low-speed mode at 1–2°/s is coarse.
 
-Both scripts were checked against a simulated board (a pseudo-terminal that
-echoes and answers like a DC-motor controller). They have not been run on real
-hardware.
+Both scripts were checked against a simulated single-wire board (a
+pseudo-terminal that echoes and answers). The Drop handling uses the libgpiod
+v2 Python API; it, and everything else, still needs a run on real hardware.
 
-## 5. If something goes wrong
+## 6. If something goes wrong
 
 | Symptom | Likely cause |
 |---|---|
-| Sniffer prints nothing | Wrong pin, wrong baud (try 115200), or AUX is not a bus port |
-| Sniffer prints garbage | Wrong baud, or inverted/RS-232 levels (then it is not a TTL port: stop and re-measure) |
-| Probe: `no reply` | Pi TX not reaching the bus (wiring C diode reversed?), HC still plugged in, or mount not powered |
-| Probe: `!` error replies | The command isn't supported by this board; note which |
-| Replies only every other time | Two masters on the bus: unplug the HC |
+| Sniffer prints nothing | Wrong pin, or AUX is not a bus tap; try 115200 only if the docs above prove wrong |
+| Sniffer prints garbage | Wrong baud, or not a TTL bus (re-measure; RS-232 swings negative) |
+| Probe: `no reply` | Drop polarity (try `--drop-active-high` only if your Drop wiring inverts), hand controller still plugged in, buffer unpowered, mount off |
+| Probe: `!4` (not initialised) on `:j`/`:f` | Normal on some boards before `:F` (init done); inquiries `:e :a :b :g` still answer. Do not send `:F` yet |
+| Replies every other time | Two masters on the bus (hand controller still connected), or Drop not asserted |
+| PC Direct (9481) gives no reply | The hand controller's firmware may not relay all commands; note the hand-controller version |

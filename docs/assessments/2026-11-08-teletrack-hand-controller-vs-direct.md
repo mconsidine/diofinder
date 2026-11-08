@@ -254,3 +254,47 @@ controller's safety is gone):**
 - alt-az specifics (zenith keyhole, the altitude reversal at culmination).
   Neither the fork nor upstream addresses the keyhole beyond its rate cap
   (4°/s resets in `tracker.py`).
+
+---
+
+## 9. Update after reading the manuals (rev. 2 of the bring-up checklist)
+
+**Documents read:**
+- Orion #9441 manual;
+- Orion #9481 TeleTrack AZ-G manual;
+- Sky-Watcher Motor Controller Command Set.
+
+Details are in `2026-11-08-teletrack-bringup-checklist.md` §1.
+
+**Effect on the comparison:**
+
+- **9441 (not GoTo).** The hand controller has no computer port. **Direct is
+  the only route**, so the comparison above applies to the 9481 only.
+- **9481, path A.** The hand controller's RJ-12 port takes NexStar commands at
+  9600 8N1, including variable rate in ¼″/s units (fine resolution, up to
+  ~4.5°/s). It is a real option.
+- **9481, path A, two costs not known before:**
+  - the hand controller's **default altitude limit is +60°** (adjustable), so
+    high passes need the limit raised;
+  - its alignment model sits between the commands and the encoders.
+- **9481, PC Direct mode.** It gives a third option: motor-protocol commands
+  relayed through the hand controller. That is useful for a first,
+  risk-free read of the motor firmware version. As a tracking path it keeps a
+  hop in the chain, which the preference rules out.
+- **Direct wiring is more involved than assumed.** On most alt-az Sky-Watcher
+  boards:
+  - TX and RX share **one open-drain line** (pulled up by the board, 5.1–10 kΩ);
+  - a separate **Drop** line must be held low by the host for each
+    command/response;
+  - signal level 5 V or 3.3 V.
+
+  So the interface needs an open-drain buffer (SN74LVC2G07) and one extra GPIO
+  for Drop. It is still a small board, and it removes the MAX3232.
+- **Firmware.** The 2008 manual mentions motor firmware upgrades "v. 2.0 or
+  later" through PC Direct. The board may well be 2.xx. 2.xx boards jump up to
+  32 counts per interrupt at high speed, and the command set says the step
+  period can't be changed while slewing at high speed. So the 3.39 assumption
+  must be checked first (checklist §4 steps 1–2). The hand controller's
+  Version screen shows it without any wiring.
+- **Resolution.** 1,452,425 counts/rev (0.89″/count). Top rate 1000× sidereal
+  (~4.2°/s): enough for satellites away from the zenith.
