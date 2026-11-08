@@ -96,6 +96,55 @@ If no AUX contact flickers while you press hand-controller keys, AUX isn't a
 bus tap. Repeat the measurement on the `HC` jack through an RJ-45 pass-through
 breakout instead, and use the same table.
 
+### 0.2a Finding DATA and DROP
+
+The buffer's A1/A2 are its *inputs*, wired to the Pi. The AUX contacts to
+find are the ones for its *outputs*: **DATA → Y1** and **DROP → Y2**.
+
+**Step 1: meter only.** Mount on, hand controller in `HC`, black probe on the
+mount's GND (the power-jack sleeve). For each AUX contact, note the DC
+voltage:
+- 8–16 V → +12 V supply. **Mark it; it must never touch the probe below.**
+- 0 V and continuity to GND with power off → GND.
+- 3.3 or 5 V → candidate signal. Press direction keys: a reading that wavers
+  slightly is a good sign, but a meter can't tell DATA from DROP.
+- Anything above 5.5 V that isn't the supply → **stop and report it.**
+
+**Step 2: one probe lead into the Pi.** Two resistors, no chip:
+
+```
+probe lead ── 10k ──┬── Pi pin 10 (RXD)
+                    ├── Pi pin 13 (GPIO27)
+                    └── 20k ── Pi pin 9 (GND)
+mount GND ──────────────────── Pi pin 9
+```
+
+Touch the probe lead only to contacts from step 1 that read 5.5 V or less.
+For each candidate, with the hand controller plugged in and direction keys
+pressed during the run:
+
+```bash
+curl -fsSL -o ~/tt_pinscan.py https://raw.githubusercontent.com/mconsidine/diofinder/claude/fervent-darwin-u1h7y3/docs/assessments/scripts/tt_pinscan.py
+```
+
+```bash
+sudo /opt/diofinder/venv/bin/python ~/tt_pinscan.py --label pin3 --secs 10
+```
+
+**How the script decides** (it records serial bytes on pin 10 and edge
+timings on GPIO27):
+
+| Verdict | Meaning |
+|---|---|
+| `DATA (shared TX/RX line…)` | Readable `:` commands **and** `=` replies on one contact: the single-wire bus. Goes to **Y1** |
+| `DATA - host->board only` / `board->host only` | Two separate contacts: an EQ-style bus with separate lines. Then wiring §3's "separate TX and RX" variant applies |
+| `DROP-like` | Low pulses lasting milliseconds (one command plus its reply), no readable serial data. Goes to **Y2** |
+| `steady HIGH` / `steady LOW` | Idle pull-up, supply or GND; not used |
+
+Each run appends a line to `~/tt_pinscan.jsonl`; send that file back.
+Tested against a simulated bus (serial side only). The GPIO edge capture uses
+the libgpiod v2 API and is untested on hardware.
+
 **Listening hardware (phase 1):** two resistors, no chip.
 - DATA → 10 kΩ → Pi pin 10;
 - Pi pin 10 → 20 kΩ → Pi pin 9 (GND).
