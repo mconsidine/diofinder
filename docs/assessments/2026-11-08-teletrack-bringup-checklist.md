@@ -1,4 +1,4 @@
-# Orion TeleTrack: bring-up checklist for a direct link (2026-11-08, rev. 2)
+# Orion TeleTrack: bring-up checklist for a direct link (2026-11-08, rev. 3)
 
 **Status: plan and read-only probe only.** Nothing here moves the mount, and
 nothing in diofinder's code changes.
@@ -13,6 +13,140 @@ Rev. 2 uses three uploaded documents:
 
 **Rev. 2 changes the wiring** (§3): on alt-az mounts the motor bus is a single
 shared data line plus a "Drop" line.
+
+
+## 0. First contact through the AUX jack (rev. 3: no MAX3232, nothing connected yet)
+
+This section supersedes §4–§5 for a first attempt.
+
+**Script:** `docs/assessments/scripts/tt_discover.py`. It is standalone (not
+part of the diofinder package) and read-only.
+- **Phase 0:** checks the Pi's UART set-up.
+- **Phase 1:** listens to the bus while the hand controller runs, and reads
+  the motor firmware version straight from the traffic.
+- **Phase 2** (only with `--talk` and the hand controller unplugged): sends
+  every *inquiry* command in the Sky-Watcher set, decodes the replies, and
+  computes the speed resolution and the round-trip time.
+- **Output:** a JSON report in the home directory. Tested against simulated
+  boards only.
+
+### 0.1 Pi settings (once, over ssh)
+
+Check the UART is on, with no console on it (`install.sh` normally does
+this):
+
+```bash
+grep -H '^enable_uart' /boot/firmware/config.txt; grep -o 'console=[^ ]*' /boot/firmware/cmdline.txt; readlink -f /dev/serial0
+```
+
+Expect: `enable_uart=1`, only `console=tty1` (or a USB-gadget console), and
+`/dev/ttyS0`.
+
+Make GPIO17 (the Drop line) start as a high output at boot, so the buffer
+never asserts Drop while the Pi is starting:
+
+```bash
+grep -q '^gpio=17=op,dh' /boot/firmware/config.txt || echo 'gpio=17=op,dh' | sudo tee -a /boot/firmware/config.txt
+```
+
+```bash
+sudo apt install -y python3-libgpiod gpiod
+```
+
+```bash
+diofinder-ctl raw '{"cmd":"mount_status"}'
+```
+(`enabled` must be false.)
+
+```bash
+sudo reboot
+```
+
+Get the script (the repository is public):
+
+```bash
+curl -fsSL -o ~/tt_discover.py https://raw.githubusercontent.com/mconsidine/diofinder/claude/fervent-darwin-u1h7y3/docs/assessments/scripts/tt_discover.py
+```
+
+### 0.2 The AUX cable
+
+No document gives the AUX pinout, so the cable is made after measuring. Each
+contact you find connects like this:
+
+| AUX contact (found by measuring) | Goes to |
+|---|---|
+| +12 V (reads 8–16 V) | **nothing**: cut or tape it |
+| GND (continuity to the power-jack sleeve) | Pi pin 9 (and buffer GND) |
+| DATA (idles at 3.3 or 5 V, flickers with traffic) | Listening: divider → Pi pin 10. Talking: also buffer output Y1 |
+| DROP (dips low in step with traffic) | Talking only: buffer output Y2 |
+| Anything else | nothing |
+
+**Connector:**
+- Count the gold contacts: 4 = RJ11, 6 = RJ12, 8 = RJ45.
+- Use a plug-to-screw-terminal breakout of that size.
+- Numbering: hold the plug with its contacts toward you and the clip
+  underneath; pin 1 is on the left.
+
+**Measuring**, with a meter against the mount's GND:
+- the mount powered and the hand controller in the `HC` jack, so the bus is
+  busy;
+- probe each AUX contact.
+
+If no AUX contact flickers while you press hand-controller keys, AUX isn't a
+bus tap. Repeat the measurement on the `HC` jack through an RJ-45 pass-through
+breakout instead, and use the same table.
+
+**Listening hardware (phase 1):** two resistors, no chip.
+- DATA → 10 kΩ → Pi pin 10;
+- Pi pin 10 → 20 kΩ → Pi pin 9 (GND).
+
+That divider gives 3.3 V from a 5 V bus. On a measured 3.3 V bus it gives
+2.2 V, still a valid high.
+
+**Talking hardware (phase 2):** an SN74LVC2G07 (dual open-drain buffer,
+breakout board):
+
+| Buffer pin | Connection |
+|---|---|
+| VCC | Pi pin 17 (3.3 V) |
+| GND | Pi pin 9 |
+| A1 | Pi pin 8 (TXD), plus 10 kΩ to 3.3 V |
+| Y1 | AUX DATA |
+| A2 | Pi pin 11 (GPIO17), plus 10 kΩ to 3.3 V |
+| Y2 | AUX DROP |
+
+Keep the listening divider in place. Pins 1, 3, 5 and 6 stay with the BNO055.
+
+### 0.3 Runs
+
+1. **Environment and listening**, hand controller plugged in. Press direction
+   keys during the 30 s, and power the hand controller up during it if
+   possible:
+
+```bash
+sudo /opt/diofinder/venv/bin/python ~/tt_discover.py --listen 30 --scan-bauds
+```
+
+2. **Talking** (buffer fitted, hand controller **unplugged**, mount
+   power-cycled):
+
+```bash
+sudo /opt/diofinder/venv/bin/python ~/tt_discover.py --listen 5 --talk --drop 17
+```
+
+The script refuses to talk if it hears traffic (another master). If `:e1`
+gets no answer with Drop active-low, it tries the other polarity once.
+
+3. **Send back** the `~/teletrack_discover_*.json` files. They hold:
+   - the environment;
+   - the raw traffic (first 60 lines plus hex);
+   - every inquiry reply, decoded;
+   - echo (single-wire) yes/no;
+   - the Drop polarity that worked;
+   - the speed-resolution table;
+   - round-trip statistics.
+
+   That is enough to choose the control path and the loop rate.
 
 ## 1. What the documents settle
 
