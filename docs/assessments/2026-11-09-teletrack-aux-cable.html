@@ -1,0 +1,380 @@
+<title>TeleTrack AUX Cable</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a bench sheet — one column of numbered drawing plates, each with its own caption block, then the wiring list and checks. */
+:root {
+  --paper: #f3f5f2;        /* drawing-sheet ground, faint green-grey */
+  --plate: #fbfcfa;        /* drawing plate */
+  --ink: #1d2a26;          /* line work and text */
+  --muted: #5d6b66;
+  --rule: #c9d1cc;
+  --accent: #0f6e63;       /* teal: the interface board */
+  --warn: #b3261e;         /* 12 V / do-not-connect */
+  --caution-bg: #fbeceb;
+  --w-5v: #c62828; --w-3v3: #e07b00; --w-gnd: #3b3b3b; --w-tx: #c9a400;
+  --w-rx: #2e7d32; --w-drop: #1565c0; --w-bus: #6a4fb3;
+  --display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --body: "IBM Plex Sans", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --paper: #121816; --plate: #18201d; --ink: #dfe8e3; --muted: #9aaba4; --rule: #33413c;
+  --accent: #4fc4b3; --warn: #ff7b72; --caution-bg: #2c1a19;
+  --w-5v: #ff6b6b; --w-3v3: #ffab40; --w-gnd: #b0bec5; --w-tx: #ffd740;
+  --w-rx: #69d26f; --w-drop: #64b5f6; --w-bus: #b39ddb; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --paper: #121816; --plate: #18201d; --ink: #dfe8e3; --muted: #9aaba4; --rule: #33413c;
+  --accent: #4fc4b3; --warn: #ff7b72; --caution-bg: #2c1a19;
+  --w-5v: #ff6b6b; --w-3v3: #ffab40; --w-gnd: #b0bec5; --w-tx: #ffd740;
+  --w-rx: #69d26f; --w-drop: #64b5f6; --w-bus: #b39ddb; color-scheme: dark }
+
+body { background: var(--paper); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.55; }
+.wrap { max-width: 1040px; margin: 0 auto; padding-block: 28px 56px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 28px; }
+header h1 { font-family: var(--display); font-weight: 600; font-size: clamp(30px, 5vw, 44px); letter-spacing: .01em; margin: 0; text-wrap: balance; }
+header p { margin: 6px 0 0; max-width: 68ch; color: var(--muted); }
+.meta { font-family: var(--mono); font-size: 12px; color: var(--muted); letter-spacing: .04em; text-transform: uppercase; }
+.caution { border: 1.5px solid var(--warn); background: var(--caution-bg); padding: 12px 16px; max-width: 80ch; }
+.caution strong { color: var(--warn); }
+.caution ul { margin: 6px 0 0; padding-left: 20px; }
+section.plate { background: var(--plate); border: 1px solid var(--rule); display: flex; flex-direction: column; }
+.plate-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; padding: 12px 16px; border-bottom: 1px solid var(--rule); }
+.plate-head h2 { font-family: var(--display); font-weight: 600; font-size: 24px; margin: 0; letter-spacing: .02em; }
+.plate-head .meta { margin-left: auto; }
+.fig { overflow-x: auto; padding: 8px 8px 4px; }
+.fig svg { display: block; min-width: 760px; width: 100%; height: auto; }
+.caption { padding: 4px 16px 16px; color: var(--muted); max-width: 90ch; font-size: 14px; }
+.caption p { margin: 6px 0; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+.tbl { overflow-x: auto; padding: 0 16px 16px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { font-family: var(--mono); font-size: 11.5px; font-weight: 500; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+td.m { font-family: var(--mono); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sw { display: inline-block; width: 22px; height: 6px; border-radius: 3px; vertical-align: middle; margin-right: 6px; }
+.nc { color: var(--warn); font-weight: 600; }
+ol.steps { margin: 0; padding: 4px 16px 16px 40px; display: flex; flex-direction: column; gap: 6px; max-width: 90ch; }
+code { font-family: var(--mono); font-size: 13px; }
+/* SVG line work */
+svg text { font-family: var(--mono); fill: var(--ink); }
+svg .t { font-size: 13px; }
+svg .s { font-size: 11px; fill: var(--muted); }
+svg .h { font-family: var(--display); font-size: 17px; font-weight: 600; letter-spacing: .03em; }
+svg .wire { stroke: var(--ink); stroke-width: 1.6; fill: none; }
+svg .box { fill: var(--plate); stroke: var(--ink); stroke-width: 1.6; }
+svg .ic { fill: var(--plate); stroke: var(--accent); stroke-width: 2; }
+svg .icfill { fill: var(--accent); }
+svg .acc { fill: var(--accent); }
+svg .dot { fill: var(--ink); }
+svg .warn { fill: var(--warn); }
+svg .warnl { stroke: var(--warn); stroke-width: 2; fill: none; }
+svg .pad { fill: var(--plate); stroke: var(--muted); stroke-width: 1.2; }
+svg .padbusy { fill: var(--rule); stroke: var(--muted); stroke-width: 1.2; }
+svg .padon { stroke: var(--ink); stroke-width: 2; }
+svg .pcb { fill: none; stroke: var(--rule); stroke-width: 2; }
+svg .board { fill: var(--plate); stroke: var(--accent); stroke-width: 2; stroke-dasharray: 6 4; }
+svg .plug { fill: var(--plate); stroke: var(--ink); stroke-width: 1.6; }
+svg .contact { fill: #c9a227; stroke: var(--ink); stroke-width: .8; }
+svg .w5v { stroke: var(--w-5v); } svg .w3v3 { stroke: var(--w-3v3); } svg .wgnd { stroke: var(--w-gnd); }
+svg .wtx { stroke: var(--w-tx); } svg .wrx { stroke: var(--w-rx); } svg .wdrop { stroke: var(--w-drop); }
+svg .hw { stroke-width: 3.2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="meta">diofinder · Orion TeleTrack · direct motor-bus link · rev 2026-11-09</div>
+    <h1>TeleTrack AUX cable</h1>
+    <p>A Raspberry Pi Zero 2W on the TeleTrack's 6-pin AUX jack. The cable passes through a small interface board with one SN74LVC2G07 and six resistors. The AUX pinout comes from the Sky-Watcher "AUX INTERFACE" schematic (P/N 51562-83 rev B) and still needs checking on the mount before connecting.</p>
+  </header>
+
+  <div class="caution">
+    <strong>Before anything touches the Pi</strong>
+    <ul>
+      <li><strong>AUX pin 4 is +12 V.</strong> It must not be connected to anything. 12 V on any Pi pin destroys the Pi.</li>
+      <li>Check with a meter, mount on, against the power-jack sleeve:
+        <ul>
+          <li>pin 4 reads 8–16 V;</li>
+          <li>pin 2 shows continuity to GND with the power off;</li>
+          <li>pins 1, 3 and 5 sit near 5 V.</li>
+        </ul>
+        Earlier hardware revisions used a different AUX pinout.</li>
+      <li>Ready-made 6-wire telephone cables are often <em>reversed</em> (pin 1 at one end is pin 6 at the other). Check continuity end to end, or use a screw-terminal breakout at the mount.</li>
+    </ul>
+  </div>
+
+  <!-- Plate 1: schematic -->
+  <section class="plate" aria-labelledby="p1">
+    <div class="plate-head"><h2 id="p1">Schematic</h2><span class="meta">Plate 1 of 3</span></div>
+    <div class="fig">
+      <svg viewBox="0 0 960 520" role="img" aria-label="Schematic: Pi Zero 2W header pins 2, 8, 9, 10, 11 and 17 connected through an SN74LVC2G07 open-drain buffer and a resistor divider to TeleTrack AUX pins 1, 2, 3 and 5.">
+        <!-- Pi header block -->
+        <rect class="box" x="40" y="30" width="170" height="460"/>
+        <text class="h" x="52" y="54">Pi Zero 2W</text>
+        <text class="s" x="52" y="70">40-pin header</text>
+        <!-- pin rows: 5V 60? use y list -->
+        <g>
+          <text class="t" x="52" y="114">pin 2 · 5V</text>
+          <text class="t" x="52" y="144">pin 17 · 3V3</text>
+          <text class="t" x="52" y="214">pin 11 · GPIO17</text>
+          <text class="t" x="52" y="294">pin 8 · TXD</text>
+          <text class="t" x="52" y="394">pin 10 · RXD</text>
+          <text class="t" x="52" y="464">pin 9 · GND</text>
+        </g>
+        <!-- 5V rail y=110 -->
+        <path class="wire" d="M210 110 H780"/>
+        <text class="s" x="740" y="102">+5V</text>
+        <!-- 3V3 rail y=140 -->
+        <path class="wire" d="M210 140 H490"/>
+        <text class="s" x="440" y="132">+3V3</text>
+        <!-- IC -->
+        <rect class="ic" x="420" y="180" width="140" height="140"/>
+        <text class="t" x="434" y="246" style="font-weight:500">SN74LVC2G07</text>
+        <text class="s" x="434" y="262">open-drain ×2</text>
+        <text class="s" x="300" y="344">VCC 3.3 V · outputs 5 V-tolerant</text>
+        <!-- VCC pin -->
+        <path class="wire" d="M490 140 V180"/><circle class="dot" cx="490" cy="140" r="0"/>
+        <text class="s" x="496" y="176">5 VCC</text>
+        <!-- GND pin -->
+        <path class="wire" d="M490 320 V350"/>
+        <text class="s" x="496" y="336">2 GND</text>
+        <path class="wire" d="M478 350 H502 M482 355 H498 M486 360 H494"/>
+        <!-- buffer triangles inside -->
+        <path class="wire" d="M420 210 H470 M500 210 H560 M420 290 H470 M500 290 H560"/>
+        <path class="icfill" d="M470 198 L470 222 L500 210 Z"/>
+        <path class="icfill" d="M470 278 L470 302 L500 290 Z"/>
+        <!-- GPIO17 -> A2 (pin 3) y=210 -->
+        <path class="wire" d="M210 210 H420"/>
+        <text class="s" x="384" y="204">3 2A</text>
+        <!-- TXD -> A1 (pin 1) y=290 -->
+        <path class="wire" d="M210 290 H420"/>
+        <text class="s" x="384" y="284">1 1A</text>
+        <!-- 3V3 pull-ups on A2 (x=320) and A1 (x=360) -->
+        <path class="wire" d="M320 140 V160 M320 196 V210"/>
+        <rect class="box" x="313" y="160" width="14" height="36"/>
+        <text class="s" x="270" y="182">R1 10k</text>
+        <circle class="dot" cx="320" cy="140" r="3.5"/><circle class="dot" cx="320" cy="210" r="3.5"/>
+        <path class="wire" d="M360 140 V236 M360 272 V290"/>
+        <rect class="box" x="353" y="236" width="14" height="36"/>
+        <text class="s" x="372" y="258">R2 10k</text>
+        <circle class="dot" cx="360" cy="140" r="3.5"/><circle class="dot" cx="360" cy="290" r="3.5"/>
+        <!-- Y2 (pin 4) -> AUX 1 DROP y=210 ; Y1 (pin 6) -> AUX 3 y=290 -->
+        <path class="wire" d="M560 210 H820"/>
+        <text class="s" x="566" y="204">4 2Y</text>
+        <path class="wire" d="M560 290 H820"/>
+        <text class="s" x="566" y="284">6 1Y</text>
+        <!-- 5V pull-ups: R4 100k on Y2 at x=660, R3 10k on Y1 at x=720 -->
+        <path class="wire" d="M660 110 V150 M660 186 V210"/>
+        <rect class="box" x="653" y="150" width="14" height="36"/>
+        <text class="s" x="604" y="172">R4 100k</text>
+        <circle class="dot" cx="660" cy="110" r="3.5"/><circle class="dot" cx="660" cy="210" r="3.5"/>
+        <path class="wire" d="M720 110 V236 M720 272 V290"/>
+        <rect class="box" x="713" y="236" width="14" height="36"/>
+        <text class="s" x="732" y="258">R3 10k</text>
+        <circle class="dot" cx="720" cy="110" r="3.5"/><circle class="dot" cx="720" cy="290" r="3.5"/>
+        <!-- RX divider: AUX5 y=390 -> R5 10k horizontal (640..700) -> node x=600 -> RXD ; R6 20k down to GND -->
+        <path class="wire" d="M820 390 H700 M640 390 H210"/>
+        <rect class="box" x="640" y="383" width="60" height="14"/>
+        <text class="s" x="644" y="376">R5 10k</text>
+        <circle class="dot" cx="600" cy="390" r="3.5"/>
+        <path class="wire" d="M600 390 V410 M600 446 V462"/>
+        <rect class="box" x="593" y="410" width="14" height="36"/>
+        <text class="s" x="614" y="432">R6 20k (or 18k)</text>
+        <path class="wire" d="M588 462 H612 M592 467 H608 M596 472 H604"/>
+        <text class="s" x="320" y="382">≈3.3 V max into RXD</text>
+        <!-- Pi GND -->
+        <path class="wire" d="M210 460 H260 V472"/>
+        <path class="wire" d="M248 472 H272 M252 477 H268 M256 482 H264"/>
+        <!-- AUX connector -->
+        <rect class="box" x="820" y="160" width="110" height="300"/>
+        <text class="h" x="832" y="150">TeleTrack AUX</text>
+        <text class="s" x="832" y="478">6P6C (RJ12 / RJ25)</text>
+        <text class="t" x="840" y="214">1 DROP</text>
+        <text class="t" x="840" y="254">2 GND</text>
+        <text class="t" x="840" y="294">3 AUX.TX</text>
+        <text class="t warn" x="840" y="334">4 +12V</text>
+        <text class="t" x="840" y="394">5 AUX.RX</text>
+        <text class="t" x="840" y="434">6 PDL</text>
+        <!-- pin 2 GND stub -->
+        <path class="wire" d="M820 250 H790 V262"/>
+        <path class="wire" d="M778 262 H802 M782 267 H798 M786 272 H794"/>
+        <!-- pin 4 and 6 NC -->
+        <path class="warnl" d="M820 330 H800 M792 322 L808 338 M808 322 L792 338"/>
+        <text class="s warn" x="684" y="334">do not connect</text>
+        <path class="wire" d="M820 430 H800 M792 422 L808 438 M808 422 L792 438"/>
+        <text class="s" x="736" y="434">unused</text>
+        <!-- legend -->
+        <text class="s" x="40" y="512">Lines that cross without a dot are not connected. IC pin numbers are for the SOT-23-6 (DBV/DCK) package — check your breakout's labels.</text>
+      </svg>
+    </div>
+    <div class="caption">
+      <p><strong>How it works.</strong>
+        The Pi's TX (pin 8) and its Drop output (GPIO17, pin 11) each drive one
+        open-drain buffer channel:
+        a low input pulls the mount's line low, and a high input lets it float up to 5 V
+        through R3/R4 and the mount's own pull-ups. So nothing at 5 V ever reaches a
+        Pi pin, and the Pi never pushes the bus high.
+        R1/R2 hold the buffer inputs high while the Pi boots, so the mount sees an idle bus.</p>
+      <p>The mount's data back to the Pi (AUX pin 5) passes through the R5/R6 divider:
+        5 V × 20/30 = 3.3 V.
+        With 18k for R6 it is 3.2 V.
+        Don't use 22k: it gives 3.4 V.</p>
+    </div>
+  </section>
+
+  <!-- Plate 2: physical wiring -->
+  <section class="plate" aria-labelledby="p2">
+    <div class="plate-head"><h2 id="p2">Wiring drawing</h2><span class="meta">Plate 2 of 3</span></div>
+    <div class="fig">
+      <svg viewBox="0 0 960 470" role="img" aria-label="Physical wiring: six jumper wires from the Pi Zero 2W header to the interface board, and four wires from the board to an RJ12 plug for the AUX jack.">
+        <!-- Pi board outline -->
+        <rect class="pcb" x="24" y="24" width="540" height="96" rx="8"/>
+        <text class="h" x="36" y="16">Pi Zero 2W · header from above</text>
+        <text class="s" x="30" y="140">◀ SD-card end</text>
+        <text class="s" x="440" y="140">USB / power end ▶</text>
+        <text class="s" x="576" y="64">outer edge: even pins</text>
+        <text class="s" x="576" y="92">inner row: odd pins</text>
+        <!-- pads drawn by script below -->
+        <g id="pads"></g>
+        <!-- wires drawn by script -->
+        <g id="wires"></g>
+        <!-- interface board -->
+        <rect class="board" x="640" y="160" width="290" height="140" rx="4"/>
+        <text class="h" x="652" y="182">Interface board</text>
+        <text class="s" x="652" y="200">SN74LVC2G07 breakout + R1–R6</text>
+        <text class="s" x="652" y="216">(perfboard; wiring = Plate 1)</text>
+        <!-- board output wires to RJ12 plug -->
+        <g id="outwires"></g>
+        <!-- RJ12 plug face -->
+        <rect class="plug" x="690" y="360" width="222" height="72" rx="4"/>
+        <g id="contacts"></g>
+        <text class="s" x="950" y="448" text-anchor="end">RJ12 plug, contacts toward you, clip underneath, pin 1 on the left</text>
+        <text class="s" x="950" y="464" text-anchor="end">→ plugs into the TeleTrack AUX jack</text>
+      </svg>
+    </div>
+    <div class="caption">
+      <p>
+        Grey pads 1, 3, 5 and 6 are already used by the BNO055 IMU; leave them alone.
+        Pin 13 (GPIO27) is only for the pin-scan step and isn't part of the finished cable.
+        The jumper colors are suggestions; the board-to-plug colors depend on your flat cable,
+        so identify each conductor by continuity.
+      </p>
+    </div>
+  </section>
+
+  <!-- Plate 3: lists -->
+  <section class="plate" aria-labelledby="p3">
+    <div class="plate-head"><h2 id="p3">Connection list and parts</h2><span class="meta">Plate 3 of 3</span></div>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Pi pin</th><th>Signal</th><th>Interface board</th><th>AUX pin</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="m"><span class="sw" style="background:var(--w-5v)"></span>2</td><td>5V</td><td>R3 (10k) and R4 (100k) top ends</td><td class="m">—</td><td>Pull-ups for the mount side only</td></tr>
+          <tr><td class="m"><span class="sw" style="background:var(--w-3v3)"></span>17</td><td>3.3 V</td><td>Buffer VCC; R1, R2 top ends</td><td class="m">—</td><td>Pin 1 is taken by the BNO055</td></tr>
+          <tr><td class="m"><span class="sw" style="background:var(--w-drop)"></span>11</td><td>GPIO17 (Drop out)</td><td>Buffer 2A (+R1 to 3.3 V)</td><td class="m">—</td><td>Buffer 2Y → AUX 1</td></tr>
+          <tr><td class="m"><span class="sw" style="background:var(--w-tx)"></span>8</td><td>TXD (GPIO14)</td><td>Buffer 1A (+R2 to 3.3 V)</td><td class="m">—</td><td>Buffer 1Y → AUX 3</td></tr>
+          <tr><td class="m"><span class="sw" style="background:var(--w-rx)"></span>10</td><td>RXD (GPIO15)</td><td>R5/R6 junction</td><td class="m">—</td><td>R5 other end → AUX 5</td></tr>
+          <tr><td class="m"><span class="sw" style="background:var(--w-gnd)"></span>9</td><td>GND</td><td>Buffer GND, R6 bottom</td><td class="m">2</td><td>The only direct Pi-to-mount wire</td></tr>
+          <tr><td class="m">—</td><td>DROP</td><td>Buffer 2Y + R4 (100k to 5V)</td><td class="m">1</td><td>Low = "bus busy"</td></tr>
+          <tr><td class="m">—</td><td>AUX.TX (into mount)</td><td>Buffer 1Y + R3 (10k to 5V)</td><td class="m">3</td><td></td></tr>
+          <tr><td class="m">—</td><td>AUX.RX (from mount)</td><td>R5 (10k) far end</td><td class="m">5</td><td></td></tr>
+          <tr><td class="m">—</td><td class="nc">+12 V</td><td class="nc">nothing</td><td class="m nc">4</td><td class="nc">Cut or tape this conductor</td></tr>
+          <tr><td class="m">—</td><td>PDL</td><td>nothing</td><td class="m">6</td><td>Function unknown</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Qty</th><th>Part</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td class="m">1</td><td>SN74LVC2G07 on a SOT-23-6 (or SC-70) to DIP adapter</td><td>Dual open-drain buffer; any 74LVC1G07 ×2 also works</td></tr>
+          <tr><td class="m">3</td><td>10 kΩ resistor</td><td>R1, R2, R3</td></tr>
+          <tr><td class="m">1</td><td>10 kΩ resistor</td><td>R5 (divider top)</td></tr>
+          <tr><td class="m">1</td><td>20 kΩ (or 18 kΩ) resistor</td><td>R6 (divider bottom)</td></tr>
+          <tr><td class="m">1</td><td>100 kΩ resistor</td><td>R4, matches the master's DROP pull-up</td></tr>
+          <tr><td class="m">1</td><td>6P6C plug + 6-wire flat cable, or a 6P6C screw-terminal breakout</td><td>A breakout makes the meter checks easy</td></tr>
+          <tr><td class="m">6</td><td>Female jumper wires</td><td>Pi header to the board</td></tr>
+          <tr><td class="m">1</td><td>Small perfboard</td><td>About 30 × 50 mm is enough</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <ol class="steps">
+      <li>Meter the AUX jack as in the caution box above. Stop if pin 4 isn't the 12 V pin.</li>
+      <li>Build the board. With nothing attached, check:
+        <ul>
+          <li>no continuity between the Pi 5V pad and any Pi signal pad;</li>
+          <li>the AUX pin 4 conductor is isolated.</li>
+        </ul>
+      </li>
+      <li>Listen first. Connect GND and the AUX pin 5 path only, then run
+        <code>tt_discover.py --listen 30</code> with the hand controller plugged in.</li>
+      <li>Then talk. Unplug the hand controller, connect the rest, and run
+        <code>tt_discover.py --talk --drop 17</code>.</li>
+    </ol>
+  </section>
+</div>
+
+<script>
+(function () {
+  var NS = "http://www.w3.org/2000/svg";
+  function el(tag, attrs, parent, text) {
+    var e = document.createElementNS(NS, tag);
+    for (var k in attrs) e.setAttribute(k, attrs[k]);
+    if (text != null) e.textContent = text;
+    parent.appendChild(e); return e;
+  }
+  var X0 = 48, P = 25, YE = 52, YO = 88;           // pad grid: even row (outer) above odd row
+  function pos(n) { var c = Math.floor((n - 1) / 2); return { x: X0 + c * P, y: (n % 2 === 0) ? YE : YO }; }
+  var busy = { 1: "3V3 IMU", 3: "SDA", 5: "SCL", 6: "GND IMU" };
+  var used = { 2: "w5v", 8: "wtx", 9: "wgnd", 10: "wrx", 11: "wdrop", 17: "w3v3" };
+  var pads = document.getElementById("pads");
+  for (var n = 1; n <= 40; n++) {
+    var p = pos(n);
+    var cls = busy[n] ? "padbusy" : "pad";
+    if (n === 1) el("rect", { x: p.x - 7, y: p.y - 7, width: 14, height: 14, "class": cls }, pads);
+    else el("circle", { cx: p.x, cy: p.y, r: 7, "class": cls }, pads);
+    if (used[n]) el("circle", { cx: p.x, cy: p.y, r: 9.5, fill: "none", "class": "hw " + used[n], "stroke-width": 2.4 }, pads);
+    if (n <= 18 || used[n] || n === 13) el("text", { x: p.x, y: (n % 2 === 0) ? p.y - 13 : p.y + 22, "text-anchor": "middle", "class": "s" }, pads, String(n));
+  }
+  // pin 13 marker (pin-scan only)
+  var p13 = pos(13);
+  el("circle", { cx: p13.x, cy: p13.y, r: 9.5, fill: "none", stroke: "currentColor", "stroke-dasharray": "2 2", "class": "s" }, pads);
+
+  // wires: leftmost pin deepest so nothing crosses
+  var wires = [
+    { n: 17, cls: "w3v3", label: "3.3V", y: 176, dx: 0 },
+    { n: 11, cls: "wdrop", label: "GPIO17", y: 196, dx: 0 },
+    { n: 10, cls: "wrx", label: "RXD", y: 216, dx: 4 },
+    { n: 9, cls: "wgnd", label: "GND", y: 236, dx: -4 },
+    { n: 8, cls: "wtx", label: "TXD", y: 256, dx: 0 },
+    { n: 2, cls: "w5v", label: "5V", y: 276, dx: 0 }
+  ];
+  var wg = document.getElementById("wires");
+  wires.forEach(function (w) {
+    var p = pos(w.n), x = p.x + w.dx;
+    el("path", { d: "M" + x + " " + (p.y + 9) + " V" + w.y + " H640", "class": "hw " + w.cls }, wg);
+    el("circle", { cx: 640, cy: w.y, r: 3.5, "class": "dot" }, wg);
+    el("text", { x: 600, y: w.y - 4, "text-anchor": "end", "class": "s" }, wg, "pin " + w.n + " · " + w.label);
+  });
+
+  // RJ12 contacts and board-to-plug wires
+  var cg = document.getElementById("contacts"), og = document.getElementById("outwires");
+  var CX0 = 716, CP = 34, CY = 368;
+  var aux = { 1: ["DROP", "wdrop"], 2: ["GND", "wgnd"], 3: ["TX", "wtx"], 5: ["RX", "wrx"] };
+  var names = { 1: "DROP", 2: "GND", 3: "TX", 4: "12V", 5: "RX", 6: "PDL" };
+  for (var i = 1; i <= 6; i++) {
+    var cx = CX0 + (i - 1) * CP;
+    el("rect", { x: cx - 5, y: CY, width: 10, height: 22, "class": "contact" }, cg);
+    el("text", { x: cx, y: CY + 38, "text-anchor": "middle", "class": "s" }, cg, String(i));
+    el("text", { x: cx, y: CY + 54, "text-anchor": "middle", "class": i === 4 ? "s warn" : "s" }, cg, names[i]);
+    if (aux[i]) {
+      el("path", { d: "M" + cx + " 300 V" + CY, "class": "hw " + aux[i][1] }, og);
+    } else if (i === 4) {
+      el("path", { d: "M" + (cx - 7) + " 334 L" + (cx + 7) + " 348 M" + (cx + 7) + " 334 L" + (cx - 7) + " 348", "class": "warnl" }, og);
+    } else {
+      el("path", { d: "M" + (cx - 6) + " 335 L" + (cx + 6) + " 347 M" + (cx + 6) + " 335 L" + (cx - 6) + " 347", "class": "wire" }, og);
+    }
+  }
+})();
+</script>
