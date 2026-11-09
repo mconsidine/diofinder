@@ -225,6 +225,18 @@ That matches AUX pins 2–5 here exactly. The AUX connector looks like the
 standard Sky-Watcher serial jack, with DROP and PDL added on the two outer
 positions.
 
+**Sky-Watcher manuals (read 2026-11-09):** the SynScan hand controller's
+RJ-45 mount port is:
+- 1 GND;
+- 3 DROP;
+- 5 RX(TTL);
+- 6 TX(TTL);
+- 8 Vpp+ (the supply rail).
+
+The manual also says "all Alt-azimuth mounts" have a 6-pin RJ-12 hand-control
+port. So the AUX signal set matches what the hand controller uses. Details:
+`2026-11-09-synscan-docs-findings.md`.
+
 **Not found:** the rest of the schematic set ("NXW210", "51562-83"). Neither
 number has any public match. The Sky-Watcher download site and the usual
 forums (Stargazers Lounge, IceInSpace, Astropolis) are not reachable from
