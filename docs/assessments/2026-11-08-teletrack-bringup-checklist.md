@@ -145,6 +145,72 @@ Each run appends a line to `~/tt_pinscan.jsonl`; send that file back.
 Tested against a simulated bus (serial side only). The GPIO edge capture uses
 the libgpiod v2 API and is untested on hardware.
 
+### 0.2b AUX pinout from a SynScan AUX-interface schematic (2026-11-09)
+
+The user supplied a schematic page titled "AUX INTERFACE". Its note says:
+- part number 51562-83 rev B;
+- the AUX pinout "is now consistent with motor board's modular (RJ25)
+  connector";
+- "previous revisions have incorrect AUX pinout".
+
+The board it comes from is a bus **master** (it has its own 3.3 V
+microcontroller), such as a hand-controller-class device. It is not the
+motor board.
+
+**Connector J3: 6-pin modular (RJ25/RJ12)**
+
+| Pin | Net | On that board |
+|---|---|---|
+| 1 | DROP | Open-drain: U8A (74HCT2G125, input tied to GND) pulls it low only while the board's `DROP_OUT` is low. 100 kΩ pull-up to 5 V (R5). Also read back by the microcontroller (sees another master holding the bus) |
+| 2 | GND | Ground |
+| 3 | AUX.TX | U8B (74HCT2G125) drives the board's transmit data onto this pin **only while `DROP_OUT` is asserted**; tri-state otherwise. 5 V push-pull while enabled |
+| 4 | DIST_12V+ | 12 V supply. **Never to the Pi** |
+| 5 | AUX.RX | Straight to the microcontroller's receive input; 100 kΩ pull-up to 5 V (R8) |
+| 6 | PDL | Straight to the microcontroller; function not shown (unknown). Leave unconnected |
+
+All four signals pass through ferrite beads (FB3–FB6) and a VEMI45AA
+four-channel EMI/ESD filter (U6).
+
+**What it shows about the bus:**
+- **Logic level:** 5 V (HCT drivers, 5 V pull-ups). The Pi needs the RX
+  divider and an open-drain or level-shifted TX.
+- **Who drives:** a master drives TX only between asserting and releasing
+  DROP; otherwise its TX floats. So a host may drive the line high while it
+  holds DROP. The open-drain buffer plus a pull-up gives the same result.
+- **DROP is shared busy/arbitration** between masters: each master pulls it
+  low and reads it.
+- **TX and RX are separate pins at the connector.** Whether they are joined
+  inside the motor board (the command set's "most Alt/Az mounts") shows up in
+  the pin scan:
+  - commands **and** replies on both pins 3 and 5 → joined;
+  - commands only on pin 3 and replies only on pin 5 → separate.
+
+**Applied to the TeleTrack's AUX jack** (still to be confirmed with the meter
+and the pin scan, since earlier revisions differed):
+- Pin 4 should read 8–16 V.
+- Pin 2 should show continuity to the power-jack sleeve.
+- Pins 1, 3 and 5 should idle near 5 V.
+
+| AUX pin | Connect to |
+|---|---|
+| 1 DROP | Buffer Y2, plus 100 kΩ pull-up to Pi pin 2 (5 V) |
+| 2 GND | Pi pin 9 |
+| 3 AUX.TX (data into the motor board) | Buffer Y1, plus 10 kΩ pull-up to Pi pin 2 (5 V) |
+| 4 +12 V | nothing |
+| 5 AUX.RX (data from the motor board) | 10 kΩ → Pi pin 10; Pi pin 10 → 20 kΩ → GND |
+| 6 PDL | nothing |
+
+The pull-ups go on the buffer's *outputs*, which tolerate 5 V. Nothing at
+5 V reaches a Pi pin.
+
+The buffer inputs are unchanged:
+- A1 = Pi pin 8 (TX), with 10 kΩ to 3.3 V;
+- A2 = Pi pin 11 (GPIO17, Drop), with 10 kΩ to 3.3 V;
+- VCC = Pi pin 17; GND = Pi pin 9.
+
+**Pin scan with this pinout:** probe pins 1, 3, 5 and 6 only. Never probe
+pin 4.
+
 **Listening hardware (phase 1):** two resistors, no chip.
 - DATA → 10 kΩ → Pi pin 10;
 - Pi pin 10 → 20 kΩ → Pi pin 9 (GND).
