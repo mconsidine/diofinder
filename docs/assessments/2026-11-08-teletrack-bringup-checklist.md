@@ -211,6 +211,25 @@ The buffer inputs are unchanged:
 **Pin scan with this pinout:** probe pins 1, 3, 5 and 6 only. Never probe
 pin 4.
 
+**Corroboration (2026-11-09).** The open-source SkyWatcherWiFi adapter
+(github.com/vlaate/SkyWatcherWiFi, `schematic.png`) wires the older
+Sky-Watcher 6-position serial jack (four contacts, an "RJ11" in a 6P body)
+as:
+- position 2 GND;
+- position 3 "to TX" (driven by the adapter's TX);
+- position 4 VCC 12 V;
+- position 5 "to RX" (to the adapter's RX);
+- positions 1 and 6 not connected.
+
+That matches AUX pins 2–5 here exactly. The AUX connector looks like the
+standard Sky-Watcher serial jack, with DROP and PDL added on the two outer
+positions.
+
+**Not found:** the rest of the schematic set ("NXW210", "51562-83"). Neither
+number has any public match. The Sky-Watcher download site and the usual
+forums (Stargazers Lounge, IceInSpace, Astropolis) are not reachable from
+this sandbox.
+
 **Listening hardware (phase 1):** two resistors, no chip.
 - DATA → 10 kΩ → Pi pin 10;
 - Pi pin 10 → 20 kΩ → Pi pin 9 (GND).
