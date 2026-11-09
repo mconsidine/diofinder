@@ -156,3 +156,51 @@ enough.
 - The component side of the jack board **without the cable covering** the
   traces next to the jacks.
 - The panel itself, showing which jack is labelled HC and which AUX.
+
+---
+
+## 6. Update from the close-up photos (same day)
+
+### Parts now identified
+
+| Ref | Marking | Part | Role |
+|---|---|---|---|
+| U2 | `74HC14D` + lot code | **74HC14 hex Schmitt-trigger inverter** | Squares up slow or noisy edges. Most likely the optical-encoder channels (after U3, the LM324 op-amp), and possibly the serial-bus input. Read the U3 → U2 path as the encoder front end |
+| T1 | `357T` / `XB` / `LG06`, 4-lead mini-flat, pin-1 dot | **Lite-On LTV-357T optocoupler** (phototransistor output; the second line is its rank/date) | Isolates the **SW** connector. Sky-Watcher boards have a camera **snap/shutter port** switched by the `:O` "Set Aux Switch On/Off" command (INDI calls it `SetSnapPort`). SW → the panel's camera "Cable" jack is the natural reading. The SynScan hand controller's own SHUTTER/COMMON pins are also optoisolated |
+| R6 | `561` | 560 Ω | Optocoupler LED current resistor (or output series resistor) |
+| D3 | `T4`, SOD-323 | 1N4148WS small-signal diode (the usual "T4" marking) | Single diode near the MCUs. A diode with a 10 kΩ pull-up is the classic way to put a push-pull UART TX onto a shared wire. It may be the bus TX path; confirm with the continuity checks |
+| R3, R4, R12, R14, R19, R20 | `103` | 10 kΩ | Pull-ups / biasing |
+| R11, R13 | `102` | 1 kΩ | Around the LM324: encoder or current-sense network |
+
+### Jack board silkscreen
+
+| Silkscreen | Jack | Connection |
+|---|---|---|
+| **AUX** | the jack beside the six cable pads | **Directly to the 6-wire cable**, so straight to the motor board's HC connector |
+| **HC** | the jack beside the axial resistor | Through the jack board with the **~1 kΩ resistor** in one of its lines; which line still needs the meter |
+
+So **AUX is the direct, unresistored tap of the motor bus**: the right port
+for the Pi. The 1 kΩ on the HC side is probably a series protection resistor
+for the hand-controller cable.
+
+### Which TeleTrack this is
+
+The board has a camera snap output (SW via T1), and the jack board has a
+"CONTROL" header and LED pads. That matches the **#9441 TeleTrack**:
+- its panel has a camera "Cable Jack" for the "Cruise and Shoot" mode;
+- its hand controller has no computer port;
+- its slew speeds are 32×, 64× and 800× sidereal.
+
+The #9481 AZ-G panel in its manual shows no camera jack. **Confirm from the
+label on the mount.**
+
+If it is the 9441, driving the motor board directly through AUX is the
+**only** computer route. That is the plan already.
+
+### Still to measure (§3 unchanged)
+
+- The jack-pin ↔ cable-wire table for AUX. Expected straight through, but
+  confirm.
+- Which HC-jack line carries the 1 kΩ.
+- Which cable wire is 12 V, GND, data and Drop. Use the PIC16F886
+  continuity checks in §3.
