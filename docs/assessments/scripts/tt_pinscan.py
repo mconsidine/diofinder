@@ -2,7 +2,8 @@
 """Identify which AUX/HC-jack contact is DATA and which is DROP. LISTEN-ONLY.
 
 Wiring (one probe lead, moved from contact to contact):
-  probe lead -> 10k -> NODE ;  NODE -> 20k -> Pi pin 9 (GND)
+  probe lead -> 47k -> NODE ;  NODE -> 100k -> Pi pin 9 (GND)
+  (light load: the mount bus has 10k pull-ups and PIC inputs need >= 4.0 V)
   NODE -> Pi pin 10 (RXD)  and  NODE -> Pi pin 13 (GPIO27)
   mount GND -> Pi pin 9
 NEVER touch the probe to a contact that measured above 5.5 V on the meter

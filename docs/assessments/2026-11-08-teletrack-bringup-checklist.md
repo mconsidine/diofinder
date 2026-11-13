@@ -123,9 +123,9 @@ voltage:
 **Step 2: one probe lead into the Pi.** Two resistors, no chip:
 
 ```
-probe lead ── 10k ──┬── Pi pin 10 (RXD)
+probe lead ── 47k ──┬── Pi pin 10 (RXD)
                     ├── Pi pin 13 (GPIO27)
-                    └── 20k ── Pi pin 9 (GND)
+                    └── 100k ── Pi pin 9 (GND)
 mount GND ──────────────────── Pi pin 9
 ```
 
