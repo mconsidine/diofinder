@@ -79,6 +79,14 @@ svg .plug { fill: var(--plate); stroke: var(--ink); stroke-width: 1.6; }
 svg .contact { fill: #c9a227; stroke: var(--ink); stroke-width: .8; }
 svg .w5v { stroke: var(--w-5v); } svg .w3v3 { stroke: var(--w-3v3); } svg .wgnd { stroke: var(--w-gnd); }
 svg .wtx { stroke: var(--w-tx); } svg .wrx { stroke: var(--w-rx); } svg .wdrop { stroke: var(--w-drop); }
+svg .bbody { fill: var(--paper); stroke: var(--rule); stroke-width: 1.5; }
+svg .hole { fill: var(--rule); }
+svg .rail3 { stroke: var(--w-3v3); stroke-width: 1.4; }
+svg .railg { stroke: var(--w-gnd); stroke-width: 1.4; }
+svg .rbody { fill: #d9c49a; stroke: var(--ink); stroke-width: 1; }
+svg .dash { stroke-dasharray: 5 4; }
+svg .adapter { fill: #1f6b47; stroke: var(--ink); stroke-width: 1.2; }
+svg .chiptxt { fill: #f2f2f2; font-size: 10px; }
 svg .hw { stroke-width: 3.2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
 </style>
 
@@ -110,7 +118,7 @@ svg .hw { stroke-width: 3.2; fill: none; stroke-linecap: round; stroke-linejoin:
 
   <!-- Plate 1: schematic -->
   <section class="plate" aria-labelledby="p1">
-    <div class="plate-head"><h2 id="p1">Schematic</h2><span class="meta">Plate 1 of 3</span></div>
+    <div class="plate-head"><h2 id="p1">Schematic</h2><span class="meta">Plate 1 of 4</span></div>
     <div class="fig">
       <svg viewBox="0 0 960 520" role="img" aria-label="Schematic: Pi Zero 2W header pins 2, 8, 9, 10, 11 and 17 connected through an SN74LVC2G07 open-drain buffer and a resistor divider to TeleTrack AUX pins 1, 2, 3 and 5.">
         <!-- Pi header block -->
@@ -221,7 +229,7 @@ svg .hw { stroke-width: 3.2; fill: none; stroke-linecap: round; stroke-linejoin:
 
   <!-- Plate 2: physical wiring -->
   <section class="plate" aria-labelledby="p2">
-    <div class="plate-head"><h2 id="p2">Wiring drawing</h2><span class="meta">Plate 2 of 3</span></div>
+    <div class="plate-head"><h2 id="p2">Wiring drawing</h2><span class="meta">Plate 2 of 4</span></div>
     <div class="fig">
       <svg viewBox="0 0 960 470" role="img" aria-label="Physical wiring: six jumper wires from the Pi Zero 2W header to the interface board, and four wires from the board to an RJ12 plug for the AUX jack.">
         <!-- Pi board outline -->
@@ -259,9 +267,28 @@ svg .hw { stroke-width: 3.2; fill: none; stroke-linecap: round; stroke-linejoin:
     </div>
   </section>
 
-  <!-- Plate 3: lists -->
+  <!-- Plate 3: breadboard -->
+  <section class="plate" aria-labelledby="p3b">
+    <div class="plate-head"><h2 id="p3b">Breadboard layout</h2><span class="meta">Plate 3 of 4</span></div>
+    <div class="fig">
+      <svg id="bb" viewBox="0 0 960 575" role="img" aria-label="Breadboard layout: SN74LVC2G07 adapter straddling the centre gap at columns 10 to 12, two 10k input pull-ups, a 47k/100k divider, Pi wires from below and mount wires from above."></svg>
+    </div>
+    <div class="caption">
+      <p>Columns are numbered 1–30 and rows a–e and f–j, as printed on most half-size breadboards.
+        The SN74LVC2G07 adapter straddles the centre gap at columns 10–12:
+        pins 1 (1A), 2 (GND) and 3 (2A) are in row f, and pins 6 (1Y), 5 (VCC) and 4 (2Y) are in row e.
+        Check your adapter's silkscreen, because some adapters number the pins differently.
+        The top and bottom rails are joined at the right-hand end.</p>
+      <p><strong>Dashed parts are for stage 1 only</strong> (proving the interface without the mount):
+        two 10&nbsp;kΩ resistors from a 5&nbsp;V point (Pi pin 2) to the bus and Drop columns stand in for the motor board's own pull-ups.
+        Remove them, and the pin 2 wire, before connecting the mount.
+        The mount's 12&nbsp;V pin is never brought to the breadboard.</p>
+    </div>
+  </section>
+
+  <!-- Plate 4: lists -->
   <section class="plate" aria-labelledby="p3">
-    <div class="plate-head"><h2 id="p3">Connection list and parts</h2><span class="meta">Plate 3 of 3</span></div>
+    <div class="plate-head"><h2 id="p3">Connection list and parts</h2><span class="meta">Plate 4 of 4</span></div>
     <div class="tbl">
       <table>
         <thead><tr><th>Pi pin</th><th>Signal</th><th>Interface board</th><th>AUX pin</th><th>Notes</th></tr></thead>
@@ -369,5 +396,85 @@ svg .hw { stroke-width: 3.2; fill: none; stroke-linecap: round; stroke-linejoin:
       el("path", { d: "M" + (cx - 6) + " 335 L" + (cx + 6) + " 347 M" + (cx + 6) + " 335 L" + (cx - 6) + " 347", "class": "wire" }, og);
     }
   }
+})();
+
+// ---- breadboard plate ----
+(function () {
+  var NS = "http://www.w3.org/2000/svg", svg = document.getElementById("bb");
+  if (!svg) return;
+  function el(tag, a, txt) { var e = document.createElementNS(NS, tag); for (var k in a) e.setAttribute(k, a[k]); if (txt != null) e.textContent = txt; svg.appendChild(e); return e; }
+  var X0 = 112, P = 25;
+  function cx(c) { return X0 + (c - 1) * P; }
+  var RY = { a: 150, b: 168, c: 186, d: 204, e: 222, f: 262, g: 280, h: 298, i: 316, j: 334 };
+  var R3T = 104, RGT = 122, R3B = 374, RGB = 392;             // rail y: top 3V3, top GND, bottom 3V3, bottom GND
+  el("rect", { x: 78, y: 88, width: 780, height: 320, rx: 8, "class": "bbody" });
+  el("rect", { x: 86, y: 236, width: 764, height: 12, fill: "var(--rule)", opacity: ".45" });
+  [[R3T, "rail3", "+3.3 V"], [RGT, "railg", "GND"], [R3B, "rail3", "+3.3 V"], [RGB, "railg", "GND"]].forEach(function (r) {
+    el("line", { x1: 96, y1: r[0] - 9, x2: 840, y2: r[0] - 9, "class": r[1] });
+    for (var c = 1; c <= 30; c++) if (c % 6) el("rect", { x: cx(c) - 3, y: r[0] - 3, width: 6, height: 6, "class": "hole" });
+    el("text", { x: 92, y: r[0] + 4, "text-anchor": "end", "class": "s" }, r[2]);
+  });
+  for (var c = 1; c <= 30; c++) {
+    for (var k in RY) el("rect", { x: cx(c) - 3, y: RY[k] - 3, width: 6, height: 6, "class": "hole" });
+    if (c === 1 || c % 5 === 0) el("text", { x: cx(c), y: 142, "text-anchor": "middle", "class": "s" }, String(c));
+  }
+  ["a","b","c","d","e","f","g","h","i","j"].forEach(function (k) { el("text", { x: 98, y: RY[k] + 4, "text-anchor": "middle", "class": "s" }, k); });
+  function wire(pts, cls, dashed) { el("path", { d: "M" + pts.map(function (p) { return p[0] + " " + p[1]; }).join(" L"), "class": "hw " + cls + (dashed ? " dash" : "") }); pts.forEach(function (p, i) { if (i === 0 || i === pts.length - 1) el("circle", { cx: p[0], cy: p[1], r: 3, "class": "dot" }); }); }
+  function res(x1, y1, x2, y2, label, dashed, lx, ly) {
+    el("line", { x1: x1, y1: y1, x2: x2, y2: y2, stroke: "var(--ink)", "stroke-width": 1.4, "class": dashed ? "dash" : "" });
+    var mx = (x1 + x2) / 2, my = (y1 + y2) / 2, ang = Math.atan2(y2 - y1, x2 - x1) * 180 / Math.PI;
+    el("rect", { x: mx - 15, y: my - 5, width: 30, height: 10, rx: 3, "class": "rbody" + (dashed ? " dash" : ""), transform: "rotate(" + ang + " " + mx + " " + my + ")" });
+    el("circle", { cx: x1, cy: y1, r: 3, "class": "dot" }); el("circle", { cx: x2, cy: y2, r: 3, "class": "dot" });
+    el("text", { x: lx != null ? lx : mx + 10, y: ly != null ? ly : my - 9, "class": "s" }, label);
+  }
+  // adapter straddling the gap, cols 10-12
+  el("rect", { x: cx(10) - 12, y: RY.e - 10, width: cx(12) - cx(10) + 24, height: RY.f - RY.e + 20, rx: 3, "class": "adapter" });
+  el("text", { x: cx(11), y: 246, "text-anchor": "middle", "class": "chiptxt" }, "LVC2G07");
+  [[10, "e", "6"], [11, "e", "5"], [12, "e", "4"], [10, "f", "1"], [11, "f", "2"], [12, "f", "3"]].forEach(function (q) { el("circle", { cx: cx(q[0]), cy: RY[q[1]], r: 3.4, fill: "#e8e8e8" }); });
+  el("text", { x: cx(9) - 2, y: RY.e + 4, "text-anchor": "end", "class": "s" }, "6·1Y");
+  el("text", { x: cx(13) + 4, y: RY.e + 4, "class": "s" }, "4·2Y");
+  el("text", { x: cx(9) - 2, y: RY.f + 4, "text-anchor": "end", "class": "s" }, "1·1A");
+  el("text", { x: cx(13) + 4, y: RY.f + 4, "class": "s" }, "3·2A");
+  // VCC and GND of the chip
+  wire([[cx(11), RY.a], [cx(11), R3T]], "w3v3");
+  wire([[cx(11), RY.j], [cx(11), RGB]], "wgnd");
+  // input pull-ups R1 (1A) and R2 (2A) to bottom 3V3 rail
+  res(cx(10), RY.g, cx(7), R3B, "R1 10k", false, cx(4), 352);
+  res(cx(12), RY.g, cx(15), R3B, "R2 10k", false, cx(15) + 8, 352);
+  // RX divider: R5 47k from 1Y column (row c) to col 17 (row c); R6 100k col 17 row d -> top GND rail via col 19
+  res(cx(10), RY.c, cx(17), RY.c, "R5 47k", false, cx(13) - 6, RY.c - 9);
+  res(cx(17), RY.h, cx(20), RGB, "R6 100k", false, cx(20) + 8, 352);
+  // RX node crosses the gap at col 17 (jumper e->f) for the Pi wire
+  wire([[cx(17), RY.e], [cx(17), RY.f]], "wrx");
+  // rails joined at the right
+  wire([[cx(29), R3T], [870, R3T], [870, R3B], [cx(29), R3B]], "w3v3");
+  wire([[cx(30), RGT], [884, RGT], [884, RGB], [cx(30), RGB]], "wgnd");
+  // Pi header wires from below
+  var PY = 520;
+  el("rect", { x: 120, y: PY - 6, width: 520, height: 34, rx: 4, fill: "none", stroke: "var(--rule)", "stroke-width": 1.5 });
+  el("text", { x: 126, y: PY + 42, "class": "s" }, "to Pi Zero 2W header (pin numbers)");
+  function piw(px, pin, label, cls, pts, dashed) {
+    wire([[px, PY]].concat(pts), cls, dashed);
+    el("text", { x: px, y: PY + 16, "text-anchor": "middle", "class": "s" }, "pin " + pin);
+    el("text", { x: px + 4, y: PY - 10, "class": "s" }, label);
+  }
+  piw(160, 17, "3V3", "w3v3", [[160, R3B]]);
+  piw(210, 9, "GND", "wgnd", [[210, 452], [cx(5), 452], [cx(5), RGB]]);
+  piw(cx(10) - 4, 8, "TXD", "wtx", [[cx(10), RY.j]]);
+  piw(cx(12) + 6, 11, "GPIO17", "wdrop", [[cx(12), RY.j]]);
+  piw(cx(17), 10, "RXD", "wrx", [[cx(17), RY.j]]);
+  piw(560, 2, "5V (stage 1)", "w5v", [[560, 470], [cx(24), 470], [cx(24), RY.j]], true);
+  // stage-1 simulated pull-ups: 5V column 24 jumpered across gap, R to bus (col 10 row b via col 22) and Drop (col 12)
+  wire([[cx(24), RY.f], [cx(24), RY.e]], "w5v", true);
+  res(cx(24), RY.d, cx(10), RY.d, "10k to bus (stage 1)", true, cx(25), RY.d + 4);
+  res(cx(24), RY.a, cx(12), RY.a, "10k to Drop (stage 1)", true, cx(25), RY.a + 4);
+  // mount wires from above
+  var MY = 40;
+  el("text", { x: 300, y: 18, "class": "s" }, "to TeleTrack AUX (RJ12 breakout) or MC001 HC header");
+  function mw(x, label, cls, target) { wire([[x, MY], [x, 70], [target[0], 70], target], cls); el("text", { x: x, y: MY - 6, "text-anchor": "middle", "class": "s" }, label); }
+  mw(cx(10) - 70, "RXTX (AUX 3/5 · HC 3)", "wtx", [cx(10), RY.a]);
+  mw(cx(12) + 120, "Drop (AUX 1 · HC 1)", "wdrop", [cx(12), RY.b]);
+  mw(cx(27), "GND (AUX 2 · HC 2)", "wgnd", [cx(27), RGT]);
+  el("text", { x: 950, y: 60, "text-anchor": "end", "class": "s warn" }, "+12 V: not connected");
 })();
 </script>
