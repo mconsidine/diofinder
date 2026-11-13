@@ -15,6 +15,16 @@ Rev. 2 uses three uploaded documents:
 shared data line plus a "Drop" line.
 
 
+> **2026-11-13 correction.** The MC001 schematic shows 10 kΩ pull-ups to 5 V
+> on RXTX and Drop *on the motor board*, and a PIC Schmitt input needing
+> ≥ 4.0 V. So:
+> - use a **47 kΩ / 100 kΩ** RX divider (not 10k/20k);
+> - fit **no 5 V pull-ups** on the interface board.
+>
+> The cable drawing `2026-11-09-teletrack-aux-cable.html` (v4) and
+> `2026-11-09-teletrack-mc001-board-analysis.md` §8 supersede the wiring
+> values below.
+
 ## 0. First contact through the AUX jack (rev. 3: no MAX3232, nothing connected yet)
 
 This section supersedes §4–§5 for a first attempt.

@@ -119,16 +119,12 @@ svg .hw { stroke-width: 3.2; fill: none; stroke-linecap: round; stroke-linejoin:
         <text class="s" x="52" y="70">40-pin header</text>
         <!-- pin rows: 5V 60? use y list -->
         <g>
-          <text class="t" x="52" y="114">pin 2 · 5V</text>
           <text class="t" x="52" y="144">pin 17 · 3V3</text>
           <text class="t" x="52" y="214">pin 11 · GPIO17</text>
           <text class="t" x="52" y="294">pin 8 · TXD</text>
           <text class="t" x="52" y="394">pin 10 · RXD</text>
           <text class="t" x="52" y="464">pin 9 · GND</text>
         </g>
-        <!-- 5V rail y=110 -->
-        <path class="wire" d="M210 110 H780"/>
-        <text class="s" x="740" y="102">+5V</text>
         <!-- 3V3 rail y=140 -->
         <path class="wire" d="M210 140 H490"/>
         <text class="s" x="440" y="132">+3V3</text>
@@ -168,25 +164,18 @@ svg .hw { stroke-width: 3.2; fill: none; stroke-linecap: round; stroke-linejoin:
         <text class="s" x="566" y="204">4 2Y</text>
         <path class="wire" d="M560 290 H820"/>
         <text class="s" x="566" y="284">6 1Y</text>
-        <!-- 5V pull-ups: R4 100k on Y2 at x=660, R3 10k on Y1 at x=720 -->
-        <path class="wire" d="M660 110 V150 M660 186 V210"/>
-        <rect class="box" x="653" y="150" width="14" height="36"/>
-        <text class="s" x="604" y="172">R4 100k</text>
-        <circle class="dot" cx="660" cy="110" r="3.5"/><circle class="dot" cx="660" cy="210" r="3.5"/>
-        <path class="wire" d="M720 110 V236 M720 272 V290"/>
-        <rect class="box" x="713" y="236" width="14" height="36"/>
-        <text class="s" x="732" y="258">R3 10k</text>
-        <circle class="dot" cx="720" cy="110" r="3.5"/><circle class="dot" cx="720" cy="290" r="3.5"/>
+        <text class="s" x="600" y="240">pull-ups: 10k to 5 V on the</text>
+        <text class="s" x="600" y="254">motor board (its R3, R4)</text>
         <!-- RX divider: AUX5 y=390 -> R5 10k horizontal (640..700) -> node x=600 -> RXD ; R6 20k down to GND -->
         <path class="wire" d="M820 390 H700 M640 390 H210"/>
         <rect class="box" x="640" y="383" width="60" height="14"/>
-        <text class="s" x="644" y="376">R5 10k</text>
+        <text class="s" x="644" y="376">R5 47k</text>
         <circle class="dot" cx="600" cy="390" r="3.5"/>
         <path class="wire" d="M600 390 V410 M600 446 V462"/>
         <rect class="box" x="593" y="410" width="14" height="36"/>
-        <text class="s" x="614" y="432">R6 20k (or 18k)</text>
+        <text class="s" x="614" y="432">R6 100k</text>
         <path class="wire" d="M588 462 H612 M592 467 H608 M596 472 H604"/>
-        <text class="s" x="320" y="382">≈3.3 V max into RXD</text>
+        <text class="s" x="300" y="382">≈3.2 V into RXD; bus stays ≥4.6 V</text>
         <!-- Pi GND -->
         <path class="wire" d="M210 460 H260 V472"/>
         <path class="wire" d="M248 472 H272 M252 477 H268 M256 482 H264"/>
@@ -217,13 +206,16 @@ svg .hw { stroke-width: 3.2; fill: none; stroke-linecap: round; stroke-linejoin:
         The Pi's TX (pin 8) and its Drop output (GPIO17, pin 11) each drive one
         open-drain buffer channel:
         a low input pulls the mount's line low, and a high input lets it float up to 5 V
-        through R3/R4 and the mount's own pull-ups. So nothing at 5 V ever reaches a
-        Pi pin, and the Pi never pushes the bus high.
+        through the motor board's own 10&nbsp;kΩ pull-ups (MC001 R3 on RXTX, R4 on DROP).
+        Nothing at 5 V ever reaches a Pi pin, the Pi never pushes the bus high, and
+        the cable needs no 5 V from the Pi.
         R1/R2 hold the buffer inputs high while the Pi boots, so the mount sees an idle bus.</p>
-      <p>The mount's data back to the Pi (AUX pin 5) passes through the R5/R6 divider:
-        5 V × 20/30 = 3.3 V.
-        With 18k for R6 it is 3.2 V.
-        Don't use 22k: it gives 3.4 V.</p>
+      <p>The mount's data back to the Pi passes through the R5/R6 divider, 47k over 100k:
+        5 V × 100/147 ≈ 3.4 V at most, about 3.2 V in practice.
+        The values are high on purpose. The divider loads the 10&nbsp;kΩ pull-up, and the
+        PIC16F886's serial input needs at least 0.8 × 5 V = 4.0 V to read a 1.
+        A 10k/20k divider would pull the idle bus down to about 3.75 V, too low for the motor board.
+        With 47k/100k the bus stays at about 4.7 V.</p>
     </div>
   </section>
 
@@ -246,7 +238,7 @@ svg .hw { stroke-width: 3.2; fill: none; stroke-linecap: round; stroke-linejoin:
         <!-- interface board -->
         <rect class="board" x="640" y="160" width="290" height="140" rx="4"/>
         <text class="h" x="652" y="182">Interface board</text>
-        <text class="s" x="652" y="200">SN74LVC2G07 breakout + R1–R6</text>
+        <text class="s" x="652" y="200">SN74LVC2G07 breakout + R1, R2, R5, R6</text>
         <text class="s" x="652" y="216">(perfboard; wiring = Plate 1)</text>
         <!-- board output wires to RJ12 plug -->
         <g id="outwires"></g>
@@ -274,15 +266,14 @@ svg .hw { stroke-width: 3.2; fill: none; stroke-linecap: round; stroke-linejoin:
       <table>
         <thead><tr><th>Pi pin</th><th>Signal</th><th>Interface board</th><th>AUX pin</th><th>Notes</th></tr></thead>
         <tbody>
-          <tr><td class="m"><span class="sw" style="background:var(--w-5v)"></span>2</td><td>5V</td><td>R3 (10k) and R4 (100k) top ends</td><td class="m">—</td><td>Pull-ups for the mount side only</td></tr>
           <tr><td class="m"><span class="sw" style="background:var(--w-3v3)"></span>17</td><td>3.3 V</td><td>Buffer VCC; R1, R2 top ends</td><td class="m">—</td><td>Pin 1 is taken by the BNO055</td></tr>
           <tr><td class="m"><span class="sw" style="background:var(--w-drop)"></span>11</td><td>GPIO17 (Drop out)</td><td>Buffer 2A (+R1 to 3.3 V)</td><td class="m">—</td><td>Buffer 2Y → AUX 1</td></tr>
           <tr><td class="m"><span class="sw" style="background:var(--w-tx)"></span>8</td><td>TXD (GPIO14)</td><td>Buffer 1A (+R2 to 3.3 V)</td><td class="m">—</td><td>Buffer 1Y → AUX 3</td></tr>
-          <tr><td class="m"><span class="sw" style="background:var(--w-rx)"></span>10</td><td>RXD (GPIO15)</td><td>R5/R6 junction</td><td class="m">—</td><td>R5 other end → AUX 5</td></tr>
+          <tr><td class="m"><span class="sw" style="background:var(--w-rx)"></span>10</td><td>RXD (GPIO15)</td><td>R5/R6 junction (47k/100k)</td><td class="m">—</td><td>R5 other end → AUX 5</td></tr>
           <tr><td class="m"><span class="sw" style="background:var(--w-gnd)"></span>9</td><td>GND</td><td>Buffer GND, R6 bottom</td><td class="m">2</td><td>The only direct Pi-to-mount wire</td></tr>
-          <tr><td class="m">—</td><td>DROP</td><td>Buffer 2Y + R4 (100k to 5V)</td><td class="m">1</td><td>Low = "bus busy"</td></tr>
-          <tr><td class="m">—</td><td>AUX.TX (into mount)</td><td>Buffer 1Y + R3 (10k to 5V)</td><td class="m">3</td><td>Same wire as pin 5 inside the mount ("RXTX")</td></tr>
-          <tr><td class="m">—</td><td>AUX.RX (from mount)</td><td>R5 (10k) far end</td><td class="m">5</td><td>Same wire as pin 3; the Pi hears its own bytes echoed</td></tr>
+          <tr><td class="m">—</td><td>DROP</td><td>Buffer 2Y</td><td class="m">1</td><td>Low = "bus busy"</td></tr>
+          <tr><td class="m">—</td><td>AUX.TX (into mount)</td><td>Buffer 1Y</td><td class="m">3</td><td>Same wire as pin 5 inside the mount ("RXTX")</td></tr>
+          <tr><td class="m">—</td><td>AUX.RX (from mount)</td><td>R5 (47k) far end</td><td class="m">5</td><td>Same wire as pin 3; the Pi hears its own bytes echoed</td></tr>
           <tr><td class="m">—</td><td class="nc">+12 V</td><td class="nc">nothing</td><td class="m nc">4</td><td class="nc">Cut or tape this conductor</td></tr>
           <tr><td class="m">—</td><td>PDL</td><td>nothing</td><td class="m">6</td><td>Links the HC and AUX jacks only (5.1 kΩ to GND in the mount); not wired to the motor board</td></tr>
         </tbody>
@@ -293,10 +284,9 @@ svg .hw { stroke-width: 3.2; fill: none; stroke-linecap: round; stroke-linejoin:
         <thead><tr><th>Qty</th><th>Part</th><th>Notes</th></tr></thead>
         <tbody>
           <tr><td class="m">1</td><td>SN74LVC2G07 on a SOT-23-6 (or SC-70) to DIP adapter</td><td>Dual open-drain buffer; any 74LVC1G07 ×2 also works</td></tr>
-          <tr><td class="m">3</td><td>10 kΩ resistor</td><td>R1, R2, R3</td></tr>
-          <tr><td class="m">1</td><td>10 kΩ resistor</td><td>R5 (divider top)</td></tr>
-          <tr><td class="m">1</td><td>20 kΩ (or 18 kΩ) resistor</td><td>R6 (divider bottom)</td></tr>
-          <tr><td class="m">1</td><td>100 kΩ resistor</td><td>R4, matches the master's DROP pull-up</td></tr>
+          <tr><td class="m">2</td><td>10 kΩ resistor</td><td>R1, R2 (buffer inputs to 3.3 V)</td></tr>
+          <tr><td class="m">1</td><td>47 kΩ resistor</td><td>R5 (divider top)</td></tr>
+          <tr><td class="m">1</td><td>100 kΩ resistor</td><td>R6 (divider bottom)</td></tr>
           <tr><td class="m">1</td><td>6P6C plug + 6-wire flat cable, or a 6P6C screw-terminal breakout</td><td>A breakout makes the meter checks easy</td></tr>
           <tr><td class="m">6</td><td>Female jumper wires</td><td>Pi header to the board</td></tr>
           <tr><td class="m">1</td><td>Small perfboard</td><td>About 30 × 50 mm is enough</td></tr>
@@ -307,7 +297,7 @@ svg .hw { stroke-width: 3.2; fill: none; stroke-linecap: round; stroke-linejoin:
       <li>Meter the AUX jack as in the caution box above. Stop if pin 4 isn't the 12 V pin.</li>
       <li>Build the board. With nothing attached, check:
         <ul>
-          <li>no continuity between the Pi 5V pad and any Pi signal pad;</li>
+          <li>nothing on the board connects to the Pi's 5V pins (2, 4);</li>
           <li>the AUX pin 4 conductor is isolated.</li>
         </ul>
       </li>
@@ -331,7 +321,7 @@ svg .hw { stroke-width: 3.2; fill: none; stroke-linecap: round; stroke-linejoin:
   var X0 = 48, P = 25, YE = 52, YO = 88;           // pad grid: even row (outer) above odd row
   function pos(n) { var c = Math.floor((n - 1) / 2); return { x: X0 + c * P, y: (n % 2 === 0) ? YE : YO }; }
   var busy = { 1: "3V3 IMU", 3: "SDA", 5: "SCL", 6: "GND IMU" };
-  var used = { 2: "w5v", 8: "wtx", 9: "wgnd", 10: "wrx", 11: "wdrop", 17: "w3v3" };
+  var used = { 8: "wtx", 9: "wgnd", 10: "wrx", 11: "wdrop", 17: "w3v3" };
   var pads = document.getElementById("pads");
   for (var n = 1; n <= 40; n++) {
     var p = pos(n);
@@ -351,8 +341,7 @@ svg .hw { stroke-width: 3.2; fill: none; stroke-linecap: round; stroke-linejoin:
     { n: 11, cls: "wdrop", label: "GPIO17", y: 196, dx: 0 },
     { n: 10, cls: "wrx", label: "RXD", y: 216, dx: 4 },
     { n: 9, cls: "wgnd", label: "GND", y: 236, dx: -4 },
-    { n: 8, cls: "wtx", label: "TXD", y: 256, dx: 0 },
-    { n: 2, cls: "w5v", label: "5V", y: 276, dx: 0 }
+    { n: 8, cls: "wtx", label: "TXD", y: 256, dx: 0 }
   ];
   var wg = document.getElementById("wires");
   wires.forEach(function (w) {
