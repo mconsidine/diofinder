@@ -86,7 +86,7 @@ svg .hw { stroke-width: 3.2; fill: none; stroke-linecap: round; stroke-linejoin:
   <header>
     <div class="meta">diofinder · Orion TeleTrack · direct motor-bus link · rev 2026-11-09</div>
     <h1>TeleTrack AUX cable</h1>
-    <p>A Raspberry Pi Zero 2W on the TeleTrack's 6-pin AUX jack. The cable passes through a small interface board with one SN74LVC2G07 and six resistors. The AUX pinout comes from the Sky-Watcher "AUX INTERFACE" schematic (P/N 51562-83 rev B) and still needs checking on the mount before connecting.</p>
+    <p>A Raspberry Pi Zero 2W on the TeleTrack's 6-pin AUX jack. The cable passes through a small interface board with one SN74LVC2G07 and six resistors. The pinout is confirmed by two Synta schematics: the accessory-side "AUX INTERFACE" sheet and the mount's own "Pannel of Synta Multi-Function Mount" sheet. They number the contacts from opposite faces, plug and jack, but describe the same wiring. Check it with a meter before connecting.</p>
   </header>
 
   <div class="caution">
@@ -101,6 +101,10 @@ svg .hw { stroke-width: 3.2; fill: none; stroke-linecap: round; stroke-linejoin:
         </ul>
         Earlier hardware revisions used a different AUX pinout.</li>
       <li>Ready-made 6-wire telephone cables are often <em>reversed</em> (pin 1 at one end is pin 6 at the other). Check continuity end to end, or use a screw-terminal breakout at the mount.</li>
+      <li><strong>Looking into the mount's AUX jack</strong> with the latch slot at the bottom, the contacts from left to right are:
+        PDL, data, <strong class="nc">+12&nbsp;V</strong>, data, GND, DROP.
+        The panel schematic numbers these 1–6 left to right. This page numbers them from the plug side, so DROP is plug pin 1.</li>
+      <li>Inside the mount the two data contacts are the <strong>same wire</strong> (TX and RX joined), so the bus really is single-wire.</li>
     </ul>
   </div>
 
@@ -249,8 +253,8 @@ svg .hw { stroke-width: 3.2; fill: none; stroke-linecap: round; stroke-linejoin:
         <!-- RJ12 plug face -->
         <rect class="plug" x="690" y="360" width="222" height="72" rx="4"/>
         <g id="contacts"></g>
-        <text class="s" x="950" y="448" text-anchor="end">RJ12 plug, contacts toward you, clip underneath, pin 1 on the left</text>
-        <text class="s" x="950" y="464" text-anchor="end">→ plugs into the TeleTrack AUX jack</text>
+        <text class="s" x="950" y="448" text-anchor="end">Plug-side numbering: plug pin 1 (DROP) mates with the RIGHTMOST contact</text>
+        <text class="s" x="950" y="464" text-anchor="end">seen looking into the AUX jack, latch slot down (panel schematic pin 6)</text>
       </svg>
     </div>
     <div class="caption">
@@ -277,10 +281,10 @@ svg .hw { stroke-width: 3.2; fill: none; stroke-linecap: round; stroke-linejoin:
           <tr><td class="m"><span class="sw" style="background:var(--w-rx)"></span>10</td><td>RXD (GPIO15)</td><td>R5/R6 junction</td><td class="m">—</td><td>R5 other end → AUX 5</td></tr>
           <tr><td class="m"><span class="sw" style="background:var(--w-gnd)"></span>9</td><td>GND</td><td>Buffer GND, R6 bottom</td><td class="m">2</td><td>The only direct Pi-to-mount wire</td></tr>
           <tr><td class="m">—</td><td>DROP</td><td>Buffer 2Y + R4 (100k to 5V)</td><td class="m">1</td><td>Low = "bus busy"</td></tr>
-          <tr><td class="m">—</td><td>AUX.TX (into mount)</td><td>Buffer 1Y + R3 (10k to 5V)</td><td class="m">3</td><td></td></tr>
-          <tr><td class="m">—</td><td>AUX.RX (from mount)</td><td>R5 (10k) far end</td><td class="m">5</td><td></td></tr>
+          <tr><td class="m">—</td><td>AUX.TX (into mount)</td><td>Buffer 1Y + R3 (10k to 5V)</td><td class="m">3</td><td>Same wire as pin 5 inside the mount ("RXTX")</td></tr>
+          <tr><td class="m">—</td><td>AUX.RX (from mount)</td><td>R5 (10k) far end</td><td class="m">5</td><td>Same wire as pin 3; the Pi hears its own bytes echoed</td></tr>
           <tr><td class="m">—</td><td class="nc">+12 V</td><td class="nc">nothing</td><td class="m nc">4</td><td class="nc">Cut or tape this conductor</td></tr>
-          <tr><td class="m">—</td><td>PDL</td><td>nothing</td><td class="m">6</td><td>Function unknown</td></tr>
+          <tr><td class="m">—</td><td>PDL</td><td>nothing</td><td class="m">6</td><td>Links the HC and AUX jacks only (5.1 kΩ to GND in the mount); not wired to the motor board</td></tr>
         </tbody>
       </table>
     </div>

@@ -204,3 +204,81 @@ If it is the 9441, driving the motor board directly through AUX is the
 - Which HC-jack line carries the 1 kΩ.
 - Which cable wire is 12 V, GND, data and Drop. Use the PIC16F886
   continuity checks in §3.
+
+---
+
+## 7. Panel schematic: "Pannel of Synta Multi-Function Mount" (user upload, 2026-11-13)
+
+This sheet is the mount's own jack/power panel, and it settles the pinout.
+
+**Panel jacks.** Both are RJ-11(6-6). The sheet's "RJ11 Pins" drawing numbers
+1–6 left to right, looking into the jack with the latch slot down.
+
+| Panel pin | HC jack | AUX jack | Bus net |
+|---|---|---|---|
+| 1 | PDL | PDL | HC 1 ↔ AUX 1 only, with **R1 5.1 kΩ to GND**. Not wired to the motor board |
+| 2 | RXTX | RXTX | Tied to pin 4 on each jack |
+| 3 | +12 V | +12 V | After the SPST power switch |
+| 4 | RXTX | RXTX | **The single data wire** (motor-board "RXTX") |
+| 5 | GND | GND | |
+| 6 | Drop | Drop | |
+
+**"MC" connector (JST PHR-6, "To motor controller"):**
+
+| Pin | Signal |
+|---|---|
+| 1 | Drop |
+| 2 | GND |
+| 3 | RXTX |
+| 4 | +12 V |
+| 5 | LED (motor board drives the "Power / Battery Low" LED, D1, to GND) |
+| 6 | VCC (not used on the panel) |
+
+**Other parts on the sheet:**
+- **Power:** PWR1 Power In jack and a battery box through D2 (1N4001).
+- **Power Out:** PWR2 "Power for external device" is wired *before* the
+  power switch.
+- **Shutter:** a 2.5 mm phone jack to the motor board's **"SW"** connector
+  (SW1/SWCOM). This confirms SW is the camera snap output through the
+  LTV-357T optocoupler.
+
+**Reconciliation with the accessory-side "AUX INTERFACE" sheet** (1 DROP,
+2 GND, 3 TX, 4 +12 V, 5 RX, 6 PDL):
+- It is the **exact mirror** (n ↔ 7 − n) of the panel numbering.
+- One sheet numbers from the plug face, the other from the jack face.
+- Both describe the same contacts.
+- The accessory's separate TX and RX pins land on the mount's two RXTX
+  contacts, which are the same wire.
+
+So:
+- **The cable drawing is physically correct** (plug-side numbering, plug
+  pin 1 = DROP = the rightmost contact seen looking into the jack).
+- **The bus is single-wire at the mount.** The Pi hears an echo of every
+  byte it sends, which `tt_discover.py` already handles.
+- **PDL** is a link between the HC and AUX jacks with a 5.1 kΩ pull-down,
+  probably presence detection between a hand controller and an AUX device.
+  The Pi leaves it unconnected.
+
+**Cable colours, if the jack board's cable follows the MC connector numbering
+(brown = 1):**
+
+| Colour | Signal |
+|---|---|
+| brown | Drop |
+| red | GND |
+| orange | RXTX |
+| yellow | +12 V |
+| green | LED |
+| blue | VCC |
+
+Check: **yellow should read 12 V** with the switch on, red should be GND.
+
+**Corrections to §1 and §6:**
+- The jack board's axial resistor is **R1, 5.1 kΩ** (the bands read
+  green-brown-black-brown-brown), the **PDL pull-down**. It is not a series
+  resistor on an HC line. Both jacks are wired in parallel; AUX has no
+  extra protection compared with HC.
+- The red wire traced to the "CONTROL" header on the jack board is GND on
+  this sheet. "CONTROL" is probably the power-switch/LED harness. The board
+  (DW340708A1) may be a later revision than this sheet: verify with the
+  meter.
